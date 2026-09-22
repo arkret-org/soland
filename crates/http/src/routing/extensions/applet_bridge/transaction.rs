@@ -4,7 +4,7 @@ use arkret_models_integration::{
     AppletEventRejection, AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus,
     namespace_pattern_matches,
 };
-use arkret_wire::Event;
+use arkret_wire::{CommittedEventRef, Event};
 use soland_http::error::AppError;
 use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
 use soland_services::identity::SessionIdentityState as SessionRecord;
@@ -58,6 +58,7 @@ pub(super) async fn process_verified_transaction(
     }
 
     let event_count = transaction.events.len();
+    let mut committed_event_refs = Vec::new();
     let mut rejected = Vec::new();
     for event in transaction.events {
         let event_id = event.event_id.to_string();
@@ -86,6 +87,10 @@ pub(super) async fn process_verified_transaction(
         let session = applet_event_session(state, &event);
         match submit_event_value(state, &session, envelope).await {
             Ok(outcome) => {
+                committed_event_refs.push(
+                    durable_transaction_event_ref(state, &event.event_id, &outcome.event_id)
+                        .await?,
+                );
                 tracing::debug!(
                     event_id = %outcome.event_id,
                     duplicate = outcome.duplicate,
@@ -116,6 +121,7 @@ pub(super) async fn process_verified_transaction(
         } else {
             AppletTransactionStatus::Partial
         },
+        committed_event_refs,
         rejections: rejected,
         retry_after_ms: None,
     };
@@ -136,6 +142,39 @@ pub(super) async fn process_verified_transaction(
             AppError::internal("applet transaction replay store unavailable")
         })?;
     Ok(outcome)
+}
+
+async fn durable_transaction_event_ref(
+    state: &AppState,
+    submitted_event_id: &EventId,
+    accepted_event_id: &str,
+) -> Result<CommittedEventRef, AppError> {
+    if accepted_event_id != submitted_event_id.as_str() {
+        return Err(AppError::internal(
+            "Event admission returned an identity different from the submitted Event",
+        ));
+    }
+    let record = state
+        .persistence()
+        .committed_event(submitted_event_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::internal(
+                "Event admission succeeded without a durable governing-Station commit",
+            )
+        })?;
+    if record.event.event_id != *submitted_event_id {
+        return Err(AppError::internal(
+            "durable committed Event record disagrees with the submitted Event identity",
+        ));
+    }
+    Ok(CommittedEventRef {
+        event_id: submitted_event_id.clone(),
+        commit_id: record.commit.commit_id,
+        stream_ref: record.commit.stream_ref,
+        stream_position: record.commit.stream_position,
+    })
 }
 
 fn replayed_transaction_outcome(
@@ -256,6 +295,7 @@ const QUEUE_FULL_RETRY_AFTER_MS: u64 = 1_000;
 fn queue_full_outcome(transaction: &AppletEventTransactionRequestBody) -> AppletTransactionOutcome {
     AppletTransactionOutcome {
         status: AppletTransactionStatus::Rejected,
+        committed_event_refs: Vec::new(),
         rejections: transaction
             .events
             .iter()
@@ -356,6 +396,7 @@ mod backpressure_tests {
 
         let outcome = queue_full_outcome(&transaction);
         assert_eq!(outcome.status, AppletTransactionStatus::Rejected);
+        assert!(outcome.committed_event_refs.is_empty());
         assert_eq!(outcome.retry_after_ms, Some(QUEUE_FULL_RETRY_AFTER_MS));
         assert_eq!(outcome.rejections.len(), event_ids.len());
         for (rejection, event_id) in outcome.rejections.iter().zip(event_ids) {
