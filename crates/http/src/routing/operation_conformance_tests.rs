@@ -216,15 +216,11 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "purpose": "collaboration",
                 "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 "trust_domain": "ak:trust_domain:local",
-                "schema_refs": ["ak.schema.realm.v1"],
-                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-                "encryption_profile": "mls_rfc9420",
                 "security_class": "standard",
-                "digest_algorithm": "sha256",
-                "notary": serde_json::to_value(crate::test_notary(
-                    "did:web:alice.example",
-                    32,
-                )).unwrap()
+                "governance_station_id": "ak:did_core:web:station.example",
+                "initial_join_rule": "invite",
+                "initial_history_access": "since_join",
+                "initial_discoverability": "invite_only"
             }}),
             valid: true,
         },
