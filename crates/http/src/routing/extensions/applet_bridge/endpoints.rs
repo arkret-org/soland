@@ -1,20 +1,28 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
-use arkret_models_collaboration::account_lifecycle::AppletRevokeRequestBody;
+use arkret_models_collaboration::governance::grant_constraint::{
+    CapabilityGrant, CapabilityGrantStatus, CapabilitySubject,
+};
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_integration::{
     AppletActorView, AppletCapabilityRevokeIntent, AppletGhostAuthoringRequestBasis,
     AppletInstallOutcome, AppletInstallPreviewOutcome, AppletInstallPreviewRequestBody,
     AppletInstallRequestBody, AppletManagedActorAuthoringRequest, AppletManagedActorPurpose,
     AppletManagedMembershipRemoval, AppletMembershipRemoveIntent, AppletNamespaceDomain,
-    AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeEffectKind,
-    AppletRevokeOutcome, AppletRevokePlan, AppletRevokePreviewOutcome,
-    AppletRevokePreviewRequestBody, AppletRevokeSagaStatus, AppletRevokeStep,
-    AppletRevokeStepStatus, AppletTransactionOutcome, AppletTransactionRequestBody, ExternalRef,
-    FieldDefinition, GhostActorProvisionOutcome, GhostActorProvisionRequestBody,
-    GhostPreviewOutcome, GhostPreviewRequestBody, ProtocolInstance, namespace_pattern_matches,
+    AppletPingOutcome, AppletProtocolMetadata, AppletRealmView, AppletRevokeCommittedEventStatus,
+    AppletRevokeCommittedEventStep, AppletRevokeEffectRef, AppletRevokeEventEffectKind,
+    AppletRevokeLocalEffectKind, AppletRevokeLocalEffectRef, AppletRevokeLocalEffectStatus,
+    AppletRevokeLocalEffectStep, AppletRevokeOutcome, AppletRevokePlan, AppletRevokePreviewOutcome,
+    AppletRevokePreviewRequestBody, AppletRevokeRequestBody, AppletRevokeSagaStatus,
+    AppletRevokeStep, AppletRevokeSubmittedEventStatus, AppletRevokeSubmittedEventStep,
+    AppletTransactionOutcome, AppletTransactionRequestBody, ExternalRef, FieldDefinition,
+    GhostActorProvisionOutcome, GhostActorProvisionRequestBody, GhostPreviewOutcome,
+    GhostPreviewRequestBody, ProtocolInstance, namespace_pattern_matches,
 };
-use arkret_wire::{AppletRevokeMode, EventKind, Hash, ProtocolOperationId};
+use arkret_wire::{
+    AppletRevokeMode, CommittedEventRef, CurrentRevision, EventId, EventKind, Hash,
+    ProtocolOperationId,
+};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -652,61 +660,56 @@ async fn revoke_install_endpoint(
         validate_revoke_submissions(&admin_actor, &recomputed.revoke_plan, &revoke)?;
     }
 
-    let mut outcome =
-        if let Some(stored_outcome) = stored_outcome {
-            stored_outcome
-        } else {
-            let operation_id =
-                ProtocolOperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
-                    .map_err(AppError::internal)?;
-            let mut steps =
-                revoke
-                    .capability_revoke_events
-                    .iter()
-                    .map(|submission| AppletRevokeStep {
-                        effect_kind: AppletRevokeEffectKind::CapabilityRevokeEvent,
-                        effect_ref: submission.event.event_id.to_string(),
-                        status: AppletRevokeStepStatus::Pending,
-                        reason_code: None,
-                    })
-                    .chain(revoke.membership_state_events.iter().map(|submission| {
-                        AppletRevokeStep {
-                            effect_kind: AppletRevokeEffectKind::MembershipStateEvent,
-                            effect_ref: submission.event.event_id.to_string(),
-                            status: AppletRevokeStepStatus::Pending,
-                            reason_code: None,
-                        }
-                    }))
-                    .collect::<Vec<_>>();
-            if revoke_mode_fences_runtime(revoke.revoke_mode) {
-                steps.push(AppletRevokeStep {
-                    effect_kind: AppletRevokeEffectKind::LocalAppletFence,
-                    effect_ref: applet_id.clone(),
-                    status: AppletRevokeStepStatus::Pending,
-                    reason_code: None,
-                });
-            }
-            let mut outcome = AppletRevokeOutcome {
-                operation_id,
-                revoke_plan_digest: revoke.revoke_plan_digest.clone(),
-                status: AppletRevokeSagaStatus::InProgress,
-                steps,
-                revoked_refs: Vec::new(),
-                rejections: Vec::new(),
-            };
-            persist_revoke_execution(
-                state,
-                &mut record,
-                &admin_actor_key,
-                &idempotency_key,
-                &request_digest,
-                &request_value,
-                &mut outcome,
-                false,
-            )
-            .await?;
-            outcome
+    let mut outcome = if let Some(stored_outcome) = stored_outcome {
+        stored_outcome
+    } else {
+        let operation_id =
+            ProtocolOperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                .map_err(AppError::internal)?;
+        let mut steps = revoke
+            .capability_revoke_events
+            .iter()
+            .map(|submission| {
+                pending_revoke_event_step(
+                    AppletRevokeEventEffectKind::CapabilityRevokeEvent,
+                    submission.event.event_id.clone(),
+                )
+            })
+            .chain(revoke.membership_state_events.iter().map(|submission| {
+                pending_revoke_event_step(
+                    AppletRevokeEventEffectKind::MembershipStateEvent,
+                    submission.event.event_id.clone(),
+                )
+            }))
+            .collect::<Vec<_>>();
+        if revoke_mode_fences_runtime(revoke.revoke_mode) {
+            steps.push(AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                effect_kind: AppletRevokeLocalEffectKind::LocalAppletFence,
+                effect_ref: applet_revoke_local_ref(applet_id.clone())?,
+                status: AppletRevokeLocalEffectStatus::Pending,
+                reason_code: None,
+            }));
+        }
+        let mut outcome = AppletRevokeOutcome {
+            operation_id,
+            revoke_plan_digest: revoke.revoke_plan_digest.clone(),
+            status: AppletRevokeSagaStatus::InProgress,
+            steps,
+            revoked_refs: Vec::new(),
+            rejections: Vec::new(),
         };
+        persist_revoke_execution(
+            state,
+            &mut record,
+            &admin_actor_key,
+            &idempotency_key,
+            &request_digest,
+            &request_value,
+            &mut outcome,
+        )
+        .await?;
+        outcome
+    };
 
     if outcome.status == AppletRevokeSagaStatus::Complete {
         return json_ok(outcome);
@@ -719,46 +722,101 @@ async fn revoke_install_endpoint(
         .chain(revoke.membership_state_events.iter().cloned())
         .collect::<Vec<_>>();
     for (index, submission) in submissions.into_iter().enumerate() {
-        if matches!(
-            outcome.steps[index].status,
-            AppletRevokeStepStatus::Accepted | AppletRevokeStepStatus::Duplicate
-        ) {
+        if matches!(outcome.steps[index], AppletRevokeStep::CommittedEvent(_)) {
             continue;
         }
-        let effect_ref = outcome.steps[index].effect_ref.clone();
+        let submitted_event_id = submission.event.event_id.clone();
+        let effect_kind = revoke_event_effect_kind(&submission.event.kind)?;
         outcome
             .rejections
-            .retain(|item| item.requested_scope.as_deref() != Some(effect_ref.as_str()));
-        outcome.steps[index].reason_code = None;
+            .retain(|item| item.requested_scope.as_deref() != Some(submitted_event_id.as_str()));
+        outcome.steps[index] = pending_revoke_event_step(effect_kind, submitted_event_id.clone());
+        // A retry of a rejected step is made durable as pending before the
+        // exact signed bytes are submitted again. The first attempt already
+        // persisted the same pending identity with the initial ledger.
+        persist_revoke_execution(
+            state,
+            &mut record,
+            &admin_actor_key,
+            &idempotency_key,
+            &request_digest,
+            &request_value,
+            &mut outcome,
+        )
+        .await?;
+        if outcome.status == AppletRevokeSagaStatus::Complete {
+            return json_ok(outcome);
+        }
+        if matches!(outcome.steps[index], AppletRevokeStep::CommittedEvent(_)) {
+            continue;
+        }
+        if let Some(committed_event_ref) =
+            durable_revoke_event_ref(state, &submitted_event_id).await?
+        {
+            outcome.steps[index] =
+                AppletRevokeStep::CommittedEvent(AppletRevokeCommittedEventStep {
+                    effect_kind,
+                    committed_event_ref: committed_event_ref.clone(),
+                    status: AppletRevokeCommittedEventStatus::Duplicate,
+                    reason_code: None,
+                });
+            outcome
+                .revoked_refs
+                .push(AppletRevokeEffectRef::CommittedEvent(committed_event_ref));
+            persist_revoke_execution(
+                state,
+                &mut record,
+                &admin_actor_key,
+                &idempotency_key,
+                &request_digest,
+                &request_value,
+                &mut outcome,
+            )
+            .await?;
+            continue;
+        }
         match crate::routing::events::event_log::submit_initial_event_submission(
             state, &session, submission,
         )
         .await
         {
             Ok(accepted) => {
-                outcome.steps[index].status = if accepted.duplicate {
-                    AppletRevokeStepStatus::Duplicate
+                let committed_event_ref = committed_revoke_event_ref(
+                    state,
+                    &submitted_event_id,
+                    accepted.event_id.as_str(),
+                )
+                .await?;
+                let status = if accepted.duplicate {
+                    AppletRevokeCommittedEventStatus::Duplicate
                 } else {
-                    AppletRevokeStepStatus::Accepted
+                    AppletRevokeCommittedEventStatus::Accepted
                 };
-                outcome.revoked_refs.push(accepted.event_id);
-                if let Some(fence) = outcome
-                    .steps
-                    .iter_mut()
-                    .find(|step| step.effect_kind == AppletRevokeEffectKind::LocalAppletFence)
-                {
-                    fence.status = AppletRevokeStepStatus::Accepted;
-                }
+                outcome.steps[index] =
+                    AppletRevokeStep::CommittedEvent(AppletRevokeCommittedEventStep {
+                        effect_kind,
+                        committed_event_ref: committed_event_ref.clone(),
+                        status,
+                        reason_code: None,
+                    });
+                outcome
+                    .revoked_refs
+                    .push(AppletRevokeEffectRef::CommittedEvent(committed_event_ref));
             }
             Err(error) => {
-                outcome.steps[index].status = AppletRevokeStepStatus::Rejected;
-                outcome.steps[index].reason_code =
-                    Some(arkret_wire::ReasonCode::from_wire(&error.code()));
+                let reason_code = arkret_wire::ReasonCode::from_wire(&error.code());
+                outcome.steps[index] =
+                    AppletRevokeStep::SubmittedEvent(AppletRevokeSubmittedEventStep {
+                        effect_kind,
+                        submitted_event_id: submitted_event_id.clone(),
+                        status: AppletRevokeSubmittedEventStatus::Rejected,
+                        reason_code: Some(reason_code.clone()),
+                    });
                 outcome
                     .rejections
                     .push(arkret_models_integration::AppletScopeRejection {
-                        requested_scope: Some(outcome.steps[index].effect_ref.clone()),
-                        reason_code: arkret_wire::ReasonCode::from_wire(&error.code()),
+                        requested_scope: Some(submitted_event_id.to_string()),
+                        reason_code,
                     });
                 outcome.status = AppletRevokeSagaStatus::PartiallyCompleted;
                 persist_revoke_execution(
@@ -769,7 +827,6 @@ async fn revoke_install_endpoint(
                     &request_digest,
                     &request_value,
                     &mut outcome,
-                    false,
                 )
                 .await?;
                 return json_ok(outcome);
@@ -783,12 +840,19 @@ async fn revoke_install_endpoint(
             &request_digest,
             &request_value,
             &mut outcome,
-            revoke_mode_fences_runtime(revoke.revoke_mode),
         )
         .await?;
+        if outcome.status == AppletRevokeSagaStatus::Complete {
+            return json_ok(outcome);
+        }
     }
 
     if revoke_mode_fences_runtime(revoke.revoke_mode) {
+        if !revoke_outcome_ready_for_local_effect(&outcome) {
+            return Err(AppError::internal(
+                "Applet revoke cannot apply its local fence before every Event step is committed",
+            ));
+        }
         let local_outcome = revoke_applet_record_after_admin_gate(
             state,
             &session.actor,
@@ -796,19 +860,41 @@ async fn revoke_install_endpoint(
             &revoke.effective_scope,
         )
         .await?;
-        outcome.revoked_refs.push(local_outcome.bot_actor_id);
-        outcome.revoked_refs.extend(local_outcome.ghost_actor_ids);
+        outcome
+            .revoked_refs
+            .push(AppletRevokeEffectRef::TypedResource(
+                applet_revoke_local_ref(local_outcome.bot_actor_id)?,
+            ));
+        for ghost_actor_id in local_outcome.ghost_actor_ids {
+            outcome
+                .revoked_refs
+                .push(AppletRevokeEffectRef::TypedResource(
+                    applet_revoke_local_ref(ghost_actor_id)?,
+                ));
+        }
+        let step = outcome
+            .steps
+            .iter_mut()
+            .find(|step| {
+                matches!(
+                    step,
+                    AppletRevokeStep::LocalEffect(local)
+                        if local.effect_kind == AppletRevokeLocalEffectKind::LocalAppletFence
+                )
+            })
+            .ok_or_else(|| AppError::internal("Applet revoke local fence step disappeared"))?;
+        let AppletRevokeStep::LocalEffect(step) = step else {
+            unreachable!("matched local Applet fence")
+        };
+        step.status = AppletRevokeLocalEffectStatus::Accepted;
+        outcome
+            .revoked_refs
+            .push(AppletRevokeEffectRef::TypedResource(
+                step.effect_ref.clone(),
+            ));
     }
-    outcome.revoked_refs.sort();
-    outcome.revoked_refs.dedup();
+    deduplicate_revoke_effect_refs(&mut outcome.revoked_refs)?;
     outcome.status = AppletRevokeSagaStatus::Complete;
-    if let Some(step) = outcome
-        .steps
-        .iter_mut()
-        .find(|step| step.effect_kind == AppletRevokeEffectKind::LocalAppletFence)
-    {
-        step.status = AppletRevokeStepStatus::Accepted;
-    }
     record = applet_record(state, &applet_id, &revoke.effective_scope)
         .await?
         .ok_or_else(|| AppError::not_found("applet disappeared during revoke"))?;
@@ -820,7 +906,6 @@ async fn revoke_install_endpoint(
         &request_digest,
         &request_value,
         &mut outcome,
-        false,
     )
     .await?;
     crate::routing::append_audit_log(
@@ -890,6 +975,101 @@ fn revoke_mode_fences_runtime(mode: AppletRevokeMode) -> bool {
     )
 }
 
+fn pending_revoke_event_step(
+    effect_kind: AppletRevokeEventEffectKind,
+    submitted_event_id: EventId,
+) -> AppletRevokeStep {
+    AppletRevokeStep::SubmittedEvent(AppletRevokeSubmittedEventStep {
+        effect_kind,
+        submitted_event_id,
+        status: AppletRevokeSubmittedEventStatus::Pending,
+        reason_code: None,
+    })
+}
+
+fn revoke_event_effect_kind(kind: &EventKind) -> Result<AppletRevokeEventEffectKind, AppError> {
+    match kind {
+        EventKind::CapabilityRevoke => Ok(AppletRevokeEventEffectKind::CapabilityRevokeEvent),
+        EventKind::MemberState => Ok(AppletRevokeEventEffectKind::MembershipStateEvent),
+        _ => Err(AppError::internal(
+            "stored Applet revoke submission has an unsupported Event kind",
+        )),
+    }
+}
+
+fn applet_revoke_local_ref(
+    value: impl Into<String>,
+) -> Result<AppletRevokeLocalEffectRef, AppError> {
+    AppletRevokeLocalEffectRef::new(value).map_err(|error| {
+        AppError::internal(format!(
+            "Applet revoke local effect identity is invalid: {error}"
+        ))
+    })
+}
+
+async fn committed_revoke_event_ref(
+    state: &AppState,
+    submitted_event_id: &EventId,
+    accepted_event_id: &str,
+) -> Result<CommittedEventRef, AppError> {
+    if accepted_event_id != submitted_event_id.as_str() {
+        return Err(AppError::internal(
+            "Event admission returned an identity different from the submitted Event",
+        ));
+    }
+    durable_revoke_event_ref(state, submitted_event_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::internal(
+                "Event admission succeeded without a durable governing-Station commit",
+            )
+        })
+}
+
+async fn durable_revoke_event_ref(
+    state: &AppState,
+    submitted_event_id: &EventId,
+) -> Result<Option<CommittedEventRef>, AppError> {
+    let Some(record) = state
+        .persistence()
+        .committed_event(submitted_event_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    if record.event.event_id != *submitted_event_id {
+        return Err(AppError::internal(
+            "durable committed Event record disagrees with the submitted Event identity",
+        ));
+    }
+    Ok(Some(CommittedEventRef {
+        event_id: submitted_event_id.clone(),
+        commit_id: record.commit.commit_id,
+        stream_ref: record.commit.stream_ref,
+        stream_position: record.commit.stream_position,
+    }))
+}
+
+fn deduplicate_revoke_effect_refs(refs: &mut Vec<AppletRevokeEffectRef>) -> Result<(), AppError> {
+    let mut keyed = refs
+        .drain(..)
+        .map(|effect_ref| {
+            serde_json::to_string(&effect_ref)
+                .map(|key| (key, effect_ref))
+                .map_err(|error| {
+                    AppError::internal(format!(
+                        "Applet revoke effect ref serialization failed: {error}"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    keyed.dedup_by(|left, right| left.0 == right.0);
+    refs.extend(keyed.into_iter().map(|(_, effect_ref)| effect_ref));
+    Ok(())
+}
+
 async fn build_revoke_plan(
     state: &AppState,
     record: &AppletRecord,
@@ -920,21 +1100,31 @@ async fn build_revoke_plan(
     let mut capability_revocations = Vec::new();
     let mut membership_removals = Vec::new();
     if revoke_mode_fences_runtime(preview.revoke_mode) {
-        let scope_realm_id = effective_scope_realm_id(&preview.effective_scope);
-        let active_grant_ids = state
-            .authorization()
-            .grants_for_subject(
-                &arkret_wire::ActorId::service(package.service_id.clone()),
-                &scope_realm_id,
-            )
-            .into_iter()
-            .map(|grant| grant.grant_id.to_string())
-            .collect::<std::collections::BTreeSet<_>>();
+        let scope_realm_id = arkret_wire::RealmId::new(effective_scope_realm_id(
+            &preview.effective_scope,
+        ))
+        .map_err(|error| AppError::internal(format!("effective Realm id is invalid: {error}")))?;
+        let grant_snapshot = state
+            .persistence()
+            .capability_grant_current_results(&scope_realm_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "cannot read governing-Station Capability Grant current snapshot: {error}"
+                ))
+            })?;
+        let active_grant_revisions = active_applet_grant_revisions(
+            grant_snapshot,
+            &scope_realm_id,
+            &package.service_id,
+            &response.capability_grant_refs,
+        )?;
         for grant_id in &response.capability_grant_refs {
-            if active_grant_ids.contains(grant_id.as_str()) {
+            if let Some(expected_revision) = active_grant_revisions.get(grant_id) {
                 capability_revocations.push(AppletCapabilityRevokeIntent {
                     event_kind: EventKind::CapabilityRevoke.as_str().to_owned(),
                     grant_id: grant_id.clone(),
+                    expected_revision: expected_revision.clone(),
                     registration_epoch: package.registration_epoch.clone(),
                     reason_code: preview.reason_code.clone(),
                 });
@@ -968,6 +1158,51 @@ async fn build_revoke_plan(
         })?,
         revoke_plan: plan,
     })
+}
+
+fn active_applet_grant_revisions(
+    snapshot: Vec<soland_storage::CapabilityGrantCurrentResultRecord>,
+    realm_id: &arkret_wire::RealmId,
+    applet_service_id: &arkret_wire::DidCoreId,
+    installed_grant_refs: &[arkret_wire::GrantId],
+) -> Result<std::collections::BTreeMap<arkret_wire::GrantId, CurrentRevision>, AppError> {
+    let installed = installed_grant_refs
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected_subject = arkret_wire::ActorId::service(applet_service_id.clone());
+    let mut active = std::collections::BTreeMap::new();
+    for row in snapshot {
+        if !installed.contains(&row.grant_id)
+            || row.status != soland_storage::CapabilityGrantCurrentStatus::Active
+        {
+            continue;
+        }
+        let grant = serde_json::from_value::<CapabilityGrant>(row.value).map_err(|error| {
+            AppError::internal(format!(
+                "active Applet Capability Grant current value is invalid: {error}"
+            ))
+        })?;
+        let subject_matches = matches!(
+            &grant.subject,
+            CapabilitySubject::Actor(subject) if subject == &expected_subject
+        );
+        if grant.id != row.grant_id
+            || grant.realm_id.as_ref() != Some(realm_id)
+            || grant.status != CapabilityGrantStatus::Active
+            || !subject_matches
+        {
+            return Err(AppError::internal(
+                "active Applet Capability Grant current row disagrees with its canonical value",
+            ));
+        }
+        if active.insert(row.grant_id, row.revision).is_some() {
+            return Err(AppError::internal(
+                "governing-Station Capability Grant snapshot contains a duplicate Grant id",
+            ));
+        }
+    }
+    Ok(active)
 }
 
 fn incomplete_managed_membership_projection(detail: impl std::fmt::Display) -> AppError {
@@ -1120,8 +1355,8 @@ fn validate_revoke_submissions(
     let expected_grants = plan
         .capability_revocations
         .iter()
-        .map(|intent| intent.grant_id.as_str().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
+        .map(|intent| (intent.grant_id.clone(), intent))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let mut submitted_grants = std::collections::BTreeSet::new();
     for submission in &revoke.capability_revoke_events {
         let event = &submission.event;
@@ -1136,20 +1371,38 @@ fn validate_revoke_submissions(
         let payload = &event.payload;
         let grant_id = payload
             .get("grant_id")
-            .and_then(Value::as_str)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::GrantId>(value).ok())
             .ok_or_else(|| AppError::param_invalid("capability revoke payload lacks grant_id"))?;
-        if payload.get("reason").and_then(Value::as_str) != Some(plan.reason_code.as_str()) {
+        let expected = expected_grants.get(&grant_id).ok_or_else(|| {
+            AppError::conflict("capability revoke Event target is absent from the current plan")
+                .with_wire_code("failed_precondition")
+        })?;
+        let submitted_revision = payload
+            .get("expected_revision")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<CurrentRevision>(value).ok())
+            .ok_or_else(|| {
+                AppError::param_invalid("capability revoke payload lacks expected_revision")
+            })?;
+        if submitted_revision != expected.expected_revision {
+            return Err(AppError::conflict(
+                "capability revoke expected_revision does not match the current plan",
+            )
+            .with_wire_code("failed_precondition"));
+        }
+        if payload.get("reason").and_then(Value::as_str) != Some(expected.reason_code.as_str()) {
             return Err(AppError::param_invalid(
                 "capability revoke reason does not match the plan",
             ));
         }
-        if !submitted_grants.insert(grant_id.to_owned()) {
+        if !submitted_grants.insert(grant_id) {
             return Err(AppError::param_invalid(
                 "duplicate capability revoke target",
             ));
         }
     }
-    if submitted_grants != expected_grants {
+    if submitted_grants != expected_grants.keys().cloned().collect() {
         return Err(AppError::conflict(
             "capability revoke Event set does not exactly match the current plan",
         )
@@ -1223,7 +1476,6 @@ async fn persist_revoke_execution(
     request_digest: &str,
     request: &Value,
     outcome: &mut AppletRevokeOutcome,
-    fence_applet: bool,
 ) -> Result<(), AppError> {
     let execution = json!({
         "principal_id": state.service_id(),
@@ -1236,10 +1488,6 @@ async fn persist_revoke_execution(
     for _ in 0..8 {
         let current = record.clone();
         let mut replacement = current.clone();
-        if fence_applet && replacement.revoked_at.is_none() {
-            replacement.revoked_at = Some(chrono::Utc::now());
-            replacement.status = "revoking".to_owned();
-        }
         replacement.revoke_execution = Some(execution.clone());
         if persist_applet_record(state, &current, &replacement).await? {
             *record = replacement;
@@ -1275,17 +1523,12 @@ fn revoke_outcome_progress(outcome: &AppletRevokeOutcome) -> (bool, usize, usize
     let completed_prefix = outcome
         .steps
         .iter()
-        .take_while(|step| step.status != AppletRevokeStepStatus::Pending)
+        .take_while(|step| !revoke_step_is_pending(step))
         .count();
     let accepted = outcome
         .steps
         .iter()
-        .filter(|step| {
-            matches!(
-                step.status,
-                AppletRevokeStepStatus::Accepted | AppletRevokeStepStatus::Duplicate
-            )
-        })
+        .filter(|step| revoke_step_is_successful(step))
         .count();
     let status_rank = match outcome.status {
         AppletRevokeSagaStatus::InProgress => 0,
@@ -1298,6 +1541,52 @@ fn revoke_outcome_progress(outcome: &AppletRevokeOutcome) -> (bool, usize, usize
         accepted,
         status_rank,
     )
+}
+
+fn revoke_step_is_pending(step: &AppletRevokeStep) -> bool {
+    matches!(
+        step,
+        AppletRevokeStep::SubmittedEvent(AppletRevokeSubmittedEventStep {
+            status: AppletRevokeSubmittedEventStatus::Pending,
+            ..
+        }) | AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+            status: AppletRevokeLocalEffectStatus::Pending,
+            ..
+        })
+    )
+}
+
+fn revoke_step_is_successful(step: &AppletRevokeStep) -> bool {
+    matches!(
+        step,
+        AppletRevokeStep::CommittedEvent(_)
+            | AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                status: AppletRevokeLocalEffectStatus::Accepted
+                    | AppletRevokeLocalEffectStatus::Duplicate,
+                ..
+            })
+    )
+}
+
+fn revoke_outcome_ready_for_local_effect(outcome: &AppletRevokeOutcome) -> bool {
+    let mut local_fence_pending = false;
+    for step in &outcome.steps {
+        match step {
+            AppletRevokeStep::CommittedEvent(_) => {}
+            AppletRevokeStep::SubmittedEvent(_) => return false,
+            AppletRevokeStep::LocalEffect(local)
+                if local.effect_kind == AppletRevokeLocalEffectKind::LocalAppletFence
+                    && local.status == AppletRevokeLocalEffectStatus::Pending =>
+            {
+                if local_fence_pending {
+                    return false;
+                }
+                local_fence_pending = true;
+            }
+            AppletRevokeStep::LocalEffect(_) => return false,
+        }
+    }
+    local_fence_pending
 }
 
 #[salvo::oapi::endpoint(
@@ -2301,6 +2590,72 @@ mod revoke_saga_tests {
         assert!(validate_revoke_submissions(&actor, &plan, &request).is_err());
     }
 
+    #[test]
+    fn stale_capability_revision_is_rejected_before_the_saga_can_apply_an_effect() {
+        let actor = admin_actor("ak:did_core:web:service-a.example");
+        let scope = realm_scope();
+        let expected_revision = json!({
+            "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+            "stream_position": 41
+        });
+        let plan: AppletRevokePlan = serde_json::from_value(json!({
+            "applet_id": APPLET_ID,
+            "effective_scope": scope,
+            "registration_epoch": format!("sha256:{}", "a".repeat(64)),
+            "reason_code": "requested_by_admin",
+            "revoke_mode": "revoke_runtime_only",
+            "capability_revocations": [{
+                "event_kind": "ak.capability.revoke",
+                "grant_id": TARGET_GRANT,
+                "expected_revision": expected_revision,
+                "registration_epoch": format!("sha256:{}", "a".repeat(64)),
+                "reason_code": "requested_by_admin"
+            }],
+            "membership_removals": [],
+            "widget_token_refs": [],
+            "delegated_session_refs": []
+        }))
+        .unwrap();
+        let mut event = arkret_wire::test_support::raw_event(
+            EventKind::CapabilityRevoke.as_str(),
+            realm_scope(),
+            actor.signing_principal_id().clone(),
+            actor.route_service_id().clone(),
+            1,
+            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
+            json!({
+                "grant_id": TARGET_GRANT,
+                "expected_revision": expected_revision,
+                "reason": "requested_by_admin"
+            }),
+        )
+        .unwrap();
+        event.actor_id = actor.clone();
+        let mut request = AppletRevokeRequestBody {
+            revoke_plan_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            effective_scope: realm_scope(),
+            reason_code: plan.reason_code.clone(),
+            revoke_mode: plan.revoke_mode,
+            capability_revoke_events: vec![arkret_wire::EventInitialSubmission::online(event)],
+            membership_state_events: Vec::new(),
+            proof: None,
+        };
+        assert!(validate_revoke_submissions(&actor, &plan, &request).is_ok());
+
+        request.capability_revoke_events[0].event.payload.insert(
+            "expected_revision".to_owned(),
+            json!({
+                "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                "stream_position": 40
+            }),
+        );
+        let error = validate_revoke_submissions(&actor, &plan, &request).unwrap_err();
+        assert_eq!(
+            error.wire_code_override.as_deref(),
+            Some("failed_precondition")
+        );
+    }
+
     fn completed_execution() -> Value {
         json!({
             "principal_id": "ak:did_core:web:service-a.example",
@@ -2456,16 +2811,88 @@ mod revoke_saga_tests {
                 "operation_id": "ak:operation:01904100-0000-7000-8000-000000000001",
                 "revoke_plan_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "status": "in_progress",
-                "steps": statuses.iter().enumerate().map(|(index, status)| json!({
-                    "effect_kind": "capability_revoke_event",
-                    "effect_ref": format!("ak:event:step-{index}"),
-                    "status": status,
-                })).collect::<Vec<_>>(),
+                "steps": statuses.iter().map(|status| match *status {
+                    "pending" => json!({
+                        "effect_kind": "capability_revoke_event",
+                        "submitted_event_id": "ak:event:AXKJvMpMFIFTD9GYNEzOeImU-2ytvLCtsCq3Mrq9-Ci8",
+                        "status": "pending",
+                    }),
+                    "accepted" => json!({
+                        "effect_kind": "capability_revoke_event",
+                        "committed_event_ref": {
+                            "event_id": "ak:event:AXKJvMpMFIFTD9GYNEzOeImU-2ytvLCtsCq3Mrq9-Ci8",
+                            "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                            "stream_ref": {"kind": "realm", "realm_id": REALM_ID},
+                            "stream_position": 42
+                        },
+                        "status": "accepted",
+                    }),
+                    other => panic!("unsupported fixture status {other}"),
+                }).collect::<Vec<_>>(),
             }))
             .unwrap()
         };
         let step_two = outcome(&["accepted", "accepted", "pending"]);
         let step_three = outcome(&["accepted", "accepted", "accepted"]);
         assert!(revoke_outcome_progress(&step_three) > revoke_outcome_progress(&step_two));
+    }
+
+    #[test]
+    fn accepted_then_rejected_events_do_not_open_the_local_fence_gate() {
+        let outcome: AppletRevokeOutcome = serde_json::from_value(json!({
+            "operation_id": "ak:operation:01904100-0000-7000-8000-000000000001",
+            "revoke_plan_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "status": "partially_completed",
+            "steps": [
+                {
+                    "effect_kind": "capability_revoke_event",
+                    "committed_event_ref": {
+                        "event_id": "ak:event:AXKJvMpMFIFTD9GYNEzOeImU-2ytvLCtsCq3Mrq9-Ci8",
+                        "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                        "stream_ref": {"kind": "realm", "realm_id": REALM_ID},
+                        "stream_position": 42
+                    },
+                    "status": "accepted"
+                },
+                {
+                    "effect_kind": "membership_state_event",
+                    "submitted_event_id": "ak:event:AZ0ZCDzYHwYBC27RoU6bQQQgjHBScA-_bYFHyK9m1IQJ",
+                    "status": "rejected",
+                    "reason_code": "cas_conflict"
+                },
+                {
+                    "effect_kind": "local_applet_fence",
+                    "effect_ref": APPLET_ID,
+                    "status": "pending"
+                }
+            ]
+        }))
+        .unwrap();
+        assert!(!revoke_outcome_ready_for_local_effect(&outcome));
+
+        let all_events_committed: AppletRevokeOutcome = serde_json::from_value(json!({
+            "operation_id": "ak:operation:01904100-0000-7000-8000-000000000001",
+            "revoke_plan_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "status": "in_progress",
+            "steps": [
+                {
+                    "effect_kind": "capability_revoke_event",
+                    "committed_event_ref": {
+                        "event_id": "ak:event:AXKJvMpMFIFTD9GYNEzOeImU-2ytvLCtsCq3Mrq9-Ci8",
+                        "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                        "stream_ref": {"kind": "realm", "realm_id": REALM_ID},
+                        "stream_position": 42
+                    },
+                    "status": "duplicate"
+                },
+                {
+                    "effect_kind": "local_applet_fence",
+                    "effect_ref": APPLET_ID,
+                    "status": "pending"
+                }
+            ]
+        }))
+        .unwrap();
+        assert!(revoke_outcome_ready_for_local_effect(&all_events_committed));
     }
 }
