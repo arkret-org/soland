@@ -45,6 +45,7 @@ pub struct PgPersistenceStore {
     realm_organization_statements: PgRealmOrganizationStatementStore,
     audit: PgAuditStore,
     push_devices: PgPushDeviceStore,
+    push_registration_handoffs: PgPushRegistrationHandoffStore,
     events: PgEventStore,
     federation_operations: PgFederationOperationsStore,
     moderation: PgModerationStore,
@@ -126,6 +127,7 @@ impl PgPersistenceStore {
             realm_organization_statements: PgRealmOrganizationStatementStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
             push_devices: PgPushDeviceStore { pool: pool.clone() },
+            push_registration_handoffs: PgPushRegistrationHandoffStore { pool: pool.clone() },
             events: PgEventStore { pool: pool.clone() },
             federation_operations: PgFederationOperationsStore { pool: pool.clone() },
             moderation: PgModerationStore { pool: pool.clone() },
@@ -325,6 +327,10 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
 
     fn push_devices(&self) -> &dyn PushDeviceStore {
         &self.push_devices
+    }
+
+    fn push_registration_handoffs(&self) -> &dyn PushRegistrationHandoffStore {
+        &self.push_registration_handoffs
     }
 
     fn signal_relay(&self) -> &dyn SignalRelayStore {

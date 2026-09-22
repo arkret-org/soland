@@ -1207,6 +1207,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    push_registration_handoff_intents (source_station_id, registration_id) {
+        source_station_id -> Text,
+        registration_id -> Text,
+        destination_gateway_id -> Text,
+        desired_state -> Text,
+        request_digest -> Text,
+        canonical_request -> Bytea,
+        status -> Text,
+        receipt -> Nullable<Jsonb>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     realm_invites (pk) {
         pk -> Int8,
         id -> Bytea,
@@ -1993,6 +2008,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_strand_watches,
     projection_strands,
     push_devices,
+    push_registration_handoff_intents,
     realm_invites,
     realm_meta,
     realm_organizations,

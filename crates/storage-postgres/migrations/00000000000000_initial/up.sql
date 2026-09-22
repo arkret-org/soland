@@ -3066,6 +3066,29 @@ CREATE TABLE public.push_devices (
 CREATE UNIQUE INDEX push_devices_account_device_route_idx ON public.push_devices ((payload->'account_id'), device_id, (payload->>'push_route_id'));
 CREATE INDEX push_devices_source_target_idx ON public.push_devices ((payload->'account_id'->>'station_id'), (payload->>'push_target_id'), device_id);
 
+CREATE TABLE public.push_registration_handoff_intents (
+    source_station_id text NOT NULL,
+    registration_id text NOT NULL,
+    destination_gateway_id text NOT NULL,
+    desired_state text NOT NULL CHECK (desired_state IN ('active', 'revoked')),
+    request_digest text NOT NULL,
+    canonical_request bytea NOT NULL,
+    status text NOT NULL CHECK (status IN ('awaiting_receipt', 'receipt_verified')),
+    receipt jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (source_station_id, registration_id),
+    CHECK (updated_at >= created_at),
+    CHECK (
+        (status = 'awaiting_receipt' AND receipt IS NULL)
+        OR (status = 'receipt_verified' AND receipt IS NOT NULL)
+    )
+);
+
+CREATE INDEX push_registration_handoff_retry_idx
+    ON public.push_registration_handoff_intents (source_station_id, updated_at, registration_id)
+    WHERE status = 'awaiting_receipt';
+
 CREATE TABLE public.realm_invites (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id bytea NOT NULL CHECK (octet_length(id) = 33),
