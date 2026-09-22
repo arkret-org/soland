@@ -75,8 +75,12 @@ pub(super) fn validate_control_move_seal_basis(
 }
 
 pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
-    kind.parse::<arkret_wire::EventKind>()
-        .is_ok_and(|kind| arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&kind))
+    arkret_schema::REALM_BOOTSTRAP_PROFILES
+        .iter()
+        .flat_map(|profile| profile.ordered_slots)
+        .any(|slot| {
+            slot.event_kind != arkret_wire::event_kind_str::REALM_CREATE && slot.event_kind == kind
+        })
 }
 
 pub(super) async fn reject_revoked_actor_device_signature(
