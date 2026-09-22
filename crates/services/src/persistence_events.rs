@@ -887,38 +887,6 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         }
         Ok(retired)
     }
-
-    async fn enqueue_welcome(
-        &self,
-        welcome: crate::events::MlsWelcomeState,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .mls_welcomes()
-            .enqueue(&persistence_mls_welcome(welcome))
-            .await?;
-        Ok(())
-    }
-}
-
-fn persistence_mls_welcome(
-    welcome: crate::events::MlsWelcomeState,
-) -> soland_storage::MlsWelcomeRecord {
-    soland_storage::MlsWelcomeRecord {
-        id: welcome.id,
-        group_id: welcome.group_id,
-        recipient_actor_id: welcome.recipient_actor_id,
-        recipient_device_id: welcome.recipient_device_id,
-        recipient_endpoint_verification_method: welcome.recipient_endpoint_verification_method,
-        intended_realm_id: welcome.intended_realm_id,
-        welcome_bytes: welcome.welcome_bytes,
-        key_package_id: welcome.key_package_id,
-        epoch: welcome.epoch,
-        commit_ref: welcome.commit_ref,
-        governance_binding: serde_json::to_value(welcome.governance_binding)
-            .expect("typed MLS governance binding must serialize"),
-        enqueued_at: welcome.enqueued_at,
-        delivered_at: welcome.delivered_at,
-    }
 }
 
 #[async_trait::async_trait]

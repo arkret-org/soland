@@ -161,7 +161,6 @@ DROP TABLE IF EXISTS key_backups CASCADE;
 DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
 DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;
-DROP TABLE IF EXISTS mls_welcomes CASCADE;
 DROP TABLE IF EXISTS moderation_reports CASCADE;
 DROP TABLE IF EXISTS moderation_queue_items CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
@@ -225,10 +224,3 @@ DROP TABLE IF EXISTS public.history_key_response_streams;
 DROP TABLE IF EXISTS public.history_key_requests;
 
 DROP TABLE IF EXISTS device_inventory_station CASCADE;
-DROP FUNCTION IF EXISTS project_mls_welcome_discovery() CASCADE;
-DROP FUNCTION IF EXISTS invalidate_mls_welcome_claim() CASCADE;
-DROP TABLE IF EXISTS mls_welcome_discovery_windows;
-DROP TABLE IF EXISTS mls_welcome_discovery_entries;
-DROP TABLE IF EXISTS mls_welcome_discovery_chain;
-DROP TABLE IF EXISTS mls_welcome_discovery_scopes;
-DROP TABLE IF EXISTS mls_welcome_discovery_membership;

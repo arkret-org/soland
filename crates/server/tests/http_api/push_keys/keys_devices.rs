@@ -310,7 +310,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
             "messages": {
                 (alice_core.as_str()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": {
-                        "kind": "ak.mls.welcome",
+                        "kind": "ak.encrypted.test",
                         "content": "not-an-object",
                         "expires_at": arkret_canonical::format_timestamp_canonical(
                             chrono::Utc::now() + chrono::Duration::hours(1)
@@ -332,8 +332,8 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     );
 
     let device_message = device_message_target(
-        "ak.mls.welcome",
-        encrypted_envelope("ak.mls.welcome", "opaque"),
+        "ak.encrypted.test",
+        encrypted_envelope("ak.encrypted.test", "opaque"),
     );
     let send: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)

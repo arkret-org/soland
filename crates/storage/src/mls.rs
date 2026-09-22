@@ -180,10 +180,11 @@ mod key_package_lifecycle_tests {
 
     #[test]
     fn ordinary_claim_and_consumption_are_explicit_states() {
+        const GROUP_ID: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let claimed = classify_key_package_lifecycle(
             false,
             None,
-            Some("group-a"),
+            Some(GROUP_ID),
             Some(10),
             Some(20_000),
             None,
@@ -194,13 +195,13 @@ mod key_package_lifecycle_tests {
             PersistedKeyPackageClaimState::Claimed {
                 ref mls_group_id,
                 ..
-            } if mls_group_id.as_str() == "group-a"
+            } if mls_group_id.as_str() == GROUP_ID
         ));
 
         let consumed = classify_key_package_lifecycle(
             false,
             None,
-            Some("group-a"),
+            Some(GROUP_ID),
             Some(10),
             Some(20_000),
             Some(15),
@@ -540,23 +541,6 @@ pub enum PeerKeyPackageClaimLedgerWriteResult {
     Inserted,
     Existing(Box<PeerKeyPackageClaimLedgerRecord>),
 }
-/// G3.S1 — durable Welcome envelope row (per closed recipient endpoint).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MlsWelcomeRecord {
-    pub id: String,
-    pub group_id: String,
-    pub recipient_actor_id: String,
-    pub recipient_device_id: Option<String>,
-    pub recipient_endpoint_verification_method: Option<String>,
-    pub intended_realm_id: Option<String>,
-    pub welcome_bytes: Vec<u8>,
-    pub key_package_id: String,
-    pub epoch: u64,
-    pub commit_ref: Option<String>,
-    pub governance_binding: Value,
-    pub enqueued_at: i64,
-    pub delivered_at: Option<i64>,
-}
 /// G3.S1 — durable per-group commit epoch row. The protocol identity is
 /// the tagged `effective_scope` plus `mls_group_id`; the row's `epoch`
 /// is bumped monotonically by the CAS-protected `try_bump` path. `id`
@@ -682,35 +666,6 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         mls_group_id: &str,
     ) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
-}
-/// G3.S1 — durable Welcome binding store. Delivery uses the standard
-/// device-message stream; these rows support claim and consume validation.
-#[async_trait]
-pub trait MlsWelcomeStore: Send + Sync {
-    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>>;
-    async fn discover(
-        &self,
-        query: &MlsWelcomeDiscoveryQuery,
-    ) -> PersistenceResult<MlsWelcomeDiscoveryPage>;
-}
-
-#[derive(Clone, Debug)]
-pub struct MlsWelcomeDiscoveryQuery {
-    pub scope: Value,
-    pub group_id: String,
-    pub endpoint: Value,
-    pub authority_context: Value,
-    pub authorization_ref: String,
-    pub membership_cells: Vec<String>,
-    pub limit: u32,
-    pub cursor: Option<String>,
-    pub now: chrono::DateTime<chrono::Utc>,
-}
-#[derive(Clone, Debug)]
-pub struct MlsWelcomeDiscoveryPage {
-    pub welcome_refs: Vec<String>,
-    pub next_cursor: Option<String>,
 }
 /// G3.S1 — per-group MLS commit epoch store.
 pub struct MlsCommitEpochAdvance<'a> {

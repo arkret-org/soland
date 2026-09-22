@@ -535,9 +535,6 @@ impl soland_storage::MlsAgentStoreRegistry for FaultInjectingStore {
     fn mls_key_packages(&self) -> &dyn soland_storage::MlsKeyPackageStore {
         self.inner.mls_key_packages()
     }
-    fn mls_welcomes(&self) -> &dyn soland_storage::MlsWelcomeStore {
-        self.inner.mls_welcomes()
-    }
     fn mls_commits(&self) -> &dyn soland_storage::MlsCommitStore {
         self.inner.mls_commits()
     }

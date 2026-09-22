@@ -3401,50 +3401,6 @@ pub(crate) async fn submit_federation_events(
             ));
             continue;
         }
-        if event_kind.as_deref() == Some(arkret_wire::EventKind::MlsWelcome.as_str()) {
-            let Some(payload) = envelope.get("payload") else {
-                rejected.push(rejected_item(
-                    id,
-                    ReasonCode::from_wire("schema_violation"),
-                    Some("MLS Welcome payload is required".to_owned()),
-                ));
-                continue;
-            };
-            match crate::routing::mls::validate_federated_welcome_peer_claim(
-                state,
-                &source_id,
-                &binding_realm,
-                &event_actor,
-                payload,
-            )
-            .await
-            {
-                Ok(()) => {}
-                Err("peer_claim_welcome_pending") => {
-                    let missing_event_ids = submissions
-                        .iter()
-                        .find(|submission| submission.event.event_id.as_str() == id)
-                        .map(|submission| submission.event.prev_refs.clone())
-                        .unwrap_or_default();
-                    let mut item = rejected_item(
-                        id,
-                        ReasonCode::DependencyMissing,
-                        Some("the Welcome peer claim ledger entry is not available yet".to_owned()),
-                    );
-                    item.missing_event_ids = missing_event_ids;
-                    rejected.push(item);
-                    continue;
-                }
-                Err(_) => {
-                    rejected.push(rejected_item(
-                        id,
-                        ReasonCode::from_wire("failed_precondition"),
-                        Some("MLS Welcome is not bound to the authenticated peer claim".to_owned()),
-                    ));
-                    continue;
-                }
-            }
-        }
         // Deviceless relayed submission, not a device named "federation:<domain>".
         let device_id = event_string_field_from_value(&envelope, "device_id").unwrap_or_default();
         let session = SessionRecord {
@@ -3935,7 +3891,6 @@ mod duplicate;
 mod ingress_receipt;
 mod outcome;
 pub(super) mod post_commit;
-mod preflight;
 mod projection_preflight;
 mod value;
 
@@ -3950,7 +3905,6 @@ use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
-use preflight::*;
 use projection_preflight::*;
 pub(in crate::routing::events::event_log) use value::replay_ackless_self_principal_ingress;
 pub(super) use value::validate_membership_compensation_live_state;

@@ -1,10 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_models_collaboration::sync_frames::account_sync::{
-    MlsWelcomeProjectedDeviceMessage, MlsWelcomeProjectionBinding,
-};
 use serde_json::Value;
-use soland_services::delivery::DeviceMessageState;
-use soland_services::events::MlsWelcomeState;
 use soland_services::operation_semantics as kinds;
 use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
 
@@ -180,43 +175,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .await
             {
                 return Err(format!("failed to mirror MLS KeyPackage claim: {error}"));
-            }
-        }
-        MlsProjectionEffect::WelcomeEnqueued {
-            welcome_id,
-            recipient_actor_id,
-            recipient_device_id,
-            recipient_endpoint_verification_method,
-            intended_realm_id,
-        } => {
-            let record = state.projections().mls_welcome_record(
-                recipient_actor_id,
-                recipient_device_id.as_deref(),
-                recipient_endpoint_verification_method.as_deref(),
-                intended_realm_id.as_deref(),
-                welcome_id,
-            );
-            let record = record
-                .ok_or_else(|| format!("MLS Welcome effect has no projected row: {welcome_id}"))?;
-            {
-                if let Err(error) = state
-                    .mls_key_packages()
-                    .enqueue_welcome(record.clone())
-                    .await
-                {
-                    return Err(format!("failed to mirror MLS Welcome enqueue: {error}"));
-                }
-                if record.recipient_device_id.is_some() {
-                    project_mls_welcome_to_device(
-                        state,
-                        origin,
-                        source_device_id,
-                        operation,
-                        &record,
-                        welcome_id,
-                    )
-                    .await?;
-                }
             }
         }
         MlsProjectionEffect::RemoveProposalRecorded => {}
@@ -751,140 +709,6 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         .store_realm_organization_statement(&record)
         .await
         .map_err(|error| format!("store RealmOrganization statement: {error}"))
-}
-
-async fn project_mls_welcome_to_device(
-    state: &AppState,
-    origin: &str,
-    source_device_id: &str,
-    operation: &Operation,
-    record: &MlsWelcomeState,
-    welcome_id: &str,
-) -> Result<(), String> {
-    let Some(recipient_device_id) = record.recipient_device_id.as_deref() else {
-        return Ok(());
-    };
-    let Ok(welcome) = operation.typed_payload::<arkret_wire::event_spec::MlsWelcome>() else {
-        return Err("accepted MLS Welcome payload is not the typed wire shape".to_owned());
-    };
-    let sender_device_id = if source_device_id.trim().is_empty() {
-        welcome
-            .sender_device_id
-            .as_ref()
-            .map(|device_id| device_id.as_str())
-            .unwrap_or_default()
-    } else {
-        source_device_id
-    }
-    .trim();
-    if sender_device_id.is_empty() {
-        return Err(
-            "cannot enqueue MLS Welcome device message without sender device id".to_owned(),
-        );
-    }
-    let Some(sender_account_id) = operation.context.sender.as_account_id().cloned() else {
-        return Err(
-            "cannot enqueue an ordinary MLS Welcome device message without an account sender"
-                .to_owned(),
-        );
-    };
-
-    // The recipient incarnation is frozen by the original KeyPackage source,
-    // never inferred from a current device that happens to reuse the same id.
-    let package = state
-        .mls_key_packages()
-        .key_package(&record.key_package_id)
-        .await
-        .map_err(|error| format!("load MLS Welcome KeyPackage source: {error}"))?
-        .ok_or_else(|| "MLS Welcome original KeyPackage source is unavailable".to_owned())?;
-    let account = arkret_wire::AccountId::new(
-        record
-            .recipient_actor_id
-            .parse()
-            .map_err(|error| format!("MLS Welcome recipient: {error}"))?,
-        state.service_core_id().clone(),
-    );
-    let owner = state
-        .identities()
-        .account(&account)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "MLS Welcome recipient Account is unavailable".to_owned())?;
-    if package.owner_account_pk != owner.pk
-        || package.actor_id != record.recipient_actor_id
-        || package.device_id.as_deref() != Some(recipient_device_id)
-    {
-        return Err(
-            "MLS Welcome KeyPackage does not bind the full recipient Account/device".into(),
-        );
-    }
-    let authorize = package
-        .device_authorize_event_id
-        .as_deref()
-        .ok_or_else(|| "MLS Welcome KeyPackage omits original device authorization".to_owned())?
-        .parse()
-        .map_err(|error| format!("MLS Welcome original authorization: {error}"))?;
-    let history =
-        crate::routing::identity::device_generation::load_confirmed_device_history(state, &account)
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "MLS Welcome recipient history is unavailable".to_owned())?;
-    let original = history.authorization(&authorize).ok_or_else(|| {
-        "MLS Welcome original authorization is not in confirmed history".to_owned()
-    })?;
-    if original.device_id().as_str() != recipient_device_id {
-        return Err("MLS Welcome original authorization names another device".into());
-    }
-    if !history.is_currently_active(original) {
-        // A confirmed closure permanently forbids recreating this instance's
-        // destroyed secrets during projection recovery.
-        return Ok(());
-    }
-    let recipient_device_authorization = soland_storage::DeviceRevocationGateSelector {
-        principal_id: account.principal_id,
-        station_id: account.station_id,
-        device_id: recipient_device_id.to_owned(),
-        target_device_authorize_event_id: original.authorization_event_id().to_string(),
-        target_device_generation_ref: original.authorized_generation_ref(),
-    };
-    let content = match serde_json::to_value(MlsWelcomeProjectedDeviceMessage {
-        sender_account_id,
-        sender_device_id: sender_device_id.to_owned(),
-        expires_at: welcome.expires_at.to_owned(),
-        content: welcome,
-        unsigned: MlsWelcomeProjectionBinding {
-            source_event_id: operation.context.event_id.to_string(),
-            mls_welcome_id: welcome_id.to_owned(),
-            key_package_id: record.key_package_id.clone(),
-        },
-    }) {
-        Ok(content) => content,
-        Err(error) => {
-            return Err(format!(
-                "serialize typed MLS Welcome device message: {error}"
-            ));
-        }
-    };
-    let message = DeviceMessageState {
-        idempotency_key: format!("mls_welcome:{welcome_id}"),
-        sender: origin.to_owned(),
-        recipient: record.recipient_actor_id.clone(),
-        device_id: recipient_device_id.to_owned(),
-        recipient_device_authorization,
-        position: state.next_to_device_position(),
-        content,
-        created_at: operation.created_at,
-    };
-    // The queue transaction checks this original recipient instance again;
-    // a concurrent closure cannot be bypassed by replaying the Welcome.
-    if let Err(error) = state
-        .deliveries()
-        .append_device_message(None, message)
-        .await
-    {
-        return Err(format!("enqueue MLS Welcome to-device message: {error}"));
-    }
-    Ok(())
 }
 
 /// P1 — fold a projected capability grant cell back into the

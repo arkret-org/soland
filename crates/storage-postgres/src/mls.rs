@@ -3,12 +3,11 @@ use diesel_async::AsyncConnection;
 use super::{
     BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis,
     MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable, OptionalExtension,
-    PeerClaimTerminalTransition, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
-    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value,
-    apply_key_package_claim, async_trait, ids, json_string_array, mls_effective_scope_parts,
-    pg_conn, sql_query, sql_types,
+    MlsKeyPackageStore, Nullable, OptionalExtension, PeerClaimTerminalTransition,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
+    PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value, apply_key_package_claim,
+    async_trait, ids, json_string_array, mls_effective_scope_parts, pg_conn, sql_query, sql_types,
 };
 
 /// Encode a key package's trust-binding Event reference for storage.
@@ -30,9 +29,6 @@ fn format_authorize_event_id(token: &[u8]) -> String {
     )
 }
 pub struct PgMlsKeyPackageStore {
-    pub pool: PgPool,
-}
-pub struct PgMlsWelcomeStore {
     pub pool: PgPool,
 }
 pub struct PgMlsCommitStore {
@@ -842,65 +838,6 @@ async fn load_peer_claim(
     .map_err(PersistenceError::database)
 }
 #[async_trait]
-impl MlsWelcomeStore for PgMlsWelcomeStore {
-    async fn discover(
-        &self,
-        query: &soland_storage::MlsWelcomeDiscoveryQuery,
-    ) -> PersistenceResult<soland_storage::MlsWelcomeDiscoveryPage> {
-        crate::mls_welcome_discovery::discover(&self.pool, query).await
-    }
-    async fn enqueue(&self, record: &MlsWelcomeRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO mls_welcomes \
-             (id, mls_group_id, recipient_actor_id, recipient_device_id, \
-              recipient_endpoint_verification_method, intended_realm_id, welcome_bytes, \
-              key_package_id, epoch, commit_ref, governance_binding, enqueued_at, delivered_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind::<Text, _>(&record.id)
-        .bind::<Text, _>(&record.group_id)
-        .bind::<Text, _>(&record.recipient_actor_id)
-        .bind::<Nullable<Text>, _>(&record.recipient_device_id)
-        .bind::<Nullable<Text>, _>(&record.recipient_endpoint_verification_method)
-        .bind::<Nullable<Text>, _>(&record.intended_realm_id)
-        .bind::<Binary, _>(&record.welcome_bytes)
-        .bind::<Text, _>(&record.key_package_id)
-        .bind::<BigInt, _>(
-            i64::try_from(record.epoch).map_err(|_| {
-                PersistenceError::Internal("MLS Welcome epoch exceeds i64".to_owned())
-            })?,
-        )
-        .bind::<Nullable<Text>, _>(&record.commit_ref)
-        .bind::<Jsonb, _>(&record.governance_binding)
-        .bind::<BigInt, _>(record.enqueued_at)
-        .bind::<Nullable<BigInt>, _>(record.delivered_at)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        Ok(())
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsWelcomeRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT id, mls_group_id, recipient_actor_id, recipient_device_id, \
-             recipient_endpoint_verification_method, intended_realm_id, welcome_bytes, \
-             key_package_id, epoch, commit_ref, governance_binding, enqueued_at, delivered_at \
-             FROM mls_welcomes ORDER BY enqueued_at ASC, id ASC",
-        )
-        .load::<MlsWelcomeRow>(&mut *conn)
-        .await
-        .map(|rows| rows.into_iter().map(MlsWelcomeRecord::from).collect())
-        .map_err(PersistenceError::database)
-    }
-}
-#[async_trait]
 impl MlsCommitStore for PgMlsCommitStore {
     async fn get(
         &self,
@@ -1167,54 +1104,6 @@ fn validated_keypackage_row(row: MlsKeyPackagePgRow) -> PersistenceResult<MlsKey
         ))
     })?;
     Ok(row)
-}
-#[derive(QueryableByName)]
-struct MlsWelcomeRow {
-    #[diesel(sql_type = Text)]
-    id: String,
-    #[diesel(sql_type = Text)]
-    mls_group_id: String,
-    #[diesel(sql_type = Text)]
-    recipient_actor_id: arkret_wire::DidCoreId,
-    #[diesel(sql_type = Nullable<Text>)]
-    recipient_device_id: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    recipient_endpoint_verification_method: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    intended_realm_id: Option<String>,
-    #[diesel(sql_type = Binary)]
-    welcome_bytes: Vec<u8>,
-    #[diesel(sql_type = Text)]
-    key_package_id: String,
-    #[diesel(sql_type = BigInt)]
-    epoch: i64,
-    #[diesel(sql_type = Nullable<Text>)]
-    commit_ref: Option<String>,
-    #[diesel(sql_type = Jsonb)]
-    governance_binding: Value,
-    #[diesel(sql_type = BigInt)]
-    enqueued_at: i64,
-    #[diesel(sql_type = Nullable<BigInt>)]
-    delivered_at: Option<i64>,
-}
-impl From<MlsWelcomeRow> for MlsWelcomeRecord {
-    fn from(row: MlsWelcomeRow) -> Self {
-        Self {
-            id: row.id,
-            group_id: row.mls_group_id,
-            recipient_actor_id: row.recipient_actor_id.to_string(),
-            recipient_device_id: row.recipient_device_id,
-            recipient_endpoint_verification_method: row.recipient_endpoint_verification_method,
-            intended_realm_id: row.intended_realm_id,
-            welcome_bytes: row.welcome_bytes,
-            key_package_id: row.key_package_id,
-            epoch: row.epoch.max(0) as u64,
-            commit_ref: row.commit_ref,
-            governance_binding: row.governance_binding,
-            enqueued_at: row.enqueued_at,
-            delivered_at: row.delivered_at,
-        }
-    }
 }
 #[derive(QueryableByName)]
 struct MlsCommitEpochRow {

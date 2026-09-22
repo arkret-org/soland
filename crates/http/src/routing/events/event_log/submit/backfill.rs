@@ -99,23 +99,6 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         .enforce_event(&envelope)
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
     let realm_id = event.realm_id.as_str();
-    if event.kind == arkret_wire::EventKind::MlsWelcome {
-        crate::routing::mls::validate_federated_welcome_peer_claim(
-            state,
-            source_id,
-            realm_id,
-            &event.actor_id,
-            &envelope["payload"],
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                "failed_precondition",
-                error,
-            )
-        })?;
-    }
     accept_federated_seal_prerequisite(state, &event.realm_id, &envelope, seals, digest_suite)
         .await
         .map_err(|error| {

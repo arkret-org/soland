@@ -719,7 +719,7 @@ pub async fn hydrate_projections_from_persistence(
     use soland_domain::reducer::{
         CircleLifecycleState, CircleMembershipState, CircleProjection,
         KeyPackageLifetimeProjection, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection,
-        MlsWelcome, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
         SpaceContainerProjection, StrandProjection, StrandWatchProjection,
         object_stage_from_wire_value,
     };
@@ -1088,46 +1088,6 @@ pub async fn hydrate_projections_from_persistence(
                     created_at: row.created_at,
                 },
             );
-        }
-    }
-
-    if let Ok(rows) = persistence.mls_welcomes().snapshot_all().await {
-        proj.mls_welcomes.clear();
-        for row in rows {
-            let endpoint_key = match (
-                row.recipient_device_id.as_deref(),
-                row.recipient_endpoint_verification_method.as_deref(),
-            ) {
-                (Some(device_id), None) => soland_domain::reducer::MlsWelcomeQueueKey::new(
-                    row.recipient_actor_id.clone(),
-                    device_id,
-                ),
-                (None, Some(method)) => soland_domain::reducer::MlsWelcomeQueueKey::endpoint(
-                    row.recipient_actor_id.clone(),
-                    method,
-                    row.intended_realm_id.as_deref(),
-                ),
-                _ => continue,
-            };
-            proj.mls_welcomes
-                .entry(endpoint_key)
-                .or_default()
-                .push(MlsWelcome {
-                    id: row.id,
-                    group_id: row.group_id,
-                    recipient_actor_id: row.recipient_actor_id,
-                    recipient_device_id: row.recipient_device_id,
-                    recipient_endpoint_verification_method: row
-                        .recipient_endpoint_verification_method,
-                    intended_realm_id: row.intended_realm_id,
-                    welcome_bytes: row.welcome_bytes,
-                    key_package_id: row.key_package_id,
-                    epoch: row.epoch,
-                    commit_ref: row.commit_ref,
-                    governance_binding: row.governance_binding,
-                    enqueued_at: row.enqueued_at,
-                    delivered_at: row.delivered_at,
-                });
         }
     }
 

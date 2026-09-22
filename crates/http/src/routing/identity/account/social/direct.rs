@@ -345,45 +345,8 @@ pub(crate) async fn validate_direct_message_bootstrap(
         return Err("provisional message Seal does not cover the winning exporter state");
     }
     validate_current_direct_pair_authority(state, &actor, &peer).await?;
-    // The other bootstrap phase permits only a binding endorsement. A durable
-    // receipt for the winning peer Welcome closes provisional history sends.
-    for event in events
-        .iter()
-        .filter(|event| event.event_kind == arkret_wire::EventKind::MlsWelcome)
-    {
-        let welcome: arkret_models_collaboration::events_payloads::MlsWelcomePayload =
-            serde_json::from_value(event.payload.clone()).map_err(|_| "invalid Welcome")?;
-        if welcome.commit_ref != current_ref
-            || welcome.recipient_principal_id.as_ref() != Some(peer.signing_principal_id())
-        {
-            continue;
-        }
-        let claim = state
-            .mls_key_packages()
-            .peer_claim(
-                welcome.claim_receipt.source_id.as_str(),
-                welcome.claim_receipt.claim_request_id.as_str(),
-            )
-            .await
-            .map_err(|_| "Welcome receipt unavailable")?;
-        if let Some(claim) = claim.filter(|claim| claim.state == "consumed")
-            && let Some(receipt) = claim.consume_receipt
-        {
-            let receipt: arkret_models_crypto::KeyPackageConsumeReceipt =
-                serde_json::from_value(receipt).map_err(|_| "invalid durable receipt")?;
-            let durable = &receipt.recipient_durable_receipt;
-            if receipt.claim_id == welcome.claim_id
-                && durable.welcome_ref.as_str() == event.event_id
-                && durable.realm_id == realm
-                && durable.mls_group_id.as_str() == welcome.mls_group_id()
-                && durable.mls_epoch == welcome.epoch()
-                && durable.key_package_ref.as_str() == welcome.keypackage_ref.as_str()
-                && durable.recipient_principal_id().as_ref() == Some(peer.signing_principal_id())
-            {
-                return Err("exact-pair completion requires the binding endorsement");
-            }
-        }
-    }
+    // The other bootstrap phase permits only a binding endorsement. Formal
+    // recipient delivery current is not inferred from a shared Realm Event.
     Ok(())
 }
 
@@ -1276,46 +1239,7 @@ async fn validate_direct_binding_event_refs(
     if current.mls_group_id() != commit.mls_group_id() {
         return Err("group_cross_binding");
     }
-    let mut consumed = false;
-    for projected in &realm_events {
-        if projected.event_kind != arkret_wire::EventKind::MlsWelcome {
-            continue;
-        }
-        let welcome: arkret_models_collaboration::events_payloads::MlsWelcomePayload =
-            serde_json::from_value(projected.payload.clone()).map_err(|_| "welcome_payload")?;
-        if welcome.commit_ref != payload.initial_exact_pair_group_state_ref
-            || welcome.epoch() != commit.next_epoch()
-            || welcome.mls_group_id() != commit.mls_group_id()
-            || welcome.recipient_principal_id.as_ref() != Some(peer.signing_principal_id())
-        {
-            continue;
-        }
-        let ledger = state
-            .mls_key_packages()
-            .peer_claim(
-                welcome.claim_receipt.source_id.as_str(),
-                welcome.claim_receipt.claim_request_id.as_str(),
-            )
-            .await
-            .map_err(|_| "welcome_consume_lookup")?;
-        if let Some(claim) = ledger.filter(|claim| claim.state == "consumed")
-            && let Some(receipt) = claim.consume_receipt
-        {
-            let receipt: arkret_models_crypto::KeyPackageConsumeReceipt =
-                serde_json::from_value(receipt).map_err(|_| "consume_receipt_invalid")?;
-            let durable = &receipt.recipient_durable_receipt;
-            consumed |= receipt.claim_id == welcome.claim_id
-                && durable.welcome_ref.as_str() == projected.event_id
-                && durable.realm_id == payload.realm_id
-                && durable.mls_group_id.as_str() == welcome.mls_group_id()
-                && durable.mls_epoch == welcome.epoch()
-                && durable.key_package_ref.as_str() == welcome.keypackage_ref.as_str()
-                && durable.recipient_principal_id().as_ref() == Some(peer.signing_principal_id());
-        }
-    }
-    if !consumed {
-        return Err("peer_welcome_not_durable");
-    }
+    direct_formal_welcome_consumed(state, peer, payload, &commit).await?;
 
     match payload.authorization_basis.kind {
         arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact => {
@@ -1390,6 +1314,18 @@ async fn validate_direct_binding_event_refs(
     }
 
     Ok(())
+}
+
+async fn direct_formal_welcome_consumed(
+    _state: &AppState,
+    _peer: &arkret_wire::ActorId,
+    _payload: &arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
+    _commit: &arkret_models_crypto::MlsCommitPayload,
+) -> Result<(), &'static str> {
+    // The authority-commit transaction already writes recipient-private
+    // deliveries, but the current read/ACK surface is part of the 0366 ingress
+    // work. Until it is available, Direct readiness must remain fail-closed.
+    Err("peer_welcome_delivery_current_unavailable")
 }
 
 /// Locate the accepted `ak.realm.create` for a Direct Conversation Realm.

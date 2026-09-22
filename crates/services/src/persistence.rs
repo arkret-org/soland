@@ -73,14 +73,6 @@ impl PersistenceHandle {
             .await
     }
 
-    /// Read the bounded Welcome discovery index without exposing its store.
-    pub async fn discover_mls_welcome_refs(
-        &self,
-        query: &soland_storage::MlsWelcomeDiscoveryQuery,
-    ) -> PersistenceResult<soland_storage::MlsWelcomeDiscoveryPage> {
-        self.persistence.mls_welcomes().discover(query).await
-    }
-
     pub async fn append_account_status_record(
         &self,
         record: &arkret_models_collaboration::account_status::AccountStatusRecord,

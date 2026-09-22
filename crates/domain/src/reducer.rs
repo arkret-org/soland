@@ -85,7 +85,7 @@ pub use projections::{
     AppletProjection, CircleLifecycleState, CircleMembershipState, CircleProjection,
     DocumentVersionProjection, InviteProjection, KeyPackageLifetimeProjection, MessageState,
     MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation,
-    MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
+    MlsRemoveProposal, MorphProjection, ObjectLifecycleState,
     PendingReplayEntry, PinProjection, PollState, ProjectedMessageView, PushRouteCellValue,
     PushRouteSubject, ReactionState, RealmLinkState, RealmOrganizationStatementState,
     RedactionCellValue, RelationCurrentResultProjection, RsvpProjection, SidecarContextProjection,

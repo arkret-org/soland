@@ -9,8 +9,8 @@ use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
-    FacetRef, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
-    SolandMembershipState, SolandRealmState, object_stage_wire_value,
+    FacetRef, MlsRemoveObligation, ProjectionEffect, ProjectionState, SolandMembershipState,
+    SolandRealmState, object_stage_wire_value,
 };
 use soland_storage::{PersistenceResult, PersistenceStore};
 
@@ -106,13 +106,6 @@ pub enum MlsProjectionEffect {
         intended_realm_id: Option<String>,
         claimed_at: i64,
     },
-    WelcomeEnqueued {
-        welcome_id: String,
-        recipient_actor_id: String,
-        recipient_device_id: Option<String>,
-        recipient_endpoint_verification_method: Option<String>,
-        intended_realm_id: Option<String>,
-    },
     RemoveProposalRecorded,
     GroupGenesis {
         group_id: String,
@@ -203,20 +196,6 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                     group_id,
                     intended_realm_id,
                     claimed_at,
-                },
-                soland_domain::reducer::MlsEffect::WelcomeEnqueued {
-                    welcome_id,
-                    recipient_actor_id,
-                    recipient_device_id,
-                    recipient_endpoint_verification_method,
-                    intended_realm_id,
-                    ..
-                } => MlsProjectionEffect::WelcomeEnqueued {
-                    welcome_id,
-                    recipient_actor_id,
-                    recipient_device_id,
-                    recipient_endpoint_verification_method,
-                    intended_realm_id,
                 },
                 soland_domain::reducer::MlsEffect::RemoveProposalRecorded { .. } => {
                     MlsProjectionEffect::RemoveProposalRecorded
@@ -949,48 +928,6 @@ impl ProjectionService {
         ids.iter()
             .filter_map(|id| self.mls_key_package_record(id))
             .collect()
-    }
-
-    pub fn mls_welcome_record(
-        &self,
-        recipient_actor_id: &str,
-        recipient_device_id: Option<&str>,
-        recipient_endpoint_verification_method: Option<&str>,
-        intended_realm_id: Option<&str>,
-        welcome_id: &str,
-    ) -> Option<crate::events::MlsWelcomeState> {
-        let key = match (recipient_device_id, recipient_endpoint_verification_method) {
-            (Some(device_id), None) => MlsWelcomeQueueKey::new(recipient_actor_id, device_id),
-            (None, Some(method)) => {
-                MlsWelcomeQueueKey::endpoint(recipient_actor_id, method, intended_realm_id)
-            }
-            _ => return None,
-        };
-        self.state
-            .lock()
-            .mls_welcomes
-            .get(&key)
-            .and_then(|queue| queue.iter().find(|row| row.id == welcome_id))
-            .cloned()
-            .and_then(|row| {
-                let governance_binding = serde_json::from_value(row.governance_binding).ok()?;
-                Some(crate::events::MlsWelcomeState {
-                    id: row.id,
-                    group_id: row.group_id,
-                    recipient_actor_id: row.recipient_actor_id,
-                    recipient_device_id: row.recipient_device_id,
-                    recipient_endpoint_verification_method: row
-                        .recipient_endpoint_verification_method,
-                    intended_realm_id: row.intended_realm_id,
-                    welcome_bytes: row.welcome_bytes,
-                    key_package_id: row.key_package_id,
-                    epoch: row.epoch,
-                    commit_ref: row.commit_ref,
-                    governance_binding,
-                    enqueued_at: row.enqueued_at,
-                    delivered_at: row.delivered_at,
-                })
-            })
     }
 
     pub fn preflight_capability_rejection(&self, operation: &Operation) -> Option<String> {

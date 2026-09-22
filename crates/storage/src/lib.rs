@@ -395,7 +395,6 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
 pub trait MlsAgentStoreRegistry: Send + Sync {
     // G3.S1: MLS lifecycle stores.
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
-    fn mls_welcomes(&self) -> &dyn MlsWelcomeStore;
     fn mls_commits(&self) -> &dyn MlsCommitStore;
     // AKP-0010 — agent participation policy.
     fn agent_participation(&self) -> &dyn AgentParticipationStore;

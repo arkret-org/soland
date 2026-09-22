@@ -369,16 +369,6 @@ pub enum MlsEffect {
         last_resort: bool,
         claimed_at: i64,
     },
-    /// `apply_welcome_enqueue` — a Welcome envelope was appended to the
-    /// per-closed-endpoint queue.
-    WelcomeEnqueued {
-        welcome_id: String,
-        recipient_actor_id: String,
-        recipient_device_id: Option<String>,
-        recipient_endpoint_verification_method: Option<String>,
-        intended_realm_id: Option<String>,
-        group_id: String,
-    },
     /// `apply_remove_proposal` — a `ak.mls.proposal{proposal_type="remove"}`
     /// was recorded so a later commit can consume a pending remove obligation.
     RemoveProposalRecorded {

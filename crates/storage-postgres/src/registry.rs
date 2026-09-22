@@ -74,7 +74,6 @@ pub struct PgPersistenceStore {
     one_time_keys: PgOneTimeKeyStore,
     member_identity: PgMemberIdentityStore,
     mls_key_packages: PgMlsKeyPackageStore,
-    mls_welcomes: PgMlsWelcomeStore,
     mls_commits: PgMlsCommitStore,
     agent_participation: PgAgentParticipationStore,
     agents: PgAgentStore,
@@ -158,7 +157,6 @@ impl PgPersistenceStore {
             one_time_keys: PgOneTimeKeyStore { pool: pool.clone() },
             member_identity: PgMemberIdentityStore { pool: pool.clone() },
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
-            mls_welcomes: PgMlsWelcomeStore { pool: pool.clone() },
             mls_commits: PgMlsCommitStore { pool: pool.clone() },
             agent_participation: PgAgentParticipationStore { pool: pool.clone() },
             agents: PgAgentStore { pool: pool.clone() },
@@ -427,10 +425,6 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 impl MlsAgentStoreRegistry for PgPersistenceStore {
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore {
         &self.mls_key_packages
-    }
-
-    fn mls_welcomes(&self) -> &dyn MlsWelcomeStore {
-        &self.mls_welcomes
     }
 
     fn mls_commits(&self) -> &dyn MlsCommitStore {

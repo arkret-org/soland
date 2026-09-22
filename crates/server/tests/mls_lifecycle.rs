@@ -1,11 +1,10 @@
-//! G3.S1 integration test — exercises the keypackage/welcome HTTP surface
+//! G3.S1 integration test — exercises the KeyPackage/public MLS HTTP surface
 //! end-to-end:
 //!
 //!   1. upload a KeyPackage,
 //!   2. claim it atomically (and assert a second claim returns 409),
-//!   3. submit canonical `ak.mls.genesis` and `ak.mls.welcome` events and assert they mirror into
-//!      the MLS epoch / Welcome stores,
-//!   4. receive the Welcome through the standard durable device-message stream.
+//!   3. submit canonical public MLS genesis/commit events and assert they mirror
+//!      into the durable MLS epoch store.
 //!
 //! MLS commits no longer have a dedicated REST surface — clients submit
 //! `ak.mls.commit` events via the canonical `POST /_arkret/self/events` pipeline
@@ -19,7 +18,6 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::RealmId;
-use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -908,37 +906,10 @@ async fn mls_lifecycle_end_to_end_body() {
             .as_deref(),
         Some(group_id)
     );
-    // `mls_welcome_payload.claim_receipt` is required and is the
-    // destination-signed receipt for *this* Welcome's claim — Bob's, from the
-    // lifecycle claim below, not Alice's own self-claim above.
-    let lifecycle_claim_receipt = lifecycle_claim["claim_receipt"].clone();
-    let claim_id = lifecycle_claim["claims"][0]["claim_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let claimed_keypackage_ref = lifecycle_claim["claims"][0]["keypackage_ref"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let claimed_keypackage_bytes = URL_SAFE_NO_PAD
-        .decode(
-            lifecycle_claim["claims"][0]["keypackage"]
-                .as_str()
-                .unwrap()
-                .trim_end_matches('='),
-        )
-        .unwrap();
-    let claimed_keypackage_digest = arkret_canonical::sha256_digest(&claimed_keypackage_bytes);
     let claimed_capabilities_digest = sha256_json(&lifecycle_claim["claims"][0]["capabilities"]);
     assert_eq!(claimed_capabilities_digest, lifecycle_capabilities_digest);
-    let claimed_device_authorize_event_id =
-        lifecycle_claim["claims"][0]["device_authorize_event_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
 
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
-    let keypackage_ref = claimed_keypackage_ref;
     // The bootstrapped Realm now has an accepted governance Seal. Every MLS
     // Control Move below cites it as its independent Event-admission
     // `seal_basis`. The MLS binding carries only the unique security frontier.
@@ -1004,114 +975,6 @@ async fn mls_lifecycle_end_to_end_body() {
         0
     );
 
-    // ── 3b. Welcome is a durable event and mirrors into the pending queue ─
-    let welcome_binding = json!({
-        "binding_version": 1,
-        "encoding_profile": "cbor-deterministic-rfc8949-v1",
-        "realm_id": realm_id,
-        "effective_scope": effective_scope.clone(),
-        "mls_group_id": group_id,
-        "previous_epoch": 0,
-        "next_epoch": 1,
-        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "content_scheme": "mls_rfc9420",
-        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
-        "reducer_profile": CORE_REDUCER_PROFILE
-    });
-    let mut claim_envelope = json!({
-        "keypackage_ref": keypackage_ref,
-        "keypackage_digest": claimed_keypackage_digest,
-        "intended_realm_id": realm_id,
-        "claim_id": claim_id,
-        "requester_actor_id": alice_actor,
-        "requester_device_id": alice_device,
-        "requester_device_authorize_event_id": alice_device_authorize_event_id,
-        "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
-        "created_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
-        "signature": {
-            "kid": format!("{alice_did}#{alice_device}"),
-            "signature_algorithm": "Ed25519",
-            "sig": b64(&[0_u8; 64])
-        }
-    });
-    let claim_envelope_model: MlsWelcomeClaimEnvelope =
-        serde_json::from_value(claim_envelope.clone()).unwrap();
-    let claim_receipt_model: arkret_models_crypto::PeerKeyPackageClaimReceipt =
-        serde_json::from_value(lifecycle_claim_receipt.clone()).unwrap();
-    let claim_envelope_signature = sign_b64(
-        &event_signing_key,
-        &claim_envelope_model
-            .canonical_signing_bytes(&claim_receipt_model)
-            .unwrap(),
-    );
-    claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
-
-    let mut welcome = signed_event(
-        "ak:event:AcRK-D2fBUTneeX_47VmTFFtdaFb9UNQ7_kQE7bDKypP",
-        9,
-        alice_did,
-        alice_device,
-        realm_id,
-        "ak.mls.welcome",
-        json!({
-            "mls_group_id": group_id,
-            "epoch": 1,
-            "recipient_principal_id": bob_core,
-            "recipient_device_id": bob_device,
-            "keypackage_ref": keypackage_ref,
-            "claim_id": claim_id,
-            "claim_ref": {
-                "claim_id": claim_id,
-                "keypackage_ref": keypackage_ref,
-                "keypackage_digest": claimed_keypackage_digest,
-                "capabilities_digest": claimed_capabilities_digest,
-                "device_authorize_event_id": claimed_device_authorize_event_id
-            },
-            "claim_envelope": claim_envelope,
-            "claim_receipt": lifecycle_claim_receipt,
-            "ciphertext": b64(b"opaque-mls-welcome"),
-            "expires_at": lifecycle_claim_receipt["expires_at"].clone(),
-            "commit_ref": "ak:event:AV7r9jE8uOCT8ZEtX3vuk67GOqlz6qBab2XgiJdgkfZr",
-            "governance_binding": welcome_binding
-        }),
-        Some(realm_seal_basis.clone()),
-    );
-    advance_event_to_actor_frontier(&state, &mut welcome).await;
-    let welcome_event_id = welcome["event_id"].as_str().unwrap().to_owned();
-    let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
-        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .add_header("content-type", "application/json", true)
-        .body(arkret_canonical::canonical_json_bytes(&welcome).unwrap())
-        .send(&app_from_state(state.clone()))
-        .await;
-    let welcome_status = welcome_resp.status_code;
-    if welcome_status != Some(StatusCode::OK) {
-        let error: Value = welcome_resp.take_json().await.unwrap_or(Value::Null);
-        panic!("expected welcome status 200, got {welcome_status:?}: {error}");
-    }
-    assert_eq!(
-        state
-            .test_persistence()
-            .mls_welcomes()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let queued_welcomes = state
-        .test_persistence()
-        .device_messages()
-        .list_after(bob_core.as_str(), bob_device, 0, 101)
-        .await
-        .expect("Welcome to-device queue query");
-    assert_eq!(
-        queued_welcomes.len(),
-        1,
-        "accepted Welcome must project to Bob's durable to-device queue"
-    );
-
     // ── 3c. Canonical commit event advances the durable epoch row ─
     let commit_binding = json!({
         "binding_version": 1,
@@ -1168,74 +1031,6 @@ async fn mls_lifecycle_end_to_end_body() {
             .expect("commit persisted")
             .epoch,
         1
-    );
-
-    // ── 4. Bob sees the Welcome on the standard to-device queue ─
-    let device_messages_resp = TestClient::get("http://server/_arkret/self/device_messages")
-        .add_header(
-            "Arkret-Operation",
-            "ak.self.device_messages.read.list.v1",
-            true,
-        )
-        .add_header("authorization", format!("Bearer {bob_token}"), true)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(device_messages_resp.status_code, Some(StatusCode::OK));
-    let mut device_messages_resp = device_messages_resp;
-    let device_messages_json: Value = device_messages_resp.take_json().await.unwrap();
-    let device_messages = device_messages_json["messages"]
-        .as_array()
-        .expect("device messages array");
-    assert_eq!(device_messages.len(), 1, "{device_messages_json}");
-    let device_message = &device_messages[0];
-    assert_eq!(device_message["kind"], json!("ak.mls.welcome"));
-    assert_eq!(
-        device_message["sender_account_id"],
-        json!({"principal_id": alice_core, "station_id": state.service_id()})
-    );
-    assert_eq!(device_message["sender_device_id"], json!(alice_device));
-    assert_eq!(
-        device_message["recipient_account_id"],
-        json!({"principal_id": bob_core, "station_id": state.service_id()})
-    );
-    assert_eq!(device_message["recipient_device_id"], json!(bob_device));
-    assert_eq!(
-        device_message["expires_at"],
-        lifecycle_claim_receipt["expires_at"]
-    );
-    assert_eq!(device_message["content"]["mls_group_id"], json!(group_id));
-    assert_eq!(device_message["content"]["epoch"], json!(1));
-    assert_eq!(
-        device_message["content"]["recipient_principal_id"],
-        json!(bob_core)
-    );
-    assert_eq!(
-        device_message["content"]["recipient_device_id"],
-        json!(bob_device)
-    );
-    assert_eq!(
-        device_message["content"]["ciphertext"],
-        json!(URL_SAFE_NO_PAD.encode(b"opaque-mls-welcome"))
-    );
-    assert_eq!(
-        device_message["content"]["governance_binding"],
-        welcome_binding
-    );
-    assert_eq!(
-        device_message["content"]["claim_ref"]["claim_id"],
-        json!(claim_id)
-    );
-    assert_eq!(
-        device_message["content"]["claim_envelope"]["welcome_digest"],
-        json!(arkret_canonical::sha256_digest(b"opaque-mls-welcome"))
-    );
-    assert_eq!(
-        device_message["content"]["commit_ref"],
-        json!("ak:event:AV7r9jE8uOCT8ZEtX3vuk67GOqlz6qBab2XgiJdgkfZr")
-    );
-    assert_eq!(
-        device_message["unsigned"]["mls_welcome_id"],
-        json!(welcome_event_id)
     );
 
     // ── 5. MLS commits no longer have a dedicated REST surface ──

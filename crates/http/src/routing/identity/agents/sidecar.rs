@@ -402,12 +402,10 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         arkret_wire::EventKind::MlsGenesis
             | arkret_wire::EventKind::MlsProposal
             | arkret_wire::EventKind::MlsCommit
-            | arkret_wire::EventKind::MlsWelcome
     ) {
         return Ok(());
     }
-    // `mls_genesis_payload` / `mls_proposal_payload` / `mls_commit_payload` /
-    // `mls_welcome_payload` all name the binding `governance_binding`.
+    // Public MLS events name the binding `governance_binding`.
     let binding_value = crate::routing::mls::payload_fields::governance_binding(&operation.payload)
         .ok_or("mls_governance_binding_missing")?;
     let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(binding_value.clone())
@@ -481,32 +479,6 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
                 return Err("mls_sidecar_genesis_authority_mismatch");
             }
         }
-        arkret_wire::EventKind::MlsWelcome => {
-            if current_group.as_deref() != Some(payload_group_id.as_str()) {
-                return Err("mls_sidecar_group_mismatch");
-            }
-            let projection = state.projections().snapshot();
-            let commit_ref = operation
-                .payload
-                .get("commit_ref")
-                .and_then(Value::as_str)
-                .ok_or("mls_sidecar_welcome_commit_ref_missing")?;
-            if !projection.accepted_mls_commit_refs.contains(commit_ref) {
-                return Err("mls_sidecar_welcome_commit_ref_unaccepted");
-            }
-            let epoch = operation
-                .payload
-                .get("epoch")
-                .and_then(Value::as_u64)
-                .ok_or("mls_welcome_epoch_missing")?;
-            if !projection
-                .mls_commit_epochs
-                .values()
-                .any(|row| row.group_id == payload_group_id && row.epoch == epoch)
-            {
-                return Err("mls_sidecar_welcome_epoch_mismatch");
-            }
-        }
         _ if current_group.as_deref() != Some(payload_group_id.as_str()) => {
             return Err("mls_sidecar_group_mismatch");
         }
@@ -530,27 +502,14 @@ fn device_coordinates_match(projected: Option<&str>, authenticated: &str) -> boo
 /// carries a consume record for the same group. Evidence from another Sidecar's
 /// group never satisfies this (`models/sidecar.md` section 5).
 fn controller_device_completed_group_join(
-    projection: &soland_domain::reducer::ProjectionState,
-    controller_account_id: &arkret_wire::AccountId,
-    controller_device_id: &str,
-    group_id: &str,
+    _projection: &soland_domain::reducer::ProjectionState,
+    _controller_account_id: &arkret_wire::AccountId,
+    _controller_device_id: &str,
+    _group_id: &str,
 ) -> bool {
-    let controller_actor_id =
-        arkret_wire::ActorId::account(controller_account_id.clone()).to_string();
-    projection.mls_welcomes.values().flatten().any(|welcome| {
-        welcome.group_id == group_id
-            && welcome.recipient_actor_id == controller_actor_id
-            && welcome.recipient_device_id.as_deref() == Some(controller_device_id)
-            && projection
-                .mls_key_packages
-                .get(&welcome.key_package_id)
-                .is_some_and(|key_package| {
-                    key_package.actor_id == controller_actor_id
-                        && key_package.device_id.as_deref() == Some(controller_device_id)
-                        && key_package.claimed_by.as_deref() == Some(group_id)
-                        && key_package.consumed_at.is_some()
-                })
-    })
+    // Formal delivery current/read/ACK is wired by 0366. The legacy Realm
+    // Event projection must never make another controller device ready.
+    false
 }
 
 fn epoch_matches_sidecar_binding(
@@ -1654,131 +1613,6 @@ mod tests {
         assert!(matches!(
             binding.effective_scope(),
             arkret_wire::ScopeRef::Sidecar { .. }
-        ));
-    }
-
-    fn projection_with_controller_join(
-        welcome_group_id: &str,
-        claimed_group_id: Option<&str>,
-        consumed: bool,
-    ) -> soland_domain::reducer::ProjectionState {
-        let controller_account = arkret_wire::AccountId::new(
-            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            crate::test_event::station_id(),
-        );
-        let controller_actor =
-            arkret_wire::ActorId::account(controller_account.clone()).to_string();
-        let controller = controller_actor.as_str();
-        let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-        let mut projection = soland_domain::reducer::ProjectionState::default();
-        projection.mls_key_packages.insert(
-            "keypackage-controller-02".to_owned(),
-            soland_domain::reducer::MlsKeyPackageProjection {
-                id: "keypackage-controller-02".to_owned(),
-                keypackage_ref: "ak:keypackage:controller-02".to_owned(),
-                keypackage_digest: format!("sha256:{}", "2".repeat(64)),
-                owner_account_pk: 1,
-                actor_id: controller.to_owned(),
-                device_id: Some(device.to_owned()),
-                endpoint_verification_method: None,
-                intended_realm_id: None,
-                lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
-                    not_before: 0,
-                    not_after: i64::MAX,
-                },
-                key_package_bytes: vec![1, 2, 3],
-                capabilities: Vec::new(),
-                capabilities_digest: format!("sha256:{}", "3".repeat(64)),
-                last_resort: false,
-                last_resort_realm_id: None,
-                claimed_by: claimed_group_id.map(ToOwned::to_owned),
-                device_authorize_event_id: None,
-                agent_key_authorize_event_id: None,
-                claimed_at: claimed_group_id.map(|_| 1),
-                claim_expires_at_unix_ms: None,
-                consumed_at: consumed.then_some(2),
-                created_at: 0,
-            },
-        );
-        projection.mls_welcomes.insert(
-            soland_domain::reducer::MlsWelcomeQueueKey::new(controller, device),
-            vec![soland_domain::reducer::MlsWelcome {
-                id: "ak:mls_welcome:controller-02".to_owned(),
-                group_id: welcome_group_id.to_owned(),
-                recipient_actor_id: controller.to_owned(),
-                recipient_device_id: Some(device.to_owned()),
-                recipient_endpoint_verification_method: None,
-                intended_realm_id: None,
-                welcome_bytes: vec![4, 5, 6],
-                key_package_id: "keypackage-controller-02".to_owned(),
-                epoch: 1,
-                commit_ref: None,
-                governance_binding: json!({}),
-                enqueued_at: 1,
-                delivered_at: None,
-            }],
-        );
-        projection
-    }
-
-    #[test]
-    fn a_second_controller_device_is_ready_on_matching_welcome_and_consume_evidence() {
-        let controller_account = arkret_wire::AccountId::new(
-            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            crate::test_event::station_id(),
-        );
-        let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-        let group = "sidecarGroup01";
-        let projection = projection_with_controller_join(group, Some(group), true);
-        assert!(controller_device_completed_group_join(
-            &projection,
-            &controller_account,
-            device,
-            group
-        ));
-        let foreign_controller = arkret_wire::AccountId::new(
-            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        );
-        assert!(!controller_device_completed_group_join(
-            &projection,
-            &foreign_controller,
-            device,
-            group
-        ));
-    }
-
-    #[test]
-    fn controller_join_evidence_never_crosses_groups_or_skips_consume() {
-        let controller_account = arkret_wire::AccountId::new(
-            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            crate::test_event::station_id(),
-        );
-        let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-        let group = "sidecarGroup01";
-        assert!(!controller_device_completed_group_join(
-            &projection_with_controller_join("sidecarGroup02", Some("sidecarGroup02"), true),
-            &controller_account,
-            device,
-            group
-        ));
-        assert!(!controller_device_completed_group_join(
-            &projection_with_controller_join(group, Some(group), false),
-            &controller_account,
-            device,
-            group
-        ));
-        assert!(!controller_device_completed_group_join(
-            &projection_with_controller_join(group, None, true),
-            &controller_account,
-            device,
-            group
-        ));
-        assert!(!controller_device_completed_group_join(
-            &projection_with_controller_join(group, Some(group), true),
-            &controller_account,
-            "ak:device:01904100-0000-7000-8000-a11ce0000003",
-            group
         ));
     }
 }

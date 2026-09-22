@@ -193,37 +193,11 @@ pub(super) async fn apply_projection_preflight(
         }
         // Recipient trust is checked by the claim ledger only after the exact
         // destination receipt has been authenticated, never by a local DID lookup.
-        if internal_admission.is_none()
-            && let Some(reason) =
-                preflight_mls_welcome_claim_ledger_reject(state, &parsed.actor, operation).await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason.clone(),
-                reason,
-            ));
-        }
         // The typed decode above proves the validated envelope is a JSON
         // object, so this deref cannot fail.
         let envelope_object = envelope
             .as_object()
             .expect("validated Event envelope decoded as a JSON object");
-        if let Some(reason) = preflight_mls_welcome_claim_signature_reject(
-            state,
-            session,
-            envelope_object,
-            &parsed.actor,
-            operation,
-            internal_admission,
-        )
-        .await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason.clone(),
-                reason,
-            ));
-        }
         if let Err(reason) =
             crate::routing::events::projection::validate_invite_cancel_pre_admission(
                 parsed.actor_id.as_str(),

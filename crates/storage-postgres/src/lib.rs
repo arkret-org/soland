@@ -50,7 +50,6 @@ mod key_backup;
 mod key_backup_unlock;
 mod member_identity;
 mod mls;
-mod mls_welcome_discovery;
 mod moderation;
 mod notifications;
 mod organization_registration;

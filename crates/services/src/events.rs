@@ -1654,24 +1654,6 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         owner_account_pk: soland_storage::AccountPk,
         retired_at: i64,
     ) -> ServiceResult<usize>;
-    async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ServiceResult<()>;
-}
-
-#[derive(Clone, Debug)]
-pub struct MlsWelcomeState {
-    pub id: String,
-    pub group_id: String,
-    pub recipient_actor_id: String,
-    pub recipient_device_id: Option<String>,
-    pub recipient_endpoint_verification_method: Option<String>,
-    pub intended_realm_id: Option<String>,
-    pub welcome_bytes: Vec<u8>,
-    pub key_package_id: String,
-    pub epoch: u64,
-    pub commit_ref: Option<String>,
-    pub governance_binding: MlsGovernanceBindingPayload,
-    pub enqueued_at: i64,
-    pub delivered_at: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -1831,10 +1813,6 @@ impl MlsKeyPackageService {
         self.key_packages
             .key_packages_claimed_by_group(mls_group_id)
             .await
-    }
-
-    pub async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ServiceResult<()> {
-        self.key_packages.enqueue_welcome(welcome).await
     }
 }
 

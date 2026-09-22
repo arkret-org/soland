@@ -213,10 +213,6 @@ pub struct ProjectionState {
     /// row is per `(actor_id, device_id)`; the `claimed_by` / claim-window
     /// slots flip on a successful CAS claim.
     pub mls_key_packages: BTreeMap<String, MlsKeyPackageProjection>,
-    /// G3.S1 — per-device Welcome binding projection. Standard durable
-    /// device messages carry delivery; these rows support claim and consume
-    /// validation without introducing a product-private transport.
-    pub mls_welcomes: BTreeMap<MlsWelcomeQueueKey, Vec<MlsWelcome>>,
     /// G3.S1 — Remove proposals keyed by their canonical `ak.mls.proposal`
     /// event id. Commit validation uses this to ensure pending remove
     /// obligations are consumed by an explicit MLS Remove proposal reference.

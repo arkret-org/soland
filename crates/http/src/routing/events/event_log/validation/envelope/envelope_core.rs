@@ -764,7 +764,6 @@ async fn validate_event_envelope_with_ingress(
                     arkret_wire::EventKind::from(kind.as_str()),
                     arkret_wire::EventKind::MlsProposal
                         | arkret_wire::EventKind::MlsCommit
-                        | arkret_wire::EventKind::MlsWelcome
                         | arkret_wire::EventKind::MessageCreate
                 )
             {
@@ -897,16 +896,6 @@ async fn validate_event_envelope_with_ingress(
             .map_err(invalid_typed_mls_payload)?;
             validate_canonical_mls_group_id(
                 payload.mls_group_id.as_str(),
-                payload.governance_binding.effective_scope(),
-            )?;
-        }
-        arkret_wire::EventKind::MlsWelcome => {
-            let payload = serde_json::from_value::<
-                arkret_models_collaboration::events_payloads::mls::MlsWelcomePayload,
-            >(payload.clone())
-            .map_err(invalid_typed_mls_payload)?;
-            validate_canonical_mls_group_id(
-                payload.mls_group_id(),
                 payload.governance_binding.effective_scope(),
             )?;
         }

@@ -1058,51 +1058,6 @@ async fn peer_events_submit_preflights_poll_prerequisites_before_durable_accepta
 }
 
 #[test]
-fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
-    run_on_deep_stack(
-        "peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration",
-        peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration_body,
-    );
-}
-
-async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration_body() {
-    let state = soland_test_support::app_state(test_config());
-    seed_peer_station_membership(&state).await;
-    let welcome_event_id = "ak:event:AeKCyaUbw70FHlzkWyBOZi9ZQYsRpG1NIAp9Yjv7Tofa";
-    let welcome_event = event_envelope(
-        welcome_event_id,
-        arkret_wire::EventKind::MlsWelcome.as_str(),
-        "did:web:alice.example",
-        1,
-        mls_welcome_payload(),
-    );
-    let outcome = submit_peer_event(state.clone(), &welcome_event).await;
-    assert_eq!(outcome["status"], "partial", "{outcome:?}");
-    assert!(outcome["accepted"].as_array().unwrap().is_empty());
-    let rejected = outcome["rejections"].as_array().unwrap();
-    assert_eq!(rejected.len(), 1);
-    assert_eq!(rejected[0]["id"], authored_event_id(&welcome_event));
-    assert_eq!(rejected[0]["reason_code"], "unsupported_profile");
-    assert!(
-        rejected[0]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("ak.profile.mls_governance_binding.full.v1"),
-        "{outcome:?}"
-    );
-    assert_eq!(
-        state
-            .test_persistence()
-            .mls_welcomes()
-            .snapshot_all()
-            .await
-            .unwrap()
-            .len(),
-        0
-    );
-}
-
-#[test]
 fn self_events_reject_federation_wire() {
     run_on_deep_stack(
         "self_events_reject_federation_wire",
@@ -1406,14 +1361,6 @@ fn account_actor(principal_did: &str, station_id: &str) -> arkret_wire::ActorId 
         fixture_actor_core_id(principal_did),
         arkret_identifiers::DidCoreId::new(station_id.to_owned()).unwrap(),
     ))
-}
-
-fn mls_welcome_payload() -> Value {
-    arkret_schema_conformance::spec_json_artifact(
-        "fixtures/keypackage-pairwise-welcome-fixture.json",
-    )
-    .expect("embedded pairwise Welcome fixture")["schema_validation_cases"][0]["instance"]
-        .clone()
 }
 
 fn event_envelope(

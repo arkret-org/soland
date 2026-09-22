@@ -339,8 +339,8 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let mut expired_target = device_message_target(
-        "ak.mls.welcome",
-        encrypted_envelope("ak.mls.welcome", "expired"),
+        "ak.encrypted.test",
+        encrypted_envelope("ak.encrypted.test", "expired"),
     );
     expired_target["expires_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(
         chrono::Utc::now() - chrono::Duration::minutes(1)
@@ -387,8 +387,8 @@ async fn expired_to_device_messages_signal_lost_and_advance_cursor_body() {
     assert_eq!(replay["lost"], false);
 
     let mut expired_for_subscribe = device_message_target(
-        "ak.mls.welcome",
-        encrypted_envelope("ak.mls.welcome", "expired-subscribe"),
+        "ak.encrypted.test",
+        encrypted_envelope("ak.encrypted.test", "expired-subscribe"),
     );
     expired_for_subscribe["expires_at"] =
         serde_json::json!(arkret_canonical::format_timestamp_canonical(
@@ -439,7 +439,7 @@ async fn device_messages_evicted_after_session_logout_body() {
             "messages": {
                 (fixture_actor_core_id("did:web:alice.example").to_string()): {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001":
-                        device_message_target("ak.mls.welcome", encrypted_envelope("ak.mls.welcome", "logout-ciphertext"))
+                        device_message_target("ak.encrypted.test", encrypted_envelope("ak.encrypted.test", "logout-ciphertext"))
                 }
             }
         }))

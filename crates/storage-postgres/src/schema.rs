@@ -952,85 +952,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    mls_welcomes (id) {
-        id -> Text,
-        mls_group_id -> Text,
-        recipient_actor_id -> Text,
-        recipient_device_id -> Nullable<Text>,
-        recipient_endpoint_verification_method -> Nullable<Text>,
-        intended_realm_id -> Nullable<Text>,
-        welcome_bytes -> Bytea,
-        key_package_id -> Text,
-        epoch -> Int8,
-        commit_ref -> Nullable<Text>,
-        governance_binding -> Jsonb,
-        enqueued_at -> Int8,
-        delivered_at -> Nullable<Int8>,
-    }
-}
-
-diesel::table! {
-    mls_welcome_discovery_scopes (scope, group_id) {
-        scope -> Jsonb,
-        group_id -> Text,
-        realm_id -> Text,
-        revision -> Int8,
-        position -> Int8,
-        available -> Bool,
-        head -> Nullable<Jsonb>,
-    }
-}
-diesel::table! {
-    mls_welcome_discovery_membership (realm_id, cell_id) {
-        realm_id -> Text,
-        cell_id -> Text,
-        revision -> Int8,
-        current_value -> Nullable<Jsonb>,
-        available -> Bool,
-        revision_event_id -> Nullable<Text>,
-    }
-}
-diesel::table! {
-    mls_welcome_discovery_chain (scope, group_id, epoch) {
-        scope -> Jsonb,
-        group_id -> Text,
-        epoch -> Int8,
-        event_ref -> Text,
-    }
-}
-diesel::table! {
-    mls_welcome_discovery_entries (event_pk) {
-        event_pk -> Int8,
-        event_ref -> Text,
-        scope -> Jsonb,
-        group_id -> Text,
-        endpoint -> Jsonb,
-        authorization_ref -> Text,
-        position -> Int8,
-        commit_ref -> Text,
-        expires_at -> Timestamptz,
-        claim_source -> Text,
-        claim_request -> Text,
-        claim_id -> Text,
-        eligible -> Bool,
-    }
-}
-diesel::table! {
-    mls_welcome_discovery_windows (id) {
-        id -> Uuid,
-        scope -> Jsonb,
-        group_id -> Text,
-        endpoint -> Jsonb,
-        authority_context -> Jsonb,
-        page_limit -> Int4,
-        revision -> Int8,
-        upper_position -> Int8,
-        after_position -> Int8,
-        expires_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     moderation_reports (pk) {
         pk -> Int8,
         id -> Bytea,
@@ -2054,12 +1975,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     messages,
     mls_commits,
     mls_key_packages,
-    mls_welcomes,
-    mls_welcome_discovery_scopes,
-    mls_welcome_discovery_membership,
-    mls_welcome_discovery_chain,
-    mls_welcome_discovery_entries,
-    mls_welcome_discovery_windows,
     moderation_queue_items,
     moderation_reports,
     notifications,
