@@ -338,7 +338,7 @@ mod tests {
             completed_at: recorded_at,
             issued_at: Some(recorded_at),
             proofs: vec![ErasureReceiptProof {
-                verification_method: arkret_identifiers::DidUrl::new(
+                verification_method: arkret_wire::DidUrl::new(
                     "did:webvh:z6mkfixtureissuerstation:issuer.example#key-1".to_owned(),
                 )
                 .unwrap(),
