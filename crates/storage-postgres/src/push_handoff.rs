@@ -7,6 +7,7 @@ use arkret_wire::{AccountId, DeviceId, DidCoreId, Hash};
 use super::{
     AsyncConnection, AsyncPgConnection, BigInt, Binary, Jsonb, Nullable, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    PushRegistrationHandoffExpiryCursor, PushRegistrationHandoffExpiryPage,
     PushRegistrationHandoffIntentRecord, PushRegistrationHandoffIntentStatus,
     PushRegistrationHandoffIntentWrite, PushRegistrationHandoffReceiptWrite,
     PushRegistrationHandoffRetryCursor, PushRegistrationHandoffRouteLocator,
@@ -354,6 +355,149 @@ fn device_revocation_input_digest(
     });
     Hash::new(arkret_canonical::canonical_sha256(&input).map_err(PersistenceError::database)?)
         .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+fn expiry_input_digest(
+    stored: &PushRegistrationHandoffIntentRecord,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Hash> {
+    let input = serde_json::json!({
+        "operation": "ak.push.registration.expiry",
+        "source_station_id": stored.source_station_id,
+        "registration_id": stored.registration_id,
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
+    });
+    Hash::new(arkret_canonical::canonical_sha256(&input).map_err(PersistenceError::database)?)
+        .map_err(|error| PersistenceError::Internal(error.to_string()))
+}
+
+async fn expire_public_push_registration(
+    pool: &PgPool,
+    source_station_id: &DidCoreId,
+    snapshot: &PushRegistrationHandoffIntentRecord,
+    now: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Option<PushRegistrationHandoffIntentRecord>> {
+    let source_station_id = source_station_id.clone();
+    let snapshot = snapshot.clone();
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        crate::device_revocations::lock_artifact_devices_in_transaction(
+            conn,
+            &[&snapshot.device_authorization],
+        )
+        .await?;
+        let account_lock_key = push_device_lock_key(
+            &snapshot.local_route.account_id,
+            snapshot.local_route.device_id.as_str(),
+        );
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind::<Text, _>(&account_lock_key)
+            .execute(&mut *conn)
+            .await?;
+        let route_lock_key = local_route_lock_key(&source_station_id, &snapshot.local_route)?;
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind::<Text, _>(&route_lock_key)
+            .execute(&mut *conn)
+            .await?;
+
+        let stored = load_intent(conn, &source_station_id, &snapshot.registration_id, true)
+            .await?
+            .ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "cas_conflict: expiring public push handoff disappeared".to_owned(),
+                )
+            })?;
+        if stored.desired_state == arkret_models_integration::PushRegistrationHandoffState::Revoked
+        {
+            return Ok(None);
+        }
+        if stored.request_digest != snapshot.request_digest
+            || stored.device_authorization != snapshot.device_authorization
+            || stored.local_route != snapshot.local_route
+        {
+            return Err(PersistenceError::Conflict(
+                "cas_conflict: public push handoff changed during expiry".to_owned(),
+            )
+            .into());
+        }
+        let request = stored.request()?;
+        let PushRegistrationHandoffRequestBody::Active {
+            expires_at: Some(expires_at),
+            ..
+        } = request
+        else {
+            return Err(PersistenceError::Conflict(
+                "cas_conflict: selected public push handoff has no expiry".to_owned(),
+            )
+            .into());
+        };
+        if expires_at > now {
+            return Err(PersistenceError::Conflict(
+                "cas_conflict: public push handoff is not expired".to_owned(),
+            )
+            .into());
+        }
+
+        let route = sql_query(
+            "SELECT payload,device_authorization,public_handoff FROM push_devices \
+             WHERE id=$1 FOR UPDATE",
+        )
+        .bind::<Text, _>(stored.registration_id.as_str())
+        .get_result::<CurrentPushRouteRow>(&mut *conn)
+        .await
+        .optional()?;
+        if let Some(route) = route {
+            if !route.public_handoff {
+                return Err(PersistenceError::Conflict(
+                    "cas_conflict: expiring handoff collides with a local-only route".to_owned(),
+                )
+                .into());
+            }
+            let route_authorization: soland_storage::DeviceRevocationGateSelector =
+                serde_json::from_value(route.device_authorization.clone()).map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored public push route authorization is invalid during expiry: {error}"
+                    ))
+                })?;
+            if route_authorization != stored.device_authorization {
+                return Err(PersistenceError::Conflict(
+                    "cas_conflict: public push route authorization changed during expiry"
+                        .to_owned(),
+                )
+                .into());
+            }
+            let registration: PushRegistrationRecord = serde_json::from_value(route.payload)
+                .map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored push route is invalid during expiry: {error}"
+                    ))
+                })?;
+            let mut installation = registration.clone();
+            installation.retained_push_targets.clear();
+            stored
+                .validate_active_local_registration(&stored.device_authorization, &installation)?;
+            let removed = sql_query(
+                "DELETE FROM push_devices WHERE id=$1 AND public_handoff=TRUE \
+                   AND device_authorization=$2",
+            )
+            .bind::<Text, _>(stored.registration_id.as_str())
+            .bind::<Jsonb, _>(&route.device_authorization)
+            .execute(&mut *conn)
+            .await?;
+            if removed != 1 {
+                return Err(PersistenceError::Conflict(
+                    "cas_conflict: public push route changed during expiry".to_owned(),
+                )
+                .into());
+            }
+        }
+        let digest = expiry_input_digest(&stored, expires_at)?;
+        Ok(Some(
+            advance_active_intent_to_revoked(conn, &stored, &digest, now).await?,
+        ))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
 }
 
 /// Turn every public Gateway route owned by one exact device generation into
@@ -992,6 +1136,101 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn expire_public_push_registrations(
+        &self,
+        source_station_id: &DidCoreId,
+        now: chrono::DateTime<chrono::Utc>,
+        after: Option<&PushRegistrationHandoffExpiryCursor>,
+        limit: usize,
+    ) -> PersistenceResult<PushRegistrationHandoffExpiryPage> {
+        if limit == 0 {
+            return Ok(PushRegistrationHandoffExpiryPage::default());
+        }
+        let page_limit = limit.min(1_000);
+        let limit = i64::try_from(page_limit).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let query = if after.is_some() {
+            format!(
+                "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
+                 WHERE source_station_id=$1 AND desired_state='active' \
+                   AND (created_at > $2 OR (created_at = $2 AND registration_id > $3)) \
+                 ORDER BY created_at, registration_id LIMIT $4"
+            )
+        } else {
+            format!(
+                "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
+                 WHERE source_station_id=$1 AND desired_state='active' \
+                 ORDER BY created_at, registration_id LIMIT $2"
+            )
+        };
+        let rows = if let Some(after) = after {
+            sql_query(query)
+                .bind::<Text, _>(source_station_id)
+                .bind::<Timestamptz, _>(after.created_at)
+                .bind::<Text, _>(&after.registration_id)
+                .bind::<BigInt, _>(limit)
+                .load::<HandoffIntentRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?
+        } else {
+            sql_query(query)
+                .bind::<Text, _>(source_station_id)
+                .bind::<BigInt, _>(limit)
+                .load::<HandoffIntentRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?
+        };
+        drop(conn);
+
+        let next_cursor = if rows.len() == page_limit {
+            rows.last().map(|row| PushRegistrationHandoffExpiryCursor {
+                created_at: row.created_at,
+                registration_id: row.registration_id.clone(),
+            })
+        } else {
+            None
+        };
+        let mut page = PushRegistrationHandoffExpiryPage {
+            scanned: rows.len(),
+            next_cursor,
+            ..PushRegistrationHandoffExpiryPage::default()
+        };
+        for row in rows {
+            let snapshot: PushRegistrationHandoffIntentRecord = match row.try_into() {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    page.failed += 1;
+                    continue;
+                }
+            };
+            let request = match snapshot.request() {
+                Ok(request) => request,
+                Err(_) => {
+                    page.failed += 1;
+                    continue;
+                }
+            };
+            let PushRegistrationHandoffRequestBody::Active {
+                expires_at: Some(expires_at),
+                ..
+            } = request
+            else {
+                continue;
+            };
+            if expires_at > now {
+                continue;
+            }
+            match expire_public_push_registration(&self.pool, source_station_id, &snapshot, now)
+                .await
+            {
+                Ok(Some(expired)) => page.expired.push(expired),
+                Ok(None) => {}
+                Err(_) => page.failed += 1,
+            }
+        }
+        Ok(page)
+    }
+
     async fn list_awaiting_revoked_intents(
         &self,
         source_station_id: &DidCoreId,
@@ -1252,6 +1491,25 @@ mod tests {
             app_id,
             None,
         )
+    }
+
+    fn active_request_expiring_at(
+        registration_id: &str,
+        device_id: &DeviceId,
+        push_target_id: &str,
+        push_key: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> PushRegistrationHandoffRequestBody {
+        let mut value = serde_json::to_value(active_request_for_device(
+            registration_id,
+            device_id,
+            push_target_id,
+            push_key,
+        ))
+        .unwrap();
+        value["expires_at"] =
+            Value::String(arkret_canonical::format_timestamp_canonical(expires_at));
+        serde_json::from_value(value).unwrap()
     }
 
     fn active_request_for_route_superseding(
@@ -2747,6 +3005,237 @@ mod tests {
             Err(PersistenceError::Conflict(_))
         ));
         assert!(stored_push_route(&pool, &route).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn public_handoff_expiry_is_inclusive_and_keeps_local_only_routes() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+                .bind::<Text, _>(station_id.as_str())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+        for device in source.device_inventory_records() {
+            inventory.seed_test_record(&device).await.unwrap();
+        }
+        let authorization = source
+            .gate_selectors()
+            .into_iter()
+            .find(|selector| selector.device_id == source.founding_device_id.as_str())
+            .unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route_for_account(
+            source.account.clone(),
+            source.founding_device_id.clone(),
+            &destination,
+        );
+        let expiry = chrono::DateTime::parse_from_rfc3339("2026-09-23T01:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let request = active_request_expiring_at(
+            "registration_7777777777777777",
+            &source.founding_device_id,
+            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
+            "provider-token",
+            expiry,
+        );
+        let started_at = expiry - chrono::Duration::minutes(10);
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        install_public_route(
+            &store,
+            &station_id,
+            &route,
+            &authorization,
+            &request,
+            &client_input_digest('f'),
+            started_at,
+        )
+        .await;
+        let receipt = receipt_for(
+            &request,
+            &station_id,
+            &destination,
+            started_at + chrono::Duration::milliseconds(1),
+        );
+        let registration = local_registration(&source.account, &request);
+
+        let mut local_only = registration.clone();
+        local_only.registration_id =
+            arkret_wire::OpaqueLocalId::new("registration_8888888888888888").unwrap();
+        local_only.push_route_id = "local-expiring-route".to_owned();
+        local_only.push_key =
+            arkret_models_integration::PushKey::new("local-provider-token").unwrap();
+        let mut local_only_locator = route.clone();
+        local_only_locator.push_route_id = local_only.push_route_id.clone();
+        PgPushDeviceStore { pool: pool.clone() }
+            .register(&authorization, serde_json::to_value(&local_only).unwrap())
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .expire_public_push_registrations(
+                    &station_id,
+                    expiry - chrono::Duration::milliseconds(1),
+                    None,
+                    64,
+                )
+                .await
+                .unwrap()
+                .expired
+                .is_empty()
+        );
+        assert!(stored_push_route(&pool, &route).await.is_some());
+        let expired = store
+            .expire_public_push_registrations(&station_id, expiry, None, 64)
+            .await
+            .unwrap();
+        assert_eq!(expired.expired.len(), 1);
+        assert_eq!(
+            expired.expired[0].desired_state,
+            PushRegistrationHandoffState::Revoked
+        );
+        assert_eq!(
+            expired.expired[0].status,
+            PushRegistrationHandoffIntentStatus::AwaitingReceipt
+        );
+        assert!(stored_push_route(&pool, &route).await.is_none());
+        assert!(
+            stored_push_route(&pool, &local_only_locator)
+                .await
+                .is_some()
+        );
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &request.request_digest().unwrap(),
+                    &receipt,
+                    &authorization,
+                    &registration,
+                    expiry + chrono::Duration::milliseconds(1),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        assert!(stored_push_route(&pool, &route).await.is_none());
+        assert!(
+            store
+                .expire_public_push_registrations(&station_id, expiry, None, 64)
+                .await
+                .unwrap()
+                .expired
+                .is_empty(),
+            "an exact expiry replay reuses the already durable tombstone"
+        );
+    }
+
+    #[tokio::test]
+    async fn expiry_cursor_advances_past_a_conflicting_first_row_to_the_sixty_fifth() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+                .bind::<Text, _>(station_id.as_str())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+        for device in source.device_inventory_records() {
+            inventory.seed_test_record(&device).await.unwrap();
+        }
+        let authorization = source
+            .gate_selectors()
+            .into_iter()
+            .find(|selector| selector.device_id == source.founding_device_id.as_str())
+            .unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let expiry = chrono::DateTime::parse_from_rfc3339("2026-09-23T02:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        let mut requests = Vec::new();
+        for index in 0..65 {
+            let registration_id = format!("registration_{index:016x}");
+            let request = active_request_expiring_at(
+                &registration_id,
+                &source.founding_device_id,
+                "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
+                "provider-token",
+                expiry,
+            );
+            let mut route = local_route_for_account(
+                source.account.clone(),
+                source.founding_device_id.clone(),
+                &destination,
+            );
+            route.push_route_id = format!("expiry-route-{index:02}");
+            store
+                .ensure_desired_intent(
+                    &station_id,
+                    &route,
+                    &authorization,
+                    &client_input_digest('e'),
+                    &request,
+                    expiry - chrono::Duration::minutes(1),
+                )
+                .await
+                .unwrap();
+            requests.push((request, route));
+        }
+
+        // A local-only route with the same registration id makes the first
+        // expiry candidate fail closed without corrupting its durable intent.
+        let mut collision = local_registration(&source.account, &requests[0].0);
+        collision.push_route_id = requests[0].1.push_route_id.clone();
+        PgPushDeviceStore { pool: pool.clone() }
+            .register(&authorization, serde_json::to_value(collision).unwrap())
+            .await
+            .unwrap();
+
+        let first = store
+            .expire_public_push_registrations(&station_id, expiry, None, 64)
+            .await
+            .unwrap();
+        assert_eq!(first.scanned, 64);
+        assert_eq!(first.failed, 1);
+        assert_eq!(first.expired.len(), 63);
+        let cursor = first.next_cursor.expect("a full page advances its cursor");
+
+        let second = store
+            .expire_public_push_registrations(&station_id, expiry, Some(&cursor), 64)
+            .await
+            .unwrap();
+        assert_eq!(second.scanned, 1);
+        assert_eq!(second.failed, 0);
+        assert_eq!(second.expired.len(), 1);
+        assert_eq!(
+            second.expired[0].registration_id,
+            requests[64].0.registration_id().clone()
+        );
+        assert_eq!(
+            store
+                .get_intent(&station_id, requests[0].0.registration_id())
+                .await
+                .unwrap()
+                .unwrap()
+                .desired_state,
+            PushRegistrationHandoffState::Active,
+            "the conflicting row remains fail-closed for a later operator-visible retry"
+        );
     }
 
     #[tokio::test]

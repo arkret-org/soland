@@ -234,6 +234,7 @@ impl PushDeviceStore for PgPushDeviceStore {
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<Value>> {
+        let now = chrono::Utc::now();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -283,6 +284,15 @@ impl PushDeviceStore for PgPushDeviceStore {
                 .await
                 .optional()?
                 {
+                    let registration: arkret_models_integration::PushRegistrationRecord =
+                        serde_json::from_value(row.payload.clone())
+                            .map_err(PersistenceError::database)?;
+                    // Delivery reads enforce the validity boundary after the
+                    // device lock and exact-row re-read, independently from
+                    // the asynchronous durable tombstone sweep.
+                    if registration.expires_at.is_some_and(|expiry| expiry <= now) {
+                        continue;
+                    }
                     visible.push(row.payload);
                 }
             }
@@ -377,6 +387,20 @@ mod tests {
             serde_json::from_value(rows[0].clone()).unwrap();
         assert!(replaced.retained_push_targets.is_empty());
         assert!(!replaced.visible_notification_opt_in);
+        record.expires_at = Some(chrono::Utc::now() - chrono::Duration::milliseconds(1));
+        store
+            .register(&authorization, serde_json::to_value(&record).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            store.snapshot_all().await.unwrap().is_empty(),
+            "an expired route is never visible to the delivery snapshot"
+        );
+        record.expires_at = None;
+        store
+            .register(&authorization, serde_json::to_value(&record).unwrap())
+            .await
+            .unwrap();
         let mut wrong_account = record.account_id.clone();
         wrong_account.station_id = "ak:did_core:web:other.example".parse().unwrap();
         assert_eq!(

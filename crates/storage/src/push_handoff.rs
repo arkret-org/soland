@@ -26,6 +26,26 @@ pub struct PushRegistrationHandoffRetryCursor {
     pub registration_id: PushRegistrationId,
 }
 
+/// Process-local continuation for the stable active-registration expiry order.
+///
+/// The cursor is deliberately not durable authority. It lets the bounded
+/// worker move past an invalid or concurrently changed row, then wrap to the
+/// head after reaching the end so the failed row remains observable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PushRegistrationHandoffExpiryCursor {
+    pub created_at: DateTime<Utc>,
+    pub registration_id: String,
+}
+
+/// Outcome of one bounded expiry sweep page.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PushRegistrationHandoffExpiryPage {
+    pub scanned: usize,
+    pub expired: Vec<PushRegistrationHandoffIntentRecord>,
+    pub failed: usize,
+    pub next_cursor: Option<PushRegistrationHandoffExpiryCursor>,
+}
+
 impl PushRegistrationHandoffRetryCursor {
     #[must_use]
     pub fn after(record: &PushRegistrationHandoffIntentRecord) -> Self {
@@ -449,6 +469,19 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         app_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> PersistenceResult<Vec<PushRegistrationHandoffIntentRecord>>;
+
+    /// Turn a bounded stable page of active public handoffs whose registration
+    /// validity has ended (`expires_at <= now`) into terminal revoke intents,
+    /// removing only each matching public local route. Candidates are isolated
+    /// transactionally so one conflicting row cannot roll back the rest of the
+    /// page. The returned cursor provides bounded cross-pass fairness.
+    async fn expire_public_push_registrations(
+        &self,
+        source_station_id: &DidCoreId,
+        now: DateTime<Utc>,
+        after: Option<&PushRegistrationHandoffExpiryCursor>,
+        limit: usize,
+    ) -> PersistenceResult<PushRegistrationHandoffExpiryPage>;
 
     /// Stable, bounded retry view for the dedicated public-Gateway revoke
     /// worker. This is intentionally separate from the federation outbox.

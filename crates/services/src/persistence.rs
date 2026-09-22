@@ -391,6 +391,20 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn expire_public_push_registrations(
+        &self,
+        source_station_id: &arkret_wire::DidCoreId,
+        now: chrono::DateTime<chrono::Utc>,
+        after: Option<&soland_storage::PushRegistrationHandoffExpiryCursor>,
+        limit: usize,
+    ) -> crate::ServiceResult<soland_storage::PushRegistrationHandoffExpiryPage> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .expire_public_push_registrations(source_station_id, now, after, limit)
+            .await?)
+    }
+
     pub async fn commit_verified_push_registration_handoff_receipt(
         &self,
         source_station_id: &arkret_wire::DidCoreId,

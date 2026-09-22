@@ -18,9 +18,10 @@ use soland_services::push_handoff::{
     plan_active_push_registration, retry_revoked_handoff_page,
 };
 use soland_storage::{
-    DeviceRevocationGateSelector, PushRegistrationHandoffIntentRecord,
-    PushRegistrationHandoffIntentStatus, PushRegistrationHandoffIntentWrite,
-    PushRegistrationHandoffRetryCursor, PushRegistrationHandoffRouteLocator,
+    DeviceRevocationGateSelector, PushRegistrationHandoffExpiryCursor,
+    PushRegistrationHandoffIntentRecord, PushRegistrationHandoffIntentStatus,
+    PushRegistrationHandoffIntentWrite, PushRegistrationHandoffRetryCursor,
+    PushRegistrationHandoffRouteLocator,
 };
 
 use crate::push_gateway_registry::TrustedPushGateway;
@@ -209,11 +210,41 @@ where
 
 async fn retry_awaiting_revocations_once(
     state: &AppState,
-    cursor: &mut Option<PushRegistrationHandoffRetryCursor>,
+    expiry_cursor: &mut Option<PushRegistrationHandoffExpiryCursor>,
+    revoke_cursor: &mut Option<PushRegistrationHandoffRetryCursor>,
 ) -> Result<soland_services::push_handoff::RevokeRetryReport, AppError> {
     let source_station_id = state.service_core_id();
+    match state
+        .persistence()
+        .expire_public_push_registrations(
+            &source_station_id,
+            Utc::now(),
+            expiry_cursor.as_ref(),
+            REVOKE_RETRY_BATCH_LIMIT,
+        )
+        .await
+    {
+        Ok(page) => {
+            *expiry_cursor = page.next_cursor;
+            if page.failed > 0 {
+                tracing::warn!(
+                    worker = "public_push_revoke_retry",
+                    stage = "expire_public_push_registrations",
+                    scanned = page.scanned,
+                    expired = page.expired.len(),
+                    failed = page.failed,
+                    "public Push Gateway expiry sweep completed with isolated failures"
+                );
+            }
+        }
+        Err(_) => tracing::warn!(
+            worker = "public_push_revoke_retry",
+            stage = "expire_public_push_registrations",
+            "public Push Gateway expiry sweep could not load its bounded page"
+        ),
+    }
     retry_revoked_handoff_page(
-        cursor,
+        revoke_cursor,
         REVOKE_RETRY_BATCH_LIMIT,
         |after, limit| {
             let source_station_id = source_station_id.clone();
@@ -239,14 +270,12 @@ async fn retry_awaiting_revocations_once(
 pub fn spawn_public_push_revoke_retry_worker(
     state: AppState,
 ) -> Option<std::sync::Arc<tokio::task::JoinHandle<()>>> {
-    if state.trusted_push_gateways().is_empty() {
-        return None;
-    }
     Some(std::sync::Arc::new(tokio::spawn(async move {
         let mut ticker = tokio::time::interval(REVOKE_RETRY_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut drain = state.subscribe_connection_drain();
-        let mut cursor = None;
+        let mut expiry_cursor = None;
+        let mut revoke_cursor = None;
         loop {
             tokio::select! {
                 _ = ticker.tick() => {}
@@ -257,7 +286,8 @@ pub fn spawn_public_push_revoke_retry_worker(
                     continue;
                 }
             }
-            let pass = retry_awaiting_revocations_once(&state, &mut cursor);
+            let pass =
+                retry_awaiting_revocations_once(&state, &mut expiry_cursor, &mut revoke_cursor);
             let report = tokio::select! {
                 result = pass => result,
                 changed = drain.changed() => {
