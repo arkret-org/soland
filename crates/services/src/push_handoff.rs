@@ -47,6 +47,19 @@ pub fn plan_active_push_registration(
     let Some(existing) = existing else {
         return Ok(ActivePushRegistrationPlan::Create { predecessor: None });
     };
+    let request = existing.request()?;
+    if request.state() == arkret::PushRegistrationHandoffState::Revoked {
+        return match existing.status {
+            PushRegistrationHandoffIntentStatus::AwaitingReceipt => Err(ServiceError::Conflict(
+                "cas_conflict: public Push Gateway revocation is awaiting a receipt".to_owned(),
+            )),
+            PushRegistrationHandoffIntentStatus::ReceiptVerified => {
+                Ok(ActivePushRegistrationPlan::Create {
+                    predecessor: Some(existing.registration_id),
+                })
+            }
+        };
+    }
     match existing.status {
         PushRegistrationHandoffIntentStatus::AwaitingReceipt => {
             if &existing.client_input_digest != client_input_digest {
@@ -58,7 +71,6 @@ pub fn plan_active_push_registration(
             Ok(ActivePushRegistrationPlan::ReplayPending(existing))
         }
         PushRegistrationHandoffIntentStatus::ReceiptVerified => {
-            let request = existing.request()?;
             if &existing.client_input_digest == client_input_digest
                 && request.push_target_id() == current_push_target_id
             {
@@ -152,6 +164,29 @@ mod tests {
         record
     }
 
+    fn revoked_record(
+        status: PushRegistrationHandoffIntentStatus,
+    ) -> PushRegistrationHandoffIntentRecord {
+        let active = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let request = active.request().unwrap();
+        let revoked = PushRegistrationHandoffRequestBody::Revoked {
+            registration_id: active.registration_id.clone(),
+            push_target_id: request.push_target_id().clone(),
+            device_id: request.device_id().clone(),
+        };
+        let mut record = PushRegistrationHandoffIntentRecord::prepare(
+            active.source_station_id,
+            active.local_route,
+            active.device_authorization,
+            active.client_input_digest,
+            &revoked,
+            active.created_at,
+        )
+        .unwrap();
+        record.status = status;
+        record
+    }
+
     #[test]
     fn pending_cross_epoch_replays_stored_body_but_verified_cross_epoch_supersedes() {
         let next_epoch_target =
@@ -203,6 +238,23 @@ mod tests {
         let predecessor = verified.registration_id.clone();
         assert_eq!(
             plan_active_push_registration(Some(verified), &changed, &target).unwrap(),
+            ActivePushRegistrationPlan::Create {
+                predecessor: Some(predecessor)
+            }
+        );
+    }
+
+    #[test]
+    fn revoked_pending_waits_but_verified_revoke_creates_successor() {
+        let pending = revoked_record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let digest = pending.client_input_digest.clone();
+        let target = pending.request().unwrap().push_target_id().clone();
+        assert!(plan_active_push_registration(Some(pending), &digest, &target).is_err());
+
+        let verified = revoked_record(PushRegistrationHandoffIntentStatus::ReceiptVerified);
+        let predecessor = verified.registration_id.clone();
+        assert_eq!(
+            plan_active_push_registration(Some(verified), &digest, &target).unwrap(),
             ActivePushRegistrationPlan::Create {
                 predecessor: Some(predecessor)
             }

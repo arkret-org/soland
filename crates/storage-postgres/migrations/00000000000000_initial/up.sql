@@ -3097,7 +3097,7 @@ CREATE INDEX push_registration_handoff_retry_idx
 CREATE UNIQUE INDEX push_registration_handoff_awaiting_local_route_idx
     ON public.push_registration_handoff_intents
        (source_station_id, local_account_id, local_device_id, local_push_route_id, destination_gateway_id)
-    WHERE status = 'awaiting_receipt';
+    WHERE status = 'awaiting_receipt' AND desired_state = 'active';
 
 CREATE TABLE public.realm_invites (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

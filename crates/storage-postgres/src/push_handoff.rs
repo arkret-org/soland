@@ -243,6 +243,87 @@ async fn store_receipt_transition(
     Ok(())
 }
 
+fn active_request_matches_filters(
+    request: &PushRegistrationHandoffRequestBody,
+    push_key: Option<&str>,
+    app_id: Option<&str>,
+) -> bool {
+    let PushRegistrationHandoffRequestBody::Active {
+        push_key: request_push_key,
+        app_id: request_app_id,
+        ..
+    } = request
+    else {
+        return false;
+    };
+    push_key.is_none_or(|expected| expected == request_push_key.as_str())
+        && app_id.is_none_or(|expected| Some(expected) == request_app_id.as_deref())
+}
+
+async fn advance_active_intent_to_revoked(
+    conn: &mut AsyncPgConnection,
+    stored: &PushRegistrationHandoffIntentRecord,
+    now: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<PushRegistrationHandoffIntentRecord> {
+    let active = stored.request()?;
+    let PushRegistrationHandoffRequestBody::Active {
+        push_target_id,
+        device_id,
+        ..
+    } = active
+    else {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: public push handoff is not active".to_owned(),
+        ));
+    };
+    let revoke_request = PushRegistrationHandoffRequestBody::Revoked {
+        registration_id: stored.registration_id.clone(),
+        push_target_id,
+        device_id,
+    };
+    let candidate = PushRegistrationHandoffIntentRecord::prepare(
+        stored.source_station_id.clone(),
+        stored.local_route.clone(),
+        stored.device_authorization.clone(),
+        stored.client_input_digest.clone(),
+        &revoke_request,
+        now,
+    )?;
+    let outcome = apply_push_registration_desired_intent(stored, &candidate)?;
+    let PushRegistrationHandoffIntentWrite::AdvancedToRevoked(revoked) = outcome else {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: public push handoff did not advance to revoked".to_owned(),
+        ));
+    };
+    let updated = sql_query(
+        "UPDATE push_registration_handoff_intents \
+         SET desired_state = $5, request_digest = $6, client_input_digest = $7, \
+             canonical_request = $8, status = $9, receipt = NULL, updated_at = $10 \
+         WHERE source_station_id = $1 AND registration_id = $2 \
+           AND destination_gateway_id = $3 AND request_digest = $4 \
+           AND desired_state = 'active'",
+    )
+    .bind::<Text, _>(&stored.source_station_id)
+    .bind::<Text, _>(stored.registration_id.as_str())
+    .bind::<Text, _>(&stored.destination_gateway_id)
+    .bind::<Text, _>(stored.request_digest.as_str())
+    .bind::<Text, _>(revoked.desired_state.as_str())
+    .bind::<Text, _>(revoked.request_digest.as_str())
+    .bind::<Text, _>(revoked.client_input_digest.as_str())
+    .bind::<Binary, _>(&revoked.canonical_request)
+    .bind::<Text, _>(revoked.status.as_str())
+    .bind::<Timestamptz, _>(revoked.updated_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if updated != 1 {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: public push handoff changed during unregistration".to_owned(),
+        ));
+    }
+    Ok(revoked)
+}
+
 #[async_trait]
 impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
     async fn ensure_desired_intent(
@@ -262,9 +343,17 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
             request,
             now,
         )?;
+        let account_lock_key = push_device_lock_key(
+            &candidate.local_route.account_id,
+            candidate.local_route.device_id.as_str(),
+        );
         let route_lock_key = local_route_lock_key(source_station_id, local_route)?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(&account_lock_key)
+                .execute(conn)
+                .await?;
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&route_lock_key)
                 .execute(conn)
@@ -482,7 +571,63 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
             .bind::<Nullable<Text>, _>(app_id.as_deref())
             .load::<CurrentPushRouteRow>(&mut *conn)
             .await?;
+            let awaiting_query = format!(
+                "SELECT {HANDOFF_COLUMNS} FROM push_registration_handoff_intents \
+                 WHERE source_station_id = $1 AND local_account_id = $2 \
+                   AND local_device_id = $3 AND desired_state = 'active' \
+                   AND status = 'awaiting_receipt' \
+                 ORDER BY local_push_route_id, destination_gateway_id, registration_id"
+            );
+            let awaiting = sql_query(awaiting_query)
+                .bind::<Text, _>(&account_id.station_id)
+                .bind::<Jsonb, _>(&account_json)
+                .bind::<Text, _>(device_id.as_str())
+                .load::<HandoffIntentRow>(&mut *conn)
+                .await?;
             let mut revoked = Vec::new();
+            for snapshot in awaiting {
+                let snapshot: PushRegistrationHandoffIntentRecord = snapshot.try_into()?;
+                let request = snapshot.request()?;
+                if !active_request_matches_filters(
+                    &request,
+                    push_key.as_deref(),
+                    app_id.as_deref(),
+                ) {
+                    continue;
+                }
+                let route_lock_key =
+                    local_route_lock_key(&account_id.station_id, &snapshot.local_route)?;
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                    .bind::<Text, _>(&route_lock_key)
+                    .execute(&mut *conn)
+                    .await?;
+                let stored = load_intent(
+                    conn,
+                    &account_id.station_id,
+                    &snapshot.registration_id,
+                    true,
+                )
+                .await?
+                .ok_or_else(|| {
+                    PersistenceError::Conflict(
+                        "cas_conflict: pending public push handoff disappeared during unregistration"
+                            .to_owned(),
+                    )
+                })?;
+                if stored.local_route != snapshot.local_route
+                    || stored.local_route.account_id != account_id
+                    || stored.local_route.device_id != device_id
+                    || stored.desired_state
+                        != arkret_models_integration::PushRegistrationHandoffState::Active
+                {
+                    return Err(PersistenceError::Conflict(
+                        "cas_conflict: pending public push handoff changed during unregistration"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+                revoked.push(advance_active_intent_to_revoked(conn, &stored, now).await?);
+            }
             for route_row in routes {
                 let registration: PushRegistrationRecord =
                     serde_json::from_value(route_row.payload.clone()).map_err(|error| {
@@ -571,54 +716,7 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                     )
                     .into());
                 }
-                let revoke_request = PushRegistrationHandoffRequestBody::Revoked {
-                    registration_id: registration_id.clone(),
-                    push_target_id,
-                    device_id: request_device_id,
-                };
-                let candidate = PushRegistrationHandoffIntentRecord::prepare(
-                    stored.source_station_id.clone(),
-                    stored.local_route.clone(),
-                    stored.device_authorization.clone(),
-                    stored.client_input_digest.clone(),
-                    &revoke_request,
-                    now,
-                )?;
-                let outcome = apply_push_registration_desired_intent(&stored, &candidate)?;
-                let PushRegistrationHandoffIntentWrite::AdvancedToRevoked(revoked_record) = outcome
-                else {
-                    return Err(PersistenceError::Conflict(
-                        "cas_conflict: public push route did not advance to revoked".to_owned(),
-                    )
-                    .into());
-                };
-                let updated = sql_query(
-                    "UPDATE push_registration_handoff_intents \
-                     SET desired_state = $5, request_digest = $6, client_input_digest = $7, \
-                         canonical_request = $8, status = $9, receipt = NULL, updated_at = $10 \
-                     WHERE source_station_id = $1 AND registration_id = $2 \
-                       AND destination_gateway_id = $3 AND request_digest = $4 \
-                       AND desired_state = 'active'",
-                )
-                .bind::<Text, _>(&stored.source_station_id)
-                .bind::<Text, _>(stored.registration_id.as_str())
-                .bind::<Text, _>(&stored.destination_gateway_id)
-                .bind::<Text, _>(stored.request_digest.as_str())
-                .bind::<Text, _>(revoked_record.desired_state.as_str())
-                .bind::<Text, _>(revoked_record.request_digest.as_str())
-                .bind::<Text, _>(revoked_record.client_input_digest.as_str())
-                .bind::<Binary, _>(&revoked_record.canonical_request)
-                .bind::<Text, _>(revoked_record.status.as_str())
-                .bind::<Timestamptz, _>(revoked_record.updated_at)
-                .execute(&mut *conn)
-                .await?;
-                if updated != 1 {
-                    return Err(PersistenceError::Conflict(
-                        "cas_conflict: public push handoff changed during unregistration"
-                            .to_owned(),
-                    )
-                    .into());
-                }
+                let revoked_record = advance_active_intent_to_revoked(conn, &stored, now).await?;
                 let removed = sql_query(
                     "DELETE FROM push_devices WHERE payload->'account_id' = $1 \
                        AND device_id = $2 AND payload->>'push_route_id' = $3 \
@@ -868,6 +966,24 @@ mod tests {
         push_key: &str,
         app_id: &str,
     ) -> PushRegistrationHandoffRequestBody {
+        active_request_for_route_superseding(
+            registration_id,
+            device_id,
+            push_target_id,
+            push_key,
+            app_id,
+            None,
+        )
+    }
+
+    fn active_request_for_route_superseding(
+        registration_id: &str,
+        device_id: &DeviceId,
+        push_target_id: &str,
+        push_key: &str,
+        app_id: &str,
+        supersedes_registration_id: Option<&PushRegistrationId>,
+    ) -> PushRegistrationHandoffRequestBody {
         serde_json::from_value(json!({
             "registration_id": registration_id,
             "push_target_id": push_target_id,
@@ -876,7 +992,8 @@ mod tests {
             "push_key": push_key,
             "platform": "apns",
             "app_id": app_id,
-            "visible_notification_opt_in": false
+            "visible_notification_opt_in": false,
+            "supersedes_registration_id": supersedes_registration_id
         }))
         .unwrap()
     }
@@ -1673,37 +1790,82 @@ mod tests {
         )
         .await;
 
+        let successor = active_request_for_route_superseding(
+            "registration_aaaaaaaaaaaaaaaa",
+            &source.founding_device_id,
+            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
+            "provider-token-a",
+            "com.example.app",
+            Some(request_a.registration_id()),
+        );
+        store
+            .ensure_desired_intent(
+                &station_id,
+                &route_a,
+                &authorization,
+                &client_input_digest('d'),
+                &successor,
+                started_at + chrono::Duration::seconds(2),
+            )
+            .await
+            .unwrap();
+        let other_destination = DidCoreId::new("ak:did_core:web:gateway-two.example").unwrap();
+        let mut other_gateway_route = route_a.clone();
+        other_gateway_route.destination_gateway_id = other_destination;
+        let other_gateway_pending = active_request_for_route(
+            "registration_bbbbbbbbbbbbbbbb",
+            &source.founding_device_id,
+            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
+            "provider-token-a",
+            "com.example.app",
+        );
+        store
+            .ensure_desired_intent(
+                &station_id,
+                &other_gateway_route,
+                &authorization,
+                &client_input_digest('e'),
+                &other_gateway_pending,
+                started_at + chrono::Duration::seconds(3),
+            )
+            .await
+            .unwrap();
+
         let revoked = store
             .begin_public_push_unregistration(
                 &source.account,
                 &source.founding_device_id,
                 Some("provider-token-a"),
                 Some("com.example.app"),
-                started_at + chrono::Duration::seconds(2),
+                started_at + chrono::Duration::seconds(4),
             )
             .await
             .unwrap();
-        assert_eq!(revoked.len(), 1);
-        assert_eq!(revoked[0].registration_id, *request_a.registration_id());
-        let exact_body = revoked[0].canonical_request.clone();
-        assert_eq!(
-            revoked[0].desired_state,
-            PushRegistrationHandoffState::Revoked
-        );
-        assert_eq!(
-            revoked[0].device_authorization, authorization,
-            "the active authorization generation survives the revoke"
-        );
+        assert_eq!(revoked.len(), 3);
+        assert!(revoked.iter().all(|record| {
+            record.desired_state == PushRegistrationHandoffState::Revoked
+                && record.device_authorization == authorization
+        }));
         assert!(stored_push_route(&pool, &route_a).await.is_none());
         assert!(stored_push_route(&pool, &route_b).await.is_some());
 
         let due = store
-            .list_awaiting_revoked_intents(&station_id, 1)
+            .list_awaiting_revoked_intents(&station_id, 10)
             .await
             .unwrap();
-        assert_eq!(due.len(), 1);
-        assert_eq!(due[0].canonical_request, exact_body);
-        assert_eq!(due[0].registration_id, *request_a.registration_id());
+        let mut due_ids = due
+            .iter()
+            .map(|record| record.registration_id.as_str())
+            .collect::<Vec<_>>();
+        due_ids.sort_unstable();
+        assert_eq!(
+            due_ids,
+            vec![
+                request_a.registration_id().as_str(),
+                successor.registration_id().as_str(),
+                other_gateway_pending.registration_id().as_str(),
+            ]
+        );
         assert!(
             store
                 .begin_public_push_unregistration(
@@ -1711,7 +1873,7 @@ mod tests {
                     &source.founding_device_id,
                     Some("provider-token-a"),
                     Some("com.example.app"),
-                    started_at + chrono::Duration::seconds(3),
+                    started_at + chrono::Duration::seconds(5),
                 )
                 .await
                 .unwrap()
@@ -1722,7 +1884,7 @@ mod tests {
             &request_a,
             &station_id,
             &destination,
-            started_at + chrono::Duration::seconds(3),
+            started_at + chrono::Duration::seconds(6),
         );
         assert!(matches!(
             store
@@ -1731,11 +1893,62 @@ mod tests {
                     request_a.registration_id(),
                     &request_a.request_digest().unwrap(),
                     &active_receipt,
-                    started_at + chrono::Duration::seconds(4),
+                    started_at + chrono::Duration::seconds(7),
                 )
                 .await,
             Err(PersistenceError::Conflict(_))
         ));
+        let successor_receipt = receipt_for(
+            &successor,
+            &station_id,
+            &destination,
+            started_at + chrono::Duration::seconds(6),
+        );
+        let successor_registration = local_registration(&source.account, &successor);
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route_a,
+                    successor.registration_id(),
+                    &successor.request_digest().unwrap(),
+                    &successor_receipt,
+                    &authorization,
+                    &successor_registration,
+                    started_at + chrono::Duration::seconds(7),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        let other_gateway_receipt = receipt_for(
+            &other_gateway_pending,
+            &station_id,
+            &other_gateway_route.destination_gateway_id,
+            started_at + chrono::Duration::seconds(6),
+        );
+        let other_gateway_registration =
+            local_registration(&source.account, &other_gateway_pending);
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &other_gateway_route,
+                    other_gateway_pending.registration_id(),
+                    &other_gateway_pending.request_digest().unwrap(),
+                    &other_gateway_receipt,
+                    &authorization,
+                    &other_gateway_registration,
+                    started_at + chrono::Duration::seconds(7),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        assert!(stored_push_route(&pool, &route_a).await.is_none());
+        assert!(
+            stored_push_route(&pool, &other_gateway_route)
+                .await
+                .is_none()
+        );
 
         let mut wrong_generation = authorization.clone();
         wrong_generation.authorization_ref.stream_position += 1;
@@ -1755,7 +1968,7 @@ mod tests {
                     &source.founding_device_id,
                     Some("provider-token-b"),
                     Some("com.example.voip"),
-                    started_at + chrono::Duration::seconds(5),
+                    started_at + chrono::Duration::seconds(8),
                 )
                 .await,
             Err(PersistenceError::Conflict(_))
@@ -1856,6 +2069,107 @@ mod tests {
         assert_eq!(
             due[0].request().unwrap().state(),
             PushRegistrationHandoffState::Revoked
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_pending_create_linearizes_before_or_after_unregistration() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route(&station_id, &destination);
+        let authorization = device_authorization(&route);
+        let existing = active_request_with_id("registration_cccccccccccccccc", None);
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        let started_at = chrono::DateTime::parse_from_rfc3339("2026-09-23T00:15:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        store
+            .ensure_desired_intent(
+                &station_id,
+                &route,
+                &authorization,
+                &client_input_digest('f'),
+                &existing,
+                started_at,
+            )
+            .await
+            .unwrap();
+
+        let second_destination = DidCoreId::new("ak:did_core:web:gateway-two.example").unwrap();
+        let mut raced_route = route.clone();
+        raced_route.destination_gateway_id = second_destination;
+        let raced = active_request_with_id("registration_dddddddddddddddd", None);
+        let barrier = Arc::new(Barrier::new(3));
+        let unregister_task = {
+            let barrier = barrier.clone();
+            let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+            let account_id = route.account_id.clone();
+            let device_id = route.device_id.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .begin_public_push_unregistration(
+                        &account_id,
+                        &device_id,
+                        None,
+                        None,
+                        started_at + chrono::Duration::seconds(1),
+                    )
+                    .await
+            })
+        };
+        let create_task = {
+            let barrier = barrier.clone();
+            let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+            let station_id = station_id.clone();
+            let authorization = authorization.clone();
+            let raced_route = raced_route.clone();
+            let raced = raced.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .ensure_desired_intent(
+                        &station_id,
+                        &raced_route,
+                        &authorization,
+                        &client_input_digest('9'),
+                        &raced,
+                        started_at + chrono::Duration::seconds(1),
+                    )
+                    .await
+            })
+        };
+        barrier.wait().await;
+        let revoked = unregister_task.await.unwrap().unwrap();
+        assert!(matches!(
+            create_task.await.unwrap().unwrap(),
+            PushRegistrationHandoffIntentWrite::Created(_)
+        ));
+
+        let existing_after = store
+            .get_intent(&station_id, existing.registration_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            existing_after.desired_state,
+            PushRegistrationHandoffState::Revoked,
+            "an intent durable before the account/device lock is always terminated"
+        );
+        let raced_after = store
+            .get_intent(&station_id, raced.registration_id())
+            .await
+            .unwrap()
+            .unwrap();
+        let raced_was_revoked = revoked
+            .iter()
+            .any(|record| record.registration_id == *raced.registration_id());
+        assert_eq!(
+            raced_after.desired_state == PushRegistrationHandoffState::Revoked,
+            raced_was_revoked,
+            "the raced create is either included before the linearization point or remains a later explicit registration"
         );
     }
 
