@@ -45,10 +45,11 @@ impl FederationProfileIntersection {
     fn enforce_atoms(&self, atoms: &SemanticAtoms) -> Result<(), FederationProfileGateRejection> {
         // federation.md: inbound `/_arkret/peer/events` acceptance is gated by
         // the RFC 9421 service signature + trust-domain/destination binding +
-        // the MLS/E2EE governance binding lower bound. The reducer profile is
-        // resolved independently from each Event's authenticated CBS. A peer ServiceDescribe's
-        // `required_event_kinds` is the set the profile *requires support for*
-        // (a floor), NOT an allowlist of acceptable kinds — gating per-event
+        // the fixed v1 MLS/E2EE governance binding lower bound. That closed five-field binding is
+        // validated by MLS admission; it is no longer an optional conformance profile. The reducer
+        // profile is resolved independently from each Event's authenticated CBS. A peer
+        // ServiceDescribe's `required_event_kinds` is the set the profile *requires support
+        // for* (a floor), NOT an allowlist of acceptable kinds — gating per-event
         // acceptance on it wrongly rejected standard federatable ordinary Events
         // (e.g. `ak.message.create`) whenever the peer described
         // `federation_minimal` or its ServiceDescribe was momentarily
@@ -69,9 +70,6 @@ impl FederationProfileIntersection {
         }
         if atoms.requires_capability_semantics {
             self.require_schema(SchemaId::CAPABILITY_V1)?;
-        }
-        if atoms.requires_mls_governance {
-            self.require_profile_semantics(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)?;
         }
         Ok(())
     }
@@ -111,17 +109,6 @@ impl FederationProfileIntersection {
             self.local.covers_feature(feature),
             self.peer.covers_feature(feature),
             format!("feature {feature}"),
-        )
-    }
-
-    fn require_profile_semantics(
-        &self,
-        profile: &str,
-    ) -> Result<(), FederationProfileGateRejection> {
-        self.require(
-            self.local.covers_profile(profile),
-            self.peer.covers_profile(profile),
-            format!("profile {profile}"),
         )
     }
 
@@ -175,16 +162,6 @@ impl SemanticClaims {
         }
     }
 
-    fn covers_profile(&self, profile: &str) -> bool {
-        self.profiles.contains(profile)
-            || contains_str(&self.requirements.profile_ids, profile)
-            || self
-                .requirements
-                .profile_ids
-                .iter()
-                .any(|declared| declared == profile)
-    }
-
     fn covers_event_kind(&self, kind: &str) -> bool {
         contains_str(&self.requirements.required_event_kinds, kind)
     }
@@ -236,7 +213,6 @@ struct SemanticAtoms {
     constraint_kinds: BTreeSet<String>,
     features: BTreeSet<String>,
     requires_capability_semantics: bool,
-    requires_mls_governance: bool,
 }
 
 impl SemanticAtoms {
@@ -272,13 +248,6 @@ impl SemanticAtoms {
             || !self.constraint_kinds.is_empty()
         {
             self.requires_capability_semantics = true;
-        }
-        if self
-            .kind
-            .as_deref()
-            .is_some_and(|kind| kind.starts_with("ak.mls."))
-        {
-            self.requires_mls_governance = true;
         }
     }
 }
@@ -522,21 +491,6 @@ fn collect_payload_semantics(value: &Value, atoms: &mut SemanticAtoms, depth: us
                             true,
                         );
                     }
-                    "encryption_profile" | "encryption_profile_id" | "key_profile" => {
-                        if string_value_equals(child, "mls_rfc9420") {
-                            atoms.requires_mls_governance = true;
-                        }
-                    }
-                    "governance_binding"
-                    | "security_frontier_digest"
-                    | "encrypted_payload"
-                    | "encrypted_content"
-                    | "ciphertext"
-                    | "mls_group_id"
-                    | "mls_epoch"
-                    | "key_schedule_ref" => {
-                        atoms.requires_mls_governance = true;
-                    }
                     _ => {}
                 }
                 collect_payload_semantics(child, atoms, depth + 1);
@@ -647,13 +601,6 @@ fn collect_string_array(value: &Value, output: &mut BTreeSet<String>) {
         }
         _ => {}
     }
-}
-
-fn string_value_equals(value: &Value, expected: &str) -> bool {
-    value.as_str() == Some(expected)
-        || value
-            .as_array()
-            .is_some_and(|items| items.iter().any(|item| string_value_equals(item, expected)))
 }
 
 fn insert_nonempty(output: &mut BTreeSet<String>, value: &str) {
