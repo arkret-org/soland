@@ -139,26 +139,14 @@ pub(super) async fn push_register(
         ));
     }
     let device_id = body.device_id.as_str().to_owned();
-    let target = state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: account_id.principal_id.to_string(),
-            device_id: device_id.clone(),
-        })
+    let authorization =
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            account_id.principal_id.as_str(),
+            &device_id,
+        )
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::capability_denied("push target device is not authorized"))?;
-    let (event, generation) =
-        crate::routing::identity::device_generation::verified_device_authorization_binding(&target)
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::capability_denied("push target device is not authorized"))?;
-    let authorization = soland_storage::DeviceRevocationGateSelector {
-        principal_id: account_id.principal_id.clone(),
-        station_id: account_id.station_id.clone(),
-        device_id: device_id.clone(),
-        target_device_authorize_event_id: event.to_string(),
-        target_device_generation_ref: generation,
-    };
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
     let push_route_id = push_route_id_for_registration(&body);
     let salt_epoch_id = push_target_salt_epoch_id_at(now());
     let push_target_tag = derive_push_target_tag(
