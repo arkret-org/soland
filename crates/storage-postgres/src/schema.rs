@@ -1201,6 +1201,7 @@ diesel::table! {
         push_key -> Text,
         platform -> Nullable<Text>,
         app_id -> Nullable<Text>,
+        public_handoff -> Bool,
         payload -> Jsonb,
         updated_at -> Timestamptz,
     }

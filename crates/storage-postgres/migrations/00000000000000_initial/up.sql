@@ -3059,6 +3059,7 @@ CREATE TABLE public.push_devices (
     push_key text NOT NULL,
     platform text,
     app_id text,
+    public_handoff boolean DEFAULT false NOT NULL,
     payload jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );

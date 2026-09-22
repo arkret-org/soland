@@ -453,6 +453,7 @@ pub(crate) async fn commit_revocation_in_connection(
     conn: &mut AsyncPgConnection,
     transition: &DeviceRevocationTransition,
 ) -> Result<DeviceRevocationTransitionDecision, PgTransactionError> {
+    lock_artifact_devices_in_transaction(conn, &[&transition.selector]).await?;
     let event_id = transition.revoke_ref.event_id.as_str();
     let existing = sql_query(
         "SELECT selector, committed_ref, committed_at FROM device_revocation_targets \
@@ -491,6 +492,8 @@ pub(crate) async fn commit_revocation_in_connection(
         .execute(&mut *conn)
         .await?;
     }
+    crate::push_handoff::revoke_public_push_routes_for_device_in_connection(conn, transition)
+        .await?;
     Ok(decision)
 }
 pub(crate) async fn gate_status_in_transaction(
@@ -540,4 +543,30 @@ pub(crate) async fn ensure_gate_allowed_in_transaction(
     gate_status_in_transaction(conn, selector)
         .await?
         .ensure_allowed()
+}
+
+/// Reject an exact device generation once its accepted revocation target is
+/// durable, without requiring the caller to own the current-device inventory
+/// validation performed by the later material commit UOW.
+pub(crate) async fn ensure_gate_not_revoked_in_transaction(
+    conn: &mut AsyncPgConnection,
+    selector: &DeviceRevocationGateSelector,
+) -> PersistenceResult<()> {
+    let selector_json = serde_json::to_value(selector).map_err(PersistenceError::database)?;
+    let revoked = sql_query(
+        "SELECT selector, committed_ref, committed_at FROM device_revocation_targets \
+         WHERE selector=$1 ORDER BY committed_at DESC LIMIT 1",
+    )
+    .bind::<Jsonb, _>(selector_json)
+    .get_result::<TargetRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .is_some();
+    if revoked {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: device authorization has been revoked".to_owned(),
+        ));
+    }
+    Ok(())
 }

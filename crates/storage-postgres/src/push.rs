@@ -1,5 +1,5 @@
 use super::{
-    AsyncPgConnection, JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError,
+    AsyncPgConnection, Bool, JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError,
     PersistenceResult, PgPool, PushDeviceStore, RunQueryDsl, Text, Timestamptz, Value, async_trait,
     pg_conn, sql_query,
 };
@@ -10,6 +10,8 @@ struct PushSourceRow {
     payload: Value,
     #[diesel(sql_type=Jsonb)]
     device_authorization: Value,
+    #[diesel(sql_type=Bool)]
+    public_handoff: bool,
 }
 pub struct PgPushDeviceStore {
     pub pool: PgPool,
@@ -35,6 +37,7 @@ pub(crate) async fn write_push_device_route_in_transaction(
     mut registration: arkret_models_integration::PushRegistrationRecord,
     at: chrono::DateTime<chrono::Utc>,
     mode: PushDeviceRouteWriteMode,
+    public_handoff: bool,
 ) -> PersistenceResult<()> {
     registration
         .account_id
@@ -64,7 +67,7 @@ pub(crate) async fn write_push_device_route_in_transaction(
         .await
         .map_err(PersistenceError::database)?;
     let previous = sql_query(
-        "SELECT payload,device_authorization FROM push_devices \
+        "SELECT payload,device_authorization,public_handoff FROM push_devices \
          WHERE payload->'account_id' = $1 AND device_id = $2 \
            AND payload->>'push_route_id' = $3 FOR UPDATE",
     )
@@ -77,6 +80,11 @@ pub(crate) async fn write_push_device_route_in_transaction(
     .map_err(PersistenceError::database)?;
     registration.retained_push_targets.clear();
     if let Some(previous) = &previous {
+        if previous.public_handoff && !public_handoff {
+            return Err(PersistenceError::Conflict(
+                "cas_conflict: local registration cannot replace a public handoff route".to_owned(),
+            ));
+        }
         let old: arkret_models_integration::PushRegistrationRecord =
             serde_json::from_value(previous.payload.clone()).map_err(PersistenceError::database)?;
         // Aliases survive salt rotation only; route/provider replacement never
@@ -102,7 +110,9 @@ pub(crate) async fn write_push_device_route_in_transaction(
     }
     let payload = serde_json::to_value(&registration).map_err(PersistenceError::database)?;
     if previous.as_ref().is_some_and(|previous| {
-        previous.payload == payload && previous.device_authorization == binding
+        previous.payload == payload
+            && previous.device_authorization == binding
+            && previous.public_handoff == public_handoff
     }) {
         return Ok(());
     }
@@ -114,13 +124,14 @@ pub(crate) async fn write_push_device_route_in_transaction(
     sql_query(
         "INSERT INTO push_devices \
          (id, actor_id, device_id, push_gateway, push_key, platform, app_id, payload, \
-          device_authorization, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
+          device_authorization, updated_at, public_handoff) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
          ON CONFLICT ((payload->'account_id'), device_id, (payload->>'push_route_id')) \
          DO UPDATE SET id=EXCLUDED.id, actor_id=EXCLUDED.actor_id, \
            push_gateway=EXCLUDED.push_gateway, push_key=EXCLUDED.push_key, \
            platform=EXCLUDED.platform, app_id=EXCLUDED.app_id, payload=EXCLUDED.payload, \
-           device_authorization=EXCLUDED.device_authorization, updated_at=EXCLUDED.updated_at",
+           device_authorization=EXCLUDED.device_authorization, updated_at=EXCLUDED.updated_at, \
+           public_handoff=EXCLUDED.public_handoff",
     )
     .bind::<Text, _>(registration.registration_id.as_str())
     .bind::<Text, _>(registration.account_id.principal_id.as_str())
@@ -132,6 +143,7 @@ pub(crate) async fn write_push_device_route_in_transaction(
     .bind::<Jsonb, _>(&payload)
     .bind::<Jsonb, _>(&binding)
     .bind::<Timestamptz, _>(at)
+    .bind::<Bool, _>(public_handoff)
     .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
@@ -164,6 +176,7 @@ impl PushDeviceStore for PgPushDeviceStore {
                 registration,
                 at,
                 PushDeviceRouteWriteMode::AllowReplace,
+                false,
             )
             .await
             .map_err(PgTransactionError::from)
@@ -187,7 +200,7 @@ impl PushDeviceStore for PgPushDeviceStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))").bind::<Text,_>(&lock_key).execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            sql_query("DELETE FROM push_devices WHERE payload->'account_id' = $1 AND device_id = $2 AND ($3 IS NULL OR push_key = $3) AND ($4 IS NULL OR app_id = $4)")
+            sql_query("DELETE FROM push_devices WHERE public_handoff=FALSE AND payload->'account_id' = $1 AND device_id = $2 AND ($3 IS NULL OR push_key = $3) AND ($4 IS NULL OR app_id = $4)")
                 .bind::<Jsonb,_>(&account_value).bind::<Text,_>(device_id).bind::<Nullable<Text>,_>(push_key).bind::<Nullable<Text>,_>(app_id)
                 .execute(&mut *conn).await.map_err(PgTransactionError::from)
         }).await.map_err(PgTransactionError::into_persistence)
@@ -209,7 +222,7 @@ impl PushDeviceStore for PgPushDeviceStore {
                 .execute(&mut *conn)
                 .await
                 .map_err(PersistenceError::database)?;
-            sql_query("DELETE FROM push_devices WHERE actor_id = $1 AND device_id = $2")
+            sql_query("DELETE FROM push_devices WHERE public_handoff=FALSE AND actor_id = $1 AND device_id = $2")
                 .bind::<Text, _>(actor)
                 .bind::<Text, _>(device_id)
                 .execute(&mut *conn)
@@ -227,7 +240,8 @@ impl PushDeviceStore for PgPushDeviceStore {
         use diesel_async::AsyncConnection;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let sources = sql_query(
-                "SELECT payload,device_authorization FROM push_devices ORDER BY updated_at,id",
+                "SELECT payload,device_authorization,public_handoff \
+                 FROM push_devices ORDER BY updated_at,id",
             )
             .load::<PushSourceRow>(conn)
             .await?;
