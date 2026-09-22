@@ -4,7 +4,8 @@ use arkret_models_collaboration::sync_frames::current_results::{
     DETAIL_FRAME_ENVELOPE_RESERVATION, MAX_ATOMIC_CURRENT_ENTRY_CANONICAL_BYTES,
 };
 use arkret_models_collaboration::sync_frames::demand_sync::{
-    ACCOUNT_SYNC_MAX_FRAME_BYTES, ACCOUNT_SYNC_MAX_TIMELINE_LIMIT,
+    ACCOUNT_SYNC_DEFAULT_TIMELINE_LIMIT, ACCOUNT_SYNC_MAX_FRAME_BYTES,
+    ACCOUNT_SYNC_MAX_TIMELINE_LIMIT,
 };
 use soland_storage::{CurrentDetailOutcome, CurrentDetailRequest};
 
@@ -86,14 +87,15 @@ async fn frame_for_realm(
         actor_id: actor,
         realm_id: realm.clone(),
         strand_ids: filter.strand_ids.clone(),
-        all_members: !filter.effective_lazy_load_members(),
+        all_members: !filter.lazy_load_members.unwrap_or(true),
         event_ids: vec![],
         // 2.3: raising the ceiling or changing the content filter changes the
         // window range, so it must mint a new generation rather than mutate one
         // already in flight. Freezing them into the request digest is what makes
         // a stored progress fail its own check and rebuild.
         timeline_limit: filter
-            .effective_timeline_limit()
+            .timeline_limit
+            .unwrap_or(ACCOUNT_SYNC_DEFAULT_TIMELINE_LIMIT)
             .min(ACCOUNT_SYNC_MAX_TIMELINE_LIMIT),
         event_kinds: filter.event_kinds.clone(),
         not_event_kinds: filter.not_event_kinds.clone(),

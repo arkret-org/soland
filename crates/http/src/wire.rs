@@ -168,7 +168,7 @@ pub use arkret_models_collaboration::governance::authorization::{
 pub use arkret_models_collaboration::governance::moderation::{
     ModerationReportOutcome, ModerationReportRequestBody,
 };
-pub use arkret_models_collaboration::sync_frames::client_sync::SyncRequestBody;
+pub use arkret_models_collaboration::sync_frames::account_subscribe::SyncRequestBody;
 pub use arkret_models_integration::integration::{
     IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
 };

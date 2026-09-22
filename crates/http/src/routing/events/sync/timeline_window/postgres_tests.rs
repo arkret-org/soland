@@ -20,7 +20,7 @@ fn at(offset: i64) -> DateTime<Utc> {
         + chrono::Duration::seconds(offset)
 }
 
-fn filter(limit: u32) -> arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
+fn filter(limit: u32) -> arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter {
     serde_json::from_value(json!({"timeline_limit": limit})).expect("fixture filter")
 }
 

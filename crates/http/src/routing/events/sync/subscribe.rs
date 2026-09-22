@@ -580,9 +580,9 @@ fn parse_account_subscribe_query(query: &str) -> Result<SyncRequestBody, String>
         .map(|value| {
             require_canonical_query_object(&value)?;
             serde_json::from_str::<
-                    arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
-                >(&value)
-                .map_err(|error| format!("invalid account filter: {error}"))
+                arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
+            >(&value)
+            .map_err(|error| format!("invalid account filter: {error}"))
         })
         .transpose()?;
     let realm_list = values
@@ -590,7 +590,7 @@ fn parse_account_subscribe_query(query: &str) -> Result<SyncRequestBody, String>
         .map(|value| {
             require_canonical_query_object(&value)?;
             serde_json::from_str::<
-                arkret_models_collaboration::sync_frames::demand_sync::RealmListRequest,
+                arkret_models_collaboration::sync_frames::account_subscribe::RealmListRequest,
             >(&value)
             .map_err(|error| format!("invalid Realm list request: {error}"))
         })
@@ -716,9 +716,21 @@ fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barri
 }
 
 pub(crate) fn sync_filter_value(
-    filter: Option<&arkret_models_collaboration::sync_frames::client_sync::SyncFilter>,
+    filter: Option<&arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter>,
 ) -> Option<Value> {
-    Some(arkret_models_collaboration::sync_frames::client_sync::normalized_sync_filter(filter))
+    let Some(filter) = filter else {
+        return Some(json!({}));
+    };
+    let mut value = serde_json::to_value(filter).ok()?;
+    if let Some(object) = value.as_object_mut() {
+        for field in ["realm_ids", "strand_ids", "event_kinds", "not_event_kinds"] {
+            if let Some(Value::Array(items)) = object.get_mut(field) {
+                items.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+                items.dedup();
+            }
+        }
+    }
+    Some(value)
 }
 
 fn account_reconnect_control_frame(

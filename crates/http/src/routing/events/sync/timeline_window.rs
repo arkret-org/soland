@@ -49,7 +49,7 @@ pub(super) struct WindowSegment {
 pub(super) async fn next_segment(
     state: &AppState,
     session: &SessionIdentityState,
-    filter: &arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+    filter: &arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
     realm: &RealmId,
     snapshot_cursor: &arkret_wire::Cursor,
     cursor: &mut TimelineWindowCursor,
@@ -90,7 +90,7 @@ pub(super) async fn next_segment(
 async fn select(
     state: &AppState,
     session: &SessionIdentityState,
-    filter: &arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+    filter: &arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
     realm: &RealmId,
     cursor: &mut TimelineWindowCursor,
 ) -> bool {
@@ -205,7 +205,7 @@ async fn select(
 async fn readable_history_below(
     state: &AppState,
     session: &SessionIdentityState,
-    filter: &arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+    filter: &arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
     realm: &RealmId,
     head: &TimelineOrderPosition,
     floor: &TimelineOrderPosition,
@@ -232,7 +232,7 @@ async fn readable_history_below(
 async fn deliver(
     state: &AppState,
     session: &SessionIdentityState,
-    filter: &arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+    filter: &arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
     realm: &RealmId,
     snapshot_cursor: &arkret_wire::Cursor,
     cursor: &mut TimelineWindowCursor,
@@ -364,7 +364,7 @@ fn finish(
 async fn live_segment(
     state: &AppState,
     session: &SessionIdentityState,
-    filter: &arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+    filter: &arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
     realm: &RealmId,
     cursor: &mut TimelineWindowCursor,
     byte_budget: usize,
@@ -504,7 +504,7 @@ fn baseline_of(
 /// reaches the security baseline, invalidations or account channels, which do
 /// not pass through here at all.
 fn kind_allowed(
-    filter: &arkret_models_collaboration::sync_frames::client_sync::SyncFilter,
+    filter: &arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
     kind: &str,
 ) -> bool {
     if let Some(deny) = &filter.not_event_kinds
