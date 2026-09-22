@@ -1,8 +1,11 @@
 use arkret_event_draft::EventPayloadExt as _;
-use arkret_wire::{
-    AcceptedStep, ActorId, DidCoreId, RecoveryPreparedPlan, SchemaId, SecurityTransactionAcceptor,
-    SecurityTransactionPreparedPlan, SecurityTransactionStep,
+use arkret_models_crypto::{
+    AcceptedSecurityTransactionStep as AcceptedStep, PcrPolicyRecoveryBinding,
+    PcrPolicyRecoveryPlan, PreparedEventUnit, RecoveryIdentityModel,
+    RecoveryTransactionCreateRequest, SecurityTransactionAcceptor, SecurityTransactionPreparedPlan,
+    SecurityTransactionStep, SecurityTransactionTerminalOutcome,
 };
+use arkret_wire::{ActorId, DidCoreId, SchemaId};
 use ed25519_dalek::Signer as _;
 use soland_services::identity::{
     BackupSeriesEraseProgressState, SecurityTransactionStepAttemptState,
@@ -97,8 +100,8 @@ async fn load_owned_security_transaction(
     }
     let recovery_session_id = record
         .resource
-        .recovery_binding()
-        .map(|binding| &binding.recovery_session_id);
+        .recovery_plan()
+        .map(|plan| &plan.binding.recovery_session_id);
     enforce_recovery_grant_transaction_binding(state, session, recovery_session_id).await?;
     Ok(record)
 }
@@ -148,6 +151,18 @@ pub(super) async fn security_transaction_create(
         recovery_transaction_session_id(&request),
     )
     .await?;
+    if let SecurityTransactionCreateRequest::SecurityRotation(rotation) = &request {
+        if rotation.authorizing_device_id.as_str() != session.device_id
+            || state.account_lifecycle_state(session.actor.as_str()) != "active"
+            || crate::routing::is_device_revoked(state, &session.actor, &session.device_id).await
+        {
+            return Err(crate::app_error!(
+                Unauthenticated,
+                "security rotation requires fresh high-risk authentication by the authorizing device",
+            )
+            .with_wire_code("reauthentication_required"));
+        }
+    }
     // §2.1 — a recovery create request never carries a finished plan. The
     // Station derives it here, in the same durable prepare that freezes the
     // canonical request bytes, and that prepare produces no recovery effect:
@@ -232,10 +247,25 @@ pub(super) async fn security_transaction_continue(
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let session = aa.authenticated_session(state, req).await?;
     let transaction = load_owned_security_transaction(state, &session, &transaction_id).await?;
+    let expected_count = usize::try_from(request.expected_accepted_step_count).map_err(|_| {
+        crate::app_error!(FailedPrecondition, "accepted step count is out of range")
+    })?;
+    if transaction.resource.accepted_steps.len() != expected_count {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "security transaction accepted step count changed",
+        ));
+    }
     let requested_step = transaction
         .resource
-        .accepted_step_kind(usize::from(request.expected_accepted_step_count))
-        .map_err(|error| crate::app_error!(FailedPrecondition, error.to_string()))?;
+        .next_required_step()
+        .map_err(|error| crate::app_error!(FailedPrecondition, error.to_string()))?
+        .ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                "security transaction has no remaining step",
+            )
+        })?;
 
     if let Some(stored) = state
         .security_transactions()
@@ -309,7 +339,7 @@ pub(super) async fn security_transaction_continue(
 
 fn rotation_plan(
     transaction: &SecurityTransactionRecord,
-) -> Result<arkret_wire::SecurityRotationPlan, AppError> {
+) -> Result<arkret_models_crypto::SecurityRotationPlan, AppError> {
     match &transaction.resource.prepared_plan {
         SecurityTransactionPreparedPlan::SecurityRotation(plan) => Ok(plan.clone()),
         _ => Err(crate::app_error!(
@@ -364,11 +394,9 @@ async fn accept_rotation_step(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if next.is_none() {
         transaction.resource.terminal_outcome =
-            Some(arkret_wire::SecurityTransactionTerminalOutcome {
-                result: arkret_wire::SecurityTransactionResultKind::Completed,
+            Some(SecurityTransactionTerminalOutcome::Completed {
                 completed_at: chrono::Utc::now(),
                 receipt_id: None,
-                reason_code: None,
                 completion_attestation: None,
             });
     }
@@ -401,13 +429,13 @@ async fn accept_rotation_step(
 async fn submit_rotation_event_unit(
     state: &AppState,
     session: &SessionRecord,
-    unit: &arkret_wire::PreparedEventUnit,
+    unit: &PreparedEventUnit,
 ) -> Result<Value, AppError> {
     let request = unit.request.clone();
     let expected_event_ids = request
         .events
         .iter()
-        .map(|submission| submission.event.event_id.clone())
+        .map(|event| event.event_id.clone())
         .collect::<Vec<_>>();
     let outcome = crate::routing::events::event_log::submit_initial_event_batch_outcome(
         state,
@@ -455,7 +483,6 @@ async fn continue_rotation_revoke(
         .events
         .first()
         .ok_or_else(|| AppError::internal("prepared revoke unit is empty"))?
-        .event
         .event_id
         .clone();
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
@@ -623,10 +650,9 @@ async fn continue_rotation_switch(
     .await
 }
 
-fn backup_rotation_kind_name(kind: arkret_wire::BackupRotationKind) -> &'static str {
+fn backup_rotation_kind_name(kind: arkret_models_crypto::BackupRotationKind) -> &'static str {
     match kind {
-        arkret_wire::BackupRotationKind::SecretStorage => "secret_storage",
-        arkret_wire::BackupRotationKind::MlsHistory => "mls_history",
+        arkret_models_crypto::BackupRotationKind::SecretStorage => "secret_storage",
     }
 }
 
@@ -678,8 +704,8 @@ fn backup_value_matches_rotation(
     value: &Value,
     actor_id: &ActorId,
     series_id: &arkret_wire::BackupSeriesId,
-    backup_kind: arkret_wire::BackupRotationKind,
-    expected: &arkret_wire::BackupObjectRef,
+    backup_kind: arkret_models_crypto::BackupRotationKind,
+    expected: &arkret_models_crypto::BackupObjectRef,
 ) -> bool {
     value.get("backup_id").and_then(Value::as_str) == Some(expected.backup_id.as_str())
         && value.get("ciphertext_digest").and_then(Value::as_str)
@@ -767,8 +793,6 @@ pub(crate) async fn backup_series_erase_command(
     }
 
     let plan = rotation_plan(&transaction)?;
-    let session_actor =
-        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let transaction_actor =
         transaction_account_actor(&transaction.resource.account_id, &state.service_core_id())?;
     let planned_series_match = plan.backup_rotations.len() == request.series.len()
@@ -778,6 +802,16 @@ pub(crate) async fn backup_series_erase_command(
             .zip(&request.series)
             .all(|(prepared, requested)| prepared.binding == *requested);
     let now = chrono::Utc::now();
+    let authorizing_device_id = transaction
+        .resource
+        .authorizing_device_id
+        .as_ref()
+        .ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                "security rotation is missing its authorizing device",
+            )
+        })?;
     if transaction
         .resource
         .next_required_step()
@@ -787,106 +821,63 @@ pub(crate) async fn backup_series_erase_command(
         || transaction.resource.prepared_plan_digest != request.prepared_plan_digest
         || plan.erase_confirmation_digest != request.erase_confirmation_digest
         || !planned_series_match
-        || request.authorization_lease.actor_id != transaction_actor
-        || request.authorization_lease.actor_id != session_actor
-        || request.authorization_lease.device_id.as_str() != session.device_id
-        || request.authorization_lease.action
-            != arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE_V1
-        || request.authorization_lease.authorization_rule_id != "realm_admission"
-        || request.authorization_lease.risk_tier != arkret_wire::RiskTier::High
-        || !request.authorization_lease.covers_instant(now)
+        || transaction.resource.expires_at <= now
+        || state.account_lifecycle_state(transaction.resource.account_id.principal_id.as_str())
+            != "active"
+        || crate::routing::is_device_revoked(
+            state,
+            &transaction_actor.to_string(),
+            authorizing_device_id.as_str(),
+        )
+        .await
     {
         return Err(crate::app_error!(
             FailedPrecondition,
             "backup-series erase request is not authorized for this transaction",
         ));
     }
-    let expected_control_realm = request.authorization_lease.scope_ref.realm_id();
-    if !state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(
-            expected_control_realm.as_str(),
-            &session_actor.to_string(),
-        )
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "backup-series erase lease is scoped outside principal control",
-        ));
-    }
-    let arkret_wire::LeaseBasisRef::Seal(basis_seal_id) = &request.authorization_lease.basis_ref
-    else {
-        return Err(
-            AppError::conflict("backup-series erase requires an accepted Seal basis")
-                .with_internal_reason("authorization_lease_basis_mismatch"),
-        );
-    };
-    let basis_seal = state
-        .projections()
-        .seal_by_id(basis_seal_id)
+    let principal = state
+        .persistence()
+        .principal_resolution_by_account_id(&transaction.resource.account_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::conflict("backup-series erase lease basis is not accepted")
-                .with_internal_reason("authorization_lease_basis_mismatch")
+            crate::app_error!(
+                FailedPrecondition,
+                "principal control Realm is unavailable before old-series erasure",
+            )
         })?;
-    if basis_seal.realm_id != *request.authorization_lease.scope_ref.realm_id() {
-        return Err(
-            AppError::conflict("backup-series erase lease basis belongs to another Realm")
-                .with_internal_reason("authorization_lease_basis_mismatch"),
-        );
-    }
-    let (expected_authority_ref, expected_authority_policy) =
-        crate::routing::events::event_log::lease_issue::authority_for_scope(
-            state,
-            &request.authorization_lease.scope_ref,
-            &request.authorization_lease.basis_ref,
-            &request.authorization_lease.action,
-            &request.authorization_lease.authorization_rule_id,
-        )?;
-    if request.authorization_lease.authority_set_ref != expected_authority_ref
-        || request.authorization_lease.authority_set_policy != expected_authority_policy
+    let current_authority = state
+        .authority_commits()
+        .current_authority(&principal.pcr_realm_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                "principal control Realm has no current authority",
+            )
+        })?;
+    let current_head = state
+        .authority_commits()
+        .stream_head(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: principal.pcr_realm_id.clone(),
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                "principal control Realm has no current commit",
+            )
+        })?;
+    if current_authority.service_id != state.service_core_id()
+        || current_head.commit_id != request.authority_commit_id
     {
         return Err(crate::app_error!(
-            CapabilityDenied,
-            "backup-series erase lease authority policy is not current for its basis",
-        )
-        .with_internal_reason("authorization_lease_basis_mismatch"));
-    }
-    for proof in &request.authorization_lease.proofs {
-        let issuer = arkret_identity::verification_method_did(&proof.verification_method)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        let audience_covers_issuer = match proof.audience.as_ref() {
-            Some(arkret_wire::Audience::Single(audience)) => audience == issuer.as_str(),
-            Some(arkret_wire::Audience::Multiple(audiences)) => {
-                audiences.iter().any(|audience| audience == issuer.as_str())
-            }
-            None => false,
-        };
-        if !audience_covers_issuer {
-            return Err(crate::app_error!(
-                CapabilityDenied,
-                "backup-series erase lease proof audience does not cover its issuer",
-            )
-            .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
-        }
-        let binding_bytes = request
-            .authorization_lease
-            .proof_binding_bytes(proof)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        crate::jws_verify::verify_did_controlled_jws_async(
-            &binding_bytes,
-            &proof.jws,
-            &proof.verification_method,
-            issuer.as_str(),
-            state,
-        )
-        .await
-        .map_err(|error| {
-            crate::app_error!(CapabilityDenied, error)
-                .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
-        })?;
+            FailedPrecondition,
+            "backup-series erase authority commit is no longer current",
+        ));
     }
     for prepared in &plan.backup_rotations {
         let rotation = &prepared.binding;
@@ -1539,11 +1530,9 @@ async fn continue_commit_recovery_unit(
         output_digest: receipt_digest,
         accepted_at: committed_at,
     });
-    transaction.resource.terminal_outcome = Some(arkret_wire::SecurityTransactionTerminalOutcome {
-        result: arkret_wire::SecurityTransactionResultKind::Completed,
+    transaction.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Completed {
         completed_at: committed_at,
         receipt_id: Some(receipt.receipt_id.clone()),
-        reason_code: None,
         completion_attestation: Some(completion_attestation),
     });
     transaction
@@ -1649,8 +1638,8 @@ async fn continue_commit_recovery_unit(
 async fn prepare_recovery_plan(
     state: &AppState,
     session: &SessionRecord,
-    request: &arkret_wire::RecoveryTransactionCreateRequest,
-) -> Result<RecoveryPreparedPlan, AppError> {
+    request: &RecoveryTransactionCreateRequest,
+) -> Result<PcrPolicyRecoveryPlan, AppError> {
     let intent = &request.recovery_intent;
     intent.validate_structural().map_err(|error| {
         AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
@@ -1888,27 +1877,25 @@ async fn prepare_recovery_plan(
         .map_err(|error| AppError::internal(error.to_string()))?,
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(RecoveryPreparedPlan::PcrPolicy(
-        arkret_wire::PcrPolicyRecoveryPlan {
-            binding: arkret_wire::PcrPolicyRecoveryBinding {
-                identity_model: arkret_wire::RecoveryIdentityModel::PcrPolicy,
-                recovery_session_id: intent.recovery_session_id.clone(),
-                replacement_device_id: intent.replacement_device_id.clone(),
-                reanchor_event_id,
-                authorize_event_id,
-                reanchor_batch_receipt_id: reserved_receipt_id()?,
-                first_generation_seal_id,
-                terminal_receipt_id: intent.terminal_receipt_id.clone(),
-            },
-            recovery_session_snapshot_digest,
-            proof_digest: proof_summary.proof_digest.clone(),
-            previous_model_generation_ref: intent.previous_model_generation_ref,
-            result_model_generation_ref: intent.result_model_generation_ref,
-            reanchor_unit: intent.reanchor_unit.clone(),
-            first_generation_seal_intent: seal_intent.clone(),
-            first_generation_seal_body: seal_body,
+    Ok(PcrPolicyRecoveryPlan {
+        binding: PcrPolicyRecoveryBinding {
+            identity_model: RecoveryIdentityModel::PcrPolicy,
+            recovery_session_id: intent.recovery_session_id.clone(),
+            replacement_device_id: intent.replacement_device_id.clone(),
+            reanchor_event_id,
+            authorize_event_id,
+            reanchor_batch_receipt_id: reserved_receipt_id()?,
+            first_generation_seal_id,
+            terminal_receipt_id: intent.terminal_receipt_id.clone(),
         },
-    ))
+        recovery_session_snapshot_digest,
+        proof_digest: proof_summary.proof_digest.clone(),
+        previous_model_generation_ref: intent.previous_model_generation_ref,
+        result_model_generation_ref: intent.result_model_generation_ref,
+        reanchor_unit: intent.reanchor_unit.clone(),
+        first_generation_seal_intent: seal_intent.clone(),
+        first_generation_seal_body: seal_body,
+    })
 }
 
 /// Reserve the `device_reanchor_unit` batch receipt id the replacement device
@@ -2047,17 +2034,9 @@ async fn verify_recovery_unit_control_proposal_acks(
 
 fn pcr_policy_parts(
     transaction: &SecurityTransaction,
-) -> Result<
-    (
-        &arkret_wire::PcrPolicyRecoveryBinding,
-        &arkret_wire::PcrPolicyRecoveryPlan,
-    ),
-    AppError,
-> {
+) -> Result<(&PcrPolicyRecoveryBinding, &PcrPolicyRecoveryPlan), AppError> {
     match &transaction.prepared_plan {
-        SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)) => {
-            Ok((&plan.binding, plan))
-        }
+        SecurityTransactionPreparedPlan::Recovery(plan) => Ok((&plan.binding, plan)),
         _ => Err(crate::app_error!(
             FailedPrecondition,
             "operation requires a PCR-policy recovery transaction"

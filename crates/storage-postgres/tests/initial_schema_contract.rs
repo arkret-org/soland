@@ -256,6 +256,28 @@ fn security_transaction_uses_the_protocol_terminal_outcome_name_at_creation() {
 }
 
 #[test]
+fn security_rotation_persists_its_authorizing_device_at_creation() {
+    let security_transactions = INITIAL_UP
+        .split("CREATE TABLE public.security_transactions (")
+        .nth(1)
+        .and_then(|tail| tail.split(");").next())
+        .expect("security_transactions table");
+    assert!(security_transactions.contains("authorizing_device_id text"));
+    assert!(security_transactions.contains("kind = 'recovery' AND authorizing_device_id IS NULL"));
+    assert!(
+        security_transactions
+            .contains("kind = 'security_rotation' AND authorizing_device_id IS NOT NULL")
+    );
+
+    let revocation_heads = INITIAL_UP
+        .split("CREATE TABLE public.device_revocation_linearization_heads (")
+        .nth(1)
+        .and_then(|tail| tail.split(");").next())
+        .expect("device_revocation_linearization_heads table");
+    assert!(!revocation_heads.contains("authorizing_device_id"));
+}
+
+#[test]
 fn recovery_policy_uses_the_protocol_acceptance_basis_name_at_creation() {
     assert!(INITIAL_UP.contains("acceptance_basis jsonb NOT NULL"));
     assert!(!INITIAL_UP.contains("acceptance_ref jsonb"));

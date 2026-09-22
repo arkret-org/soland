@@ -1,7 +1,7 @@
-//! Multi-Realm / multi-actor committed-event stream (`ak.self.committed_event.stream.subscribe.v1`),
-//! committed-event scan (`ak.self.committed_event.read.scan.v1`),
-//! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
-//! helpers shared by both subscribe surfaces.
+//! Multi-Realm / multi-actor committed-event stream
+//! (`ak.self.committed_event.stream.subscribe.v1`), committed-event scan
+//! (`ak.self.committed_event.read.scan.v1`), signed snapshot-manifest head, plus the NDJSON framing
+//! and reconnect-gate helpers shared by both subscribe surfaces.
 
 use super::*;
 
@@ -10,8 +10,8 @@ use super::*;
 pub(crate) const EVENTS_CATCHUP_LIMIT: usize = 100;
 const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 
-/// `ak.self.committed_event.stream.subscribe.v1` at `GET /_arkret/self/committed-events/subscribe`. NDJSON
-/// streaming: each line is one frame, frame `kind` is one of
+/// `ak.self.committed_event.stream.subscribe.v1` at `GET /_arkret/self/committed-events/subscribe`.
+/// NDJSON streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
 /// Selectors: repeated `realm_ids` and percent-encoded JCS `actor_ids` values.
@@ -2459,7 +2459,7 @@ async fn durable_events_query_from_parts(
 pub(super) async fn realm_state_snapshot_head(
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<arkret_state::RealmStateSnapshotManifest> {
+) -> soland_http::result::JsonResult<arkret_wire::RealmStateSnapshot> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| soland_http::error::AppError::param_missing("realm_id is required"))?;
@@ -2482,6 +2482,7 @@ pub(super) async fn realm_state_snapshot_head(
             if matches!(
                 error.code,
                 soland_http::error::ErrorCode::NotFound
+                    | soland_http::error::ErrorCode::PayloadTooLarge
                     | soland_http::error::ErrorCode::InternalError
             ) {
                 error

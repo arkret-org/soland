@@ -3177,6 +3177,7 @@ CREATE TABLE public.security_transactions (
     kind text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     station_id text NOT NULL,
+    authorizing_device_id text CHECK (authorizing_device_id IS NULL OR authorizing_device_id LIKE 'ak:device:%'),
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
     request_digest text NOT NULL,
@@ -3186,7 +3187,11 @@ CREATE TABLE public.security_transactions (
     terminal_outcome jsonb,
     canonical_request bytea NOT NULL,
     CONSTRAINT security_transactions_pkey PRIMARY KEY (id),
-    CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text])))
+    CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text]))),
+    CONSTRAINT security_transactions_authorizing_device_check CHECK (
+        (kind = 'recovery' AND authorizing_device_id IS NULL)
+        OR (kind = 'security_rotation' AND authorizing_device_id IS NOT NULL)
+    )
 );
 
 ALTER TABLE ONLY public.recovery_sessions

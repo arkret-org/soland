@@ -48,6 +48,17 @@ pub struct CurrentRealmAuthority {
     pub last_handoff_ref: Option<arkret_wire::RealmAuthorityHandoffId>,
 }
 
+/// One durable-cut maximal Realm snapshot projection before identity and
+/// Station signature are attached by the serving layer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RealmStateSnapshotMaterial {
+    pub realm_id: arkret_wire::RealmId,
+    pub governance_generation: u64,
+    pub visible_stream_heads: Vec<arkret_wire::CommitStreamHead>,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+    pub retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor,
+}
+
 /// One transaction installed after all Event, authority and MLS checks pass.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuthorityCommitTransaction {
@@ -189,6 +200,13 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Vec<CommitStreamHead>>;
+
+    /// Read the maximal-disclosure snapshot material from one consistent
+    /// durable cut. Implementations must sort every repeated field.
+    async fn realm_state_snapshot_material(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
 
     /// Keyset page over one independent commit stream.
     ///

@@ -140,12 +140,9 @@ pub fn classify_security_transaction_first_write(
 pub fn validate_backup_erase_progress_initial(
     progress: &BackupSeriesEraseProgressRecord,
 ) -> PersistenceResult<()> {
-    if progress.transaction_id.is_empty()
-        || progress.canonical_request.is_empty()
-        || !progress.outcome.is_object()
-    {
+    if progress.transaction_id.is_empty() || progress.canonical_request.is_empty() {
         return Err(PersistenceError::SchemaViolation(
-            "backup erase progress requires a transaction, request, and object outcome".to_owned(),
+            "backup erase progress requires a transaction and request".to_owned(),
         ));
     }
     Ok(())

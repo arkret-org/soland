@@ -253,9 +253,7 @@ pub struct SecurityTransactionStepOutcomeRecord {
 pub struct BackupSeriesEraseProgressRecord {
     pub transaction_id: String,
     pub canonical_request: Vec<u8>,
-    /// Provider-specific deletion progress. The current protocol keeps backup
-    /// deletion local to the authority and does not expose a history carrier.
-    pub outcome: Value,
+    pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
 }
 
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor.v1`.

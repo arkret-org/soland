@@ -1,5 +1,5 @@
 use arkret_models_crypto::{SecurityTransaction, SecurityTransactionKind, SecurityTransactionStep};
-use arkret_wire::{DidCoreId, Hash, TransactionId};
+use arkret_wire::{DeviceId, DidCoreId, Hash, TransactionId};
 
 use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
@@ -23,6 +23,8 @@ struct SecurityTransactionRow {
     principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
     station_id: DidCoreId,
+    #[diesel(sql_type = Nullable<Text>)]
+    authorizing_device_id: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -122,6 +124,11 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             kind: parse_stored("kind", Value::String(row.kind))?,
             account_id: arkret_wire::AccountId::new(row.principal_id, row.station_id),
+            authorizing_device_id: row
+                .authorizing_device_id
+                .map(DeviceId::new)
+                .transpose()
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             expires_at: row.expires_at,
             created_at: row.created_at,
             request_digest: Hash::new(row.request_digest)
@@ -153,7 +160,7 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
     })
 }
 
-const COLUMNS: &str = "id, kind, principal_id, station_id, expires_at, created_at, \
+const COLUMNS: &str = "id, kind, principal_id, station_id, authorizing_device_id, expires_at, created_at, \
     request_digest, prepared_plan, prepared_plan_digest, accepted_steps, \
     terminal_outcome, canonical_request";
 
@@ -214,10 +221,10 @@ async fn insert_one(
     let resource = &record.resource;
     sql_query(
         "INSERT INTO security_transactions \
-         (id, kind, principal_id, station_id, expires_at, created_at, request_digest, \
+         (id, kind, principal_id, station_id, authorizing_device_id, expires_at, created_at, request_digest, \
            prepared_plan, prepared_plan_digest, accepted_steps, \
            terminal_outcome, canonical_request) \
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         resource.transaction_id.as_str(),
@@ -228,6 +235,12 @@ async fn insert_one(
     })
     .bind::<Text, _>(resource.account_id.principal_id.as_str())
     .bind::<Text, _>(resource.account_id.station_id.as_str())
+    .bind::<Nullable<Text>, _>(
+        resource
+            .authorizing_device_id
+            .as_ref()
+            .map(|device_id| device_id.as_str()),
+    )
     .bind::<Timestamptz, _>(resource.expires_at)
     .bind::<Timestamptz, _>(resource.created_at)
     .bind::<Text, _>(resource.request_digest.as_str())

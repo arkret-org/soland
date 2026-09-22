@@ -74,6 +74,20 @@ struct HeadRow {
 }
 
 #[derive(QueryableByName)]
+struct SnapshotCurrentRow {
+    #[diesel(sql_type = Text)]
+    selector_kind: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    actor_id: Option<String>,
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(QueryableByName)]
 struct SnapshotRow {
     #[diesel(sql_type = Jsonb)]
     snapshot_json: Value,
@@ -157,6 +171,119 @@ fn authority_from_row(row: AuthorityRow) -> PersistenceResult<CurrentRealmAuthor
             .map(|value| decode_text(value, "authority handoff id"))
             .transpose()?,
     })
+}
+
+pub(crate) async fn realm_state_snapshot_material_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+    let authority = sql_query(
+        "SELECT realm_id, generation, service_id, authority_ref, last_handoff_ref \
+         FROM realm_authorities WHERE realm_id = $1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<AuthorityRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(authority_from_row)
+    .transpose()?;
+    let Some(authority) = authority else {
+        return Ok(None);
+    };
+
+    let rows = sql_query(
+        "SELECT DISTINCT ON (stream_key) stream_ref, stream_position, commit_id \
+         FROM realm_commits WHERE realm_id = $1 \
+         ORDER BY stream_key, stream_position DESC",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<HeadRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut heads = rows
+        .into_iter()
+        .map(|row| {
+            Ok(arkret_wire::CommitStreamHead {
+                stream_ref: decode_json(row.stream_ref, "commit stream ref")?,
+                stream_position: to_u64(row.stream_position, "stream position")?,
+                commit_id: decode_text(row.commit_id, "RealmCommit id")?,
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
+
+    let rows = sql_query(
+        "SELECT 'realm_policy'::text AS selector_kind, NULL::text AS actor_id, \
+                current_commit_id, current_stream_position, value \
+           FROM realm_policy_bundle_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'member_state'::text AS selector_kind, member_id AS actor_id, \
+                current_commit_id, current_stream_position, value \
+           FROM member_state_current_results WHERE realm_id = $1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<SnapshotCurrentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let current_state_entries = rows
+        .into_iter()
+        .map(|row| {
+            let selector = match (row.selector_kind.as_str(), row.actor_id) {
+                ("realm_policy", None) => arkret_wire::CurrentSelector::RealmPolicy,
+                ("member_state", Some(actor_id)) => arkret_wire::CurrentSelector::MemberState {
+                    actor_id: serde_json::from_str(&actor_id).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored snapshot member actor id is invalid: {error}"
+                        ))
+                    })?,
+                },
+                _ => {
+                    return Err(PersistenceError::Internal(
+                        "stored snapshot current selector is invalid".to_owned(),
+                    ));
+                }
+            };
+            Ok(arkret_wire::TypedCurrentResult::Value {
+                selector,
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: decode_text(row.current_commit_id, "current RealmCommit id")?,
+                    stream_position: to_u64(
+                        row.current_stream_position,
+                        "current stream position",
+                    )?,
+                },
+                value: row.value,
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    let mut keyed_entries = current_state_entries
+        .into_iter()
+        .map(|entry| {
+            let key = arkret_canonical::canonical_json_bytes(&entry)
+                .map_err(PersistenceError::database)?;
+            Ok((key, entry))
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    keyed_entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let current_state_entries = keyed_entries.into_iter().map(|(_, entry)| entry).collect();
+    let stream_floors = heads
+        .iter()
+        .map(|head| arkret_wire::StreamHistoryFloor {
+            stream_ref: head.stream_ref.clone(),
+            oldest_position: 0,
+        })
+        .collect();
+    Ok(Some(soland_storage::RealmStateSnapshotMaterial {
+        realm_id: realm_id.clone(),
+        governance_generation: authority.generation,
+        visible_stream_heads: heads,
+        current_state_entries,
+        retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
+            history_access: arkret_wire::HistoryAccess::AllHistoryForCurrentMembers,
+            stream_floors,
+        },
+    }))
 }
 
 async fn locked_authority(
@@ -712,6 +839,23 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .collect::<PersistenceResult<Vec<_>>>()?;
         heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
         Ok(heads)
+    }
+
+    async fn realm_state_snapshot_material(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            realm_state_snapshot_material_in_connection(conn, realm_id)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn scan_stream(

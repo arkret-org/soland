@@ -21,7 +21,10 @@ use crate::agent_draft_pending_intents::{
     AgentDraftConsumptionLock, commit_agent_draft_pending_intent_in_connection,
     lock_agent_draft_consumption_source, mark_agent_draft_consumed,
 };
-use crate::authority_commit::{commit_transaction_in_connection, queue_event_in_connection};
+use crate::authority_commit::{
+    commit_transaction_in_connection, queue_event_in_connection,
+    realm_state_snapshot_material_in_connection,
+};
 use crate::capability_grant_current_results::{
     commit_capability_grant_current_result_in_connection,
     commit_realm_authority_root_current_result_in_connection,
@@ -62,6 +65,134 @@ struct ContactMirrorCommitRow {
 struct CountRow {
     #[diesel(sql_type = BigInt)]
     count: i64,
+}
+
+const MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+fn enforce_inline_snapshot_capacity(
+    snapshot: &arkret_wire::RealmStateSnapshot,
+) -> PersistenceResult<()> {
+    let bytes =
+        arkret_canonical::canonical_json_bytes(snapshot).map_err(PersistenceError::database)?;
+    if bytes.len() > MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES {
+        return Err(PersistenceError::Conflict(
+            "snapshot_capacity_exceeded: candidate Realm snapshot exceeds 8 MiB".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn enforce_realm_snapshot_capacity_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    verification_method: &arkret_wire::DidUrl,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let material = realm_state_snapshot_material_in_connection(conn, realm_id)
+        .await?
+        .ok_or_else(|| {
+            PersistenceError::Internal(
+                "accepted Realm has no durable authority snapshot material".to_owned(),
+            )
+        })?;
+    let snapshot = arkret_wire::RealmStateSnapshot {
+        snapshot_id: arkret_wire::RealmSnapshotId::from_digest([0; 32]),
+        realm_id: material.realm_id,
+        governance_generation: material.governance_generation,
+        visible_stream_heads: material.visible_stream_heads,
+        current_state_entries: material.current_state_entries,
+        retention_and_history_floor: material.retention_and_history_floor,
+        created_at: arkret_canonical::normalize_timestamp_canonical(created_at),
+        signature: arkret_wire::DetachedObjectSignature {
+            context: arkret_wire::DetachedSignatureContext::RealmSnapshot,
+            signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+            verification_method: verification_method.clone(),
+            signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "00".repeat(32)))
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            created_at: arkret_canonical::normalize_timestamp_canonical(created_at),
+            sig: arkret_wire::Base64UrlString::new("A".repeat(86))
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        },
+    };
+    enforce_inline_snapshot_capacity(&snapshot)
+}
+
+#[cfg(test)]
+mod snapshot_capacity_tests {
+    use chrono::TimeZone as _;
+
+    use super::*;
+
+    fn snapshot(payload_bytes: usize) -> arkret_wire::RealmStateSnapshot {
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [1; 32],
+        ));
+        let stream_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let created_at = chrono::Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        arkret_wire::RealmStateSnapshot {
+            snapshot_id: arkret_wire::RealmSnapshotId::from_digest([2; 32]),
+            realm_id,
+            governance_generation: 0,
+            visible_stream_heads: vec![arkret_wire::CommitStreamHead {
+                stream_ref: stream_ref.clone(),
+                stream_position: 0,
+                commit_id: arkret_wire::RealmCommitId::from_digest([3; 32]),
+            }],
+            current_state_entries: vec![arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::RealmProfile,
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: arkret_wire::RealmCommitId::from_digest([3; 32]),
+                    stream_position: 0,
+                },
+                value: serde_json::json!({"payload": "x".repeat(payload_bytes)}),
+            }],
+            retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
+                history_access: arkret_wire::HistoryAccess::AllHistoryForCurrentMembers,
+                stream_floors: vec![arkret_wire::StreamHistoryFloor {
+                    stream_ref,
+                    oldest_position: 0,
+                }],
+            },
+            created_at,
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmSnapshot,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:station.example#notary-key".to_owned(),
+                )
+                .unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "00".repeat(32)))
+                    .unwrap(),
+                created_at,
+                sig: arkret_wire::Base64UrlString::new("A".repeat(86)).unwrap(),
+            },
+        }
+    }
+
+    #[test]
+    fn exact_snapshot_capacity_is_accepted_and_one_byte_more_is_rejected() {
+        let base = arkret_canonical::canonical_json_bytes(&snapshot(0))
+            .unwrap()
+            .len();
+        let exact_payload = MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES - base;
+        let exact = snapshot(exact_payload);
+        assert_eq!(
+            arkret_canonical::canonical_json_bytes(&exact)
+                .unwrap()
+                .len(),
+            MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES
+        );
+        enforce_inline_snapshot_capacity(&exact).unwrap();
+
+        let error = enforce_inline_snapshot_capacity(&snapshot(exact_payload + 1)).unwrap_err();
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::SnapshotCapacityExceeded)
+        );
+    }
 }
 
 #[derive(diesel::QueryableByName)]
@@ -2207,6 +2338,27 @@ async fn commit_batch_in_connection(
         &request.events,
         request.franking_replay_nonce.as_ref(),
     )?;
+    let mut snapshot_contexts = std::collections::BTreeMap::new();
+    for request in &request.events {
+        snapshot_contexts.insert(
+            request.authority_commit.event.realm_id.clone(),
+            (
+                request
+                    .authority_commit
+                    .commit
+                    .signature
+                    .verification_method
+                    .clone(),
+                request.authority_commit.commit.committed_at,
+            ),
+        );
+    }
+    // One Realm-wide lock makes capacity measurement part of the same
+    // serialization boundary even when concurrent commits target different
+    // Circle or Sidecar streams.
+    for realm_id in snapshot_contexts.keys() {
+        advisory_lock(conn, format!("realm-snapshot-capacity:{realm_id}")).await?;
+    }
     stage_agent_membership_cascade(
         conn,
         request.agent_membership_cascade.as_ref(),
@@ -2238,6 +2390,15 @@ async fn commit_batch_in_connection(
     }
     if let Some(mutation) = request.applet_record {
         commit_applet_record(conn, mutation).await?;
+    }
+    for (realm_id, (verification_method, created_at)) in snapshot_contexts {
+        enforce_realm_snapshot_capacity_in_connection(
+            conn,
+            &realm_id,
+            &verification_method,
+            created_at,
+        )
+        .await?;
     }
     Ok(outcome)
 }

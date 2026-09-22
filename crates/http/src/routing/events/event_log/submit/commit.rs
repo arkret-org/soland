@@ -211,6 +211,16 @@ pub(super) async fn commit_accepted_event_stage(
                 message,
             ));
         }
+        if conflict == Some(ConflictCode::SnapshotCapacityExceeded) {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "candidate Realm snapshot exceeds the 8 MiB inline capacity",
+            )
+            .with_details(serde_json::json!({
+                "reason_code": "snapshot_capacity_exceeded",
+            })));
+        }
         if conflict == Some(ConflictCode::DependencyMissing) {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,

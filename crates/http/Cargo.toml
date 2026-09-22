@@ -51,7 +51,7 @@ arkret-schema = { workspace = true }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "service-identity", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["openapi"] }
-arkret-wire.workspace = true
+arkret-wire = { workspace = true, features = ["openapi"] }
 async-stream.workspace = true
 async-trait.workspace = true
 base64.workspace = true

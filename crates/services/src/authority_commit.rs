@@ -58,6 +58,85 @@ struct RealmCommitUnsignedBody<'a> {
     committed_at: DateTime<Utc>,
 }
 
+#[derive(Serialize)]
+struct RealmSnapshotIdentityBody<'a> {
+    realm_id: &'a arkret_wire::RealmId,
+    governance_generation: u64,
+    visible_stream_heads: &'a [CommitStreamHead],
+    current_state_entries: &'a [arkret_wire::TypedCurrentResult],
+    retention_and_history_floor: &'a arkret_wire::RetentionAndHistoryFloor,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct RealmSnapshotUnsignedBody<'a> {
+    snapshot_id: &'a arkret_wire::RealmSnapshotId,
+    realm_id: &'a arkret_wire::RealmId,
+    governance_generation: u64,
+    visible_stream_heads: &'a [CommitStreamHead],
+    current_state_entries: &'a [arkret_wire::TypedCurrentResult],
+    retention_and_history_floor: &'a arkret_wire::RetentionAndHistoryFloor,
+    created_at: DateTime<Utc>,
+}
+
+pub fn build_signed_realm_state_snapshot(
+    material: &soland_storage::RealmStateSnapshotMaterial,
+    verification_method: DidUrl,
+    signing_key: &SigningKey,
+    created_at: DateTime<Utc>,
+) -> ServiceResult<RealmStateSnapshot> {
+    if material.visible_stream_heads.is_empty()
+        || !material
+            .visible_stream_heads
+            .windows(2)
+            .all(|pair| pair[0].stream_ref < pair[1].stream_ref)
+    {
+        return Err(ServiceError::SchemaViolation(
+            "Realm snapshot requires sorted, unique visible stream heads".to_owned(),
+        ));
+    }
+    let created_at = arkret_canonical::normalize_timestamp_canonical(created_at);
+    let identity = RealmSnapshotIdentityBody {
+        realm_id: &material.realm_id,
+        governance_generation: material.governance_generation,
+        visible_stream_heads: &material.visible_stream_heads,
+        current_state_entries: &material.current_state_entries,
+        retention_and_history_floor: &material.retention_and_history_floor,
+        created_at,
+    };
+    let identity_bytes = arkret_canonical::canonical_json_bytes(&identity)
+        .map_err(|error| ServiceError::Internal(error.to_string()))?;
+    let snapshot_id =
+        arkret_wire::RealmSnapshotId::from_digest(arkret_canonical::sha256_bytes(&identity_bytes));
+    let unsigned = RealmSnapshotUnsignedBody {
+        snapshot_id: &snapshot_id,
+        realm_id: &material.realm_id,
+        governance_generation: material.governance_generation,
+        visible_stream_heads: &material.visible_stream_heads,
+        current_state_entries: &material.current_state_entries,
+        retention_and_history_floor: &material.retention_and_history_floor,
+        created_at,
+    };
+    let signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        DetachedSignatureContext::RealmSnapshot,
+        verification_method,
+        created_at,
+        signing_key,
+    )
+    .map_err(|error| ServiceError::Internal(error.to_string()))?;
+    Ok(RealmStateSnapshot {
+        snapshot_id,
+        realm_id: material.realm_id.clone(),
+        governance_generation: material.governance_generation,
+        visible_stream_heads: material.visible_stream_heads.clone(),
+        current_state_entries: material.current_state_entries.clone(),
+        retention_and_history_floor: material.retention_and_history_floor.clone(),
+        created_at,
+        signature,
+    })
+}
+
 fn build_signed_event_commit(
     event: &Event,
     authority: &CurrentRealmAuthority,
@@ -301,6 +380,13 @@ impl AuthorityCommitApplication {
         stream_ref: &CommitStreamRef,
     ) -> ServiceResult<Option<CommitStreamHead>> {
         Ok(self.store().stream_head(stream_ref).await?)
+    }
+
+    pub async fn realm_state_snapshot_material(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+        Ok(self.store().realm_state_snapshot_material(realm_id).await?)
     }
 
     /// Keyset page over one independent commit stream.
@@ -583,5 +669,71 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit, replay, "same closed input must produce one Commit");
+    }
+
+    #[test]
+    fn signed_snapshot_identity_and_signature_cover_the_closed_body() {
+        let genesis_event =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x21; 32]);
+        let realm_id = arkret_wire::RealmId::from_event_id(&genesis_event);
+        let stream_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let material = soland_storage::RealmStateSnapshotMaterial {
+            realm_id: realm_id.clone(),
+            governance_generation: 4,
+            visible_stream_heads: vec![arkret_wire::CommitStreamHead {
+                stream_ref: stream_ref.clone(),
+                stream_position: 7,
+                commit_id: arkret_wire::RealmCommitId::from_digest([0x22; 32]),
+            }],
+            current_state_entries: vec![arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::RealmPolicy,
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: arkret_wire::RealmCommitId::from_digest([0x22; 32]),
+                    stream_position: 7,
+                },
+                value: serde_json::json!({"policy": "closed"}),
+            }],
+            retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
+                history_access: arkret_wire::HistoryAccess::AllHistoryForCurrentMembers,
+                stream_floors: vec![arkret_wire::StreamHistoryFloor {
+                    stream_ref,
+                    oldest_position: 2,
+                }],
+            },
+        };
+        let signing_key = SigningKey::from_bytes(&[0x45; 32]);
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-09-22T08:00:01.456789Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let snapshot = build_signed_realm_state_snapshot(
+            &material,
+            DidUrl::new("did:web:station.example#notary-key").unwrap(),
+            &signing_key,
+            created_at,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.created_at.timestamp_subsec_micros(), 456_000);
+        let identity = RealmSnapshotIdentityBody {
+            realm_id: &snapshot.realm_id,
+            governance_generation: snapshot.governance_generation,
+            visible_stream_heads: &snapshot.visible_stream_heads,
+            current_state_entries: &snapshot.current_state_entries,
+            retention_and_history_floor: &snapshot.retention_and_history_floor,
+            created_at: snapshot.created_at,
+        };
+        let expected_id =
+            arkret_wire::RealmSnapshotId::from_digest(arkret_canonical::sha256_bytes(
+                &arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+            ));
+        assert_eq!(snapshot.snapshot_id, expected_id);
+        let unsigned = arkret_canonical::unsigned_value(&snapshot, &["signature"]).unwrap();
+        assert_eq!(
+            snapshot.signature.signed_digest,
+            arkret_signatures::detached_object::detached_object_signed_digest(&unsigned).unwrap(),
+            "the signature must seal the exact wire Snapshot minus signature"
+        );
     }
 }

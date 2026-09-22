@@ -1354,6 +1354,7 @@ diesel::table! {
         kind -> Text,
         principal_id -> Text,
         station_id -> Text,
+        authorizing_device_id -> Nullable<Text>,
         expires_at -> Timestamptz,
         created_at -> Timestamptz,
         request_digest -> Text,
