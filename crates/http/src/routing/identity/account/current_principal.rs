@@ -44,7 +44,7 @@ pub(super) async fn resolve(
     }
     let read = state
         .persistence()
-        .current_principal(&body.account_id, state.projections().cell_registry())
+        .current_principal(&body.account_id)
         .await
         .map_err(|_| crate::app_error!(TemporarilyUnavailable, "current principal unavailable",))?;
     let CurrentPrincipalRead::Ready {
