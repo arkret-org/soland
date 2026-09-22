@@ -1858,4 +1858,129 @@ mod tests {
             PushRegistrationHandoffState::Revoked
         );
     }
+
+    #[tokio::test]
+    async fn verified_replay_requires_the_exact_live_gate_and_local_route() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+                .bind::<Text, _>(station_id.as_str())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+        for device in source.device_inventory_records() {
+            inventory.seed_test_record(&device).await.unwrap();
+        }
+        let authorization = source
+            .gate_selectors()
+            .into_iter()
+            .find(|selector| selector.device_id == source.founding_device_id.as_str())
+            .unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route_for_account(
+            source.account.clone(),
+            source.founding_device_id.clone(),
+            &destination,
+        );
+        let request = active_request_for_device(
+            "registration_4444444444444444",
+            &source.founding_device_id,
+            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
+            "provider-token",
+        );
+        let started_at = chrono::DateTime::parse_from_rfc3339("2026-09-23T00:20:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        install_public_route(
+            &store,
+            &station_id,
+            &route,
+            &authorization,
+            &request,
+            &client_input_digest('d'),
+            started_at,
+        )
+        .await;
+        let receipt = receipt_for(
+            &request,
+            &station_id,
+            &destination,
+            started_at + chrono::Duration::milliseconds(1),
+        );
+        let registration = local_registration(&source.account, &request);
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("DELETE FROM push_devices WHERE id=$1")
+                .bind::<Text, _>(request.registration_id().as_str())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &request.request_digest().unwrap(),
+                    &receipt,
+                    &authorization,
+                    &registration,
+                    started_at + chrono::Duration::seconds(1),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+
+        PgPushDeviceStore { pool: pool.clone() }
+            .register(&authorization, serde_json::to_value(&registration).unwrap())
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &request.request_digest().unwrap(),
+                    &receipt,
+                    &authorization,
+                    &registration,
+                    started_at + chrono::Duration::seconds(2),
+                )
+                .await
+                .unwrap(),
+            PushRegistrationHandoffReceiptWrite::ExactReplay(_)
+        ));
+        PgDeviceRevocationStore { pool: pool.clone() }
+            .commit_revocation(&soland_storage::DeviceRevocationTransition {
+                selector: authorization.clone(),
+                revoke_ref: authorization.authorization_ref.clone(),
+                committed_at: started_at + chrono::Duration::seconds(3),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &request.request_digest().unwrap(),
+                    &receipt,
+                    &authorization,
+                    &registration,
+                    started_at + chrono::Duration::seconds(4),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+    }
 }

@@ -13,7 +13,6 @@ pub fn active_push_registration_client_input_digest(
     push_route_id: &str,
     origin: &WebOrigin,
     destination_gateway_id: &DidCoreId,
-    push_target_id: &PushTargetId,
 ) -> ServiceResult<Hash> {
     let input = serde_json::json!({
         "account_id": account_id,
@@ -21,7 +20,6 @@ pub fn active_push_registration_client_input_digest(
         "push_route_id": push_route_id,
         "destination_gateway_id": destination_gateway_id,
         "gateway_origin": origin,
-        "push_target_id": push_target_id,
         "push_key": body.push_key,
         "platform": body.platform,
         "app_id": body.app_id,
@@ -44,6 +42,7 @@ pub enum ActivePushRegistrationPlan {
 pub fn plan_active_push_registration(
     existing: Option<PushRegistrationHandoffIntentRecord>,
     client_input_digest: &Hash,
+    current_push_target_id: &PushTargetId,
 ) -> ServiceResult<ActivePushRegistrationPlan> {
     let Some(existing) = existing else {
         return Ok(ActivePushRegistrationPlan::Create { predecessor: None });
@@ -59,7 +58,10 @@ pub fn plan_active_push_registration(
             Ok(ActivePushRegistrationPlan::ReplayPending(existing))
         }
         PushRegistrationHandoffIntentStatus::ReceiptVerified => {
-            if &existing.client_input_digest == client_input_digest {
+            let request = existing.request()?;
+            if &existing.client_input_digest == client_input_digest
+                && request.push_target_id() == current_push_target_id
+            {
                 Ok(ActivePushRegistrationPlan::ReturnVerified(existing))
             } else {
                 Ok(ActivePushRegistrationPlan::Create {
@@ -72,7 +74,7 @@ pub fn plan_active_push_registration(
 
 #[cfg(test)]
 mod tests {
-    use arkret::{PushRegisterDeviceRequestBody, PushRegistrationHandoffRequestBody};
+    use arkret::PushRegistrationHandoffRequestBody;
     use arkret_identifiers::PushTargetId;
     use arkret_wire::{AccountId, DeviceId, DidCoreId};
     use chrono::{DateTime, Utc};
@@ -151,49 +153,27 @@ mod tests {
     }
 
     #[test]
-    fn client_digest_binds_derived_target_so_a_new_salt_epoch_creates_a_successor() {
-        let station = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let account = AccountId::new(
-            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            station,
-        );
-        let destination = DidCoreId::new("ak:did_core:web:push.example").unwrap();
-        let origin = WebOrigin::new("https://push.example").unwrap();
-        let body: PushRegisterDeviceRequestBody = serde_json::from_value(json!({
-            "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-            "push_gateway_url": "https://push.example/_arkret/edge/push/notify",
-            "push_key": "provider-secret",
-            "platform": "desktop",
-            "app_id": "inkson",
-            "visible_notification_opt_in": false
-        }))
-        .unwrap();
-        let target =
-            PushTargetId::new("ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8")
-                .unwrap();
+    fn pending_cross_epoch_replays_stored_body_but_verified_cross_epoch_supersedes() {
         let next_epoch_target =
             PushTargetId::new("ak:pseudonym:push:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                 .unwrap();
-        let digest = active_push_registration_client_input_digest(
-            &account,
-            &body,
-            "inkson",
-            &origin,
-            &destination,
-            &target,
-        )
-        .unwrap();
-        assert_ne!(
-            digest,
-            active_push_registration_client_input_digest(
-                &account,
-                &body,
-                "inkson",
-                &origin,
-                &destination,
-                &next_epoch_target,
-            )
-            .unwrap()
+        let pending = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
+        let pending_body = pending.canonical_request.clone();
+        let digest = pending.client_input_digest.clone();
+        match plan_active_push_registration(Some(pending), &digest, &next_epoch_target).unwrap() {
+            ActivePushRegistrationPlan::ReplayPending(record) => {
+                assert_eq!(record.canonical_request, pending_body)
+            }
+            other => panic!("pending cross-epoch retry did not replay: {other:?}"),
+        }
+
+        let verified = record(PushRegistrationHandoffIntentStatus::ReceiptVerified);
+        let predecessor = verified.registration_id.clone();
+        assert_eq!(
+            plan_active_push_registration(Some(verified), &digest, &next_epoch_target).unwrap(),
+            ActivePushRegistrationPlan::Create {
+                predecessor: Some(predecessor)
+            }
         );
     }
 
@@ -201,26 +181,28 @@ mod tests {
     fn exact_pending_replays_and_changed_pending_conflicts() {
         let pending = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
         let digest = pending.client_input_digest.clone();
+        let target = pending.request().unwrap().push_target_id().clone();
         assert!(matches!(
-            plan_active_push_registration(Some(pending.clone()), &digest).unwrap(),
+            plan_active_push_registration(Some(pending.clone()), &digest, &target).unwrap(),
             ActivePushRegistrationPlan::ReplayPending(_)
         ));
         let changed = Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap();
-        assert!(plan_active_push_registration(Some(pending), &changed).is_err());
+        assert!(plan_active_push_registration(Some(pending), &changed, &target).is_err());
     }
 
     #[test]
     fn exact_verified_returns_and_changed_verified_supersedes() {
         let verified = record(PushRegistrationHandoffIntentStatus::ReceiptVerified);
         let digest = verified.client_input_digest.clone();
+        let target = verified.request().unwrap().push_target_id().clone();
         assert!(matches!(
-            plan_active_push_registration(Some(verified.clone()), &digest).unwrap(),
+            plan_active_push_registration(Some(verified.clone()), &digest, &target).unwrap(),
             ActivePushRegistrationPlan::ReturnVerified(_)
         ));
         let changed = Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap();
         let predecessor = verified.registration_id.clone();
         assert_eq!(
-            plan_active_push_registration(Some(verified), &changed).unwrap(),
+            plan_active_push_registration(Some(verified), &changed, &target).unwrap(),
             ActivePushRegistrationPlan::Create {
                 predecessor: Some(predecessor)
             }

@@ -41,7 +41,7 @@ pub(super) async fn register(
     input: PublicPushRegistration<'_>,
 ) -> Result<PushRegisterDeviceOutcome, AppError> {
     let origin = canonical_gateway_origin(&input.body.push_gateway_url)?;
-    let (gateway, route) = resolve_trusted_gateway(state, &origin).await?;
+    let gateway = trusted_gateway_for_origin(state, &origin)?;
     let source_station_id = state.service_core_id();
     let local_route = PushRegistrationHandoffRouteLocator {
         account_id: input.account_id.clone(),
@@ -55,7 +55,6 @@ pub(super) async fn register(
         &input.push_route_id,
         &origin,
         gateway.service_id(),
-        &input.push_target_id,
     )
     .map_err(service_storage_error)?;
     let existing = state
@@ -64,10 +63,30 @@ pub(super) async fn register(
         .await
         .map_err(service_storage_error)?;
 
-    let intent = match plan_active_push_registration(existing, &client_input_digest)
-        .map_err(service_storage_error)?
-    {
-        ActivePushRegistrationPlan::ReturnVerified(record) => return outcome_from_record(&record),
+    let plan =
+        match plan_active_push_registration(existing, &client_input_digest, &input.push_target_id)
+            .map_err(service_storage_error)?
+        {
+            ActivePushRegistrationPlan::ReturnVerified(record) => {
+                return replay_verified_registration(
+                    state,
+                    &source_station_id,
+                    &local_route,
+                    input.authorization,
+                    &input.account_id,
+                    &input.push_route_id,
+                    &origin,
+                    record,
+                )
+                .await;
+            }
+            other => other,
+        };
+    // Only pending or new work needs live ServiceDescribe route verification.
+    // A durable verified replay is a local CAS operation and remains available
+    // while discovery is temporarily unavailable.
+    let route = resolve_trusted_gateway(state, &origin, &gateway).await?;
+    let intent = match plan {
         ActivePushRegistrationPlan::ReplayPending(record) => record,
         ActivePushRegistrationPlan::Create { predecessor } => {
             let request = PushRegistrationHandoffRequestBody::Active {
@@ -103,10 +122,13 @@ pub(super) async fn register(
                 }
             }
         }
+        ActivePushRegistrationPlan::ReturnVerified(_) => unreachable!("returned above"),
     };
 
     if intent.status == PushRegistrationHandoffIntentStatus::ReceiptVerified {
-        return outcome_from_record(&intent);
+        return Err(AppError::internal(
+            "push registration planner returned a verified intent for network delivery",
+        ));
     }
     let request = intent.request().map_err(persistence_error)?;
     let (_, assertion_method) = state
@@ -178,6 +200,46 @@ pub(super) async fn register(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn replay_verified_registration(
+    state: &AppState,
+    source_station_id: &arkret_wire::DidCoreId,
+    local_route: &PushRegistrationHandoffRouteLocator,
+    authorization: &DeviceRevocationGateSelector,
+    account_id: &AccountId,
+    push_route_id: &str,
+    origin: &WebOrigin,
+    record: PushRegistrationHandoffIntentRecord,
+) -> Result<PushRegisterDeviceOutcome, AppError> {
+    let request = record.request().map_err(persistence_error)?;
+    let receipt = record.receipt.as_ref().ok_or_else(|| {
+        AppError::internal("verified push registration replay is missing its durable receipt")
+    })?;
+    let registration = local_registration(&record, &request, account_id, push_route_id, origin)?;
+    let committed = state
+        .persistence()
+        .commit_verified_push_registration_handoff(
+            source_station_id,
+            local_route,
+            &record.registration_id,
+            &record.request_digest,
+            receipt,
+            authorization,
+            &registration,
+            Utc::now(),
+        )
+        .await
+        .map_err(service_storage_error)?;
+    match committed {
+        soland_storage::PushRegistrationHandoffReceiptWrite::ExactReplay(record) => {
+            outcome_from_record(&record)
+        }
+        soland_storage::PushRegistrationHandoffReceiptWrite::Stored(_) => Err(AppError::internal(
+            "verified push registration replay unexpectedly stored a new receipt",
+        )),
+    }
+}
+
 fn canonical_gateway_origin(raw: &str) -> Result<WebOrigin, AppError> {
     let url = reqwest::Url::parse(raw)
         .map_err(|_| AppError::param_invalid("invalid push gateway URL"))?;
@@ -197,18 +259,8 @@ fn canonical_gateway_origin(raw: &str) -> Result<WebOrigin, AppError> {
 async fn resolve_trusted_gateway(
     state: &AppState,
     origin: &WebOrigin,
-) -> Result<
-    (
-        TrustedPushGateway,
-        soland_services::service_route::ResolvedServiceRoute,
-    ),
-    AppError,
-> {
-    let registry = state.trusted_push_gateways();
-    let gateway = registry
-        .get(origin)
-        .cloned()
-        .ok_or_else(|| handoff_unavailable("Gateway origin is not onboarded", origin))?;
+    gateway: &TrustedPushGateway,
+) -> Result<soland_services::service_route::ResolvedServiceRoute, AppError> {
     let resolver = state
         .service_route_resolver()
         .map_err(|error| handoff_unavailable("Gateway route resolver unavailable", error))?;
@@ -265,10 +317,22 @@ async fn resolve_trusted_gateway(
             ));
         }
     };
-    registry
+    state
+        .trusted_push_gateways()
         .authorize_route(origin, &route, now)
         .map_err(|error| handoff_unavailable("Gateway route is not trusted", error))?;
-    Ok((gateway, route))
+    Ok(route)
+}
+
+fn trusted_gateway_for_origin(
+    state: &AppState,
+    origin: &WebOrigin,
+) -> Result<TrustedPushGateway, AppError> {
+    state
+        .trusted_push_gateways()
+        .get(origin)
+        .cloned()
+        .ok_or_else(|| handoff_unavailable("Gateway origin is not onboarded", origin))
 }
 
 fn random_registration_id() -> Result<PushRegistrationId, AppError> {
@@ -507,8 +571,9 @@ mod tests {
     fn retry_replays_pending_and_returns_verified_without_allocating_another_id() {
         let pending = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
         let digest = pending.client_input_digest.clone();
+        let target = pending.request().unwrap().push_target_id().clone();
         assert!(matches!(
-            plan_active_push_registration(Some(pending), &digest).unwrap(),
+            plan_active_push_registration(Some(pending), &digest, &target).unwrap(),
             ActivePushRegistrationPlan::ReplayPending(_)
         ));
 
@@ -519,7 +584,7 @@ mod tests {
             verified.registration_id.as_str()
         );
         assert!(matches!(
-            plan_active_push_registration(Some(verified), &digest).unwrap(),
+            plan_active_push_registration(Some(verified), &digest, &target).unwrap(),
             ActivePushRegistrationPlan::ReturnVerified(_)
         ));
     }
@@ -528,11 +593,12 @@ mod tests {
     fn changed_input_conflicts_while_pending_and_supersedes_only_after_verification() {
         let changed = Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap();
         let pending = record(PushRegistrationHandoffIntentStatus::AwaitingReceipt);
-        assert!(plan_active_push_registration(Some(pending), &changed).is_err());
+        let target = pending.request().unwrap().push_target_id().clone();
+        assert!(plan_active_push_registration(Some(pending), &changed, &target).is_err());
 
         let verified = record(PushRegistrationHandoffIntentStatus::ReceiptVerified);
         let expected = verified.registration_id.clone();
-        match plan_active_push_registration(Some(verified), &changed).unwrap() {
+        match plan_active_push_registration(Some(verified), &changed, &target).unwrap() {
             ActivePushRegistrationPlan::Create { predecessor } => {
                 assert_eq!(predecessor, Some(expected));
             }
@@ -566,17 +632,12 @@ mod tests {
         let destination = DidCoreId::new("ak:did_core:web:push.example").unwrap();
         let origin = WebOrigin::new("https://push.example").unwrap();
         let body = client_body();
-        let target = arkret_identifiers::PushTargetId::new(
-            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
-        )
-        .unwrap();
         let digest = active_push_registration_client_input_digest(
             &account,
             &body,
             "inkson",
             &origin,
             &destination,
-            &target,
         )
         .unwrap();
 
@@ -590,7 +651,6 @@ mod tests {
                 "inkson",
                 &origin,
                 &destination,
-                &target,
             )
             .unwrap()
         );
@@ -601,8 +661,7 @@ mod tests {
                 &body,
                 "inkson.voip",
                 &origin,
-                &destination,
-                &target
+                &destination
             )
             .unwrap()
         );
@@ -614,8 +673,7 @@ mod tests {
                 &body,
                 "inkson",
                 &origin,
-                &other_destination,
-                &target
+                &other_destination
             )
             .unwrap()
         );
@@ -623,19 +681,23 @@ mod tests {
             "ak:pseudonym:push:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         )
         .unwrap();
-        assert_ne!(
+        assert_eq!(
             digest,
             active_push_registration_client_input_digest(
                 &account,
                 &body,
                 "inkson",
                 &origin,
-                &destination,
-                &next_epoch_target
+                &destination
             )
             .unwrap(),
-            "salt-epoch target rotation must create a successor handoff"
+            "derived target rotation is handled after pending replay planning"
         );
+        let verified = record(PushRegistrationHandoffIntentStatus::ReceiptVerified);
+        assert!(matches!(
+            plan_active_push_registration(Some(verified), &digest, &next_epoch_target).unwrap(),
+            ActivePushRegistrationPlan::Create { .. }
+        ));
     }
 
     #[test]
