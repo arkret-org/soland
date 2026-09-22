@@ -256,19 +256,7 @@ fn pop_required(state: &AppState, req: &Request) -> bool {
     if !state.config().sovereign_enclave_enabled || req.method() == salvo::http::Method::OPTIONS {
         return false;
     }
-    if is_history_response_capability_request(req) {
-        return false;
-    }
     !is_public_projection_request(req)
-}
-
-fn is_history_response_capability_request(req: &Request) -> bool {
-    [
-        arkret_wire::ServiceOperationId::SelfHistoryKeyResponsesReadListV1,
-        arkret_wire::ServiceOperationId::SelfHistoryKeyResponsesCommandAckV1,
-    ]
-    .into_iter()
-    .any(|operation| request_matches_operation(req, operation))
 }
 
 fn is_public_projection_request(req: &Request) -> bool {
