@@ -3,8 +3,8 @@
 use arkret_identifiers::{BackupId, EventId};
 use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod, KeyBackupUnlockProof,
-    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody, RecoveryHpkeSuite,
-    RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
+    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody, RecoveryKeyAgreementEntry,
+    RecoveryKeyAgreementUse, RecoveryPolicy,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -630,7 +630,6 @@ pub(crate) async fn recovery_unlock_manifest(
     state: &AppState,
     account: &arkret_wire::AccountId,
 ) -> Result<Value, AppError> {
-    use arkret_models_crypto::BackupActiveSeriesPointer;
     let pointers = listing::active_pointers(state, account).await?;
     let actor = arkret_wire::ActorId::account(account.clone()).to_string();
     let query = soland_services::identity::KeyBackupListQuery {
@@ -657,9 +656,8 @@ pub(crate) async fn recovery_unlock_manifest(
             .map_err(|error| AppError::internal(error.to_string()))?;
         let pointer = match typed.backup_kind {
             BackupKind::SecretStorage => &pointers.secret_storage,
-            BackupKind::MlsHistory => &pointers.mls_history,
         };
-        if matches!(pointer,BackupActiveSeriesPointer::Active{active_series_id,..} if active_series_id==&typed.series_id)
+        if pointer.series_id() == Some(&typed.series_id)
             && backup
                 .get("expires_at")
                 .and_then(Value::as_str)
