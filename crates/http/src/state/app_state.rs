@@ -135,6 +135,10 @@ pub struct AppState {
     /// absent) so cache, durable floor, and quarantine decisions cannot split
     /// across ad-hoc resolver instances.
     service_route_resolver: Arc<Mutex<Option<Arc<ServiceRouteResolver>>>>,
+    /// Immutable deployment trust roots for public Push Gateways.  Resolver
+    /// output remains untrusted for handoff until it is bound to one of these
+    /// exact origin/DID/receipt-key tuples.
+    trusted_push_gateways: Arc<crate::push_gateway_registry::TrustedPushGatewayRegistry>,
     /// Accepted DID authority bindings (`did-usage-and-verification.md` §5).
     ///
     /// This is the SDK's shared value object + store — soland deliberately does
@@ -1204,6 +1208,7 @@ impl AppState {
         let verified_profiles = crate::verified_profiles::load_from_configured_path(
             config.verified_profiles_artifact.as_deref(),
         );
+        let trusted_push_gateways = Arc::new(config.trusted_push_gateways.clone());
 
         Self {
             config,
@@ -1241,6 +1246,7 @@ impl AppState {
             security_transactions,
             dids,
             service_route_resolver: Arc::new(Mutex::new(Some(service_route_resolver))),
+            trusted_push_gateways,
             did_bindings,
             organization_registrations,
             federation,
@@ -1374,6 +1380,14 @@ impl AppState {
             .lock()
             .clone()
             .ok_or("service route resolver is not installed")
+    }
+
+    /// Deployment-onboarded public Push Gateway trust roots.
+    #[must_use]
+    pub fn trusted_push_gateways(
+        &self,
+    ) -> Arc<crate::push_gateway_registry::TrustedPushGatewayRegistry> {
+        self.trusted_push_gateways.clone()
     }
 
     /// Replace the production route fetcher at test composition time while

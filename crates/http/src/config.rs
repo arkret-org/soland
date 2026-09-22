@@ -456,6 +456,14 @@ pub struct AppConfig {
     /// config. Sovereign outbound fails closed until that binding is present.
     /// Empty disables federation outbound.
     pub federation_peers: Vec<String>,
+    /// Explicit onboarding trust roots for independently operated public Push
+    /// Gateways.  Each entry binds one canonical HTTPS origin to the exact
+    /// Gateway service DID and its current receipt assertion method/key.
+    ///
+    /// Env: `SOLAND_TRUSTED_PUSH_GATEWAYS`, a closed JSON array.  This is not
+    /// derived from `federation_peers`: that registry admits only Station peers
+    /// and does not establish Push Gateway receipt trust.
+    pub trusted_push_gateways: crate::push_gateway_registry::TrustedPushGatewayRegistry,
     /// G3.S0 — when true (default), `main.rs` spawns the
     /// `FederationDispatcher` background worker that drains the
     /// `federation_outbox` table and POSTs each pending row to its peer
@@ -970,6 +978,8 @@ impl AppConfig {
             key_store: KeyStoreConfig::Disabled,
             federation_fanout_topology: FederationFanoutTopology::Mesh,
             federation_peers: Vec::new(),
+            trusted_push_gateways:
+                crate::push_gateway_registry::TrustedPushGatewayRegistry::default(),
             // Off so test binaries never spawn background federation HTTP
             // traffic; the in-process enqueue path still writes outbox rows.
             federation_outbound_enabled: false,
@@ -1238,6 +1248,14 @@ impl AppConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let trusted_push_gateways = env_non_empty(values, "SOLAND_TRUSTED_PUSH_GATEWAYS")
+            .map(|value| {
+                crate::push_gateway_registry::TrustedPushGatewayRegistry::from_json(&value).map_err(
+                    |error| anyhow::anyhow!("SOLAND_TRUSTED_PUSH_GATEWAYS is invalid: {error}"),
+                )
+            })
+            .transpose()?
+            .unwrap_or_default();
         // G3.S0 — outbound dispatcher toggle. Defaults to enabled so the
         // background worker drains the outbox; tests that don't want
         // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
@@ -1453,6 +1471,7 @@ impl AppConfig {
             key_store,
             federation_fanout_topology,
             federation_peers,
+            trusted_push_gateways,
             federation_outbound_enabled,
             deactivation_propagation_window_ms,
             federation_frontier_interval_seconds,
@@ -2252,6 +2271,13 @@ fn lookup(values: &BTreeMap<String, String>, name: &str) -> Result<String, std::
 mod tests {
     use super::*;
 
+    fn test_ed25519_public_key_multibase(seed: u8) -> String {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
+        let mut multicodec = vec![0xed, 0x01];
+        multicodec.extend_from_slice(key.as_bytes());
+        format!("z{}", bs58::encode(multicodec).into_string())
+    }
+
     fn registered_internal_channel_values() -> BTreeMap<String, String> {
         BTreeMap::from([
             (
@@ -2300,6 +2326,31 @@ mod tests {
                 .unwrap()
                 .controller_gate_url(),
             "https://auth.example/_coauth/internal/controller-gate-attestations"
+        );
+    }
+
+    #[test]
+    fn trusted_push_gateway_registry_is_validated_and_injected_from_config() {
+        let mut values =
+            BTreeMap::from([("SOLAND_DEVELOPMENT_MODE".to_owned(), "true".to_owned())]);
+        values.insert(
+            "SOLAND_TRUSTED_PUSH_GATEWAYS".to_owned(),
+            serde_json::json!([{
+                "canonical_origin": "https://push.example",
+                "service_did": "did:web:push.example",
+                "receipt_verification_method": "did:web:push.example#receipt",
+                "receipt_public_key_multibase": test_ed25519_public_key_multibase(9),
+            }])
+            .to_string(),
+        );
+        let config =
+            AppConfig::from_values(&values, StartupOverrides::default()).expect("valid registry");
+        let origin = arkret_wire::WebOrigin::new("https://push.example").unwrap();
+        let gateway = config.trusted_push_gateways.get(&origin).unwrap();
+        assert_eq!(gateway.service_did().as_str(), "did:web:push.example");
+        assert_eq!(
+            gateway.receipt_verification_method().as_str(),
+            "did:web:push.example#receipt"
         );
     }
 

@@ -20,6 +20,7 @@ pub mod jws_verify;
 pub mod metrics;
 pub mod openapi;
 pub mod openapi_routes;
+pub mod push_gateway_registry;
 pub mod ratelimit;
 pub mod result;
 pub mod routing;
