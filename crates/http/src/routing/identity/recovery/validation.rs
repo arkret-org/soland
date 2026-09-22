@@ -20,7 +20,7 @@ pub(super) fn validate_recovery_policy(
             .with_wire_code("schema_violation")
     })?;
     reject_unexecutable_recovery_policy(&typed)?;
-    typed.validate().map_err(|error| {
+    typed.validate_shape().map_err(|error| {
         AppError::param_invalid(format!(
             "recovery policy violates protocol invariants: {error}"
         ))
