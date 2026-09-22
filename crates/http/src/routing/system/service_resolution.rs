@@ -54,14 +54,14 @@ pub(crate) async fn current_authenticated_service_resolution(
     let stored = state
         .stored_service_identity()
         .await
-        .map_err(|e| crate::app_error!(ServiceIdentityUnavailable, e))?;
+        .map_err(|e| crate::app_error!(ServiceIdentityProviderUnavailable, e))?;
     let normalized_document: DidDocument =
         serde_json::from_value(serde_json::to_value(&stored.did_document).map_err(|error| {
             AppError::internal(format!("service DID document encoding failed: {error}"))
         })?)
         .map_err(|error| {
             crate::app_error!(
-                ServiceIdentityUnavailable,
+                ServiceIdentityProviderUnavailable,
                 format!("service DID document normalization failed: {error}"),
             )
         })?;
@@ -71,7 +71,7 @@ pub(crate) async fn current_authenticated_service_resolution(
         .await
         .map_err(|error| {
             crate::app_error!(
-                ServiceIdentityUnavailable,
+                ServiceIdentityProviderUnavailable,
                 format!("durable service WebVH history unavailable: {error}"),
             )
         })?;
@@ -90,7 +90,7 @@ pub(crate) async fn current_authenticated_service_resolution(
         })
         .ok_or_else(|| {
             crate::app_error!(
-                ServiceIdentityUnavailable,
+                ServiceIdentityProviderUnavailable,
                 "durable service WebVH history does not contain the current DID head",
             )
         })?;
@@ -114,7 +114,7 @@ pub(crate) async fn current_authenticated_service_resolution(
         if detail.contains("exceeds 1 MiB") {
             crate::app_error!(LimitExceeded, detail)
         } else {
-            crate::app_error!(ServiceIdentityUnavailable, detail)
+            crate::app_error!(ServiceIdentityProviderUnavailable, detail)
         }
     })
 }
