@@ -1087,6 +1087,69 @@ async fn assert_event_and_commit_absent(
 }
 
 #[tokio::test]
+async fn postgres_oversized_realm_snapshot_rejects_the_commit_without_writes() {
+    use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{EventCommitUnitOfWork, PersistenceError};
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let namespace = format!("snapshot-capacity:{}", uuid::Uuid::now_v7());
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
+        .expect("fixture Realm id");
+    let station_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:snapshot-station.example").unwrap();
+    let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:snapshot-author.example").unwrap();
+    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
+    stream.install(&pool).await;
+    let now =
+        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+
+    // Seed an already-authoritative typed row whose closed signed snapshot is
+    // necessarily larger than 8 MiB. The next admission must measure the full
+    // post-commit durable cut and roll the whole transaction back.
+    let oversized_value = serde_json::json!({"payload": "x".repeat(8 * 1024 * 1024)});
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO realm_policy_bundle_current_results \
+         (realm_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(arkret_wire::RealmCommitId::from_digest([0x61; 32]).as_str())
+    .bind::<BigInt, _>(0_i64)
+    .bind::<Jsonb, _>(oversized_value)
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+
+    let request = franking_event_request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        &realm_id,
+        actor_id,
+        &station_id,
+        arkret_wire::EventKind::MessageCreate.as_str(),
+        serde_json::json!({"body": "must roll back"}),
+        now,
+    );
+    let event_id = request.authority_commit.event.event_id.clone();
+    let commit_id = request.authority_commit.commit.commit_id.clone();
+    let error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request)
+        .await
+        .expect_err("an oversized maximal snapshot must reject admission");
+    assert!(matches!(error, PersistenceError::Conflict(_)));
+    assert_eq!(
+        error.conflict_code(),
+        Some(soland_storage::ConflictCode::SnapshotCapacityExceeded)
+    );
+    assert_event_and_commit_absent(&pool, event_id, commit_id).await;
+}
+
+#[tokio::test]
 async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     use diesel::sql_types::{Jsonb, Text};
     use diesel_async::RunQueryDsl;
