@@ -521,17 +521,15 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
                 }
                 arkret_policy::authz::authority::IssuerAuthorityRef::RealmRoot {
                     realm_id,
-                    cell_ref,
-                    controller_epoch_at_issuance,
+                    authority_event_ref,
                     authority_generation,
-                } => arkret_identifiers::RealmId::new(realm_id.clone()).ok().map(|realm_id| {
+                } => Some(
                     arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
-                        realm_id,
-                        cell_ref: cell_ref.clone(),
-                        controller_epoch_at_issuance: *controller_epoch_at_issuance,
+                        realm_id: realm_id.clone(),
+                        authority_event_ref: authority_event_ref.clone(),
                         authority_generation: *authority_generation,
-                    }
-                }),
+                    },
+                ),
             })
             .collect(),
         expires_at: arkret_policy::authz::authority::grant_effective_expiry(grant),
