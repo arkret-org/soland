@@ -275,8 +275,9 @@ fn device_authorization_invalid(message: impl Into<String>) -> EventValidationEr
 
 #[cfg(test)]
 mod applet_managed_delegation_tests {
+    use arkret_models_collaboration::events_payloads::SignatureMaterial;
     use arkret_models_collaboration::events_payloads::device_identity::{
-        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, UnsignedDeviceAuthorizePayload,
+        DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
     };
     use ed25519_dalek::{Signer as _, SigningKey};
 
@@ -296,49 +297,59 @@ mod applet_managed_delegation_tests {
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes());
         let mut hpke = vec![0xec, 0x01];
         hpke.extend([0x44; 32]);
-        let unsigned = UnsignedDeviceAuthorizePayload::new(
-            arkret_identifiers::DeviceId::new("ak:device:01904100-0000-7000-8000-00000000d001")
+        let mut payload = DeviceAuthorizePayload {
+            device_id: arkret_identifiers::DeviceId::new(
+                "ak:device:01904100-0000-7000-8000-00000000d001",
+            )
+            .unwrap(),
+            device_public_key_did: arkret_wire::NonEmptyString::new(format!("did:key:{public}"))
                 .unwrap(),
-            arkret_wire::NonEmptyString::new(format!("did:key:{public}")).unwrap(),
-            arkret_wire::NonEmptyString::new(arkret_canonical::encode_multibase_base58btc(hpke))
-                .unwrap(),
-            vec![
+            hpke_key: arkret_wire::NonEmptyString::new(
+                arkret_canonical::encode_multibase_base58btc(hpke),
+            )
+            .unwrap(),
+            algorithms: vec![
                 arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1")
                     .unwrap(),
             ],
-            Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
-            DeviceOrPrincipalRef::Principal(authorized_by.clone()),
-            Some(vec![
+            device_key_algorithm: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
+            authorized_by: DeviceOrPrincipalRef::Principal(authorized_by.clone()),
+            scopes: Some(vec![
                 arkret_wire::NonEmptyString::new("ak.realm:ak:realm:portal").unwrap(),
             ]),
-            "2026-09-15T00:00:00.000Z".parse().unwrap(),
-            Some(Some("2026-12-15T00:00:00.000Z".parse().unwrap())),
-            DeviceAuthorizationBindingKind::AppletManagedDelegation,
-            None,
-            Some(arkret_wire::AppletId::new(APPLET).unwrap()),
-        )
-        .expect("5.2.3 payload shape");
+            not_before: "2026-09-15T00:00:00.000Z".parse().unwrap(),
+            expires_at: Some(Some("2026-12-15T00:00:00.000Z".parse().unwrap())),
+            authorization_binding_kind: DeviceAuthorizationBindingKind::AppletManagedDelegation,
+            authorized_generation_ref: 1,
+            device_signature: SignatureMaterial::NonEmptyString(
+                arkret_wire::NonEmptyString::new("pending").unwrap(),
+            ),
+            recovery_session_id: None,
+            pairing_challenge_transcript_digest: None,
+            applet_id: Some(arkret_wire::AppletId::new(APPLET).unwrap()),
+        };
+        payload
+            .validate_wire_constraints()
+            .expect("5.2.3 payload shape");
         // The transcript self-anchors against the signing account, so a
         // cross-principal case has to sign under the principal it names.
         let anchor = arkret_wire::AccountId::new(
             authorized_by.clone(),
             arkret_wire::DidCoreId::new(STATION.to_owned()).unwrap(),
         );
-        let input = unsigned
+        let input = payload
             .device_possession_signature_input(if authorized_by == &account.principal_id {
                 account
             } else {
                 &anchor
             })
             .expect("possession transcript");
-        let payload = unsigned
-            .attach_signature(
-                arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
-                    key.sign(&input).to_bytes(),
-                ))
-                .unwrap(),
-            )
-            .expect("signed 5.2.3 payload");
+        payload.device_signature = SignatureMaterial::NonEmptyString(
+            arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(
+                key.sign(&input).to_bytes(),
+            ))
+            .unwrap(),
+        );
         serde_json::to_value(payload).expect("payload serializes")
     }
 
