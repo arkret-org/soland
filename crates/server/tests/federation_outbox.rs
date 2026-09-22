@@ -124,6 +124,12 @@ fn verified_peer_route(
                 http_json_base_url: base_url,
                 trust_domain: TrustDomainId::new(trust_domain).expect("fixture peer trust domain"),
                 protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+                supported_operation_bundles: vec![
+                    arkret_wire::role_describe_bundle_descriptor(ServiceKind::Station)
+                        .unwrap()
+                        .operation_bundle_id
+                        .to_owned(),
+                ],
             },
         },
     }

@@ -97,6 +97,7 @@ fn validate_service_describe(
         http_json_base_url: route.base_url.clone(),
         trust_domain: description.trust_domain,
         protocol_version: description.protocol_version.to_string(),
+        supported_operation_bundles: description.supported_operation_bundles,
     })
 }
 

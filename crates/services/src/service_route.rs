@@ -4,7 +4,10 @@ use std::sync::Arc;
 use arkret_models_identity::{
     AuthenticatedServiceResolution, ServiceResolutionCarrier, VerifiedServiceRoute,
 };
-use arkret_wire::{DidCoreId, Hash, TrustDomainId};
+use arkret_wire::{
+    BindingKind, DidCoreId, Hash, ServiceKind, ServiceOperationId, TrustDomainId,
+    operation_bundles_for_service_kind,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use soland_storage::{MonotonicRouteWrite, ServiceResolutionForkEvidence, ServiceRouteStore};
@@ -23,12 +26,14 @@ pub struct VerifiedServiceDescribeMetadata {
     pub http_json_base_url: String,
     pub trust_domain: TrustDomainId,
     pub protocol_version: String,
+    pub supported_operation_bundles: Vec<String>,
 }
 #[derive(Clone, Debug)]
 pub struct ResolvedServiceRoute {
     pub route: VerifiedServiceRoute,
     pub trust_domain: TrustDomainId,
     pub protocol_version: String,
+    pub supported_operation_bundles: Vec<String>,
     pub describe_verified_at: DateTime<Utc>,
     pub describe_cache_expires_at: DateTime<Utc>,
 }
@@ -57,6 +62,41 @@ impl ResolvedServiceRoute {
             return Err(ServiceError::Conflict(
                 "verified describe trust domain conflicts with binding".into(),
             ));
+        }
+        Ok(())
+    }
+
+    /// Require the exact generated capability bundles for a public Push
+    /// Gateway registration handoff. A verified URL or DID is not sufficient:
+    /// the same role-scoped Describe must advertise both notification ingest
+    /// and durable registration handoff.
+    pub fn require_push_gateway_registration_handoff(&self) -> ServiceResult<()> {
+        if self.route.service_kind() != ServiceKind::PushGateway.as_str() {
+            return Err(ServiceError::Conflict(
+                "verified service route is not a Push Gateway".into(),
+            ));
+        }
+        for operation_id in [
+            ServiceOperationId::EdgePushCommandNotifyV1,
+            ServiceOperationId::EdgePushCommandApplyRegistrationV1,
+        ] {
+            let required_bundle = operation_bundles_for_service_kind(ServiceKind::PushGateway)
+                .find(|bundle| bundle.contains(operation_id, BindingKind::HttpJson))
+                .ok_or_else(|| {
+                    ServiceError::Internal(format!(
+                        "generated Push Gateway registry omits {operation_id} HTTP binding"
+                    ))
+                })?;
+            if !self
+                .supported_operation_bundles
+                .iter()
+                .any(|actual| actual == required_bundle.operation_bundle_id)
+            {
+                return Err(ServiceError::Conflict(format!(
+                    "verified Push Gateway Describe omits required bundle {}",
+                    required_bundle.operation_bundle_id
+                )));
+            }
         }
         Ok(())
     }
@@ -241,6 +281,7 @@ impl ServiceRouteResolver {
                 route: entry.clone(),
                 trust_domain: d.trust_domain,
                 protocol_version: d.protocol_version,
+                supported_operation_bundles: d.supported_operation_bundles,
                 describe_verified_at: now,
                 describe_cache_expires_at: entry.cache_expires_at,
             },
@@ -405,6 +446,12 @@ mod tests {
                     http_json_base_url: base_url.to_owned(),
                     trust_domain: TrustDomainId::new(trust_domain.to_owned()).unwrap(),
                     protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+                    supported_operation_bundles: vec![
+                        arkret_wire::role_describe_bundle_descriptor(ServiceKind::Station)
+                            .unwrap()
+                            .operation_bundle_id
+                            .to_owned(),
+                    ],
                 },
             },
         )
@@ -425,5 +472,66 @@ mod tests {
         assert_eq!(store.publish_writes.load(Ordering::SeqCst), 0);
         assert_eq!(store.quarantine_writes.load(Ordering::SeqCst), 0);
         assert!(resolver.resolved_routes.lock().is_empty());
+    }
+
+    fn push_bundle_id(operation_id: ServiceOperationId) -> String {
+        operation_bundles_for_service_kind(ServiceKind::PushGateway)
+            .find(|bundle| bundle.contains(operation_id, BindingKind::HttpJson))
+            .expect("generated Push Gateway operation bundle")
+            .operation_bundle_id
+            .to_owned()
+    }
+
+    fn resolved_route_with_capabilities(
+        service_kind: ServiceKind,
+        supported_operation_bundles: Vec<String>,
+    ) -> ResolvedServiceRoute {
+        let (_, candidate) = route_candidate("ak:trust_domain:peer.production.example");
+        let mut projection = candidate.evidence.projection().unwrap();
+        projection.service_kind = service_kind.as_str().to_owned();
+        let now = Utc::now();
+        let route = VerifiedServiceRoute::new(projection, now);
+        ResolvedServiceRoute {
+            describe_cache_expires_at: route.cache_expires_at,
+            route,
+            trust_domain: candidate.description.trust_domain,
+            protocol_version: candidate.description.protocol_version,
+            supported_operation_bundles,
+            describe_verified_at: now,
+        }
+    }
+
+    #[test]
+    fn push_gateway_handoff_requires_both_generated_role_bundles() {
+        let notify = push_bundle_id(ServiceOperationId::EdgePushCommandNotifyV1);
+        let handoff = push_bundle_id(ServiceOperationId::EdgePushCommandApplyRegistrationV1);
+        resolved_route_with_capabilities(
+            ServiceKind::PushGateway,
+            vec![notify.clone(), handoff.clone()],
+        )
+        .require_push_gateway_registration_handoff()
+        .unwrap();
+
+        for (missing, remaining) in [
+            (notify.clone(), vec![handoff.clone()]),
+            (handoff.clone(), vec![notify.clone()]),
+        ] {
+            let error = resolved_route_with_capabilities(ServiceKind::PushGateway, remaining)
+                .require_push_gateway_registration_handoff()
+                .expect_err("a missing Push Gateway bundle must fail closed");
+            assert!(error.to_string().contains(&missing));
+        }
+    }
+
+    #[test]
+    fn push_gateway_handoff_rejects_a_verified_route_with_the_wrong_role() {
+        let bundles = vec![
+            push_bundle_id(ServiceOperationId::EdgePushCommandNotifyV1),
+            push_bundle_id(ServiceOperationId::EdgePushCommandApplyRegistrationV1),
+        ];
+        let error = resolved_route_with_capabilities(ServiceKind::Station, bundles)
+            .require_push_gateway_registration_handoff()
+            .expect_err("a Station route cannot stand in for a Push Gateway");
+        assert!(error.to_string().contains("not a Push Gateway"));
     }
 }

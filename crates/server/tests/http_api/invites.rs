@@ -99,6 +99,12 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
             )
             .expect("remote trust domain"),
             protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+            supported_operation_bundles: vec![
+                arkret_wire::role_describe_bundle_descriptor(service_kind)
+                    .unwrap()
+                    .operation_bundle_id
+                    .to_owned(),
+            ],
         },
     };
     (
