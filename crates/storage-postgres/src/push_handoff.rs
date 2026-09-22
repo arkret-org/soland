@@ -1,5 +1,6 @@
 use arkret_models_integration::{
     PushRegistrationHandoffRequestBody, PushRegistrationId, PushRegistrationInstallationReceipt,
+    PushRegistrationRecord,
 };
 use arkret_wire::{DidCoreId, Hash};
 
@@ -12,6 +13,7 @@ use super::{
     RunQueryDsl, Text, Timestamptz, Value, apply_push_registration_desired_intent,
     apply_verified_push_registration_receipt, async_trait, pg_conn, sql_query,
 };
+use crate::push::{PushDeviceRouteWriteMode, write_push_device_route_in_transaction};
 
 pub struct PgPushRegistrationHandoffStore {
     pub pool: PgPool,
@@ -179,6 +181,46 @@ fn local_route_lock_key(
         "push-registration-handoff:{}",
         arkret_canonical::sha256_hex(canonical)
     ))
+}
+
+async fn store_receipt_transition(
+    conn: &mut AsyncPgConnection,
+    source_station_id: &DidCoreId,
+    registration_id: &PushRegistrationId,
+    expected_request_digest: &Hash,
+    outcome: &PushRegistrationHandoffReceiptWrite,
+) -> PersistenceResult<()> {
+    let PushRegistrationHandoffReceiptWrite::Stored(committed) = outcome else {
+        return Ok(());
+    };
+    let receipt_json = serde_json::to_value(
+        committed
+            .receipt
+            .as_ref()
+            .expect("stored receipt transition carries a receipt"),
+    )
+    .map_err(PersistenceError::database)?;
+    let updated = sql_query(
+        "UPDATE push_registration_handoff_intents \
+         SET status = $4, receipt = $5, updated_at = $6 \
+         WHERE source_station_id = $1 AND registration_id = $2 \
+           AND request_digest = $3 AND status = 'awaiting_receipt' AND receipt IS NULL",
+    )
+    .bind::<Text, _>(source_station_id)
+    .bind::<Text, _>(registration_id.as_str())
+    .bind::<Text, _>(expected_request_digest.as_str())
+    .bind::<Text, _>(committed.status.as_str())
+    .bind::<Jsonb, _>(&receipt_json)
+    .bind::<Timestamptz, _>(committed.updated_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if updated != 1 {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: push registration handoff receipt state changed".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -360,36 +402,86 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                 &receipt,
                 now,
             )?;
-            let PushRegistrationHandoffReceiptWrite::Stored(committed) = &outcome else {
-                return Ok(outcome);
-            };
-            let receipt_json = serde_json::to_value(
-                committed
-                    .receipt
-                    .as_ref()
-                    .expect("stored receipt transition carries a receipt"),
+            store_receipt_transition(
+                conn,
+                &source_station_id,
+                &registration_id,
+                &expected_request_digest,
+                &outcome,
             )
-            .map_err(PersistenceError::database)?;
-            let updated = sql_query(
-                "UPDATE push_registration_handoff_intents \
-                 SET status = $4, receipt = $5, updated_at = $6 \
-                 WHERE source_station_id = $1 AND registration_id = $2 \
-                   AND request_digest = $3 AND status = 'awaiting_receipt' AND receipt IS NULL",
-            )
-            .bind::<Text, _>(&source_station_id)
-            .bind::<Text, _>(registration_id.as_str())
-            .bind::<Text, _>(expected_request_digest.as_str())
-            .bind::<Text, _>(committed.status.as_str())
-            .bind::<Jsonb, _>(&receipt_json)
-            .bind::<Timestamptz, _>(committed.updated_at)
-            .execute(conn)
             .await?;
-            if updated != 1 {
+            Ok(outcome)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn commit_verified_active_receipt_and_push_route(
+        &self,
+        source_station_id: &DidCoreId,
+        local_route: &PushRegistrationHandoffRouteLocator,
+        registration_id: &PushRegistrationId,
+        expected_request_digest: &Hash,
+        receipt: &PushRegistrationInstallationReceipt,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
+        registration: &PushRegistrationRecord,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite> {
+        let source_station_id = source_station_id.clone();
+        let local_route = local_route.clone();
+        let registration_id = registration_id.clone();
+        let expected_request_digest = expected_request_digest.clone();
+        let receipt = receipt.clone();
+        let authorization = authorization.clone();
+        let registration = registration.clone();
+        let route_lock_key = local_route_lock_key(&source_station_id, &local_route)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            // Lock order: live device gate, handoff route, handoff intent,
+            // then the local push-device route.
+            crate::ensure_gate_allowed_in_transaction(conn, &authorization).await?;
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(&route_lock_key)
+                .execute(conn)
+                .await?;
+            let record = load_intent(conn, &source_station_id, &registration_id, true)
+                .await?
+                .ok_or_else(|| {
+                    PersistenceError::NotFound(
+                        "push registration handoff desired intent".to_owned(),
+                    )
+                })?;
+            if record.local_route != local_route {
                 return Err(PersistenceError::Conflict(
-                    "cas_conflict: push registration handoff receipt state changed".to_owned(),
+                    "cas_conflict: push handoff intent belongs to another local route".to_owned(),
                 )
                 .into());
             }
+            record.validate_active_local_registration(&authorization, &registration)?;
+            let outcome = apply_verified_push_registration_receipt(
+                &record,
+                &expected_request_digest,
+                &receipt,
+                now,
+            )?;
+            let mode = match &outcome {
+                PushRegistrationHandoffReceiptWrite::Stored(_) => {
+                    PushDeviceRouteWriteMode::AllowReplace
+                }
+                PushRegistrationHandoffReceiptWrite::ExactReplay(_) => {
+                    PushDeviceRouteWriteMode::RequireExact
+                }
+            };
+            write_push_device_route_in_transaction(conn, &authorization, registration, now, mode)
+                .await?;
+            store_receipt_transition(
+                conn,
+                &source_station_id,
+                &registration_id,
+                &expected_request_digest,
+                &outcome,
+            )
+            .await?;
             Ok(outcome)
         })
         .await
@@ -404,9 +496,14 @@ mod tests {
     use arkret_models_integration::PushRegistrationHandoffState;
     use arkret_wire::{AccountId, Audience, DeviceId, DidUrl, PayloadProof};
     use serde_json::json;
+    use soland_storage::{DeviceInventoryStore, DeviceRevocationStore, PushDeviceStore};
     use tokio::sync::Barrier;
 
     use super::*;
+    use crate::{PgDeviceInventoryStore, PgDeviceRevocationStore, PgPushDeviceStore};
+
+    #[path = "../../../../test-support/src/device_authorization_history.rs"]
+    mod device_history_fixture;
 
     fn active_request() -> PushRegistrationHandoffRequestBody {
         active_request_with_id("registration_0123456789abcdef", None)
@@ -434,12 +531,24 @@ mod tests {
         source: &DidCoreId,
         destination: &DidCoreId,
     ) -> PushRegistrationHandoffRouteLocator {
-        PushRegistrationHandoffRouteLocator {
-            account_id: AccountId::new(
+        local_route_for_account(
+            AccountId::new(
                 DidCoreId::new("ak:did_core:web:account.example").unwrap(),
                 source.clone(),
             ),
-            device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap(),
+            DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap(),
+            destination,
+        )
+    }
+
+    fn local_route_for_account(
+        account_id: AccountId,
+        device_id: DeviceId,
+        destination: &DidCoreId,
+    ) -> PushRegistrationHandoffRouteLocator {
+        PushRegistrationHandoffRouteLocator {
+            account_id,
+            device_id,
             push_route_id: "com.example.app".to_owned(),
             destination_gateway_id: destination.clone(),
         }
@@ -447,6 +556,88 @@ mod tests {
 
     fn client_input_digest(byte: char) -> Hash {
         Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
+    }
+
+    fn active_request_for_device(
+        registration_id: &str,
+        device_id: &DeviceId,
+        push_target_id: &str,
+        push_key: &str,
+    ) -> PushRegistrationHandoffRequestBody {
+        serde_json::from_value(json!({
+            "registration_id": registration_id,
+            "push_target_id": push_target_id,
+            "device_id": device_id,
+            "state": "active",
+            "push_key": push_key,
+            "platform": "apns",
+            "app_id": "com.example.app",
+            "visible_notification_opt_in": false
+        }))
+        .unwrap()
+    }
+
+    fn local_registration(
+        account_id: &AccountId,
+        request: &PushRegistrationHandoffRequestBody,
+    ) -> PushRegistrationRecord {
+        let PushRegistrationHandoffRequestBody::Active {
+            registration_id,
+            push_target_id,
+            device_id,
+            push_key,
+            platform,
+            app_id,
+            visible_notification_opt_in,
+            expires_at,
+            ..
+        } = request
+        else {
+            panic!("test registration request must be active")
+        };
+        PushRegistrationRecord {
+            registration_id: arkret_wire::OpaqueLocalId::new(registration_id.as_str()).unwrap(),
+            account_id: account_id.clone(),
+            device_id: device_id.clone(),
+            push_gateway: "https://push.example/".to_owned(),
+            push_key: push_key.clone(),
+            platform: platform.clone(),
+            app_id: app_id.clone(),
+            visible_notification_opt_in: *visible_notification_opt_in,
+            push_route_id: "com.example.app".to_owned(),
+            push_target_id: push_target_id.clone(),
+            salt_epoch_id: "ak.push.salt_epoch.42".to_owned(),
+            expires_at: *expires_at,
+            retained_push_targets: Vec::new(),
+        }
+    }
+
+    #[derive(QueryableByName)]
+    struct StoredPushRoute {
+        #[diesel(sql_type = Jsonb)]
+        payload: Value,
+        #[diesel(sql_type = Timestamptz)]
+        updated_at: chrono::DateTime<chrono::Utc>,
+    }
+
+    async fn stored_push_route(
+        pool: &PgPool,
+        route: &PushRegistrationHandoffRouteLocator,
+    ) -> Option<StoredPushRoute> {
+        let account = serde_json::to_value(&route.account_id).unwrap();
+        let mut conn = pool.get().await.unwrap();
+        sql_query(
+            "SELECT payload, updated_at FROM push_devices \
+             WHERE payload->'account_id'=$1 AND device_id=$2 \
+               AND payload->>'push_route_id'=$3",
+        )
+        .bind::<Jsonb, _>(&account)
+        .bind::<Text, _>(route.device_id.as_str())
+        .bind::<Text, _>(&route.push_route_id)
+        .get_result::<StoredPushRoute>(&mut *conn)
+        .await
+        .optional()
+        .unwrap()
     }
 
     fn receipt_for(
@@ -777,6 +968,264 @@ mod tests {
         assert_eq!(
             retained.status,
             PushRegistrationHandoffIntentStatus::ReceiptVerified
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_receipt_and_local_route_replace_are_one_uow() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+                .bind::<Text, _>(station_id.as_str())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+        for device in source.device_inventory_records() {
+            inventory.seed_test_record(&device).await.unwrap();
+        }
+        let authorization = source
+            .gate_selectors()
+            .into_iter()
+            .find(|selector| selector.device_id == source.founding_device_id.as_str())
+            .unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route_for_account(
+            source.account.clone(),
+            source.founding_device_id.clone(),
+            &destination,
+        );
+        let request = active_request_for_device(
+            "registration_dddddddddddddddd",
+            &source.founding_device_id,
+            "ak:pseudonym:push:lg8aqJ2eJjms1GQpkzloxGn8F802f8RfmfmfsC85eRo",
+            "provider-token",
+        );
+        let registration = local_registration(&source.account, &request);
+        let push_store = PgPushDeviceStore { pool: pool.clone() };
+        let mut predecessor = registration.clone();
+        predecessor.registration_id =
+            arkret_wire::OpaqueLocalId::new("push_registration:predecessor").unwrap();
+        predecessor.push_target_id =
+            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8"
+                .parse()
+                .unwrap();
+        predecessor.salt_epoch_id = "ak.push.salt_epoch.41".to_owned();
+        push_store
+            .register(&authorization, serde_json::to_value(&predecessor).unwrap())
+            .await
+            .unwrap();
+        let before = stored_push_route(&pool, &route).await.unwrap();
+
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        let client_digest = client_input_digest('5');
+        let started_at = chrono::DateTime::parse_from_rfc3339("2026-09-22T12:00:00.123Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        store
+            .ensure_desired_intent(&station_id, &route, &client_digest, &request, started_at)
+            .await
+            .unwrap();
+        let receipt = receipt_for(
+            &request,
+            &station_id,
+            &destination,
+            started_at + chrono::Duration::seconds(1),
+        );
+
+        let stale_digest = client_input_digest('f');
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &stale_digest,
+                    &receipt,
+                    &authorization,
+                    &registration,
+                    started_at + chrono::Duration::seconds(2),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        let after_stale = stored_push_route(&pool, &route).await.unwrap();
+        assert_eq!(after_stale.payload, before.payload);
+        assert_eq!(after_stale.updated_at, before.updated_at);
+
+        let mut wrong_receipt = receipt.clone();
+        wrong_receipt.destination_gateway_id =
+            DidCoreId::new("ak:did_core:web:wrong-gateway.example").unwrap();
+        assert!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &request.request_digest().unwrap(),
+                    &wrong_receipt,
+                    &authorization,
+                    &registration,
+                    started_at + chrono::Duration::seconds(2),
+                )
+                .await
+                .is_err()
+        );
+        let after_wrong_receipt = stored_push_route(&pool, &route).await.unwrap();
+        assert_eq!(after_wrong_receipt.payload, before.payload);
+        assert_eq!(after_wrong_receipt.updated_at, before.updated_at);
+        let mut wrong_local_route = registration.clone();
+        wrong_local_route.push_route_id = "other.app".to_owned();
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    request.registration_id(),
+                    &request.request_digest().unwrap(),
+                    &receipt,
+                    &authorization,
+                    &wrong_local_route,
+                    started_at + chrono::Duration::seconds(2),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        let after_wrong_route = stored_push_route(&pool, &route).await.unwrap();
+        assert_eq!(after_wrong_route.payload, before.payload);
+        assert_eq!(after_wrong_route.updated_at, before.updated_at);
+        assert_eq!(
+            store
+                .get_intent(&station_id, request.registration_id())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PushRegistrationHandoffIntentStatus::AwaitingReceipt
+        );
+
+        let stored = store
+            .commit_verified_active_receipt_and_push_route(
+                &station_id,
+                &route,
+                request.registration_id(),
+                &request.request_digest().unwrap(),
+                &receipt,
+                &authorization,
+                &registration,
+                started_at + chrono::Duration::seconds(3),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            stored,
+            PushRegistrationHandoffReceiptWrite::Stored(_)
+        ));
+        let installed = stored_push_route(&pool, &route).await.unwrap();
+        let installed_registration: PushRegistrationRecord =
+            serde_json::from_value(installed.payload.clone()).unwrap();
+        assert_eq!(
+            installed_registration.registration_id.as_str(),
+            request.registration_id().as_str()
+        );
+        assert_eq!(installed_registration.retained_push_targets.len(), 1);
+        assert_eq!(
+            installed_registration.retained_push_targets[0].push_target_id,
+            predecessor.push_target_id
+        );
+        assert_eq!(
+            store
+                .get_intent(&station_id, request.registration_id())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PushRegistrationHandoffIntentStatus::ReceiptVerified
+        );
+
+        let replay = store
+            .commit_verified_active_receipt_and_push_route(
+                &station_id,
+                &route,
+                request.registration_id(),
+                &request.request_digest().unwrap(),
+                &receipt,
+                &authorization,
+                &registration,
+                started_at + chrono::Duration::seconds(4),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            replay,
+            PushRegistrationHandoffReceiptWrite::ExactReplay(_)
+        ));
+        let after_replay = stored_push_route(&pool, &route).await.unwrap();
+        assert_eq!(after_replay.payload, installed.payload);
+        assert_eq!(after_replay.updated_at, installed.updated_at);
+
+        let successor = active_request_for_device(
+            "registration_eeeeeeeeeeeeeeee",
+            &source.founding_device_id,
+            "ak:pseudonym:push:7EMHE3J_lA1FENBqXW-mmf4Ku3gfVeCu5N73ThBrOEg",
+            "replacement-token",
+        );
+        let successor_registration = local_registration(&source.account, &successor);
+        store
+            .ensure_desired_intent(
+                &station_id,
+                &route,
+                &client_input_digest('6'),
+                &successor,
+                started_at + chrono::Duration::seconds(5),
+            )
+            .await
+            .unwrap();
+        PgDeviceRevocationStore { pool: pool.clone() }
+            .commit_revocation(&soland_storage::DeviceRevocationTransition {
+                selector: authorization.clone(),
+                revoke_ref: authorization.authorization_ref.clone(),
+                committed_at: started_at + chrono::Duration::seconds(6),
+            })
+            .await
+            .unwrap();
+        let successor_receipt = receipt_for(
+            &successor,
+            &station_id,
+            &destination,
+            started_at + chrono::Duration::seconds(7),
+        );
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &station_id,
+                    &route,
+                    successor.registration_id(),
+                    &successor.request_digest().unwrap(),
+                    &successor_receipt,
+                    &authorization,
+                    &successor_registration,
+                    started_at + chrono::Duration::seconds(8),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        let after_revoked_gate = stored_push_route(&pool, &route).await.unwrap();
+        assert_eq!(after_revoked_gate.payload, installed.payload);
+        assert_eq!(after_revoked_gate.updated_at, installed.updated_at);
+        assert_eq!(
+            store
+                .get_intent(&station_id, successor.registration_id())
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PushRegistrationHandoffIntentStatus::AwaitingReceipt
         );
     }
 }

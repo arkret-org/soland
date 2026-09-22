@@ -1,6 +1,6 @@
 use arkret_models_integration::{
     PushRegistrationHandoffRequestBody, PushRegistrationHandoffState, PushRegistrationId,
-    PushRegistrationInstallationReceipt,
+    PushRegistrationInstallationReceipt, PushRegistrationRecord,
 };
 use arkret_wire::{AccountId, DeviceId, DidCoreId, Hash};
 use chrono::{DateTime, Utc};
@@ -183,6 +183,61 @@ impl PushRegistrationHandoffIntentRecord {
         }
     }
 
+    /// Re-check the Station-private route that will become current after a
+    /// caller has verified the Gateway receipt signature. The handoff body is
+    /// still the authority for every provider-route field; callers cannot
+    /// substitute a different local registration after receipt verification.
+    pub fn validate_active_local_registration(
+        &self,
+        authorization: &crate::DeviceRevocationGateSelector,
+        registration: &PushRegistrationRecord,
+    ) -> PersistenceResult<()> {
+        self.validate()?;
+        if registration.account_id != self.local_route.account_id
+            || registration.device_id != self.local_route.device_id
+            || registration.push_route_id != self.local_route.push_route_id
+            || authorization.principal_id != registration.account_id.principal_id
+            || authorization.station_id != registration.account_id.station_id
+            || authorization.device_id != registration.device_id.as_str()
+            || !registration.retained_push_targets.is_empty()
+        {
+            return Err(PersistenceError::Conflict(
+                "push registration differs from its local route or device authorization".to_owned(),
+            ));
+        }
+        let request = self.request()?;
+        let PushRegistrationHandoffRequestBody::Active {
+            registration_id,
+            push_target_id,
+            device_id,
+            push_key,
+            platform,
+            app_id,
+            visible_notification_opt_in,
+            expires_at,
+            ..
+        } = request
+        else {
+            return Err(PersistenceError::Conflict(
+                "revoked push handoff cannot install a local active route".to_owned(),
+            ));
+        };
+        if registration.registration_id.as_str() != registration_id.as_str()
+            || registration.push_target_id != push_target_id
+            || registration.device_id != device_id
+            || registration.push_key != push_key
+            || registration.platform != platform
+            || registration.app_id != app_id
+            || registration.visible_notification_opt_in != visible_notification_opt_in
+            || registration.expires_at != expires_at
+        {
+            return Err(PersistenceError::Conflict(
+                "local push registration differs from the verified Gateway request".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn same_desired_intent(&self, candidate: &Self) -> bool {
         self.source_station_id == candidate.source_station_id
@@ -327,6 +382,22 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         registration_id: &PushRegistrationId,
         expected_request_digest: &Hash,
         receipt: &PushRegistrationInstallationReceipt,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite>;
+
+    /// Atomically commit a receipt whose detached JWS the caller has already
+    /// verified and replace the exact Station-local push route it authorizes.
+    /// The store re-checks all bindings and the live device gate, but does not
+    /// resolve Gateway keys or perform signature verification itself.
+    async fn commit_verified_active_receipt_and_push_route(
+        &self,
+        source_station_id: &DidCoreId,
+        local_route: &PushRegistrationHandoffRouteLocator,
+        registration_id: &PushRegistrationId,
+        expected_request_digest: &Hash,
+        receipt: &PushRegistrationInstallationReceipt,
+        authorization: &crate::DeviceRevocationGateSelector,
+        registration: &PushRegistrationRecord,
         now: DateTime<Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite>;
 }

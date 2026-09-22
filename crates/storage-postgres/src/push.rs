@@ -1,6 +1,7 @@
 use super::{
-    JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PushDeviceStore, RunQueryDsl, Text, Value, async_trait, pg_conn, sql_query,
+    AsyncPgConnection, JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, PushDeviceStore, RunQueryDsl, Text, Timestamptz, Value, async_trait,
+    pg_conn, sql_query,
 };
 use crate::PgTransactionError;
 #[derive(diesel::QueryableByName)]
@@ -13,6 +14,129 @@ struct PushSourceRow {
 pub struct PgPushDeviceStore {
     pub pool: PgPool,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PushDeviceRouteWriteMode {
+    AllowReplace,
+    RequireExact,
+}
+
+/// Lock and write one exact local push route on a caller-owned transaction.
+/// The caller must re-check the device revocation gate before invoking this
+/// helper; keeping that check outside makes the handoff UOW's lock order
+/// explicit rather than silently taking the route lock first.
+pub(crate) async fn write_push_device_route_in_transaction(
+    conn: &mut AsyncPgConnection,
+    authorization: &soland_storage::DeviceRevocationGateSelector,
+    mut registration: arkret_models_integration::PushRegistrationRecord,
+    at: chrono::DateTime<chrono::Utc>,
+    mode: PushDeviceRouteWriteMode,
+) -> PersistenceResult<()> {
+    registration
+        .account_id
+        .validate()
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+    if registration.push_gateway.is_empty() || registration.push_route_id.is_empty() {
+        return Err(PersistenceError::Internal(
+            "push registration requires gateway and route".to_owned(),
+        ));
+    }
+    if authorization.principal_id != registration.account_id.principal_id
+        || authorization.station_id != registration.account_id.station_id
+        || authorization.device_id != registration.device_id.as_str()
+    {
+        return Err(PersistenceError::Conflict(
+            "push registration differs from its verified device authorization".into(),
+        ));
+    }
+    let binding = serde_json::to_value(authorization).map_err(PersistenceError::database)?;
+    let account =
+        serde_json::to_value(&registration.account_id).map_err(PersistenceError::database)?;
+    // Serialize replacement and unregistration for this exact account/device.
+    let lock_key = format!(
+        "push:{}:{}",
+        registration.account_id.principal_id, registration.device_id
+    );
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(&lock_key)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let previous = sql_query(
+        "SELECT payload,device_authorization FROM push_devices \
+         WHERE payload->'account_id' = $1 AND device_id = $2 \
+           AND payload->>'push_route_id' = $3 FOR UPDATE",
+    )
+    .bind::<Jsonb, _>(&account)
+    .bind::<Text, _>(registration.device_id.as_str())
+    .bind::<Text, _>(&registration.push_route_id)
+    .get_result::<PushSourceRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    registration.retained_push_targets.clear();
+    if let Some(previous) = &previous {
+        let old: arkret_models_integration::PushRegistrationRecord =
+            serde_json::from_value(previous.payload.clone()).map_err(PersistenceError::database)?;
+        // Aliases survive salt rotation only; route/provider replacement never
+        // grants an old target access to a newly registered delivery token.
+        if previous.device_authorization == binding
+            && old.push_key == registration.push_key
+            && old.push_gateway == registration.push_gateway
+        {
+            registration.retained_push_targets = old
+                .retained_push_targets
+                .into_iter()
+                .filter(|entry| at < entry.retained_until)
+                .collect();
+            if old.push_target_id != registration.push_target_id {
+                registration.retained_push_targets.push(
+                    arkret_models_integration::RetainedPushTarget {
+                        push_target_id: old.push_target_id,
+                        retained_until: at + chrono::Duration::hours(24),
+                    },
+                );
+            }
+        }
+    }
+    let payload = serde_json::to_value(&registration).map_err(PersistenceError::database)?;
+    if previous.as_ref().is_some_and(|previous| {
+        previous.payload == payload && previous.device_authorization == binding
+    }) {
+        return Ok(());
+    }
+    if mode == PushDeviceRouteWriteMode::RequireExact {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: verified push receipt replay has no exact local route".to_owned(),
+        ));
+    }
+    sql_query(
+        "INSERT INTO push_devices \
+         (id, actor_id, device_id, push_gateway, push_key, platform, app_id, payload, \
+          device_authorization, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
+         ON CONFLICT ((payload->'account_id'), device_id, (payload->>'push_route_id')) \
+         DO UPDATE SET id=EXCLUDED.id, actor_id=EXCLUDED.actor_id, \
+           push_gateway=EXCLUDED.push_gateway, push_key=EXCLUDED.push_key, \
+           platform=EXCLUDED.platform, app_id=EXCLUDED.app_id, payload=EXCLUDED.payload, \
+           device_authorization=EXCLUDED.device_authorization, updated_at=EXCLUDED.updated_at",
+    )
+    .bind::<Text, _>(registration.registration_id.as_str())
+    .bind::<Text, _>(registration.account_id.principal_id.as_str())
+    .bind::<Text, _>(registration.device_id.as_str())
+    .bind::<Text, _>(&registration.push_gateway)
+    .bind::<Text, _>(registration.push_key.as_str())
+    .bind::<Nullable<Text>, _>(&registration.platform)
+    .bind::<Nullable<Text>, _>(&registration.app_id)
+    .bind::<Jsonb, _>(&payload)
+    .bind::<Jsonb, _>(&binding)
+    .bind::<Timestamptz, _>(at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
 #[async_trait]
 impl PushDeviceStore for PgPushDeviceStore {
     async fn register(
@@ -21,72 +145,30 @@ impl PushDeviceStore for PgPushDeviceStore {
         device: Value,
     ) -> PersistenceResult<()> {
         use diesel_async::AsyncConnection;
-        let mut registration: arkret_models_integration::PushRegistrationRecord =
+        let registration: arkret_models_integration::PushRegistrationRecord =
             serde_json::from_value(device).map_err(|error| {
                 PersistenceError::Internal(format!(
                     "invalid authenticated push registration: {error}"
                 ))
             })?;
-        registration
-            .account_id
-            .validate()
-            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-        if registration.push_gateway.is_empty() || registration.push_route_id.is_empty() {
-            return Err(PersistenceError::Internal(
-                "push registration requires gateway and route".to_owned(),
-            ));
-        }
-        if authorization.principal_id != registration.account_id.principal_id
-            || authorization.station_id != registration.account_id.station_id
-            || authorization.device_id != registration.device_id.as_str()
-        {
-            return Err(PersistenceError::Conflict(
-                "push registration differs from its verified device authorization".into(),
-            ));
-        }
-        let binding = serde_json::to_value(authorization).map_err(PersistenceError::database)?;
-        let account =
-            serde_json::to_value(&registration.account_id).map_err(PersistenceError::database)?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             crate::ensure_gate_allowed_in_transaction(conn, authorization).await?;
-            // Serialize replacement and unregistration for this exact account/device.
-            let lock_key = format!("push:{}:{}", registration.account_id.principal_id, registration.device_id);
-            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                .bind::<Text,_>(&lock_key).execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            let previous = sql_query("SELECT payload,device_authorization FROM push_devices WHERE payload->'account_id' = $1 AND device_id = $2 AND payload->>'push_route_id' = $3 FOR UPDATE")
-                .bind::<Jsonb,_>(&account).bind::<Text,_>(registration.device_id.as_str()).bind::<Text,_>(&registration.push_route_id)
-                .get_result::<PushSourceRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
             let at = chrono::Utc::now();
-            registration.retained_push_targets.clear();
-            if let Some(previous) = previous {
-                let old: arkret_models_integration::PushRegistrationRecord = serde_json::from_value(previous.payload).map_err(PersistenceError::database)?;
-                // Aliases survive salt rotation only; route/provider replacement never
-                // grants an old target access to a newly registered delivery token.
-                if previous.device_authorization == binding && old.push_key == registration.push_key && old.push_gateway == registration.push_gateway {
-                    registration.retained_push_targets = old.retained_push_targets.into_iter().filter(|entry| at < entry.retained_until).collect();
-                    if old.push_target_id != registration.push_target_id {
-                        registration.retained_push_targets.push(arkret_models_integration::RetainedPushTarget {
-                            push_target_id: old.push_target_id,
-                            retained_until: at + chrono::Duration::hours(24),
-                        });
-                    }
-                }
-            }
-            let payload = serde_json::to_value(&registration).map_err(PersistenceError::database)?;
-            sql_query("INSERT INTO push_devices (id, actor_id, device_id, push_gateway, push_key, platform, app_id, payload, device_authorization, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW()) ON CONFLICT ((payload->'account_id'), device_id, (payload->>'push_route_id')) DO UPDATE SET id=EXCLUDED.id, actor_id=EXCLUDED.actor_id, push_gateway=EXCLUDED.push_gateway, push_key=EXCLUDED.push_key, platform=EXCLUDED.platform, app_id=EXCLUDED.app_id, payload=EXCLUDED.payload, device_authorization=EXCLUDED.device_authorization, updated_at=NOW()")
-                .bind::<Text,_>(registration.registration_id.as_str())
-                .bind::<Text,_>(registration.account_id.principal_id.as_str())
-                .bind::<Text,_>(registration.device_id.as_str())
-                .bind::<Text,_>(&registration.push_gateway)
-                .bind::<Text,_>(registration.push_key.as_str())
-                .bind::<Nullable<Text>,_>(&registration.platform)
-                .bind::<Nullable<Text>,_>(&registration.app_id)
-                .bind::<Jsonb,_>(&payload).bind::<Jsonb,_>(&binding).execute(&mut *conn).await.map_err(PersistenceError::database)?;
-            Ok(())
-        }).await.map_err(PgTransactionError::into_persistence)
+            write_push_device_route_in_transaction(
+                conn,
+                authorization,
+                registration,
+                at,
+                PushDeviceRouteWriteMode::AllowReplace,
+            )
+            .await
+            .map_err(PgTransactionError::from)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn unregister(
