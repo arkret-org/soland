@@ -320,7 +320,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                     let final_cursor = final_snapshot.cursor.clone();
                     if delta_is_empty(&final_snapshot) {
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(
-                            &account_frontier_frame(final_cursor.clone()),
+                            &account_checkpoint_frame(final_cursor.clone()),
                         ));
                     } else {
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(&final_snapshot));
@@ -414,7 +414,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     res.stream(body_stream.boxed());
 }
 
-pub(crate) fn account_frontier_frame(
+pub(crate) fn account_checkpoint_frame(
     cursor: Option<String>,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
@@ -422,7 +422,7 @@ pub(crate) fn account_frontier_frame(
         realm_list_changes: None,
         realm_invalidations: None,
         baseline: None,
-        kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Frontier,
+        kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Checkpoint,
         cursor,
         realms: None,
         to_device: None,

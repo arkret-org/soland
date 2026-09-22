@@ -1547,7 +1547,7 @@ async fn run_account_channel(
         }
         if delta_is_empty(&snapshot) {
             let payload = WebSocketChannelControlPayload::Account(Box::new(
-                account_frontier_frame(snapshot.cursor.clone()),
+                account_checkpoint_frame(snapshot.cursor.clone()),
             ));
             if !emit(
                 &sender,
