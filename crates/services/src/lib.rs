@@ -22,6 +22,7 @@ pub mod persistence_identity;
 pub mod persistence_operations;
 pub mod projection;
 pub mod protocol_artifacts;
+pub mod push_handoff;
 pub mod runtime_guards;
 pub mod service_route;
 pub mod sync;

@@ -43,7 +43,7 @@ pub(crate) fn push_target_privacy_derivation_claim(
     }
 }
 
-fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
+pub(super) fn push_target_salt_epoch_id_at(now: chrono::DateTime<chrono::Utc>) -> String {
     let epoch = now
         .timestamp()
         .div_euclid(PUSH_TARGET_SALT_ROTATION_SECONDS);
@@ -96,17 +96,6 @@ fn derive_push_target_id(
         .map_err(|error| AppError::internal(format!("derived push target is invalid: {error}")))
 }
 
-/// Gateway-local registration handle for one accepted push registration.
-///
-/// `push-operations.schema.json#/$defs/registration_id` is an
-/// `opaque_correlation` carrier, so it MUST NOT borrow the `ak:` typed-ID
-/// lexical space the push target pseudonym owns. It is spelled from the same
-/// pairwise tag, so re-registering an unchanged route stays idempotent without
-/// minting a second correlation key.
-fn push_registration_id(push_target_tag: &str) -> Result<arkret_wire::OpaqueLocalId, AppError> {
-    arkret_wire::OpaqueLocalId::new(format!("push_registration:{push_target_tag}"))
-        .map_err(|error| AppError::internal(format!("push registration id is invalid: {error}")))
-}
 #[salvo::oapi::endpoint(operation_id = "ak.edge.push.command.register_device", tags("interop"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.register_device.v1"))]
 pub(super) async fn push_register(
@@ -148,7 +137,8 @@ pub(super) async fn push_register(
         .await
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
     let push_route_id = push_route_id_for_registration(&body);
-    let salt_epoch_id = push_target_salt_epoch_id_at(now());
+    let prepared_at = now();
+    let salt_epoch_id = push_target_salt_epoch_id_at(prepared_at);
     let push_target_tag = derive_push_target_tag(
         state.deliveries().push_target_hmac_key(),
         &account_id,
@@ -161,42 +151,19 @@ pub(super) async fn push_register(
             .map_err(|error| {
                 AppError::internal(format!("derived push target is invalid: {error}"))
             })?;
-    let registration_id = push_registration_id(&push_target_tag)?;
-    let registration = arkret_models_integration::PushRegistrationRecord {
-        registration_id: registration_id.clone(),
-        account_id,
-        device_id: body.device_id,
-        push_gateway: format!(
-            "{}/",
-            derive_push_gateway_service_base_url(&body.push_gateway_url)
-                .ok_or_else(|| AppError::param_invalid("invalid push gateway URL"))?
-        ),
-        push_key: body.push_key,
-        platform: body.platform,
-        app_id: body.app_id,
-        visible_notification_opt_in: body.visible_notification_opt_in,
-        push_route_id,
-        push_target_id: push_target_id.clone(),
-        salt_epoch_id,
-        expires_at: None,
-        retained_push_targets: Vec::new(),
-    };
-    state
-        .deliveries()
-        .register_push_device(
-            &authorization,
-            serde_json::to_value(registration)
-                .map_err(|error| AppError::internal(error.to_string()))?,
-        )
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(
-        arkret_models_integration::models_push::PushRegisterDeviceOutcome {
+    let outcome = super::push_handoff::register(
+        state,
+        super::push_handoff::PublicPushRegistration {
+            account_id,
+            authorization: &authorization,
+            body,
+            push_route_id,
             push_target_id,
-            registration_id: Some(registration_id),
-            expires_at: None,
+            prepared_at,
         },
     )
+    .await?;
+    json_ok(outcome)
 }
 
 /// Map the `(status, code, message)` triplet produced by
@@ -283,33 +250,6 @@ pub(super) async fn push_unregister(
     .await;
     res.status_code(StatusCode::NO_CONTENT);
     Ok(())
-}
-
-pub(super) fn derive_push_gateway_service_base_url(push_gateway_url: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(push_gateway_url).ok()?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host_str().is_none()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-    {
-        return None;
-    }
-    let mut value = parsed.as_str().trim_end_matches('/').to_owned();
-
-    for suffix in [
-        "/_arkret/describe",
-        "/_arkret/edge/push/notify",
-        "/_arkret/edge/push",
-    ] {
-        if let Some(prefix) = value.strip_suffix(suffix) {
-            value = prefix.trim_end_matches('/').to_owned();
-            break;
-        }
-    }
-
-    if value.is_empty() { None } else { Some(value) }
 }
 
 #[cfg(test)]

@@ -328,6 +328,67 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn push_registration_handoff_for_local_route(
+        &self,
+        source_station_id: &arkret_wire::DidCoreId,
+        local_route: &soland_storage::PushRegistrationHandoffRouteLocator,
+    ) -> crate::ServiceResult<Option<soland_storage::PushRegistrationHandoffIntentRecord>> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .lookup_local_route_intent(source_station_id, local_route)
+            .await?)
+    }
+
+    pub async fn ensure_push_registration_handoff_intent(
+        &self,
+        source_station_id: &arkret_wire::DidCoreId,
+        local_route: &soland_storage::PushRegistrationHandoffRouteLocator,
+        client_input_digest: &arkret_wire::Hash,
+        request: &arkret::PushRegistrationHandoffRequestBody,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::PushRegistrationHandoffIntentWrite> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .ensure_desired_intent(
+                source_station_id,
+                local_route,
+                client_input_digest,
+                request,
+                now,
+            )
+            .await?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn commit_verified_push_registration_handoff(
+        &self,
+        source_station_id: &arkret_wire::DidCoreId,
+        local_route: &soland_storage::PushRegistrationHandoffRouteLocator,
+        registration_id: &arkret::PushRegistrationId,
+        expected_request_digest: &arkret_wire::Hash,
+        receipt: &arkret::PushRegistrationInstallationReceipt,
+        authorization: &soland_storage::DeviceRevocationGateSelector,
+        registration: &arkret::PushRegistrationRecord,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::PushRegistrationHandoffReceiptWrite> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .commit_verified_active_receipt_and_push_route(
+                source_station_id,
+                local_route,
+                registration_id,
+                expected_request_digest,
+                receipt,
+                authorization,
+                registration,
+                now,
+            )
+            .await?)
+    }
+
     pub async fn device_revocation_targets(
         &self,
         selector: &soland_storage::DeviceRevocationGateSelector,

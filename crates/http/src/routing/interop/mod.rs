@@ -6,6 +6,7 @@ mod mimi;
 pub(crate) mod moderation;
 pub(crate) mod participant_binding;
 mod push;
+mod push_handoff;
 pub(crate) mod webrtc;
 
 pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
