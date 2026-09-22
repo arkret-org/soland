@@ -17,8 +17,11 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     // Its genesis and registered follow-ups use initial facets, while actual
     // archive/freeze cells are always enforced. Batch validation still owns
     // the complete founding shape and authority checks.
-    let staged_creation = (kind == arkret_wire::EventKind::RealmCreate
-        || arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&kind))
+    let is_registered_bootstrap_kind = arkret_schema::REALM_BOOTSTRAP_PROFILES
+        .iter()
+        .flat_map(|profile| profile.ordered_slots)
+        .any(|slot| slot.event_kind == kind.as_str());
+    let staged_creation = is_registered_bootstrap_kind
         && operations.iter().any(|candidate| {
             kinds::canonical_kind_for_operation(candidate)
                 == Some(arkret_wire::EventKind::RealmCreate)
