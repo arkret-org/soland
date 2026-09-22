@@ -761,8 +761,7 @@ pub(crate) fn signed_recovery_policy(
 pub(crate) fn sign_recovery_policy_payload(payload: &mut Value, signing: &SigningKey) {
     let typed: arkret_models_crypto::RecoveryPolicy =
         serde_json::from_value(payload.clone()).expect("valid recovery policy fixture");
-    let transcript_bytes = typed
-        .signature_transcript_bytes()
+    let transcript_bytes = arkret_models_crypto::recovery_policy_signature_transcript_bytes(&typed)
         .expect("canonical recovery policy transcript");
     let signature = signing.sign(&transcript_bytes);
     payload["auth_data"]["signature"] =

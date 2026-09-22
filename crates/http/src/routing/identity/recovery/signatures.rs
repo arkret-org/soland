@@ -110,8 +110,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")
     })?;
-    let transcript_bytes = typed
-        .signature_transcript_bytes()
+    let transcript_bytes = arkret_models_crypto::recovery_policy_signature_transcript_bytes(&typed)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 
     let signature_b64 = auth_data
@@ -282,8 +281,7 @@ pub(super) async fn verify_recovery_auth_signature(
         AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")
     })?;
-    let transcript_bytes = typed
-        .signature_transcript_bytes()
+    let transcript_bytes = arkret_models_crypto::recovery_policy_signature_transcript_bytes(&typed)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
     let signature_b64 = auth_data
         .get("signature")
