@@ -2,7 +2,8 @@
 use arkret_models_collaboration::message_authoring::{
     MessageAuthoringContent, MessagePrepareOutcome, MessagePrepareRequestBody,
 };
-use arkret_wire::{ActorId, AuthContext, AuthorizationRef, ScopeRef};
+use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
+use arkret_wire::{ActorId, Base64UrlString, EncryptedPayloadScheme, Event, Hash, ScopeRef};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -16,6 +17,29 @@ pub(super) fn router() -> Router {
 }
 fn invalid(error: impl std::fmt::Display) -> AppError {
     crate::app_error!(SchemaViolation, error.to_string())
+}
+
+fn prepared_event_draft(
+    event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<PreparedEventDraft, AppError> {
+    let digest_payload = event
+        .digest_payload()
+        .map_err(|error| AppError::internal(format!("message Event draft: {error}")))?;
+    let unsigned_bytes = arkret_canonical::canonical_json_bytes(&digest_payload)
+        .map_err(|error| AppError::internal(format!("message Event draft bytes: {error}")))?;
+    Ok(PreparedEventDraft {
+        unsigned_event_bytes: Base64UrlString::new(arkret_canonical::base64url_encode(
+            &unsigned_bytes,
+        ))
+        .map_err(|error| AppError::internal(format!("message draft encode: {error}")))?,
+        event_digest: Hash::new(
+            event
+                .event_digest_with_digest_suite(digest_suite)
+                .map_err(|error| AppError::internal(format!("message Event digest: {error}")))?,
+        )
+        .map_err(|error| AppError::internal(format!("message Event digest invalid: {error}")))?,
+    })
 }
 
 async fn device_active(
@@ -37,32 +61,53 @@ async fn validate_encryption_context(
     scope: &ScopeRef,
     device: &str,
 ) -> Result<(), AppError> {
-    let MessageAuthoringContent::Mls {
-        encrypted_content,
-        encryption_context: frozen,
-        ..
-    } = &request.intent.content
-    else {
-        return Ok(());
-    };
-    if &frozen.effective_scope != scope || frozen.sender_domain != device {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "message encryption scope or sender does not match target and authenticated device",
-        ));
-    }
     let group = scope.canonical_mls_group_id().map_err(invalid)?;
     let current = state
         .mls_commits()
         .commit(scope, &group)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            crate::app_error!(
-                FrontierUnavailable,
-                "accepted MLS group state is unavailable",
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let MessageAuthoringContent::Mls {
+        encrypted_content,
+        encrypted_metadata,
+        encryption_context: frozen,
+    } = &request.intent.content
+    else {
+        if current.is_some() {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "plaintext is not allowed after MLS activation",
             )
-        })?;
+            .with_reason_code(arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED));
+        }
+        return Ok(());
+    };
+    encrypted_content.validate().map_err(invalid)?;
+    if let Some(metadata) = encrypted_metadata {
+        metadata.validate().map_err(invalid)?;
+        if metadata.encryption_context != encrypted_content.encryption_context {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "message content and metadata use different encryption contexts",
+            ));
+        }
+    }
+    if &frozen.effective_scope != scope
+        || frozen.sender_domain != device
+        || frozen.scheme != EncryptedPayloadScheme::MlsRfc9420
+        || encrypted_content.encryption_context.counter().is_some()
+    {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "message encryption scope, scheme, or sender does not match the authenticated target",
+        ));
+    }
+    let current = current.ok_or_else(|| {
+        crate::app_error!(
+            RevisionUnavailable,
+            "accepted MLS group state is unavailable",
+        )
+    })?;
     let current_ref = current
         .accepted_commit_ref
         .as_deref()
@@ -74,7 +119,6 @@ async fn validate_encryption_context(
                 .encryption_context
                 .group_state_ref()
                 .as_str()
-        || current.governance_binding.content_scheme().as_str() != frozen.scheme.as_str()
         || current.governance_binding.effective_scope() != scope
         || state
             .projections()
@@ -86,15 +130,6 @@ async fn validate_encryption_context(
                     && removal.circle_id.as_deref() == scope.circle_id().map(|id| id.as_str())
             })
     {
-        // These two failures ask the client for opposite things, so they must
-        // not share a code. `frontier_unavailable` above means "the accepted
-        // group state is not readable right now" and the correct client action
-        // is to retry the identical request. Here the group state IS readable
-        // and has moved past the context the client froze: the ciphertext can
-        // never become acceptable, and the client must re-encrypt against the
-        // current epoch. That is the registered `mls_governance_binding_stale`
-        // precondition. Clients refuse to branch on detail text, so returning
-        // `frontier_unavailable` here left them retrying forever.
         return Err(crate::app_error!(
             FailedPrecondition,
             "frozen message encryption context is no longer applicable",
@@ -118,19 +153,29 @@ async fn prepare(
         state, &session,
     )
     .await?;
-    let canonical_request = req.payload().await.map_err(invalid)?.to_vec();
     let body = body.into_inner();
     body.validate().map_err(invalid)?;
     if body.account_id != account || body.account_id.station_id.as_str() != state.service_id() {
         return Err(AppError::not_found("message preparation not found"));
     }
     let observed_at = crate::wire::now();
-    body.validate_time(observed_at).map_err(|_| {
-        crate::app_error!(
+    let expires_at = body
+        .created_at
+        .checked_add_signed(chrono::Duration::seconds(300))
+        .ok_or_else(|| {
+            crate::app_error!(
+                AuthoringRequestExpired,
+                "message preparation timestamp overflows expiry",
+            )
+        })?;
+    if body.created_at > observed_at || expires_at <= observed_at {
+        return Err(crate::app_error!(
             AuthoringRequestExpired,
             "message preparation has expired or has a future creation time",
-        )
-    })?;
+        ));
+    }
+    let request_digest = body.canonical_request_digest().map_err(invalid)?;
+    let request_hash = request_digest.as_str().to_owned();
     let generation =
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
@@ -144,9 +189,8 @@ async fn prepare(
     let operation_id = "ak.self.messages.command.prepare.v1";
     let key = format!(
         "{}:{}:{}",
-        session.device_id, generation.target_device_generation_ref, body.request_id
+        session.device_id, generation.authorization_ref.event_id, body.request_id
     );
-    let request_hash = arkret_canonical::sha256_digest(&canonical_request);
     if let Some(record) = state
         .jobs()
         .scoped_idempotency_record(&actor, operation_id, &key)
@@ -167,9 +211,7 @@ async fn prepare(
         }
         let result: MessagePrepareOutcome =
             serde_json::from_value(record.response_body).map_err(invalid)?;
-        result
-            .validate_for_canonical_request(&canonical_request)
-            .map_err(invalid)?;
+        result.validate_against_request(&body).map_err(invalid)?;
         return json_ok(result);
     }
     let scope = {
@@ -191,121 +233,24 @@ async fn prepare(
         }
     };
     validate_encryption_context(state, &body, &scope, &session.device_id).await?;
-    let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
-        state,
-        body.realm_id.clone(),
-        actor.clone(),
-        crate::routing::events::event_log::VerifiedActorPredecessors::from_verified(&[]),
-    )
-    .await?;
-    let mut leaves = state
+    let digest_suite = state
         .projections()
-        .realm_seal_basis_leaves(&body.realm_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    leaves.sort();
-    leaves.dedup();
-    let [authority_ref] = leaves.as_slice() else {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "message preparation requires one accepted Realm authority head",
-        ));
-    };
-    arkret_wire::SealBasis {
-        leaves: leaves.clone(),
-    }
-    .validate_protocol_bounds()
-    .map_err(|_| {
-        crate::app_error!(
-            FrontierUnavailable,
-            "accepted authorization Seal is unavailable",
+        .realm_digest_suite(body.realm_id.as_str());
+    let authored =
+        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
+            scope,
+            actor.clone(),
+            body.intent.payload(),
         )
-    })?;
-    let auth = AuthContext {
-        authority_refs: vec![authority_ref.clone()],
-    };
-    let direct = state
-        .projections()
-        .snapshot()
-        .realm_is_direct_conversation(body.realm_id.as_str());
-    let direct_binding = if direct {
-        Some(
-            arkret_wire::EventId::new(
-                state
-                    .contacts()
-                    .settled_direct_binding_for_realm(body.realm_id.as_str())
-                    .ok_or_else(|| {
-                        crate::app_error!(
-                            FrontierUnavailable,
-                            "settled Direct Conversation binding unavailable",
-                        )
-                    })?
-                    .binding_event_ref,
-            )
-            .map_err(invalid)?,
-        )
-    } else {
-        None
-    };
-    let authorities = if direct {
-        vec![Some(
-            arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_PARTICIPANT_V1,
-        )]
-    } else {
-        vec![Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL), None]
-    };
-    let mut outcome = None;
-    let mut failure = None;
-    let suite = state
-        .projections()
-        .predecessor_digest_suite(&body.realm_id, authority_ref)
-        .await
-        .map_err(|e| crate::app_error!(FrontierUnavailable, e.to_string()))?;
-    for authority in &authorities {
-        let draft = MessagePrepareOutcome::prepare(
-            &body,
-            frontier.clone(),
-            scope.clone(),
-            auth.clone(),
-            authority
-                .map(AuthorizationRef::new)
-                .transpose()
-                .map_err(invalid)?,
-            direct_binding.clone(),
-            authority_ref.clone(),
-            suite,
-            observed_at,
-        )
+        .and_then(|draft| draft.author_with_digest_suite(body.created_at, digest_suite))
         .map_err(invalid)?;
-        let authored = draft.validate_for_request(&body).map_err(invalid)?;
-        match crate::routing::events::event_log::validate_message_authoring_candidate(
-            state,
-            authored.event(),
-            suite,
-        )
-        .await
-        {
-            Ok(()) => {
-                outcome = Some(draft);
-                break;
-            }
-            Err(error) => {
-                failure = Some(error);
-            }
-        }
-    }
-    let mut outcome = outcome.ok_or_else(|| {
-        failure.unwrap_or_else(|| {
-            crate::app_error!(
-                FrontierUnavailable,
-                "accepted message authorization unavailable",
-            )
-        })
-    })?;
-    outcome.request_digest = arkret_wire::Hash::new(request_hash.clone()).map_err(invalid)?;
-    outcome
-        .validate_for_canonical_request(&canonical_request)
-        .map_err(invalid)?;
+    let outcome = MessagePrepareOutcome {
+        request_digest,
+        draft: prepared_event_draft(authored.event(), digest_suite)?,
+        observed_at,
+        expires_at,
+    };
+    outcome.validate_against_request(&body).map_err(invalid)?;
     device_active(state, &generation).await?;
     state
         .jobs()
@@ -337,9 +282,7 @@ async fn prepare(
     }
     let result: MessagePrepareOutcome =
         serde_json::from_value(landed.response_body).map_err(invalid)?;
-    result
-        .validate_for_canonical_request(&canonical_request)
-        .map_err(invalid)?;
+    result.validate_against_request(&body).map_err(invalid)?;
     device_active(state, &generation).await?;
     json_ok(result)
 }
