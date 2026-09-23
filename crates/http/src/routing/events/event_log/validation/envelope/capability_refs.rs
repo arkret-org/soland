@@ -253,8 +253,8 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
         {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
-                arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM,
-                format!("applet authorization_ref {authorization_ref} was revoked upstream"),
+                "capability_denied",
+                "capability authority is unavailable",
             ));
         }
         if stored.revoked || !effective_by_id.contains_key(authorization_ref) {
@@ -307,8 +307,8 @@ pub(in crate::routing::events::event_log) async fn validate_ordinary_event_capab
         if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
-                arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM,
-                format!("ordinary Event authorized_by grant {grant_id} was revoked upstream"),
+                "capability_denied",
+                "capability authority is unavailable",
             ));
         }
         if stored.revoked {

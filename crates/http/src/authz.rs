@@ -300,7 +300,7 @@ impl SolandAuthzEngine {
         if has_revoked_upstream_grant {
             return AuthzResult {
                 allowed: false,
-                reason: arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
+                reason: "capability_denied".to_owned(),
                 reason_detail: None,
                 grants: Vec::new(),
             };
@@ -1112,10 +1112,7 @@ mod tests {
             &[],
         );
         assert!(!result.allowed);
-        assert_eq!(
-            result.reason,
-            arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM
-        );
+        assert_eq!(result.reason, "capability_denied");
         assert!(
             engine
                 .get_grant(&child.grant_id)

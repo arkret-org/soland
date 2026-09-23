@@ -2068,8 +2068,8 @@ async fn ordinary_event_capability_ref_reports_upstream_revoked_authority() {
     .await
     .expect_err("child capability_ref with revoked parent must reject");
 
-    assert_eq!(err.code, arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM);
-    assert!(err.message.contains("revoked upstream"));
+    assert_eq!(err.code, "capability_denied");
+    assert_eq!(err.message, "capability authority is unavailable");
 }
 
 #[tokio::test]
