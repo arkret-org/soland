@@ -149,7 +149,9 @@ impl Default for DeviceHistoryFixtureOptions {
         }
     }
 }
-fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
+/// Refresh the content-bound identity of `event` and attach the producer's
+/// detached JWS proof made by `seed` under `method`.
+pub fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
     event.producer_proof = None;
     event
         .refresh_content_bound_identity_with_digest_suite(DigestSuite::Sha256)
