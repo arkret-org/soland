@@ -226,7 +226,7 @@ impl SyncCursorStore for PgSyncCursorStore {
                 .scan_stream(&arkret_wire::StreamScanRequest {
                     realm_id: request.realm_id.clone(),
                     stream_ref: head.stream_ref.clone(),
-                    after_position: after,
+                    direction: arkret_wire::StreamScanDirection::After(after),
                     limit: u16::try_from(remaining).unwrap_or(1000),
                 })
                 .await?;

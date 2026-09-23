@@ -864,24 +864,76 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<arkret_wire::StreamScanOutcome> {
         request.validate().map_err(invalid)?;
         let key = stream_key(&request.stream_ref)?;
-        let after = request
-            .after_position
-            .map(|position| to_i64(position, "stream cursor"))
-            .transpose()?
-            .unwrap_or(-1);
         let limit = i64::from(request.limit) + 1;
         let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query(
-            "SELECT c.commit_json, e.envelope FROM realm_commits c \
-             JOIN canonical_events e ON e.pk = c.event_pk \
-             WHERE c.stream_key = $1 AND c.stream_position > $2 \
-             ORDER BY c.stream_position ASC LIMIT $3",
+        let floor = sql_query(
+            "SELECT commit_json FROM realm_commits WHERE stream_key = $1 \
+             ORDER BY stream_position ASC LIMIT 1",
         )
-        .bind::<Text, _>(key)
-        .bind::<BigInt, _>(after)
-        .bind::<BigInt, _>(limit)
-        .load::<CommitStreamRow>(&mut *conn)
+        .bind::<Text, _>(&key)
+        .get_result::<CommitRow>(&mut *conn)
         .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        let readable_floor = floor
+            .map(|row| {
+                let commit: arkret_wire::RealmCommit =
+                    decode_json(row.commit_json, "first RealmCommit")?;
+                if commit.stream_position != 0 {
+                    return Err(invalid("stored stream has no genesis RealmCommit"));
+                }
+                Ok(arkret_wire::ReadableFloor {
+                    oldest_position: 0,
+                    floor_commit_id: commit.commit_id,
+                    floor_reason: arkret_wire::ReadableFloorReason::StreamStart,
+                })
+            })
+            .transpose()?;
+        let rows = match request.direction {
+            arkret_wire::StreamScanDirection::After(after) => {
+                let after = after
+                    .map(|position| to_i64(position, "stream cursor"))
+                    .transpose()?
+                    .unwrap_or(-1);
+                sql_query(
+                    "SELECT c.commit_json, e.envelope FROM realm_commits c \
+                     JOIN canonical_events e ON e.pk = c.event_pk \
+                     WHERE c.stream_key = $1 AND c.stream_position > $2 \
+                     ORDER BY c.stream_position ASC LIMIT $3",
+                )
+                .bind::<Text, _>(&key)
+                .bind::<BigInt, _>(after)
+                .bind::<BigInt, _>(limit)
+                .load::<CommitStreamRow>(&mut *conn)
+                .await
+            }
+            arkret_wire::StreamScanDirection::Before(Some(before)) => {
+                let before = to_i64(before, "stream cursor")?;
+                sql_query(
+                    "SELECT c.commit_json, e.envelope FROM realm_commits c \
+                     JOIN canonical_events e ON e.pk = c.event_pk \
+                     WHERE c.stream_key = $1 AND c.stream_position < $2 \
+                     ORDER BY c.stream_position DESC LIMIT $3",
+                )
+                .bind::<Text, _>(&key)
+                .bind::<BigInt, _>(before)
+                .bind::<BigInt, _>(limit)
+                .load::<CommitStreamRow>(&mut *conn)
+                .await
+            }
+            arkret_wire::StreamScanDirection::Before(None) => {
+                sql_query(
+                    "SELECT c.commit_json, e.envelope FROM realm_commits c \
+                     JOIN canonical_events e ON e.pk = c.event_pk \
+                     WHERE c.stream_key = $1 \
+                     ORDER BY c.stream_position DESC LIMIT $2",
+                )
+                .bind::<Text, _>(&key)
+                .bind::<BigInt, _>(limit)
+                .load::<CommitStreamRow>(&mut *conn)
+                .await
+            }
+        }
         .map_err(PersistenceError::database)?;
         let truncated = rows.len() > usize::from(request.limit);
         let committed_events = rows
@@ -898,6 +950,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .collect::<PersistenceResult<Vec<_>>>()?;
         let outcome = arkret_wire::StreamScanOutcome {
             committed_events,
+            readable_floor,
             truncated,
         };
         outcome.validate_for_request(request).map_err(invalid)?;
