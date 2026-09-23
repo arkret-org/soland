@@ -3340,7 +3340,6 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
             arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
                 required_string(&payload, "target_ref", "morph lifecycle target_ref"),
             )
-            .with_target_state("archived")
             .to_value()
             .expect("morph archive payload serialization")
         }
@@ -3348,7 +3347,6 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
             arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
                 required_string(&payload, "target_ref", "morph lifecycle target_ref"),
             )
-            .with_target_state("active")
             .to_value()
             .expect("morph restore payload serialization")
         }
