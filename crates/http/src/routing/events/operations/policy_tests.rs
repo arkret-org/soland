@@ -1,9 +1,6 @@
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
-use soland_services::events::AcceptedEvent;
 use soland_services::identity::{
     DirectConversationCoordinatesRecord, DirectConversationEndorsement,
 };
@@ -18,8 +15,6 @@ const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
 /// The Agent's own DID. `controller_authorization_ref` is a DID URL on the
 /// Agent document, so it must project back to `AGENT_CORE_ID`.
 const AGENT_DID: &str = "did:webvh:z6mkfixtureagent:agent.example";
-const AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID: &str =
-    "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim";
 
 fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
     let principal = match principal {
@@ -34,17 +29,6 @@ fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
     ))
 }
 
-fn alice_notary() -> arkret_wire::NotaryValue {
-    let verifying_key = SigningKey::from_bytes(&[17; 32]).verifying_key();
-    let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
-        crate::test_actor_id_str("did:webvh:z6mkalice:alice.example"),
-        arkret_wire::DidUrl::new("did:webvh:z6mkalice:alice.example#notary-key").unwrap(),
-        verifying_key.as_bytes(),
-    )
-    .unwrap();
-    arkret_wire::NotaryValue::new(descriptor, 0).unwrap()
-}
-
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
         object_storage: crate::config::ObjectStorageConfig::local(
@@ -53,7 +37,6 @@ fn test_config() -> crate::config::AppConfig {
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
         jws_replay_window_seconds: 0,
-        jws_replay_window_per_family: std::collections::BTreeMap::new(),
         notary_signing_key_seed: Some([9u8; 32]),
         seed_demo_data: true,
         ..crate::config::AppConfig::test_default()
@@ -61,105 +44,11 @@ fn test_config() -> crate::config::AppConfig {
 }
 
 fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
-    let state = AppState::new(test_config(), Db { pool: None });
+    // Only the coordinates conflict rule is exercised. No Event is accepted here.
+    let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6".to_owned(),
-    )
-    .unwrap();
-    let now = chrono::Utc::now();
-    let alice_did = arkret_identifiers::Did::new(ALICE_DID.to_owned()).unwrap();
-    let alice_account = arkret_wire::AccountId::new(
-        crate::test_actor_id(&alice_did),
-        state.service_core_id().clone(),
-    );
-    let alice = arkret_wire::ActorId::account(alice_account.clone());
-    let bob = arkret_wire::AccountId::new(
-        crate::test_actor_id_str("did:webvh:z6mkbob:bob.example"),
-        state.service_core_id().clone(),
-    );
-    let mut realm_create = op(
-        realm_id.clone(),
-        "000000000691",
-        arkret_wire::EventKind::RealmCreate,
-        serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
-            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
-            state.config().trust_domain.clone(),
-            alice_notary(),
-            now,
-        ).unwrap())
-        .unwrap(),
-    );
-    let realm_create_event_id =
-        arkret_identifiers::EventId::new(realm_id.as_str().replacen("ak:realm:", "ak:event:", 1))
-            .unwrap();
-    realm_create.context.sender = alice.clone();
-    realm_create.context.event_id = realm_create_event_id.clone();
-    realm_create.context.accepted_event_id = realm_create_event_id;
-    let mut peer_join = op(
-        realm_id.clone(),
-        "000000000692",
-        arkret_wire::EventKind::MemberState,
-        arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
-            realm_id.clone(),
-            bob,
-        )
-        .to_value()
-        .unwrap(),
-    );
-    peer_join.context.sender = alice.clone();
-    let peer_join_event_id =
-        arkret_identifiers::EventId::new("ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5")
-            .unwrap();
-    peer_join.context.event_id = peer_join_event_id.clone();
-    peer_join.context.accepted_event_id = peer_join_event_id;
-    let mut strand_create = op(
-        realm_id.clone(),
-        "000000000693",
-        arkret_wire::EventKind::StrandCreate,
-        serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_main_strand_create_payload(
-            realm_id.clone(),
-            alice.clone(),
-            now,
-        ))
-        .unwrap(),
-    );
-    // `ak.strand.create` derives the Strand id from the Event
-    // (`retype(event_id)`); an Operation without `event_id` is rejected with
-    // `strand_create_missing_event_id` and the Strand never materializes.
-    let strand_create_event_id =
-        arkret_identifiers::EventId::new("ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D")
-            .unwrap();
-    strand_create.context.event_id = strand_create_event_id.clone();
-    strand_create.context.accepted_event_id = strand_create_event_id;
-    // `contact-and-direct-conversation.md` §6.1 closes the founding unit at
-    // exactly four Events: `ak.realm.create` -> peer `ak.member.state{join}`
-    // -> main `ak.strand.create` -> founder `ak.member.state{join}`. The
-    // genesis payload does not imply creator membership, so the founder slot
-    // is what puts Alice in the Realm member set.
-    let mut founder_join = op(
-        realm_id.clone(),
-        "000000000694",
-        arkret_wire::EventKind::MemberState,
-        arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
-            realm_id.clone(),
-            alice_account,
-        )
-        .to_value()
-        .unwrap(),
-    );
-    founder_join.context.sender = alice;
-    let founder_join_event_id =
-        arkret_identifiers::EventId::new("ak:event:AU6CWyScSLnnHmi5-Yxv-n_v4-cC1vgdBdubYasL9BgQ")
-            .unwrap();
-    founder_join.context.event_id = founder_join_event_id.clone();
-    founder_join.context.accepted_event_id = founder_join_event_id;
-    {
-        let mut projection = state.test_projection().lock();
-        apply_with_registered_cell_writes(&mut projection, &realm_create, 0, state.hlc());
-        apply_with_registered_cell_writes(&mut projection, &peer_join, 1, state.hlc());
-        apply_with_registered_cell_writes(&mut projection, &strand_create, 2, state.hlc());
-        apply_bootstrap_membership_with_registered_cell_writes(&mut projection, &founder_join, 3);
-    }
+    ).unwrap();
     state.contacts().install_direct_binding(
         "sha256:00000000000000000000000000000000000000000000000000000000000006a1".to_owned(),
         "sha256:0000000000000000000000000000000000000000000000000000000000000601",
@@ -170,7 +59,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
             ],
             realm_id: realm_id.to_string(),
             main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
-            created_at: now,
+            created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
             actor_id: fixture_actor(ALICE_CORE_ID).to_string(),
@@ -178,78 +67,6 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         },
     );
     (state, realm_id)
-}
-
-fn registered_projection_inputs(
-    operation: &Operation,
-    actor_seq: u64,
-) -> (
-    arkret_event_draft::ProjectedEventOperation,
-    Vec<arkret_wire::cbs::ProjectedCellWrite>,
-) {
-    let mut event = crate::test_event::raw_event_at(
-        operation.event_kind.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: operation.realm_id.clone(),
-        },
-        operation.context.sender.signing_principal_id().clone(),
-        actor_seq,
-        arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
-        operation.payload.clone(),
-        operation.created_at,
-    )
-    .unwrap();
-    event.event_id = operation.context.event_id.clone();
-    let projected = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-        operation.operation_id.clone(),
-        operation.operation_kind.clone(),
-        operation.object_id.clone(),
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
-    let writes = arkret_schema::project_registered_cell_writes(
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
-    (projected, writes)
-}
-
-fn assert_projected(effect: soland_domain::reducer::ProjectionEffect) {
-    assert!(
-        !matches!(
-            effect,
-            soland_domain::reducer::ProjectionEffect::Rejected { .. }
-        ),
-        "canonical fixture projection rejected: {effect:?}"
-    );
-}
-
-fn apply_with_registered_cell_writes(
-    projection: &mut soland_domain::reducer::ProjectionState,
-    operation: &Operation,
-    actor_seq: u64,
-    server_hlc: &soland_domain::hlc::ServerHlc,
-) {
-    let (projected, writes) = registered_projection_inputs(operation, actor_seq);
-    assert_projected(projection.apply_projected(&projected, &writes, server_hlc));
-}
-
-/// Apply the founder's own `ak.member.state{join}` — the closing slot of a
-/// genesis bootstrap unit — through the reducer admission actually uses for it.
-///
-/// A self-authored join is refused by the ordinary entry gate whenever the
-/// Realm's join rule is `invite` or `closed`, which is exactly the Direct
-/// Conversation profile. Genesis membership is admitted as part of the
-/// validated bootstrap unit instead.
-fn apply_bootstrap_membership_with_registered_cell_writes(
-    projection: &mut soland_domain::reducer::ProjectionState,
-    operation: &Operation,
-    actor_seq: u64,
-) {
-    let (projected, writes) = registered_projection_inputs(operation, actor_seq);
-    assert_projected(projection.apply_validated_realm_bootstrap_membership(&projected, &writes));
 }
 
 fn op(
@@ -285,21 +102,6 @@ fn op(
         operation.context.sender = fixture_actor(sender.as_str().unwrap());
     }
     operation
-}
-
-fn canonical_event_storage_identity(
-    digest_payload: &serde_json::Value,
-) -> (String, String, Vec<u8>) {
-    let canonical_bytes =
-        arkret_canonical::canonical_json_bytes(digest_payload).expect("canonical fixture bytes");
-    let canonical_digest =
-        arkret_canonical::canonical_sha256(digest_payload).expect("canonical fixture digest");
-    let digest =
-        arkret_identifiers::Hash::new(canonical_digest.clone()).expect("fixture digest is typed");
-    let event_id = arkret_identifiers::EventId::from_event_digest(&digest)
-        .expect("SHA-256 is a registered Event digest suite")
-        .to_string();
-    (event_id, canonical_digest, canonical_bytes)
 }
 
 fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::Value {
@@ -470,8 +272,9 @@ fn signed_device_authorize_payload(
     signing_key: &SigningKey,
 ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
     use arkret_models_collaboration::events_payloads::{
-        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, UnsignedDeviceAuthorizePayload,
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, SignatureMaterial,
     };
+    use arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload;
 
     let device_public_key = format!(
         "did:key:{}",
@@ -482,36 +285,34 @@ fn signed_device_authorize_payload(
     let principal_id = crate::test_actor_id_str(ALICE_DID);
     let account_id =
         arkret_wire::AccountId::new(principal_id.clone(), crate::test_event::station_id());
-    let unsigned = UnsignedDeviceAuthorizePayload::new(
-        arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6")
-            .unwrap(),
-        arkret_wire::NonEmptyString::new(device_public_key).unwrap(),
-        arkret_wire::NonEmptyString::new("z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM")
-            .unwrap(),
-        vec![
+    let mut payload = DeviceAuthorizePayload {
+        device_id: arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6").unwrap(),
+        device_public_key_did: arkret_wire::NonEmptyString::new(device_public_key).unwrap(),
+        hpke_key: arkret_wire::NonEmptyString::new("z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM").unwrap(),
+        algorithms: vec![
             arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
             arkret_wire::NonEmptyString::new("ak.mls.v1").unwrap(),
         ],
-        Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
-        DeviceOrPrincipalRef::Principal(principal_id),
-        None,
-        "2026-06-22T14:45:51Z".parse().unwrap(),
-        None,
-        DeviceAuthorizationBindingKind::RegistrationAnchor,
-        None,
-        None,
-    )
-    .expect("valid unsigned device authorization");
-    let input = unsigned
+        device_key_algorithm: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
+        authorized_by: DeviceOrPrincipalRef::Principal(principal_id),
+        scopes: None,
+        not_before: "2026-06-22T14:45:51Z".parse().unwrap(),
+        expires_at: None,
+        authorization_binding_kind: DeviceAuthorizationBindingKind::RegistrationAnchor,
+        authorized_generation_ref: 1,
+        device_signature: SignatureMaterial::NonEmptyString(arkret_wire::NonEmptyString::new("pending").unwrap()),
+        recovery_session_id: None,
+        pairing_challenge_transcript_digest: None,
+        applet_id: None,
+    };
+    let input = payload
         .device_possession_signature_input(&account_id)
         .expect("device signature input");
     let signature = signing_key.sign(&input);
-    unsigned
-        .attach_signature(
-            arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-                .unwrap(),
-        )
-        .expect("signed typed device authorize payload")
+    payload.device_signature = SignatureMaterial::NonEmptyString(
+        arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(signature.to_bytes())).unwrap(),
+    );
+    payload
 }
 
 #[test]
@@ -632,138 +433,6 @@ fn grant_call_action(
         vec![action.to_owned()],
         Vec::new(),
     );
-}
-
-fn seed_read_receipt_link_context(
-    state: &AppState,
-    parent_realm_id: &str,
-    child_realm_id: &str,
-    parent_policy: serde_json::Value,
-) {
-    use arkret_state::state_model::ResolvedCellState;
-
-    let now = chrono::Utc::now();
-    let mut projection = state.test_projection().lock();
-    let cell_id = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.read_receipt_policy.v1:{parent_realm_id}"
-    ))
-    .expect("valid read receipt policy cell ref");
-    projection
-        .cells
-        .insert(cell_id, ResolvedCellState::Value(parent_policy));
-    projection
-        .realm_links
-        .entry(child_realm_id.to_owned())
-        .or_default()
-        .push(soland_domain::reducer::RealmLinkState {
-            realm_id: child_realm_id.to_owned(),
-            target_realm_id: parent_realm_id.to_owned(),
-            link_kind: "governed_by".to_owned(),
-            status: "active".to_owned(),
-            label: None,
-            commitment: None,
-            created_at: now,
-            updated_at: now,
-        });
-}
-
-#[tokio::test]
-async fn read_receipt_realm_link_does_not_impose_visibility_floor() {
-    let state = test_state();
-    let parent_realm = "ak:realm:AayvHPIGaKmFumB-RpzVb9nydQtJilnjIY_0iphEtH50";
-    let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:Ab-7DmdacX9m9iDoiewbvr1Th3bssb88zDPYsGOFvT77".to_owned(),
-    )
-    .unwrap();
-    seed_read_receipt_link_context(
-        &state,
-        parent_realm,
-        child_realm.as_str(),
-        json!({
-            "disclosure": "optional",
-            "visibility": "private",
-            "scope_overrides_allowed": true
-        }),
-    );
-
-    let child_policy = op(
-        child_realm,
-        "000000009913",
-        arkret_wire::EventKind::RealmReadReceiptPolicy,
-        json!({
-            "disclosure": "optional",
-            "visibility": "public"
-        }),
-    );
-    validate_operation_policy(&state, &[child_policy])
-        .await
-        .expect("Realm link does not impose a read-receipt parent floor");
-}
-
-#[tokio::test]
-async fn read_receipt_realm_link_does_not_impose_required_floor() {
-    let state = test_state();
-    let parent_realm = "ak:realm:AatPxC-EqrbW4gPLx8kUdsCQdH5-3Uf5Vhx_nTaFmHiO";
-    let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:AUz7tgcJ6ro47-4OhYOy75LdmXCYRnTUkLWvviuxYFld".to_owned(),
-    )
-    .unwrap();
-    seed_read_receipt_link_context(
-        &state,
-        parent_realm,
-        child_realm.as_str(),
-        json!({
-            "disclosure": "required",
-            "visibility": "members",
-            "scope_overrides_allowed": true
-        }),
-    );
-
-    let child_policy = op(
-        child_realm,
-        "000000009923",
-        arkret_wire::EventKind::RealmReadReceiptPolicy,
-        json!({
-            "disclosure": "disabled",
-            "visibility": "private"
-        }),
-    );
-    validate_operation_policy(&state, &[child_policy])
-        .await
-        .expect("Realm link does not impose a read-receipt parent floor");
-}
-
-#[tokio::test]
-async fn read_receipt_realm_link_does_not_impose_override_floor() {
-    let state = test_state();
-    let parent_realm = "ak:realm:AWmEIzkE4XrcUfjV5Sih-8UONowvK9ezo3bWR157AaF4";
-    let child_realm = arkret_identifiers::RealmId::new(
-        "ak:realm:ARJq-x3T6BN8drHWBoEM6LmDMvq7MTwEO6LAXUqSwsA7".to_owned(),
-    )
-    .unwrap();
-    seed_read_receipt_link_context(
-        &state,
-        parent_realm,
-        child_realm.as_str(),
-        json!({
-            "disclosure": "optional",
-            "visibility": "members",
-            "scope_overrides_allowed": false
-        }),
-    );
-
-    let child_policy = op(
-        child_realm,
-        "000000009943",
-        arkret_wire::EventKind::RealmReadReceiptPolicy,
-        json!({
-            "disclosure": "disabled",
-            "visibility": "private"
-        }),
-    );
-    validate_operation_policy(&state, &[child_policy])
-        .await
-        .expect("Realm link does not impose a read-receipt parent floor");
 }
 
 async fn put_agent_participation_ceiling(
@@ -967,340 +636,6 @@ async fn register_agent_selection(
     );
 }
 
-async fn register_agent_membership_context(
-    state: &AppState,
-    realm_id: &arkret_identifiers::RealmId,
-    encrypted: bool,
-    with_claimable_keypackage: bool,
-) {
-    let controller = ALICE_CORE_ID;
-    let agent = AGENT_CORE_ID;
-    let now = chrono::Utc::now();
-    let mut record = soland_storage::AgentPrincipalRecord::new(
-        agent.to_owned(),
-        controller.to_owned(),
-        "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{AGENT_DID}#managed-controller")).unwrap(),
-        AgentLifecycleState::Active,
-        now,
-    );
-    record.agent_slug = Some("summary".to_owned());
-    let verification_method = "did:webvh:z6mkfixtureagent:agent.example#runtime-1";
-    let (authorize_event_id, authorize_canonical_digest, authorize_canonical_bytes) =
-        canonical_event_storage_identity(&json!({
-            "kind": arkret_wire::EventKind::AgentKeyAuthorize,
-            "realm_id": realm_id.as_str(),
-            "agent_id": agent,
-            "verification_method": verification_method
-        }));
-    if with_claimable_keypackage {
-        record.authorized_event_ref = Some(authorize_event_id.clone());
-        record.authorized_verification_method = Some(verification_method.to_owned());
-    }
-    state
-        .test_persistence()
-        .agents()
-        .put(record)
-        .await
-        .expect("agent record");
-    use arkret_models_collaboration::governance::accountability::{
-        AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
-    };
-    let mut accountability_grant_payload = AccountabilityGrantPayload::new(
-        arkret_wire::DidCoreId::new(controller).unwrap(),
-        arkret_wire::DidCoreId::new(agent).unwrap(),
-        AccountabilityScope::Single(AccountabilityScopeKind::AgentOperator),
-        "2026-01-01T00:00:00Z".parse().unwrap(),
-        Some("2099-01-01T00:00:00Z".parse().unwrap()),
-        arkret_wire::PayloadProof {
-            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!("{ALICE_DID}#key-1")).unwrap(),
-            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
-            created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
-            domain: None,
-            audience: None,
-            proof_purpose: None,
-            jws: String::new(),
-        },
-    );
-    accountability_grant_payload.proof.payload_digest =
-        accountability_grant_payload.payload_digest().unwrap();
-    accountability_grant_payload.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
-        arkret_signatures::development_signing_key(
-            accountability_grant_payload
-                .proof
-                .verification_method
-                .as_str(),
-        ),
-        accountability_grant_payload
-            .proof
-            .verification_method
-            .as_str(),
-    )
-    .sign_detached_jws(
-        &accountability_grant_payload
-            .canonical_proof_binding_bytes()
-            .unwrap(),
-    );
-    accountability_grant_payload
-        .validate_lifecycle_at(now)
-        .unwrap();
-    let accountability_envelope = json!({
-        "actor_id": fixture_actor(controller),
-        "executed_by": fixture_actor(controller),
-        "kind": "ak.identity.accountability_grant",
-        "payload": accountability_grant_payload
-    });
-    let (accountability_event_id, accountability_digest, accountability_bytes) =
-        canonical_event_storage_identity(&accountability_envelope);
-    state
-        .test_persistence()
-        .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: accountability_event_id,
-            actor_id: fixture_actor(controller).to_string(),
-            actor_seq: 1,
-            realm_id: Some("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned()),
-            kind: "ak.identity.accountability_grant".to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: accountability_digest,
-            canonical_bytes: accountability_bytes,
-            envelope: accountability_envelope,
-            received_at: now,
-        })
-        .await
-        .expect("accountability grant");
-    state
-        .test_persistence()
-        .realm_meta()
-        .put(
-            realm_id.as_str(),
-            &soland_storage::RealmMetaRecord {
-                owner: controller.to_owned(),
-                deleted: false,
-                discoverability: "invite_only".to_owned(),
-                history_access: "since_join".to_owned(),
-                preview_policy: None,
-                preview_policy_digest: None,
-                asset_privacy_policy: None,
-                asset_privacy_policy_digest: None,
-                encryption_profile: encrypted.then(|| "mls_rfc9420".to_owned()),
-                plaintext_visible_services: std::collections::BTreeSet::new(),
-                plaintext_visible_service_classes: std::collections::BTreeMap::new(),
-                minimal_metadata_realm: false,
-                created_at: now,
-                updated_at: now,
-            },
-        )
-        .await
-        .expect("realm meta");
-    {
-        let mut projection = state.test_projection().lock();
-        projection.members.insert(
-            (realm_id.to_string(), fixture_actor(controller).to_string()),
-            soland_domain::reducer::SolandMembershipState {
-                member: fixture_actor(controller).to_string(),
-                realm_id: realm_id.to_string(),
-                state: "join".to_owned(),
-                role: "owner".to_owned(),
-                membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
-                invited_at: None,
-                joined_at: now,
-                updated_at: now,
-                reason: None,
-            },
-        );
-    }
-
-    if !with_claimable_keypackage {
-        return;
-    }
-    let authorize_payload = json!({
-        "agent_id": agent,
-        "key_id": "ak:agent_key:01904100-0000-7000-8000-0000000007d2",
-        "verification_method": verification_method,
-        "public_key_digest": format!("sha256:{}", "4".repeat(64)),
-        "accountable_principal_id": controller,
-        "agent_key_scope": {"actions": ["ak.message.create"]},
-        "audience": [state.service_id().as_str()],
-        "issued_at": "2026-01-01T00:00:00.000Z",
-        "expires_at": "2099-01-01T00:00:00.000Z"
-    });
-    let authorize_event = crate::test_event::raw_event(
-        arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        arkret_wire::DidCoreId::new(agent.to_owned()).unwrap(),
-        1,
-        arkret_identifiers::Hlc::new("019041000000-0001-000007d2").unwrap(),
-        authorize_payload.clone(),
-    )
-    .unwrap();
-    let mut authorize_envelope = serde_json::to_value(authorize_event).unwrap();
-    authorize_envelope["event_id"] = json!(authorize_event_id);
-    state
-        .test_persistence()
-        .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: authorize_event_id.clone(),
-            actor_id: agent.to_owned(),
-            actor_seq: 1,
-            realm_id: Some(realm_id.to_string()),
-            kind: arkret_wire::EventKind::AgentKeyAuthorize
-                .as_str()
-                .to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: authorize_canonical_digest,
-            canonical_bytes: authorize_canonical_bytes,
-            envelope: authorize_envelope,
-            received_at: now,
-        })
-        .await
-        .expect("Agent key authorization Event");
-    let authorize_projection = op(
-        realm_id.clone(),
-        "0000000007d4",
-        arkret_wire::EventKind::AgentKeyAuthorize,
-        json!({
-            "agent_id": agent,
-            "key_id": "ak:agent_key:01904100-0000-7000-8000-0000000007d2",
-            "accepted_event_id": authorize_event_id,
-            "verification_method": verification_method,
-        }),
-    );
-    state
-        .test_projection()
-        .lock()
-        .apply(&authorize_projection, state.hlc());
-    state.test_projection().lock().mls_key_packages.insert(
-        "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
-        soland_domain::reducer::MlsKeyPackageProjection {
-            id: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
-            keypackage_ref: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
-            keypackage_digest: format!("sha256:{}", "1".repeat(64)),
-            owner_account_pk: 1,
-            actor_id: agent.to_owned(),
-            device_id: None,
-            endpoint_verification_method: Some(format!("{agent}#runtime-key")),
-            intended_realm_id: None,
-            lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
-                not_before: now.timestamp() - 60,
-                not_after: now.timestamp() + 3600,
-            },
-            key_package_bytes: vec![1, 2, 3],
-            capabilities: vec!["ak.content.v1".to_owned(), "mimi.content.v1".to_owned()],
-            capabilities_digest: format!("sha256:{}", "2".repeat(64)),
-            last_resort: false,
-            last_resort_realm_id: None,
-            claimed_by: None,
-            device_authorize_event_id: None,
-            agent_key_authorize_event_id: Some(authorize_event_id.to_owned()),
-            claimed_at: None,
-            claim_expires_at_unix_ms: None,
-            consumed_at: None,
-            created_at: now.timestamp(),
-        },
-    );
-}
-
-fn agent_controller_binding() -> serde_json::Value {
-    serde_json::to_value(
-        arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
-            controller_account_id: arkret_wire::AccountId {
-                principal_id: arkret_identifiers::DidCoreId::new(ALICE_CORE_ID.to_owned()).unwrap(),
-                station_id: crate::test_event::station_id(),
-            },
-            controller_membership_generation_ref: arkret_identifiers::EventId::new(
-                AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned(),
-            )
-            .unwrap(),
-            controller_terminal_event_ref: None,
-        },
-    )
-    .unwrap()
-}
-
-#[tokio::test]
-async fn encrypted_realm_agent_join_requires_claimable_keypackage() {
-    let state = test_state();
-    let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:Aa60MQP_oVAtFU0QOgJEKNdlwd3cd0d4XPjxPSbZSUzn")
-            .unwrap();
-    register_agent_membership_context(&state, &realm_id, true, false).await;
-    let operation = op(
-        realm_id,
-        "0000000007d1",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "sender": ALICE_CORE_ID,
-            "member_id": fixture_actor(AGENT_CORE_ID),
-            "membership": "join",
-            "reason": "controller_add_agent",
-            "agent_controller_binding": agent_controller_binding()
-        }),
-    );
-
-    assert_eq!(
-        validate_member_state_policy_for_test(&state, &operation)
-            .await
-            .unwrap_err(),
-        soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
-    );
-}
-
-#[tokio::test]
-async fn encrypted_realm_agent_join_accepts_standard_claimable_keypackage() {
-    let state = test_state();
-    let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:AZAcSymeqCpuCXSyTlXUWIeJRNAz-V1BNJ0uNg_hgSZD")
-            .unwrap();
-    register_agent_membership_context(&state, &realm_id, true, true).await;
-    let operation = op(
-        realm_id,
-        "0000000007d2",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "sender": ALICE_CORE_ID,
-            "member_id": fixture_actor(AGENT_CORE_ID),
-            "membership": "join",
-            "reason": "controller_add_agent",
-            "agent_controller_binding": agent_controller_binding()
-        }),
-    );
-
-    validate_member_state_policy_for_test(&state, &operation)
-        .await
-        .expect("standard claimable KeyPackage satisfies encrypted admission precondition");
-}
-
-#[tokio::test]
-async fn plaintext_realm_agent_join_does_not_require_keypackage() {
-    let state = test_state();
-    let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:ASNBn0fPSkl6VgQFEvleAz9gyjryUEn0sB6JXO38MDRY")
-            .unwrap();
-    register_agent_membership_context(&state, &realm_id, false, false).await;
-    let operation = op(
-        realm_id,
-        "0000000007d3",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "sender": ALICE_CORE_ID,
-            "member_id": fixture_actor(AGENT_CORE_ID),
-            "membership": "join",
-            "reason": "controller_add_agent",
-            "agent_controller_binding": agent_controller_binding()
-        }),
-    );
-
-    validate_member_state_policy_for_test(&state, &operation)
-        .await
-        .expect("plaintext Realm membership does not require MLS material");
-}
-
 fn agent_context(agent_id: &str, authorization_ref: &str) -> serde_json::Value {
     json!({
         "agent_id": agent_id,
@@ -1402,260 +737,6 @@ fn insert_approved_agent_action(
 }
 
 #[tokio::test]
-async fn active_direct_conversation_rejects_invites_space_and_third_party_member() {
-    let (state, realm_id) = state_with_direct_binding();
-
-    let invite = op(
-        realm_id.clone(),
-        "000000000601",
-        arkret_wire::EventKind::InviteCreate,
-        json!({
-            "invitee_id": "ak:did_core:web:charlie.example",
-            "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "expires_at": "2026-08-05T10:00:00.000Z"
-        }),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[invite])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_THIRD_PARTY_MEMBER_FORBIDDEN
-    );
-
-    let bob = fixture_actor("ak:did_core:webvh:z6mkbob")
-        .as_account_id()
-        .expect("Bob fixture is an account Actor")
-        .clone();
-    let pair_member_invite = op(
-        realm_id.clone(),
-        "000000000609",
-        arkret_wire::EventKind::InviteCreate,
-        json!({
-            "invitee_account_id": bob,
-            "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "expires_at": "2026-08-05T10:00:00.000Z"
-        }),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[pair_member_invite])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN
-    );
-
-    let space_create = op(
-        realm_id.clone(),
-        "000000000602",
-        arkret_wire::EventKind::SpaceCreate,
-        json!({
-            "space_id": "ak:space:AfBl2v9EFciTUTWf3Pyvb2ZNjC04y8l-AW2bp6dJAZn1",
-            "title": "Third participant space"
-        }),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[space_create])
-            .await
-            .unwrap_err(),
-        "direct_conversation_space_forbidden"
-    );
-
-    let member_add = op(
-        realm_id,
-        "000000000603",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "member_id": fixture_actor("ak:did_core:web:charlie.example"),
-            "membership": "join",
-            "sender": "ak:did_core:web:alice.example"
-        }),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[member_add])
-            .await
-            .unwrap_err(),
-        "direct_conversation_third_party_member_forbidden"
-    );
-}
-
-#[tokio::test]
-async fn direct_conversation_admission_precedence_is_registry_order() {
-    let (state, realm_id) = state_with_direct_binding();
-
-    let malformed_binding = op(
-        realm_id.clone(),
-        "00000000060a",
-        arkret_wire::EventKind::DirectConversationBound,
-        json!({}),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[malformed_binding])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_BINDING_INVALID
-    );
-
-    let mut root_terminal = op(
-        realm_id.clone(),
-        "00000000060b",
-        arkret_wire::EventKind::RealmTombstone,
-        json!({ "sender": "ak:did_core:web:alice.example" }),
-    );
-    root_terminal.context.authorization_ref =
-        Some(arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap());
-    assert_eq!(
-        validate_operation_policy(&state, &[root_terminal])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN
-    );
-
-    let mut root_operational = op(
-        realm_id.clone(),
-        "00000000060c",
-        arkret_wire::EventKind::RealmArchive,
-        json!({ "sender": "ak:did_core:web:alice.example" }),
-    );
-    root_operational.context.authorization_ref =
-        Some(arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap());
-    assert_eq!(
-        validate_operation_policy(&state, &[root_operational])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION
-    );
-
-    let mut unsupported_participant_action = op(
-        realm_id,
-        "00000000060d",
-        arkret_wire::EventKind::RealmArchive,
-        json!({ "sender": "ak:did_core:web:alice.example" }),
-    );
-    unsupported_participant_action.context.authorization_ref = Some(
-        arkret_wire::AuthorizationRef::new(
-            arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_PARTICIPANT_V1,
-        )
-        .unwrap(),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[unsupported_participant_action])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED
-    );
-}
-
-#[tokio::test]
-async fn direct_conversation_provisional_message_uses_registered_bootstrap_source() {
-    let (state, realm_id) = state_with_direct_binding();
-    state.contacts().clear_runtime_direct_bindings();
-    let mut message = op(
-        realm_id,
-        "000000000608",
-        arkret_wire::EventKind::MessageCreate,
-        json!({"sender":"ak:did_core:web:alice.example", "content":[{"type":"text","text":"provisional"}]}),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[message.clone()])
-            .await
-            .unwrap_err(),
-        "direct_conversation_member_count_invalid"
-    );
-    message.context.authorization_ref = Some(
-        arkret_wire::AuthorizationRef::new(
-            arkret_wire::AuthoritySourceId::DIRECT_CONVERSATION_BOOTSTRAP_PARTICIPANT_V1,
-        )
-        .unwrap(),
-    );
-    // This is the policy stage after envelope authority verification. The
-    // envelope test and joint flow enforce the actual founder/Seal proof.
-    validate_operation_policy(&state, &[message]).await.unwrap();
-}
-
-#[tokio::test]
-async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
-    let (state, realm_id) = state_with_direct_binding();
-    state.contacts().clear_runtime_direct_bindings();
-
-    let invite = op(
-        realm_id.clone(),
-        "000000000604",
-        arkret_wire::EventKind::InviteCreate,
-        json!({
-            "invitee_id": "ak:did_core:web:charlie.example",
-            "introduction_evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-            "expires_at": "2026-08-05T10:00:00.000Z"
-        }),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[invite])
-            .await
-            .unwrap_err(),
-        "direct_conversation_invite_forbidden"
-    );
-
-    let member_add = op(
-        realm_id,
-        "000000000605",
-        arkret_wire::EventKind::MemberState,
-        json!({
-            "member_id": fixture_actor("ak:did_core:web:charlie.example"),
-            "membership": "join",
-            "sender": "ak:did_core:web:alice.example"
-        }),
-    );
-    assert_eq!(
-        validate_operation_policy(&state, &[member_add])
-            .await
-            .unwrap_err(),
-        "direct_conversation_member_count_invalid"
-    );
-}
-
-/// §8.1 — DM coordinates are permanent and successor-free, so an irreversible
-/// terminal is refused. The reversible archive/freeze facets stay available.
-#[tokio::test]
-async fn direct_conversation_realm_refuses_tombstone_and_destroy() {
-    let (state, realm_id) = state_with_direct_binding();
-
-    for (seed, kind) in [
-        ("000000000606", arkret_wire::EventKind::RealmTombstone),
-        ("000000000607", arkret_wire::EventKind::RealmDestroy),
-    ] {
-        let terminal = op(
-            realm_id.clone(),
-            seed,
-            kind.clone(),
-            json!({ "sender": "ak:did_core:web:alice.example" }),
-        );
-        assert_eq!(
-            validate_operation_policy(&state, &[terminal])
-                .await
-                .unwrap_err(),
-            arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN,
-            "{kind} must be refused on a canonical DM Realm"
-        );
-    }
-
-    // The reversible facets are ordinary Realm authority, not a terminal.
-    let archive = op(
-        realm_id,
-        "000000000608",
-        arkret_wire::EventKind::RealmArchive,
-        json!({ "sender": "ak:did_core:web:alice.example" }),
-    );
-    assert!(
-        !matches!(
-            validate_operation_policy(&state, &[archive]).await,
-            Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN)
-        ),
-        "ak.realm.archive is reversible and must not hit the terminal guard"
-    );
-}
-
-/// §8.3 — the binding cell is an or_set keyed by `(binding_digest, actor_id)`.
-/// Both participants endorsing the same coordinates are compatible adds: the
-/// pair stays settled and MUST NOT join to bottom.
-#[tokio::test]
 async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
     let (state, realm_id) = state_with_direct_binding();
     let pair_key = "sha256:00000000000000000000000000000000000000000000000000000000000006a1";
@@ -1697,10 +778,6 @@ async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
             .settled_direct_binding_for_realm(realm_id.as_ref())
             .is_some(),
         "the realm lookup must see the settled pair"
-    );
-    assert!(
-        crate::routing::identity::account::direct_binding_matches_projection(&state, &settled),
-        "the fixture projection must agree with the settled coordinates"
     );
 }
 
@@ -2363,64 +1440,6 @@ async fn profile_accountability_uses_signed_frozen_time() {
 }
 
 #[tokio::test]
-async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_actor() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AVL-lH-YPO6V6QqApOt_nAmCdrWn3Wi6XOHl91H653O5".to_owned(),
-    )
-    .unwrap();
-    let grant_envelope = json!({
-        "actor_id": "ak:did_core:web:mallory.example",
-        "kind": "ak.identity.accountability_grant",
-        "realm_id": realm_id.to_string(),
-        "payload": {
-            "issuer_id": "ak:did_core:web:alice.example",
-            "subject_id": "did:web:agent.example",
-            "grant_status": "active",
-            "not_before": "2026-01-01T00:00:00.000Z",
-            "expires_at": "2099-01-01T00:00:00.000Z"
-        }
-    });
-    let (grant_event_id, grant_digest, grant_bytes) =
-        canonical_event_storage_identity(&grant_envelope);
-    state
-        .event_queries()
-        .store_canonical_event(AcceptedEvent {
-            event_id: grant_event_id,
-            actor_id: "ak:did_core:web:mallory.example".to_owned(),
-            actor_seq: 1,
-            realm_id: Some(realm_id.to_string()),
-            kind: "ak.identity.accountability_grant".to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: grant_digest,
-            canonical_bytes: grant_bytes,
-            envelope: grant_envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .expect("store fake accountability grant");
-    let profile = op(
-        realm_id,
-        "0000000007a7",
-        "ak.profile.create",
-        json!({
-            "sender": "ak:did_core:web:agent.example",
-            "principal_id": "ak:did_core:web:agent.example",
-            "display_name": "Agent",
-            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
-        }),
-    );
-
-    assert_eq!(
-        validate_operation_policy(&state, &[profile])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
-    );
-}
-
-#[tokio::test]
 async fn circle_member_manage_rejects_without_grant() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
@@ -2613,11 +1632,6 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 directory_visibility: "private".to_owned(),
                 join_rule: "invite".to_owned(),
                 history_access: "since_join".to_owned(),
-                content_encryption_floor: None,
-                metadata_encryption_floor: None,
-                encryption_profile: "none".to_owned(),
-                content_scheme: None,
-                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,

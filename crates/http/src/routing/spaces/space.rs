@@ -25,7 +25,6 @@ use serde::Serialize;
 use serde_json::Value;
 use soland_http::error::AppError;
 use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_services::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 
 use super::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};
@@ -84,52 +83,17 @@ async fn get_space_cell(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    space_id: PathParam<String>,
-    cell_family: PathParam<String>,
+    _space_id: PathParam<String>,
+    _cell_family: PathParam<String>,
 ) -> JsonResult<SpaceCellOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let space_id = space_id.into_inner();
-    let cell_family = cell_family.into_inner();
-    if cell_family != CHILD_ORDER_CELL_FAMILY {
-        return Err(AppError::not_found("cell family not found"));
-    }
-    validate_child_order_subject(&space_id)?;
-
-    // Snapshot everything we need out of the projection under a short lock so
-    // we never hold the (non-Send) guard across the async access check.
-    let (realm_id, value) = {
-        let proj = state.projections().snapshot();
-        let realm_id = proj
-            .space_containers
-            .get(&space_id)
-            .map(|container| container.realm_id.clone())
-            .unwrap_or_else(|| space_id.clone());
-        let value = proj.child_order_cell_value(&space_id);
-        (realm_id, value)
-    };
-    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(AppError::not_found("not found"));
-    }
-    let total = value
-        .get("children")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or_default();
-
-    json_ok(SpaceCellOutcome {
-        cell_id: format!("ak:cell:{CHILD_ORDER_CELL_FAMILY}:{space_id}"),
-        cell_family: CHILD_ORDER_CELL_FAMILY.to_owned(),
-        space_id,
-        state: "value".to_owned(),
-        state_model: arkret_state::state_model::StateModelKind::OrderedLog
-            .as_wire_str()
-            .to_owned(),
-        value,
-        total,
-    })
+    let _session = aa.authenticated_session(state, req).await?;
+    Err(AppError::from_rejection(
+        soland_http::error::ErrorCode::ServiceUnavailable,
+        "Space child order requires a committed Event projection",
+    )
+    .with_rejection_code("service_unavailable"))
 }
-
 #[salvo::oapi::endpoint(operation_id = "ak.self.realm.read.export", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.read.export.v1"))]
 async fn export_realm(
@@ -598,33 +562,15 @@ pub async fn invite_token_matches_realm(state: &AppState, realm_id: &str, token:
 pub(crate) enum InviteTokenRealmResolution {
     NotFound,
     FrontierUnavailable,
-    Ready {
-        realm_id: String,
-        seal_basis: arkret_wire::SealBasis,
-    },
 }
 
 pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<String> {
-    match invite_token_realm_resolution(state, token).await {
-        InviteTokenRealmResolution::Ready { realm_id, .. } => Some(realm_id),
-        InviteTokenRealmResolution::NotFound | InviteTokenRealmResolution::FrontierUnavailable => {
-            None
-        }
-    }
+    let _ = invite_token_realm_resolution(state, token).await;
+    None
 }
 
-/// Resolve an Invite token only after the Invite's registered lifecycle write
-/// is part of the exact accepted control-Seal view that will be disclosed to
-/// the pre-join client.
-///
-/// `realm_invites` is a live ingress projection: an accepted `invite.create`
-/// can appear there before the notary has closed its `null -> pending` write
-/// into a durable Seal. Returning the then-current Realm leaves would invite a
-/// client to author `invite.accept` against a pre-create state and
-/// deterministically produce the illegal `null -> accepted` transition. Keep
-/// that provisional window distinct from an invalid token so the route can
-/// return the canonical retryable `frontier_unavailable` error without
-/// inventing a client-side wait.
+/// A pending invite has no proven lifecycle state until the accepted
+/// Event/Commit projection exposes an authority cut for that invite.
 pub(crate) async fn invite_token_realm_resolution(
     state: &AppState,
     token: &str,
@@ -633,84 +579,20 @@ pub(crate) async fn invite_token_realm_resolution(
     if token.is_empty() {
         return InviteTokenRealmResolution::NotFound;
     }
-    let now = now();
     let Ok(invites) = state.realm_invites().snapshot_all().await else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
-    let Some(invite) = invites.into_iter().find(|invite| {
+    let now = now();
+    if invites.into_iter().any(|invite| {
         invite.status == "pending"
             && invite.invite_token == token
             && invite.expires_at.is_none_or(|expires_at| expires_at > now)
-    }) else {
-        return InviteTokenRealmResolution::NotFound;
-    };
-
-    let Ok(realm_id) = RealmId::new(invite.realm_id.clone()) else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let Ok(mut leaves) = state.projections().realm_seal_basis_leaves(&realm_id).await else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    leaves.sort();
-    let seal_basis = arkret_wire::SealBasis { leaves };
-    if seal_basis.validate_protocol_bounds().is_err() {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    }
-    let Ok(covered_events) = state
-        .projections()
-        .seal_basis_covered_events(&seal_basis.leaves)
-        .await
-    else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let Ok(lifecycle_cell) = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.invite.lifecycle.v1:{}",
-        invite.invite_id
-    )) else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let Ok(batches) = state
-        .projections()
-        .confirmed_write_batches_for_cell(&realm_id, &lifecycle_cell)
-        .await
-    else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let batches = batches
-        .into_iter()
-        .filter_map(|(_, ops)| {
-            let covered_ops = ops
-                .into_iter()
-                .filter(|issued| covered_events.contains(&issued.op.event_id.event_digest()))
-                .collect::<Vec<_>>();
-            (!covered_ops.is_empty()).then_some(covered_ops)
-        })
-        .collect::<Vec<_>>();
-    if batches.is_empty() {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    }
-    let Ok(binding) = state.projections().resolve_cell(&realm_id, &lifecycle_cell) else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let Ok(lifecycle) =
-        arkret_state::join_cell_seal_batches(binding.model.as_ref(), &lifecycle_cell, &batches)
-    else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let lifecycle = lifecycle.into_value();
-    match lifecycle
-        .as_ref()
-        .and_then(|value| value.as_str().or_else(|| value.get("state")?.as_str()))
-    {
-        Some("pending") => InviteTokenRealmResolution::Ready {
-            realm_id: invite.realm_id,
-            seal_basis,
-        },
-        Some(_) => InviteTokenRealmResolution::NotFound,
-        None => InviteTokenRealmResolution::FrontierUnavailable,
+    }) {
+        InviteTokenRealmResolution::FrontierUnavailable
+    } else {
+        InviteTokenRealmResolution::NotFound
     }
 }
-
 // `realm_id_accessible_for_id` is the visibility path with looser semantics
 // for the backfill / subscribe edge.
 
@@ -888,345 +770,4 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         .ok()
         .flatten()
         .is_some_and(|record| record.allows_plaintext_data_class(state.service_id(), data_class))
-}
-
-#[cfg(test)]
-mod tests {
-    use arkret_identifiers::DidCoreId;
-    use chrono::TimeZone;
-    use serde_json::json;
-    use soland_services::events::RealmInviteState;
-
-    use super::*;
-
-    const LIFECYCLE_ACTOR: &str = "ak:did_core:web:owner.example";
-    const LIFECYCLE_REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
-    const LIFECYCLE_INVITE: &str = "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg";
-
-    fn test_hash(byte: u8) -> arkret_identifiers::Hash {
-        arkret_identifiers::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32)))
-            .unwrap()
-    }
-
-    fn test_seal(
-        predecessor_ref: Option<arkret_identifiers::SealId>,
-        delta: Vec<arkret_identifiers::Hash>,
-        notary_seq: u64,
-    ) -> arkret_wire::Seal {
-        let mut seal = arkret_wire::Seal {
-            id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64)))
-                .unwrap(),
-            realm_id: RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap(),
-            predecessor_ref,
-            delta,
-            data_delta: Vec::new(),
-            data_event_set_root: arkret_wire::empty_data_event_set_root(
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .unwrap(),
-            control_event_set_root: test_hash(0x22),
-            state_root: test_hash(0x77),
-            notary_seq,
-            availability_receipt_digests: Vec::new(),
-            covered_event_digests: Vec::new(),
-            previous_state_root: None,
-            previous_digest_algorithm: None,
-            notary_signature: arkret_wire::SealSignature {
-                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
-                payload_digest: test_hash(0xff),
-                jws: "AAAA.BBBB.CCCC".to_owned(),
-            },
-            sealed_at: chrono::Utc
-                .with_ymd_and_hms(2026, 8, 29, 0, 0, notary_seq as u32)
-                .unwrap(),
-            hlc: arkret_identifiers::Hlc::new(format!("019041000000-{notary_seq:04x}-aabbccdd"))
-                .unwrap(),
-            configuration_ref: arkret_wire::EventId::new(format!("ak:event:A{}", "a".repeat(42)))
-                .unwrap(),
-            command_results: Vec::new(),
-            authorization_closures: Vec::new(),
-            data_closure_announcements: Vec::new(),
-            data_closures: Vec::new(),
-            existence_anchors: Vec::new(),
-        };
-        seal.id = seal
-            .derive_id(arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
-        seal
-    }
-
-    fn test_state() -> AppState {
-        AppState::new(
-            crate::config::AppConfig {
-                seed_demo_data: false,
-                ..crate::config::AppConfig::test_default()
-            },
-            soland_storage_postgres::Db { pool: None },
-        )
-    }
-
-    #[test]
-    fn sealed_member_cell_is_authoritative_when_sideband_cache_is_missing() {
-        let realm_id = RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap();
-        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            DidCoreId::new(LIFECYCLE_ACTOR).unwrap(),
-            DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        ));
-        let actor_key = actor.to_string();
-        let subject = arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap();
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{subject}"
-        ))
-        .unwrap();
-        let mut projection = soland_domain::reducer::ProjectionState::new();
-
-        assert!(!projection_member_is_joined(
-            &projection,
-            realm_id.as_str(),
-            &actor,
-            &actor_key,
-        ));
-        projection.install_reloaded_cells(
-            &realm_id,
-            [(
-                cell_id.clone(),
-                arkret_state::ResolvedCellState::Value(json!("join")),
-            )],
-        );
-        assert!(projection_member_is_joined(
-            &projection,
-            realm_id.as_str(),
-            &actor,
-            &actor_key,
-        ));
-        projection.install_reloaded_cells(
-            &realm_id,
-            [(
-                cell_id,
-                arkret_state::ResolvedCellState::Value(json!("leave")),
-            )],
-        );
-        assert!(!projection_member_is_joined(
-            &projection,
-            realm_id.as_str(),
-            &actor,
-            &actor_key,
-        ));
-    }
-
-    /// The durable invite row stores complete Account ids, so a fixture cannot
-    /// use a bare principal core id for either party.
-    fn lifecycle_account(state: &AppState, principal: &str) -> arkret_wire::AccountId {
-        arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(principal).unwrap(),
-            state.service_core_id(),
-        )
-    }
-
-    async fn put_pending_invite(state: &AppState, token: &str) {
-        state
-            .realm_invites()
-            .put(RealmInviteState {
-                invite_id: LIFECYCLE_INVITE.to_owned(),
-                realm_id: LIFECYCLE_REALM.to_owned(),
-                inviter_id: lifecycle_account(state, LIFECYCLE_ACTOR)
-                    .canonical_key()
-                    .unwrap(),
-                invitee_id: Some(
-                    lifecycle_account(state, "ak:did_core:web:bob.example")
-                        .canonical_key()
-                        .unwrap(),
-                ),
-                introduction_evidence_digest: None,
-                third_party_invite: None,
-                invite_token: token.to_owned(),
-                status: "pending".to_owned(),
-                claim_nonces: Default::default(),
-                expires_at: None,
-                created_at: "2026-08-14T00:00:00.000Z".parse().unwrap(),
-                updated_at: None,
-            })
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn invite_token_waits_for_pending_lifecycle_to_be_sealed() {
-        let state = test_state();
-        put_pending_invite(&state, "barrier-token").await;
-
-        let old_seal = test_seal(None, Vec::new(), 1);
-        state
-            .projections()
-            .test_put_seal(&old_seal, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            invite_token_realm_resolution(&state, "barrier-token").await,
-            InviteTokenRealmResolution::FrontierUnavailable
-        );
-
-        let create_move = test_hash(0x44);
-        let create_seal = test_seal(Some(old_seal.id), vec![create_move.clone()], 2);
-        state
-            .projections()
-            .test_put_seal(&create_seal, arkret_canonical::DigestSuite::Sha256)
-            .await
-            .unwrap();
-        let lifecycle_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.invite.lifecycle.v1:{LIFECYCLE_INVITE}"
-        ))
-        .unwrap();
-        state
-            .projections()
-            .test_append_confirmed_effects(
-                &RealmId::new(LIFECYCLE_REALM.to_owned()).unwrap(),
-                &create_seal.id,
-                &[(
-                    lifecycle_cell,
-                    arkret_state::state_model::ordered_log::IssuedOp {
-                        issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
-                            "did:web:owner.example",
-                        )),
-                        op: arkret_state::state_model::StateWrite::new(
-                            create_move,
-                            arkret_wire::LatticeOp {
-                                op_type: arkret_wire::LatticeOpType::Transition,
-                                tag: None,
-                                value: None,
-                                from: Some(json!(null)),
-                                to: Some(json!("pending")),
-                                reason: None,
-                                issuer_seq: None,
-                            },
-                        ),
-                    },
-                )],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            invite_token_realm_resolution(&state, "barrier-token").await,
-            InviteTokenRealmResolution::Ready {
-                realm_id: LIFECYCLE_REALM.to_owned(),
-                seal_basis: arkret_wire::SealBasis {
-                    leaves: vec![create_seal.id],
-                },
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn private_pending_invite_is_pre_join_authoring_evidence() {
-        let state = test_state();
-        let account = arkret_wire::AccountId::new(
-            DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
-            state.service_core_id().clone(),
-        );
-        let invitee_id = arkret_wire::ActorId::account(account.clone()).to_string();
-        let invited_at = "2026-08-14T00:00:00.000Z".parse().unwrap();
-        state
-            .realm_invites()
-            .put(RealmInviteState {
-                invite_id: "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg".to_owned(),
-                realm_id: LIFECYCLE_REALM.to_owned(),
-                inviter_id: lifecycle_account(&state, LIFECYCLE_ACTOR)
-                    .canonical_key()
-                    .unwrap(),
-                invitee_id: Some(account.canonical_key().unwrap()),
-                introduction_evidence_digest: None,
-                third_party_invite: None,
-                invite_token: "private-token".to_owned(),
-                status: "pending".to_owned(),
-                claim_nonces: Default::default(),
-                expires_at: None,
-                created_at: invited_at,
-                updated_at: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(
-            realm_member_invited_or_joined_at_for_id(&state, LIFECYCLE_REALM, &invitee_id).await,
-            Some(invited_at)
-        );
-        assert_eq!(
-            realm_member_invited_or_joined_at_for_id(
-                &state,
-                LIFECYCLE_REALM,
-                "ak:did_core:web:mallory.example"
-            )
-            .await,
-            None
-        );
-        let other_station_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            account.principal_id,
-            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        ));
-        assert_eq!(
-            realm_member_invited_or_joined_at_for_id(
-                &state,
-                LIFECYCLE_REALM,
-                &other_station_actor.to_string()
-            )
-            .await,
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn joined_agent_cannot_bypass_an_ineffective_controller_binding() {
-        let state = test_state();
-        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
-            state.service_core_id(),
-        ));
-        let actor_key = actor.to_string();
-        let now = chrono::Utc::now();
-        state.test_projection().lock().members.insert(
-            (LIFECYCLE_REALM.to_owned(), actor_key.clone()),
-            soland_domain::reducer::SolandMembershipState {
-                member: actor_key.clone(),
-                realm_id: LIFECYCLE_REALM.to_owned(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                membership_event_ref: None,
-                invited_at: None,
-                joined_at: now,
-                updated_at: now,
-                reason: None,
-            },
-        );
-        state.test_projection().lock().agent_membership_bindings.insert(
-            (LIFECYCLE_REALM.to_owned(), actor_key.clone()),
-            arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
-                controller_account_id: arkret_wire::AccountId::new(
-                    DidCoreId::new(LIFECYCLE_ACTOR).unwrap(), state.service_core_id()),
-                controller_membership_generation_ref: arkret_identifiers::EventId::new(
-                    "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim").unwrap(),
-                controller_terminal_event_ref: None,
-            },
-        );
-        assert!(!realm_has_member_by_id(&state, LIFECYCLE_REALM, &actor_key).await);
-    }
-
-    #[tokio::test]
-    async fn principal_directory_entry_does_not_authorize_an_account() {
-        let state = test_state();
-        let principal = DidCoreId::new(LIFECYCLE_ACTOR).unwrap();
-        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal.clone(),
-            state.service_core_id().clone(),
-        ));
-        let mut entry = soland_services::events::RealmDirectoryEntry::new(
-            RealmId::new(LIFECYCLE_REALM).unwrap(),
-            "discovery only",
-            soland_services::events::DirectoryProvenance::LocalOnly,
-        );
-        entry.members.insert(principal);
-        state.realm_directory().upsert(entry);
-        assert!(!realm_has_member_by_id(&state, LIFECYCLE_REALM, &actor.to_string()).await);
-    }
 }

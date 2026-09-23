@@ -4,10 +4,13 @@ use arkret_wire::{DeviceId, DidCoreId, Hash, TransactionId};
 use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RunQueryDsl, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, Text, Timestamptz, Uuid, Value,
-    async_trait, ids, pg_conn, sql_query, sql_types,
+    QueryableByName, RecoveryUnitCommitWrite, RunQueryDsl, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
+    SecurityTransactionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    sql_types,
 };
+
+mod recovery_unit;
 
 pub struct PgSecurityTransactionStore {
     pub pool: PgPool,
@@ -538,6 +541,19 @@ async fn insert_step_attempt(
 
 #[async_trait]
 impl SecurityTransactionStore for PgSecurityTransactionStore {
+    async fn commit_recovery_unit(
+        &self,
+        write: RecoveryUnitCommitWrite,
+    ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord> {
+        write.validate()?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            recovery_unit::commit_recovery_unit_in_connection(conn, write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn create(
         &self,
         record: SecurityTransactionRecord,

@@ -12,8 +12,7 @@
 //! URLs, credential TTLs, and the optional TURN shared secret are
 //! operator-configurable via `AppConfig::ice`.
 
-use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{CallId, CellRef, DeviceId, RealmId};
+use arkret_identifiers::{CallId, DeviceId, RealmId};
 use arkret_models_collaboration::events_payloads::{
     RealmMediaServicePayload, RealmMediaServiceValue,
 };
@@ -23,7 +22,7 @@ use arkret_models_collaboration::objects::media::{
     MediaBackendToken, MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
     MediaIceCredentialType, MediaIceMode, MediaIceServer, MediaIceSignatureAlgorithm,
 };
-use arkret_wire::{CapabilityActionId, DidUrl, REALM_MEDIA_SERVICE_CELL_FAMILY, XExtensionMap};
+use arkret_wire::{CapabilityActionId, DidUrl, XExtensionMap};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
@@ -33,9 +32,9 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_domain::reducer::{FacetRef, facet};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::{hmac_sha256, now, realm_has_member, sha256_hex, validate_device_id};
@@ -561,6 +560,7 @@ async fn handle_rtc_token(
     // first `ak.call.state` event. Absent cells mean no committed focus or ban.
     let call_cells = CallMediaCells::load(
         state,
+        body.realm_id.as_str(),
         body.call_id.as_str(),
         &body.actor_id,
         body.device_id.as_str(),
@@ -761,8 +761,8 @@ fn session_focus_for_call(
     ))
 }
 
-/// Read-only view of the independent durable focus, moderation and per-leg
-/// mute cells consumed by the media token issuer.
+/// Read-only view of the committed focus, moderation and per-leg mute facets
+/// consumed by the media token issuer.
 struct CallMediaCells {
     focus: Option<Value>,
     moderation: Option<Value>,
@@ -772,21 +772,28 @@ struct CallMediaCells {
 impl CallMediaCells {
     async fn load(
         state: &AppState,
+        realm_id: &str,
         call_id: &str,
         actor_id: &arkret_wire::ActorId,
         device_id: &str,
     ) -> Result<Self, AppError> {
-        let focus_cell = call_cell_ref(arkret_wire::CellFamilyId::CALL_FOCUS_V1, &[call_id])?;
-        let moderation_cell =
-            call_cell_ref(arkret_wire::CellFamilyId::CALL_MODERATION_V1, &[call_id])?;
-        let mute_cell = call_cell_ref(
-            arkret_wire::CellFamilyId::CALL_MUTE_OVERRIDE_V1,
-            &[call_id, &actor_id.to_string(), device_id],
-        )?;
+        let projection = state.projections().snapshot();
         Ok(Self {
-            focus: load_call_cell(state, call_id, focus_cell).await?,
-            moderation: load_call_cell(state, call_id, moderation_cell).await?,
-            mute_override: load_call_cell(state, call_id, mute_cell).await?,
+            focus: projection
+                .facet_value(realm_id, &FacetRef::new(facet::CALL_FOCUS, call_id))
+                .cloned(),
+            moderation: projection
+                .facet_value(realm_id, &FacetRef::new(facet::CALL_MODERATION, call_id))
+                .cloned(),
+            mute_override: projection
+                .facet_value(
+                    realm_id,
+                    &FacetRef::composite(
+                        facet::CALL_MUTE_OVERRIDE,
+                        &[call_id, &actor_id.to_string(), device_id],
+                    ),
+                )
+                .cloned(),
         })
     }
 
@@ -857,122 +864,6 @@ impl CallMediaCells {
                 .unwrap_or(true),
         )
     }
-}
-
-fn call_cell_ref(family: &str, subject_parts: &[&str]) -> Result<CellRef, AppError> {
-    let subject = if subject_parts.len() == 1 {
-        subject_parts[0].to_owned()
-    } else {
-        arkret_wire::composite_subject(subject_parts)
-            .map_err(|error| AppError::internal(format!("invalid call cell subject: {error}")))?
-    };
-    CellRef::new(format!("ak:cell:{family}:{subject}"))
-        .map_err(|error| AppError::internal(format!("invalid call cell id: {error}")))
-}
-
-async fn load_call_cell(
-    state: &AppState,
-    call_id: &str,
-    cell_id: CellRef,
-) -> Result<Option<Value>, AppError> {
-    let cached = {
-        let projection = state.projections().snapshot();
-        projection.cell_value(&cell_id).cloned()
-    };
-    match call_state_from_event_log(state, call_id, &cell_id).await? {
-        Some(value) => {
-            state.projections().cache_cell(cell_id, value.clone());
-            Ok(Some(value))
-        }
-        None => Ok(cached),
-    }
-}
-
-async fn call_state_from_event_log(
-    state: &AppState,
-    call_id: &str,
-    cell_id: &CellRef,
-) -> Result<Option<Value>, AppError> {
-    let mut records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
-        .into_iter()
-        .filter(|record| {
-            record.kind == arkret_wire::EventKind::CallState.as_str()
-                && record_call_id(record) == Some(call_id)
-        })
-        .collect::<Vec<_>>();
-    if records.is_empty() {
-        return Ok(None);
-    }
-    records.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
-
-    let mut operations = Vec::new();
-    for record in &records {
-        let Some(operation) = call_state_operation_from_record(record)? else {
-            continue;
-        };
-        // Cold projection re-derives each Event's writes from the registered
-        // reducer contract; the stored envelope carries no producer
-        // `effects[]` to replay (`event-and-patch.md` §2.4.2).
-        let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "stored call-state Event {} is not a canonical Event: {error}",
-                    record.event_id
-                ))
-            },
-        )?;
-        let cell_writes = state
-            .projections()
-            .project_cell_writes(&event)
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "stored call-state Event {} does not project its registered cell writes: \
-                     {error}",
-                    record.event_id
-                ))
-            })?;
-        operations.push(soland_services::projection::ProjectedOperation {
-            operation,
-            cell_writes,
-        });
-    }
-    Ok(state
-        .projections()
-        .project_call_state_cell(&operations, cell_id))
-}
-
-fn record_call_id(record: &AcceptedEvent) -> Option<&str> {
-    record
-        .envelope
-        .get("payload")
-        .and_then(|payload| payload.get("call_id"))
-        .and_then(Value::as_str)
-}
-
-fn call_state_operation_from_record(record: &AcceptedEvent) -> Result<Option<Operation>, AppError> {
-    let Some(operation) =
-        crate::routing::events::event_log::projection_operation_from_canonical_record(record)
-    else {
-        return Ok(None);
-    };
-    if operation.event_kind != arkret_wire::EventKind::CallState {
-        return Err(AppError::internal(format!(
-            "stored Event {} hydrated as {}, expected {}",
-            record.event_id,
-            operation.event_kind.as_str(),
-            arkret_wire::EventKind::CallState.as_str(),
-        )));
-    }
-    Ok(Some(operation))
 }
 
 fn media_service_epoch_for_realm(
@@ -1465,7 +1356,9 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
     let projection = state.projections().snapshot();
     let owner = projection
         .realm_authority_root(realm_id)
-        .map(|root| root.controller_actor_id.to_string());
+        .and_then(|root| root.get("controller_actor_id"))
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+        .map(|actor| actor.to_string());
     let members = projection
         .members_of_realm(realm_id)
         .into_iter()

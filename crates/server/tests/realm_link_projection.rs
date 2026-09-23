@@ -38,13 +38,12 @@ fn link_op(source: &str, target: &str, link_kind: &str, status: Option<&str>) ->
 }
 
 #[test]
-fn realm_link_projects_all_eight_canonical_kinds() {
+fn realm_link_projects_all_seven_canonical_kinds() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let kinds = [
         "governed_by",
         "discoverable_from",
-        "join_gate_from",
         "join_gate_from",
         "confidential_extension_of",
         "mirror_of",
@@ -70,14 +69,14 @@ fn realm_link_projects_all_eight_canonical_kinds() {
         }
     }
 
-    // Structured cache has eight rows for REALM_A (outbound) + eight
+    // Structured cache has seven rows for REALM_A (outbound) + seven
     // mirrored rows for REALM_B (inbound).
     let outbound = state.realm_links_query(REALM_A, RealmLinkDirection::Outbound, None);
-    assert_eq!(outbound.len(), 8);
+    assert_eq!(outbound.len(), 7);
     let inbound = state.realm_links_query(REALM_B, RealmLinkDirection::Inbound, None);
-    assert_eq!(inbound.len(), 8);
+    assert_eq!(inbound.len(), 7);
     let both = state.realm_links_query(REALM_A, RealmLinkDirection::Both, None);
-    assert_eq!(both.len(), 8); // REALM_A has no inbound from its outbound, so still 8.
+    assert_eq!(both.len(), 7); // REALM_A has no inbound from its outbound.
 }
 
 #[test]
@@ -162,17 +161,17 @@ fn realm_link_status_flip_replaces_in_place() {
 }
 
 #[test]
-fn realm_link_cell_value_persisted() {
+fn realm_link_facet_value_projected() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
-    let cell_id = soland_domain::reducer::realm_links::realm_link_projection_cell_ref(
-        REALM_A,
+    let facet = soland_domain::reducer::realm_links::realm_link_facet(
         REALM_B,
         "join_gate_from",
-    )
-    .unwrap();
-    let value = state.cell_value(&cell_id).expect("cell must be projected");
+    );
+    let value = state
+        .facet_value(REALM_A, &facet)
+        .expect("Realm link facet must be projected");
     assert_eq!(
         value.get("link_kind").and_then(Value::as_str),
         Some("join_gate_from")

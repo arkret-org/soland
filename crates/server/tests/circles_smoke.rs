@@ -62,16 +62,6 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
         .map(|token| format!("ak:event:{token}"))
         .unwrap_or_else(|| soland_test_support::fixture_content_bound_id("ak:event:"));
     if let Some(object) = object {
-        if kind == arkret_wire::EventKind::CircleCreate.as_str() {
-            object
-                .entry("encryption_profile")
-                .or_insert_with(|| Value::String("none".to_owned()));
-            if object.get("encryption_profile").and_then(Value::as_str) == Some("mls_rfc9420") {
-                object
-                    .entry("content_scheme")
-                    .or_insert_with(|| Value::String("mls_rfc9420".to_owned()));
-            }
-        }
         object.remove("id");
         object.remove("created_by");
     }
@@ -130,16 +120,14 @@ fn seed_realm_projection(
             default_strand_id: None,
         },
     );
-    state.realm_null_subject_cells.insert(
-        (
-            realm_id.to_owned(),
-            arkret_wire::REALM_GENESIS_CELL.to_owned(),
-        ),
-        arkret_state::state_model::ResolvedCellState::Value(json!({
+    state.set_realm_facet(
+        realm_id,
+        soland_domain::reducer::facet::REALM_GENESIS,
+        json!({
             "purpose": "collaboration",
             "encryption_profile": encryption_profile,
             "schema_refs": ["ak.schema.realm.v1"]
-        })),
+        }),
     );
 }
 
@@ -193,7 +181,6 @@ fn circle_create_writes_projection() {
                     "directory_visibility": "members",
                     "join_rule": "invite",
                     "history_access": "since_join",
-                    "encryption_profile": "mls_rfc9420",
                     "created_by": member_actor(ALICE),
                 }
             }),
@@ -213,12 +200,12 @@ fn circle_create_writes_projection() {
 }
 
 #[test]
-fn circle_create_plaintext_under_e2ee_realm_rejected() {
+fn circle_remains_plaintext_until_its_own_mls_genesis() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("circles-e2ee-floor-test");
     seed_encrypted_realm(&mut state, &hlc, REALM_A, ALICE);
 
-    let rejected = state.apply(
+    let created = state.apply(
         &op(
             arkret_wire::EventKind::CircleCreate,
             REALM_A,
@@ -227,7 +214,6 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Plaintext Ops",
-                    "encryption_profile": "none",
                     "created_by": member_actor(ALICE),
                 }
             }),
@@ -235,96 +221,8 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
         &hlc,
     );
 
-    assert!(
-        matches!(rejected, ProjectionEffect::Rejected { ref reason }
-                 if reason == "circle_encryption_below_realm_floor"),
-        "plaintext Circle under E2EE Realm MUST reject as circle_encryption_below_realm_floor; got {rejected:?}"
-    );
-}
-
-#[test]
-fn circle_content_floor_below_realm_rejected() {
-    // ak.vector.circle.content_floor_below_realm_rejected.v1 — an MLS Circle
-    // (so the encryption_profile check passes) that declares a content floor
-    // LOWER than the parent Realm's effective floor is rejected (circle.md §7).
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("circles-content-floor-test");
-    seed_realm(&mut state, &hlc, REALM_A, ALICE);
-    // Install the already-accepted policy projection; this reducer-level test
-    // exercises Circle floor enforcement, not policy-bundle admission.
-    state.realm_policy_bundle_cells.insert(
-        REALM_A.to_owned(),
-        arkret_state::state_model::ResolvedCellState::Value(json!({
-            "policy_revision": 1,
-            "content_encryption_floor": "e2ee_required"
-        })),
-    );
-    let rejected = state.apply(
-        &op(
-            arkret_wire::EventKind::CircleCreate,
-            REALM_A,
-            json!({
-                "object": {
-                    "id": CIRCLE_A,
-                    "realm_id": REALM_A,
-                    "title": "Below-floor Ops",
-                    "encryption_profile": "mls_rfc9420",
-                    "content_encryption_floor": "allow_plaintext",
-                    "created_by": member_actor(ALICE),
-                }
-            }),
-        ),
-        &hlc,
-    );
-    assert!(
-        matches!(rejected, ProjectionEffect::Rejected { ref reason }
-                 if reason == "circle_encryption_below_realm_floor"),
-        "Circle content floor below the parent Realm floor MUST reject; got {rejected:?}"
-    );
-}
-
-#[test]
-fn circle_update_rejects_encryption_profile_patch() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("circles-e2ee-lock-test");
-    seed_realm(&mut state, &hlc, REALM_A, ALICE);
-    state.apply(
-        &op(
-            arkret_wire::EventKind::CircleCreate,
-            REALM_A,
-            json!({
-                "object": {
-                    "id": CIRCLE_A,
-                    "realm_id": REALM_A,
-                    "title": "Ops",
-                    "encryption_profile": "mls_rfc9420",
-                    "created_by": member_actor(ALICE),
-                }
-            }),
-        ),
-        &hlc,
-    );
-
-    let rejected = state.apply(
-        &op(
-            arkret_wire::EventKind::CircleUpdate,
-            REALM_A,
-            json!({
-                "circle_id": CIRCLE_A,
-                "patch": {
-                    "encryption_profile": "none"
-                },
-                "sender": member_actor(ALICE),
-            }),
-        ),
-        &hlc,
-    );
-
-    assert!(
-        matches!(rejected, ProjectionEffect::Rejected { ref reason }
-                 if reason == arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED),
-        "Circle encryption_profile updates MUST reject as patch_path_reducer_managed; got {rejected:?}"
-    );
+    assert!(matches!(created, ProjectionEffect::CircleLifecycle { .. }));
+    assert!(!state.circle_scope_is_mls_activated(CIRCLE_A));
 }
 
 #[test]
@@ -483,7 +381,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
     add_realm_member(&mut state, &hlc, REALM_A, ALICE);
     add_realm_member(&mut state, &hlc, REALM_A, BOB);
 
-    for (circle_id, encryption_profile) in [(CIRCLE_A, "mls_rfc9420"), (CIRCLE_B, "none")] {
+    for circle_id in [CIRCLE_A, CIRCLE_B] {
         state.apply(
             &op(
                 arkret_wire::EventKind::CircleCreate,
@@ -494,7 +392,6 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
                         "realm_id": REALM_A,
                         "title": "Private Ops",
                         "created_by": member_actor(ALICE),
-                        "encryption_profile": encryption_profile,
                     }
                 }),
             ),
@@ -519,6 +416,10 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
             "fixture should start with Bob joined in {circle_id}"
         );
     }
+    // Only this Circle has accepted its own MLS Genesis. A create payload no
+    // longer declares an encryption profile or activates MLS.
+    state.circles.get_mut(CIRCLE_A).unwrap().mls_group_ref =
+        Some("ak:mls:group:circle".to_owned());
 
     let effect = state.apply(
         &op(
@@ -611,9 +512,8 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         );
     }
 
-    // AKP-0007: a Message's Circle scope is derived from its Strand, never from
-    // the message payload (spec: scope_circle_id is a Strand field). Bind a Strand
-    // to the Circle, then post a message to that Strand WITHOUT any scope field.
+    // Bind a Strand to the Circle, then submit a Message whose accepted
+    // scope_ref was verified against that Strand by the receiver.
     let strand_created = state.apply(
         &op(
             arkret_wire::EventKind::StrandCreate,
@@ -622,7 +522,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
                 "object": {
                     "id": STRAND_X,
                     "realm_id": REALM_A,
-                    "title": "Circle-scoped Strand",
+                    "metadata": {"title": "Circle-scoped Strand"},
                     "scope_circle_id": CIRCLE_A,
                 }
             }),
@@ -634,8 +534,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         "circle-scoped Strand create must succeed, got {strand_created:?}"
     );
 
-    let effect = state.apply(
-        &op(
+    let mut message = op(
             arkret_wire::EventKind::MessageCreate,
             REALM_A,
             json!({
@@ -648,15 +547,18 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
                 },
                 "encrypted": true,
             }),
-        ),
-        &hlc,
-    );
+        );
+    message.context.accepted_scope_ref = arkret_wire::ScopeRef::Circle {
+        realm_id: RealmId::new(REALM_A).unwrap(),
+        circle_id: arkret_wire::CircleId::new(CIRCLE_A).unwrap(),
+    };
+    let effect = state.apply(&message, &hlc);
     let ProjectionEffect::MessageCreated(message) = effect else {
         panic!("circle-scoped message should be projected, got {effect:?}");
     };
     assert_eq!(
         message.content["scope_circle_id"], CIRCLE_A,
-        "projection must derive Circle scope from the Strand so sync/event readers can filter"
+        "projection must preserve the accepted Circle scope so sync/event readers can filter"
     );
     assert!(state.circle_scope_visible_to_actor(CIRCLE_A, &member_key(ALICE)));
     assert!(state.circle_scope_visible_to_actor(CIRCLE_A, &member_key(BOB)));
@@ -765,7 +667,7 @@ fn strand_scope_circle_id_rejects_cross_realm() {
                 "object": {
                     "id": STRAND_X,
                     "realm_id": REALM_A,
-                    "title": "Cross-Realm Strand",
+                    "metadata": {"title": "Cross-Realm Strand"},
                     "scope_circle_id": CIRCLE_B,
                 }
             }),

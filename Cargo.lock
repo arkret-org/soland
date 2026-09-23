@@ -6113,6 +6113,7 @@ dependencies = [
  "soland-storage",
  "soland-storage-postgres",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

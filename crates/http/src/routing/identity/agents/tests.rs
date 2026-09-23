@@ -197,70 +197,10 @@ fn requested_agent_scope() -> Value {
 
 fn initial_submission(
     event: arkret_wire::Event,
-    actor_id: arkret_identifiers::DidCoreId,
-) -> arkret_wire::EventInitialSubmission {
-    use arkret_wire::{
-        AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole,
-        AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
-        AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, DeviceId, DidUrl,
-        LeaseBasisRef, RiskTier, SchemaId, SealId,
-    };
-
-    let policy = AuthoritySetPolicy {
-        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-        authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
-        policy_kind: AuthoritySetPolicyKind::RealmAdmission,
-        scope_ref: event.scope_ref.clone(),
-        source: AuthoritySetPolicySource {
-            source_kind: AuthoritySetSourceKind::RealmControl,
-            source_ref: event.event_id.as_str().to_owned(),
-            source_digest: arkret_wire::Hash::new(format!("sha256:{}", "e".repeat(64))).unwrap(),
-            generation_ref: "1".to_owned(),
-        },
-        authorization_rules: vec![AuthoritySetAuthorizationRule {
-            rule_id: "realm_admission".to_owned(),
-            issuer_role: AuthoritySetIssuerRole::RealmAdmission,
-            allowed_actions: vec![event.kind.as_str().to_owned()],
-            issuers: vec![AuthoritySetIssuer {
-                verification_method: DidUrl::new("did:web:controller.example#key-1").unwrap(),
-            }],
-            threshold: 1,
-        }],
-    };
-    let issued_at = event.created_at;
-    arkret_wire::EventInitialSubmission {
-        publication_event: None,
-        mls_frontier_leaves: None,
-        authorization_lease: Some(AuthorizationLease {
-            authorization_lease_id: AuthorizationLeaseId::new(
-                "ak:authorization_lease:01904100-0000-7000-8000-aaaaaaaaaaaa",
-            )
-            .unwrap(),
-            basis_ref: LeaseBasisRef::Seal(
-                SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
-            ),
-            actor_id: arkret_wire::ActorId::service(actor_id),
-            device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002").unwrap(),
-            scope_ref: event.scope_ref.clone(),
-            action: event.kind.as_str().to_owned(),
-            authorization_rule_id: "realm_admission".to_owned(),
-            risk_tier: RiskTier::Low,
-            issued_at,
-            expires_at: issued_at + chrono::Duration::hours(1),
-            authority_set_ref: AuthoritySetRef {
-                authority_set_id: policy.authority_set_id.clone(),
-                authority_set_digest: policy.digest().unwrap(),
-            },
-            authority_set_policy: policy,
-            proofs: Vec::new(),
-        }),
-        event,
-        cbs_proof_bundles: Vec::new(),
-        control_proposal_ack: None,
-        membership_compensation_evidence: None,
-    }
+    _actor_id: arkret_identifiers::DidCoreId,
+) -> arkret_wire::EventAdmissionSubmission {
+    arkret_wire::EventAdmissionSubmission::new(event)
 }
-
 fn key_authorize_envelope(
     record: &mut AgentPrincipalRecord,
     controller: &str,
@@ -360,7 +300,7 @@ fn runtime_approval_request_body(
     .unwrap();
     let verification_method = arkret_wire::DidUrl::new(verification_method).unwrap();
     let runtime_key_binding_digest =
-        arkret_models_collaboration::agent_operations::agent_runtime_key_binding_digest(
+        arkret_models_collaboration::agent_scope::agent_runtime_key_binding_digest(
             &agent_id,
             &pairing_request_id,
             &verification_method,
@@ -371,10 +311,10 @@ fn runtime_approval_request_body(
     let created_at = chrono::Utc::now();
     let expires_at = created_at + chrono::Duration::minutes(5);
     let mut proof_of_possession =
-        arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProof {
-            kind: arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProofKind::AgentRuntimeKeyPossession,
+        arkret_models_collaboration::agent_scope::AgentRuntimeKeyPossessionProof {
+            kind: arkret_models_collaboration::agent_scope::AgentRuntimeKeyPossessionProofKind::AgentRuntimeKeyPossession,
             verification_method: verification_method.clone(),
-            signature_algorithm: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::Ed25519,
+            signature_algorithm: arkret_models_collaboration::agent_scope::AgentRuntimeKeyAlgorithm::Ed25519,
             challenge: pairing_request_id.clone(),
             audience_id: arkret_wire::DidCoreId::new(service_id).unwrap(),
             created_at,
@@ -501,13 +441,7 @@ fn bind_pairing_request_to_controller_device(
     body: &mut AgentKeyPairRequestBody,
     controller_principal_id: &str,
 ) {
-    let device_id = body
-        .authorize_event
-        .authorization_lease
-        .as_ref()
-        .expect("pairing fixture uses a delayed authorization lease")
-        .device_id
-        .as_str();
+    let device_id = "ak:device:01904100-0000-7000-8000-000000000002";
     let mut proof = body.requested_scope_disclosure.proofs[0].clone();
     proof.verification_method =
         arkret_wire::DidUrl::new(format!("{}#{device_id}", web_did(controller_principal_id)))
@@ -515,7 +449,16 @@ fn bind_pairing_request_to_controller_device(
     body.authorize_event.event.executed_by = Some(arkret_wire::ActorId::service(
         crate::test_actor_id_str(&web_did(controller_principal_id)),
     ));
-    body.authorize_event.event.producer_proof = Some(proof.into());
+    body.authorize_event.event.producer_proof = Some(arkret_wire::ProducerEventProof {
+        kind: proof.kind,
+        verification_method: proof.verification_method,
+        event_digest: proof.payload_digest,
+        created_at: proof.created_at,
+        domain: proof.domain,
+        audience: proof.audience,
+        proof_purpose: proof.proof_purpose,
+        jws: proof.jws,
+    });
 }
 
 #[test]
@@ -528,15 +471,7 @@ fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submissio
     let device_id = service_pairing_controller_device_id(&body, controller_principal_id)
         .expect("signed submission binds the service session device");
 
-    assert_eq!(
-        device_id,
-        body.authorize_event
-            .authorization_lease
-            .as_ref()
-            .expect("pairing fixture uses a delayed authorization lease")
-            .device_id
-            .as_str()
-    );
+    assert_eq!(device_id, "ak:device:01904100-0000-7000-8000-000000000002");
 }
 
 #[test]
@@ -868,7 +803,7 @@ fn status_request_body(
             "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
         )
         .unwrap(),
-        pairing_code: pairing_code.to_owned(),
+        pairing_code: arkret_wire::NonEmptyString::new(pairing_code).unwrap(),
         agent_id: DidCoreId::new(agent_id.to_owned()).unwrap(),
     }
 }
@@ -1286,10 +1221,9 @@ fn pairing_terminal_decision_requires_coverage_and_exact_post_state() {
 
 #[test]
 fn accepted_lifecycle_rejects_stale_active_row_without_interlocking_pairing() {
-    use arkret_models_identity::agent_signer_evidence::AgentLifecycleStatus;
     for accepted in [
-        Some(AgentLifecycleStatus::Paused),
-        Some(AgentLifecycleStatus::Deactivated),
+        Some(AgentLifecycleState::Paused),
+        Some(AgentLifecycleState::Deactivated),
         None,
     ] {
         assert!(
@@ -1301,14 +1235,14 @@ fn accepted_lifecycle_rejects_stale_active_row_without_interlocking_pairing() {
     assert!(
         validate_accepted_agent_action_lifecycle(
             AgentLifecycleState::Active,
-            Some(AgentLifecycleStatus::Active)
+            Some(AgentLifecycleState::Active)
         )
         .is_ok()
     );
     assert!(
         validate_accepted_agent_action_lifecycle(
             AgentLifecycleState::Paused,
-            Some(AgentLifecycleStatus::Active)
+            Some(AgentLifecycleState::Active)
         )
         .is_err(),
         "pending local pause intent remains a conservative deny"
@@ -1317,7 +1251,7 @@ fn accepted_lifecycle_rejects_stale_active_row_without_interlocking_pairing() {
     assert_eq!(
         projected_agent_lifecycle(
             AgentLifecycleState::Active,
-            Some(AgentLifecycleStatus::Paused)
+            Some(AgentLifecycleState::Paused)
         )
         .unwrap(),
         AgentLifecycleState::Paused
@@ -1325,7 +1259,7 @@ fn accepted_lifecycle_rejects_stale_active_row_without_interlocking_pairing() {
     assert_eq!(
         projected_agent_lifecycle(
             AgentLifecycleState::Active,
-            Some(AgentLifecycleStatus::Deactivated)
+            Some(AgentLifecycleState::Deactivated)
         )
         .unwrap(),
         AgentLifecycleState::Deactivated
@@ -1333,7 +1267,7 @@ fn accepted_lifecycle_rejects_stale_active_row_without_interlocking_pairing() {
     assert_eq!(
         projected_agent_lifecycle(
             AgentLifecycleState::Paused,
-            Some(AgentLifecycleStatus::Active)
+            Some(AgentLifecycleState::Active)
         )
         .unwrap(),
         AgentLifecycleState::Paused

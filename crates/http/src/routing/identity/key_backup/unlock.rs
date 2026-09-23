@@ -91,7 +91,9 @@ fn verify_key_backup_auth_data_signature(
         "multibase",
     )
     .map_err(|_| key_backup_untrusted_signature())?;
-    let canonical = KeyBackup::signing_payload_bytes_from_wire(backup).map_err(|error| {
+    let backup: KeyBackup = serde_json::from_value(backup.clone())
+        .map_err(|error| schema_error(format!("invalid key backup envelope: {error}")))?;
+    let canonical = backup.signing_payload_bytes().map_err(|error| {
         AppError::internal(format!(
             "key backup signature transcript is invalid: {error}"
         ))
@@ -129,18 +131,23 @@ fn key_backup_verification_method_matches_device_key(
     let Ok(method) = arkret_wire::DidUrl::new(verification_method.to_owned()) else {
         return false;
     };
-    crate::routing::federation::move_seal::session_device_verification_method_matches(
-        principal_id,
-        device_id,
-        &method,
-    )
+    let Some((did_text, fragment)) = method.as_str().split_once('#') else {
+        return false;
+    };
+    arkret_wire::Did::new(did_text.to_owned())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+        .is_ok_and(|core| core.as_str() == principal_id && fragment == device_id)
 }
 
 pub(super) fn key_backup_canonical_digest_without_signature(
     backup: &Value,
 ) -> Result<String, AppError> {
-    KeyBackup::signature_independent_digest_from_wire(backup)
-        .map_err(|error| AppError::internal(format!("key backup canonical digest failed: {error}")))
+    let backup: KeyBackup = serde_json::from_value(backup.clone())
+        .map_err(|error| schema_error(format!("invalid key backup envelope: {error}")))?;
+    let bytes = backup
+        .signing_payload_bytes()
+        .map_err(|error| schema_error(format!("invalid key backup envelope: {error}")))?;
+    Ok(arkret_canonical::sha256_digest(bytes))
 }
 
 pub(super) fn validate_key_backup_unlock_proof_shape(
@@ -172,7 +179,7 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
     if proof.backup_id != backup.backup_id
         || proof.backup_kind != backup.backup_kind
         || proof.series_id != backup.series_id
-        || proof.ciphertext_digest.as_str() != backup.ciphertext_digest
+        || proof.ciphertext_digest != backup.ciphertext_digest
     {
         return Err(AppError::capability_denied(
             "key backup unlock proof does not match backup metadata",
@@ -306,7 +313,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
                 != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
                 || grant.grant_id.as_str() != record.session_grant_id
                 || grant.cnf_jkt != record.session_grant_cnf_jkt
-                || record.state != arkret_models_crypto::SessionState::Verified
+                || record.state != soland_storage::RecoverySessionLifecycle::Verified
                 || record.expires_at <= now
                 || record.expires_at != typed.expires_at
                 || record.principal_id != typed.account_id.principal_id
@@ -422,8 +429,7 @@ pub(super) async fn issue_key_backup_unlock_challenge(
             .map_err(|error| AppError::internal(error.to_string()))?,
         backup_id: typed.backup_id,
         series_id: typed.series_id,
-        ciphertext_digest: arkret_wire::Hash::new(typed.ciphertext_digest)
-            .map_err(|error| AppError::internal(error.to_string()))?,
+        ciphertext_digest: typed.ciphertext_digest,
         audience: arkret_wire::NonEmptyString::new(unlock_audience(state)?)
             .map_err(|error| AppError::internal(error.to_string()))?,
         service_id: state.service_core_id(),
@@ -493,10 +499,7 @@ pub(super) async fn unlock_active_basis(
     let pointers = super::listing::active_pointers(state, account).await?;
     let typed: KeyBackup = serde_json::from_value(backup.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let pointer = match typed.backup_kind {
-        BackupKind::SecretStorage => &pointers.secret_storage,
-        BackupKind::MlsHistory => &pointers.mls_history,
-    };
+    let pointer = &pointers.secret_storage;
     if !matches!(pointer,BackupActiveSeriesPointer::Active{active_series_id,..} if active_series_id==&typed.series_id)
         || typed
             .expires_at
@@ -504,5 +507,7 @@ pub(super) async fn unlock_active_basis(
     {
         return Err(AppError::conflict("backup_frontier_stale"));
     }
-    Ok(json!({"realm_id":pointers.control_realm_id,"seal_basis":pointers.seal_basis}))
+    Ok(
+        json!({"realm_id":pointers.control_realm_id,"authority_commit_id":pointers.authority_commit_id}),
+    )
 }

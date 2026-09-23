@@ -40,136 +40,23 @@ fn did_key_from_ed25519_bytes(bytes: &[u8]) -> Result<arkret_wire::DidKey, Event
 }
 
 async fn verify_with_historical_signer_evidence(
-    state: &AppState,
-    event: &arkret_wire::Event,
-    proof: &arkret_wire::ProducerEventProof,
-    envelope_bytes: &[u8],
-    event_actor: &arkret_wire::ActorId,
-    signer: &arkret_wire::ActorId,
+    _state: &AppState,
+    _event: &arkret_wire::Event,
+    _proof: &arkret_wire::ProducerEventProof,
+    _envelope_bytes: &[u8],
+    _event_actor: &arkret_wire::ActorId,
+    _signer: &arkret_wire::ActorId,
 ) -> Result<arkret_wire::DidKey, EventValidationError> {
-    let evidence_ref = proof
-        .signer_resolution_evidence_ref
-        .as_ref()
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "ordinary Event producer proof must reference signer evidence",
-            )
-        })?;
-    let content_digest = evidence_ref.content_digest().map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            format!("producer signer evidence reference is invalid: {error}"),
-        )
-    })?;
-    let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest,
-    };
-    let dependency = state
-        .persistence()
-        .governance_dependency_store()
-        .get_unscoped_signer_evidence(&selector)
-        .await
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                format!("producer signer evidence lookup failed: {error}"),
-            )
-        })?;
-    let dependency = dependency.ok_or_else(|| {
-        event_validation_error(
-            StatusCode::CONFLICT,
-            "dependency_missing",
-            "ordinary Event historical producer source is unavailable",
-        )
-    })?;
-    let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-        authenticated_signer_resolution_evidence: evidence,
-        ..
-    } = dependency
-    else {
-        return Err(event_validation_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "schema_violation",
-            "producer signer evidence selector resolved to the wrong dependency kind",
-        ));
-    };
-    if evidence.signer_id() != signer.signing_principal_id() {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "producer signer evidence does not bind the Event signer",
-        ));
-    }
-    if evidence.verification_method() != &proof.verification_method {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
-            "producer signer evidence does not bind the selected verification method",
-        ));
-    }
-    let public_key = if matches!(
-        evidence.as_ref(),
-        arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent { .. }
-    ) {
-        crate::routing::identity::agents::evidence::verified_historical_agent_event_key(
-            state, event, &evidence,
-        )
-        .await
-        .map_err(|error| event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error))?
-    } else {
-        *crate::routing::events::event_log::submit::verify_historical_producer(
-            state,
-            event,
-            proof.event_digest.digest_suite().map_err(|error| {
-                event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
-            })?,
-        )
-        .await
-        .map_err(|error| {
-            let missing = error.starts_with("dependency_missing:");
-            event_validation_error(
-                if missing {
-                    StatusCode::CONFLICT
-                } else {
-                    StatusCode::BAD_REQUEST
-                },
-                if missing {
-                    "dependency_missing"
-                } else {
-                    "invalid_proof"
-                },
-                error,
-            )
-        })?
-        .key()
-    };
-    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-        bytes: public_key.to_vec(),
-    };
-    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-        proof,
-        envelope_bytes,
-        event_actor,
-        &material,
-        proof.event_digest.digest_suite().map_err(|error| {
-            event_validation_error(StatusCode::BAD_REQUEST, "invalid_proof", error.to_string())
-        })?,
-    )
-    .map_err(|error| {
-        tracing::debug!(%error, "historical producer Event proof verification failed");
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "producer Event proof signature is invalid",
-        )
-    })?;
-    did_key_from_ed25519_bytes(&public_key)
+    // The former selector used the retired governance dependency store. A
+    // current signer key cannot prove which key signed a historical Event.
+    // Reopen ordinary admission only after the accepted authority cut can
+    // resolve the producer key and its authorization Event/Commit pair.
+    Err(event_validation_error(
+        StatusCode::CONFLICT,
+        "dependency_missing",
+        "accepted historical producer signer evidence is unavailable",
+    ))
 }
-
 pub(crate) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
@@ -763,8 +650,6 @@ mod tests {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
             arkret_wire::ActorId::service(actor_id.clone()),
-            0,
-            arkret_wire::Hlc::new("019041000000-0000-00000000".to_owned()).unwrap(),
             json!({
                 "realm_id": realm_id,
                 "event_id": target_event_id,
@@ -790,15 +675,7 @@ mod tests {
         arkret_signatures::sign_event(
             &mut event,
             &signer,
-            &verification_method,
-            arkret_signatures::SignEventOptions::new(
-                arkret_wire::SignerEvidenceRef::new(format!(
-                    "ak:signer_evidence:sha256:{}",
-                    "11".repeat(32)
-                ))
-                .unwrap(),
-            )
-            .with_created_at(created_at),
+            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
         )
         .unwrap();
         let session = SessionRecord {

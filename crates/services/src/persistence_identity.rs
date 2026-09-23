@@ -776,10 +776,8 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             signer_resolution_evidence_ref: command.signer_resolution_evidence_ref.clone(),
             current_signer_evidence: command.current_signer_evidence.clone(),
             frozen_authorize_event: command.frozen_authorize_event.clone(),
-            outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome {
-                authorize_ref: command.authorize_ref.clone(),
-                status: command.status,
-            },
+            authorize_ref: command.authorize_ref.clone(),
+            status: command.status,
             authorized_key_event: command.authorized_key_event.clone(),
             authorized_at: command.authorized_at,
         };
@@ -1505,6 +1503,17 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .0
             .security_transactions()
             .accept_step(transaction, outcome)
+            .await?)
+    }
+
+    async fn commit_recovery_unit(
+        &self,
+        write: crate::identity::RecoveryUnitCommitWrite,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionStepOutcomeState> {
+        Ok(self
+            .0
+            .security_transactions()
+            .commit_recovery_unit(write)
             .await?)
     }
 

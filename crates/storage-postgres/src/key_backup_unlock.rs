@@ -282,8 +282,65 @@ pub(crate) async fn validate_recovery_unlock_policy(
     if session.get("state").and_then(Value::as_str) == Some("verified") && proof.is_none() {
         return Err(rejected("verified recovery session proof missing").into());
     }
+    let proof = proof
+        .map(serde_json::from_value::<arkret_models_crypto::RecoverySessionProof>)
+        .transpose()
+        .map_err(PersistenceError::database)?;
     for policy in &updates {
         ensure_policy_payload_active(policy, now)?;
+        if let Some(proof) = &proof {
+            ensure_selected_recovery_method_active(policy, proof, now)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_selected_recovery_method_active(
+    payload: &Value,
+    proof: &arkret_models_crypto::RecoverySessionProof,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), PgTransactionError> {
+    use arkret_models_crypto::{RecoveryMethod, RecoverySessionProof};
+
+    let policy: arkret_models_crypto::RecoveryPolicy =
+        serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
+    let active = policy.methods.iter().any(|method| match (method, proof) {
+        (RecoveryMethod::DidRoot, RecoverySessionProof::DidRoot(_)) => true,
+        (RecoveryMethod::RecoveryUnlock { keys }, RecoverySessionProof::RecoveryUnlock(proof)) => {
+            keys.iter().any(|key| {
+                key.verification_method == proof.verification_method
+                    && key.not_before <= now
+                    && now < key.expires_at
+                    && key.revoked_at.is_none_or(|revoked_at| now < revoked_at)
+            })
+        }
+        (
+            RecoveryMethod::DeviceQuorum { k, member_ids },
+            RecoverySessionProof::DeviceQuorum(proof),
+        ) => {
+            *k <= proof
+                .signatures
+                .iter()
+                .map(|signature| &signature.device_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len() as u32
+                && proof
+                    .signatures
+                    .iter()
+                    .all(|signature| member_ids.contains(&signature.device_id))
+        }
+        (
+            RecoveryMethod::TrustedRecoveryService { services },
+            RecoverySessionProof::TrustedRecoveryService(proof),
+        ) => services.iter().any(|entry| {
+            entry.service_id == proof.service_id
+                && entry.audience == proof.audience
+                && entry.authorization_verification_method == proof.verification_method
+        }),
+        _ => false,
+    });
+    if !active {
+        return Err(rejected("selected recovery method or key was revoked").into());
     }
     Ok(())
 }
@@ -298,6 +355,14 @@ pub(crate) fn ensure_policy_payload_active(
         .ok_or_else(|| rejected("recovery policy methods missing"))?;
     if methods.is_empty() {
         return Err(rejected("recovery policy is revoked").into());
+    }
+    if let Some(not_before) = policy.get("not_before").and_then(Value::as_str) {
+        let not_before = chrono::DateTime::parse_from_rfc3339(not_before)
+            .map_err(PersistenceError::database)?
+            .with_timezone(&chrono::Utc);
+        if now < not_before {
+            return Err(rejected("recovery policy is not yet active").into());
+        }
     }
     if let Some(expires_at) = policy.get("expires_at").and_then(Value::as_str) {
         let expires_at = chrono::DateTime::parse_from_rfc3339(expires_at)

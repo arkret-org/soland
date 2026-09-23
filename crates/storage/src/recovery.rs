@@ -1,8 +1,100 @@
 use super::{
-    BackupSeriesEraseProgressRecord, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
-    RecoverySessionRecord, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, async_trait,
+    AuthorityCommitTransaction, BackupSeriesEraseProgressRecord, PersistenceError,
+    PersistenceResult, RecoveryPolicyRecord, RecoverySessionRecord, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord, async_trait,
 };
+
+/// The complete terminal recovery unit admitted under one PCR stream-head and
+/// generation CAS. Both signed Commits, both producer Events, the consumed
+/// session and the terminal ledger must become visible in one durable write.
+#[derive(Clone, Debug)]
+pub struct RecoveryUnitCommitWrite {
+    pub transaction: SecurityTransactionRecord,
+    pub step_outcome: SecurityTransactionStepOutcomeRecord,
+    pub predecessor: arkret_wire::CommitStreamHead,
+    pub commits: [AuthorityCommitTransaction; 2],
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl RecoveryUnitCommitWrite {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        self.transaction
+            .resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let plan = self.transaction.resource.recovery_plan().ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "recovery unit requires a RecoveryTransaction plan".to_owned(),
+            )
+        })?;
+        let intent = &plan.reanchor_commit_intent;
+        let [planned_reanchor, planned_authorize] = plan.reanchor_unit.request.events.as_slice()
+        else {
+            return Err(PersistenceError::SchemaViolation(
+                "recovery plan must contain exactly two ordered Events".to_owned(),
+            ));
+        };
+        let [reanchor, authorize] = &self.commits;
+        let Some(arkret_models_crypto::SecurityTransactionTerminalOutcome::Completed {
+            completion_attestation: Some(completion),
+            ..
+        }) = &self.transaction.resource.terminal_outcome
+        else {
+            return Err(PersistenceError::SchemaViolation(
+                "recovery unit requires a completed terminal attestation".to_owned(),
+            ));
+        };
+        let expected_stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: intent.realm_id.clone(),
+        };
+        if self.step_outcome.step
+            != arkret_models_crypto::SecurityTransactionStep::CommitRecoveryUnit
+            || self.step_outcome.transaction_id != self.transaction.resource.transaction_id.as_str()
+            || self.predecessor.stream_ref != expected_stream
+            || self.predecessor.commit_id != intent.predecessor_ref
+            || reanchor.event != *planned_reanchor
+            || authorize.event != *planned_authorize
+            || reanchor.commit.stream_ref != expected_stream
+            || authorize.commit.stream_ref != expected_stream
+            || reanchor.expected_authority != authorize.expected_authority
+            || reanchor.commit.previous_commit_ref.as_ref() != Some(&self.predecessor.commit_id)
+            || authorize.commit.previous_commit_ref.as_ref() != Some(&reanchor.commit.commit_id)
+            || reanchor.commit.stream_position
+                != self
+                    .predecessor
+                    .stream_position
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        PersistenceError::SchemaViolation("PCR stream position overflow".to_owned())
+                    })?
+            || authorize.commit.stream_position
+                != reanchor
+                    .commit
+                    .stream_position
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        PersistenceError::SchemaViolation("PCR stream position overflow".to_owned())
+                    })?
+            || self.transaction.resource.terminal_outcome.is_none()
+            || completion.reanchor_event_ref.commit_id != reanchor.commit.commit_id
+            || completion.reanchor_event_ref.stream_position != reanchor.commit.stream_position
+            || completion.device_authorization_event_ref.commit_id != authorize.commit.commit_id
+            || completion.device_authorization_event_ref.stream_position
+                != authorize.commit.stream_position
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "recovery unit does not bind the exact ordered Event/Commit pair and terminal result"
+                    .to_owned(),
+            ));
+        }
+        for commit in &self.commits {
+            commit.validate().map_err(|error| {
+                PersistenceError::SchemaViolation(format!("invalid recovery Commit: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+}
 /// Durable recovery policy store. Implementations enforce policy_id
 /// uniqueness, `(account_id, version)` uniqueness, and the per-account
 /// supersedes/version monotonicity check before accepting a new snapshot.
@@ -55,6 +147,13 @@ pub trait RecoverySessionStore: Send + Sync {
 
 #[async_trait]
 pub trait SecurityTransactionStore: Send + Sync {
+    /// Atomically queues and commits the ordered PCR recovery Event pair and
+    /// accepts the terminal step. An error leaves zero accepted Event, Commit,
+    /// session consumption or terminal ledger writes visible.
+    async fn commit_recovery_unit(
+        &self,
+        write: RecoveryUnitCommitWrite,
+    ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord>;
     /// Persists the canonical request and initial resource atomically.
     ///
     /// Recovery transactions additionally CAS-bind their already verified

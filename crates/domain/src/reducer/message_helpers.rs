@@ -106,12 +106,9 @@ pub(crate) fn pin_scope_parts(pin_scope: &Value) -> Option<(&str, &str)> {
     Some((kind, id))
 }
 
-/// Build the stored message content. `scope_circle_id` is the Strand-derived
-/// circle scope (spec: messages never carry their own scope — it is resolved
-/// from the message's Strand by the caller via
-/// [`super::ProjectionState::strand_scope_circle_id`]). Any client-supplied
-/// `scope_circle_id` on the message is dropped and replaced by the authoritative
-/// Strand scope.
+/// Build the stored message content. `scope_circle_id` comes from the accepted
+/// scope reference, which admission has verified against the Strand. Any
+/// client-supplied `scope_circle_id` in message content is discarded.
 pub(crate) fn message_content_from_payload(
     payload: &Value,
     scope_circle_id: Option<String>,
@@ -129,7 +126,7 @@ pub(crate) fn message_content_from_payload(
                 object.insert(key.to_owned(), value.clone());
             }
         }
-        // Never trust a client-supplied scope; stamp the Strand-derived one.
+        // Stamp the scope accepted by admission, never the client's content field.
         object.remove("scope_circle_id");
         if let Some(value) = scope_circle_id {
             object.insert("scope_circle_id".to_owned(), Value::String(value));

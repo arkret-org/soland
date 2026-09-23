@@ -570,9 +570,8 @@ pub(super) fn agent_lifecycle_from_record(record: &AgentPrincipalRecord) -> Agen
 
 pub(super) fn projected_agent_lifecycle(
     local_intent: AgentLifecycleState,
-    accepted: Option<arkret_models_identity::agent_signer_evidence::AgentLifecycleStatus>,
+    accepted: Option<AgentLifecycleState>,
 ) -> Result<AgentLifecycleState, AppError> {
-    use arkret_models_identity::agent_signer_evidence::AgentLifecycleStatus;
     let accepted = accepted.ok_or_else(|| {
         crate::app_error!(
             FailedPrecondition,
@@ -580,13 +579,13 @@ pub(super) fn projected_agent_lifecycle(
         )
     })?;
     Ok(match (local_intent, accepted) {
-        (AgentLifecycleState::Deactivated, _) | (_, AgentLifecycleStatus::Deactivated) => {
+        (AgentLifecycleState::Deactivated, _) | (_, AgentLifecycleState::Deactivated) => {
             AgentLifecycleState::Deactivated
         }
-        (AgentLifecycleState::Paused, _) | (_, AgentLifecycleStatus::Paused) => {
+        (AgentLifecycleState::Paused, _) | (_, AgentLifecycleState::Paused) => {
             AgentLifecycleState::Paused
         }
-        (AgentLifecycleState::Active, AgentLifecycleStatus::Active) => AgentLifecycleState::Active,
+        (AgentLifecycleState::Active, AgentLifecycleState::Active) => AgentLifecycleState::Active,
     })
 }
 
@@ -681,7 +680,32 @@ pub(super) async fn agent_view_from_record(
     state: &AppState,
     record: &AgentPrincipalRecord,
 ) -> Result<AgentView, AppError> {
-    let (keys, _, lifecycle) = accepted_agent_key_authorization_snapshot(state, record).await?;
+    let (keys, ..) = accepted_agent_key_authorization_snapshot(state, record).await?;
+    let realm_id = arkret_wire::RealmId::new(record.principal_control_realm_id.clone())
+        .map_err(|error| AppError::internal(format!("persisted Agent PCR is invalid: {error}")))?;
+    let agent_id = arkret_wire::DidCoreId::new(record.id.clone())
+        .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
+    let lifecycle = state
+        .authority_commits()
+        .current_agent_result(
+            &realm_id,
+            &arkret_wire::CurrentSelector::AgentStatus { agent_id },
+        )
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("accepted Agent lifecycle is unavailable: {error}"))
+        })?
+        .map(|entry| match entry {
+            arkret_wire::TypedCurrentResult::Value { value, .. } => {
+                serde_json::from_value::<AgentLifecycleState>(value).map_err(|error| {
+                    AppError::internal(format!("accepted Agent lifecycle is invalid: {error}"))
+                })
+            }
+            _ => Err(AppError::internal(
+                "accepted Agent lifecycle result is invalid",
+            )),
+        })
+        .transpose()?;
     let mut projected_record = record.clone();
     projected_record.state = projected_agent_lifecycle(record.state, lifecycle)?;
     let record = &projected_record;
@@ -731,14 +755,24 @@ pub(super) fn agent_key_state_from_record(
         .active_binding
         .as_ref()
         .map(|binding| binding.authorized_event_ref.clone());
+    let authorized_verification_method = runtime_bindings
+        .active_binding
+        .as_ref()
+        .map(|binding| binding.verification_method.clone());
+    let authorized_public_key_digest = runtime_bindings
+        .active_binding
+        .as_ref()
+        .map(|binding| binding.public_key_digest.clone());
     let signer_resolution_evidence_ref = runtime_bindings
         .active_binding
         .as_ref()
         .map(|binding| binding.signer_resolution_evidence_ref.clone());
-    let current_signer_evidence = runtime_bindings
-        .active_binding
-        .as_ref()
-        .map(|binding| binding.current_signer_evidence.clone());
+    let current_signer_evidence = runtime_bindings.active_binding.as_ref().map(|binding| {
+        arkret_models_collaboration::agent_operations::KeyStateCurrentSignerEvidence {
+            signer_resolution_evidence_ref: binding.signer_resolution_evidence_ref.clone(),
+            authenticated_signer_evidence: binding.current_signer_evidence.clone(),
+        }
+    });
     let agent_id = arkret_wire::DidCoreId::new(record.id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
     if controller_account_id.principal_id.as_str() != record.controller_principal_id {
@@ -789,6 +823,8 @@ pub(super) fn agent_key_state_from_record(
             .and_then(|handle| handle.pending_runtime_key_request.as_ref())
             .and(record.approval_requested_at),
         authorized_event_ref,
+        authorized_verification_method,
+        authorized_public_key_digest,
         active_authorizations,
         signer_resolution_evidence_ref,
         current_signer_evidence,

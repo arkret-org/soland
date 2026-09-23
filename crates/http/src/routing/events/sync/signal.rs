@@ -8,7 +8,7 @@
 //! single-hop `POST /_arkret/peer/signal` federation binding.
 //!
 //! A Signal is not a durable Event: admitting one mints no Event id, advances
-//! no `actor_seq`, enters no Seal coverage and produces no reducer state. The
+//! no authority Commit, enters no durable Event stream and produces no current state. The
 //! only server-visible product classification is `signal_class`; the payload
 //! type, the Strand / Message / Call / receipt target and the sender sequence
 //! all live inside the ciphertext and are never reconstructible here.
@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use arkret_models_collaboration::signal_operations::SignalSubmitOutcome;
-use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
+use arkret_wire::{SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
 use futures_util::stream::StreamExt;
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -189,7 +189,7 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
 
 /// The §3 admission set, in order: scope/realm coherence and every structural
 /// rule the SDK owns, then the sender binding, then the checks that need
-/// accepted state (Seal basis, live send eligibility, moderation action), then
+/// accepted state (Commit basis, live send eligibility, moderation action), then
 /// the device proof.
 async fn admit_signal(
     state: &AppState,
@@ -219,29 +219,12 @@ async fn admit_signal(
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
 
-    // (2) — the Seal basis must be verifiable and must belong to this Realm. A
-    // Signal carries no `seal_basis` of its own: `seal_ref` IS the basis the
-    // sender claims its send eligibility under, so an unknown or foreign Seal
-    // leaves nothing to evaluate eligibility against.
-    let seal = state
-        .projections()
-        .seal_by_id(&envelope.seal_ref)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to resolve the signal seal_ref");
-            signal_rail_unavailable("resolve the signal seal basis")
-        })?
-        .ok_or_else(|| signal_invalid("signal seal_ref does not resolve to a known Seal"))?;
-    if seal.realm_id != envelope.realm_id {
-        return Err(signal_invalid(
-            "signal seal_ref belongs to a different Realm",
-        ));
-    }
+    // The source-selected basis must resolve to an accepted Event and its exact
+    // covering RealmCommit before any live eligibility decision is made.
+    verify_signal_authority_commit_id(state, envelope).await?;
 
-    // (2, continued) + (3) — evaluate membership/scope and class action from
-    // signed Seal state at both the declared historical basis and the complete
-    // current accepted head. A current projection row or pending-removal
-    // flag is not a substitute for either signed view.
+    // (2, continued) + (3) — require authority-committed membership and
+    // class action at both the declared Commit and the current accepted head.
     verify_signal_scope_authority(state, envelope, &actor).await?;
 
     match (&envelope.sender_device_id, &session.agent_session) {
@@ -261,193 +244,53 @@ async fn admit_signal(
     }
 }
 
-/// `signal.md` §3(2) — live send eligibility for the envelope's scope.
-async fn verify_signal_scope_authority(
+/// Resolve the signed stream coordinate carried by a Signal. The signal is
+/// ephemeral, but its governance basis must be a durable accepted Commit in
+/// the exact Realm and scope stream named by the envelope.
+async fn verify_signal_authority_commit_id(
     state: &AppState,
     envelope: &SignalEnvelope,
-    actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
-    let realm = &envelope.realm_id;
-    let current_head = state
-        .projections()
-        .realm_seal_head(realm)
+    let record = state
+        .authority_commits()
+        .committed_event_by_commit_id(&envelope.authority_commit_id)
         .await
         .map_err(|error| {
-            signal_rail_unavailable(&format!("resolve current Signal Seal basis: {error}"))
-        })?;
-    let Some(current_head) = current_head else {
+            tracing::error!(%error, "failed to resolve Signal stream head Commit");
+            signal_rail_unavailable("resolve Signal stream head Commit")
+        })?
+        .ok_or_else(|| signal_invalid("Signal authority_commit_id is not an accepted Commit"))?;
+    let stream_ref = arkret_wire::CommitStreamRef::from_scope(&envelope.scope_ref, None)
+        .map_err(|error| signal_invalid(format!("Signal scope stream: {error}")))?;
+    if record.commit.commit_id != envelope.authority_commit_id
+        || record.commit.realm_id != envelope.realm_id
+        || record.commit.stream_ref != stream_ref
+        || record.commit.event_ref != record.event.event_id
+        || record.event.realm_id != envelope.realm_id
+        || record.event.scope_ref != envelope.scope_ref
+    {
         return Err(signal_invalid(
-            "signal Realm has no current signed Seal basis",
+            "Signal authority_commit_id does not cover the exact scope Event",
         ));
-    };
-    let historical = arkret_wire::SealBasis {
-        leaves: vec![envelope.seal_ref.clone()],
-    };
-    let current = arkret_wire::SealBasis {
-        leaves: vec![current_head],
-    };
-    for (label, basis) in [("declared", historical), ("current", current)] {
-        let view = state
-            .projections()
-            .effective_state_at(&basis.leaves, realm)
-            .await
-            .map_err(|error| {
-                signal_rail_unavailable(&format!(
-                    "resolve {label} Signal governance basis: {error}"
-                ))
-            })?;
-        if !signal_actor_joined_in_view(&view, &envelope.scope_ref, actor)? {
-            return Err(AppError::capability_denied(format!(
-                "signal sender is not joined in the {label} signed Seal basis"
-            )));
-        }
-        if envelope.signal_class == SignalClass::Moderation
-            && !signal_actor_has_realm_action_in_view(
-                &view,
-                realm,
-                actor,
-                arkret_wire::CapabilityActionId::CALL_MODERATE,
-            )
-        {
-            return Err(crate::app_error!(
-                SignalClassDenied,
-                format!("signal sender lacks ak.call.moderate in the {label} signed Seal basis"),
-            ));
-        }
     }
     Ok(())
 }
 
-fn signal_actor_joined_in_view(
-    view: &std::collections::BTreeMap<
-        arkret_wire::CellRef,
-        arkret_state::state_model::ResolvedCellState,
-    >,
-    scope: &arkret_wire::ScopeRef,
-    actor: &arkret_wire::ActorId,
-) -> Result<bool, AppError> {
-    let actor = actor
-        .canonical_key()
-        .map_err(|error| signal_invalid(format!("signal sender ActorId: {error}")))?;
-    let member_subject =
-        arkret_wire::cell::composite_subject(&[serde_json::Value::String(actor.clone())])
-            .map_err(|error| signal_invalid(format!("signal Realm membership subject: {error}")))?;
-    let realm_cell = arkret_wire::CellRef::new(arkret_wire::cell::subject_cell(
-        arkret_wire::CellFamilyId::MEMBER_STATE_V1,
-        &member_subject,
+/// `signal.md` §3(2) — live send eligibility for the envelope's scope.
+///
+/// The authority-commit store currently exposes an accepted Commit lookup and
+/// current projections, but no historical membership/capability view at the
+/// exact `authority_commit_id`. A current row cannot prove that historical gate.
+/// Keep the rail closed until the authority service supplies both views from
+/// verifiable Commit cuts.
+async fn verify_signal_scope_authority(
+    _state: &AppState,
+    _envelope: &SignalEnvelope,
+    _actor: &arkret_wire::ActorId,
+) -> Result<(), AppError> {
+    Err(signal_rail_unavailable(
+        "resolve historical and current Signal scope authority",
     ))
-    .map_err(|error| signal_invalid(format!("signal Realm membership cell: {error}")))?;
-    if !matches!(view.get(&realm_cell), Some(arkret_state::state_model::ResolvedCellState::Value(value)) if value.as_str() == Some("join"))
-    {
-        return Ok(false);
-    }
-    let arkret_wire::ScopeRef::Circle { circle_id, .. } = scope else {
-        return Ok(true);
-    };
-    let circle_subject = arkret_wire::cell::composite_subject(&[
-        serde_json::Value::String(circle_id.to_string()),
-        serde_json::Value::String(actor),
-    ])
-    .map_err(|error| signal_invalid(format!("signal Circle membership subject: {error}")))?;
-    let circle_cell = arkret_wire::CellRef::new(arkret_wire::cell::subject_cell(
-        arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1,
-        &circle_subject,
-    ))
-    .map_err(|error| signal_invalid(format!("signal Circle membership cell: {error}")))?;
-    Ok(
-        matches!(view.get(&circle_cell), Some(arkret_state::state_model::ResolvedCellState::Value(value)) if value.as_str() == Some("join")),
-    )
-}
-
-fn signal_actor_has_realm_action_in_view(
-    view: &std::collections::BTreeMap<
-        arkret_wire::CellRef,
-        arkret_state::state_model::ResolvedCellState,
-    >,
-    realm: &arkret_wire::RealmId,
-    actor: &arkret_wire::ActorId,
-    action: &str,
-) -> bool {
-    let root_cell =
-        arkret_wire::CellRef::new(arkret_wire::cell::REALM_AUTHORITY_ROOT_CELL.to_owned()).ok();
-    let root_controller = root_cell
-        .as_ref()
-        .and_then(|cell| view.get(cell))
-        .and_then(arkret_state::state_model::ResolvedCellState::settled_value)
-        .and_then(|value| {
-            serde_json::from_value::<arkret_policy::realm_bootstrap::RealmAuthorityRootValue>(
-                value.clone(),
-            )
-            .ok()
-        })
-        .map(|root| root.controller_actor_id);
-    if root_controller.as_ref() == Some(actor)
-        && arkret_schema::capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
-            .is_some_and(|descriptor| descriptor.grant_authority_actions.contains(&action))
-    {
-        return true;
-    }
-
-    let engine = crate::authz::SolandAuthzEngine::new();
-    for (cell, cell_state) in view {
-        let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell) else {
-            continue;
-        };
-        if cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1 {
-            continue;
-        }
-        let scoped_state = signal_capability_cell_state_for_realm(cell_state, realm);
-        if let Some(grant) = soland_services::projection::engine_grant_from_capability_cell_state(
-            cell_id.subject(),
-            &scoped_state,
-        ) {
-            engine.upsert_projected_grant(grant);
-        }
-    }
-    let root_controller_key = root_controller.as_ref().map(ToString::to_string);
-    engine
-        .check_for_authority(
-            actor,
-            action,
-            realm.as_str(),
-            realm.as_str(),
-            root_controller_key.as_deref(),
-            &[],
-            &[],
-        )
-        .allowed
-}
-
-fn signal_capability_cell_state_for_realm(
-    cell_state: &arkret_state::state_model::ResolvedCellState,
-    realm: &arkret_wire::RealmId,
-) -> arkret_state::state_model::ResolvedCellState {
-    let mut scoped = cell_state.clone();
-    let arkret_state::state_model::ResolvedCellState::Value(serde_json::Value::Array(items)) =
-        &mut scoped
-    else {
-        return scoped;
-    };
-    for item in items {
-        let value = if item.get("value").is_some() {
-            item.get_mut("value").expect("value existence was checked")
-        } else {
-            item
-        };
-        let body = if value.get("grant").is_some() {
-            value.get_mut("grant").expect("grant existence was checked")
-        } else {
-            value
-        };
-        if let Some(body) = body.as_object_mut() {
-            // `grant.realm_id` is optional on the canonical producer payload:
-            // the accepted Event envelope supplies the scope. Preserve an
-            // explicit value so a mismatch still fails the engine realm pin.
-            body.entry("realm_id".to_owned())
-                .or_insert_with(|| serde_json::Value::String(realm.to_string()));
-        }
-    }
-    scoped
 }
 
 async fn verify_signal_device_proof(
@@ -569,7 +412,6 @@ async fn verify_signal_agent_proof(
     })?;
     let arkret_models_identity::session_credential::SessionGrantHolderBinding::AgentRuntime {
         agent_id,
-        device_id,
         agent_key_authorization_ref,
         verification_method,
     } = &grant.holder_binding
@@ -579,7 +421,6 @@ async fn verify_signal_agent_proof(
         ));
     };
     if agent_id != actor.signing_principal_id()
-        || device_id.as_str() != session.device_id
         || verification_method != &envelope.proof.verification_method
     {
         return Err(signal_proof_invalid(
@@ -869,17 +710,7 @@ async fn admit_signal_outer(
             "Signal sender route does not match the authenticated source Station",
         ));
     }
-    let seal = state
-        .projections()
-        .seal_by_id(&envelope.seal_ref)
-        .await
-        .map_err(|_| signal_rail_unavailable("resolve the signal seal basis"))?
-        .ok_or_else(|| signal_invalid("signal seal_ref does not resolve"))?;
-    if seal.realm_id != envelope.realm_id {
-        return Err(signal_invalid(
-            "signal seal_ref belongs to a different Realm",
-        ));
-    }
+    verify_signal_authority_commit_id(state, envelope).await?;
     verify_signal_scope_authority(state, envelope, &sender_actor).await?;
     Ok(())
 }
@@ -935,11 +766,15 @@ async fn verify_signal_mls_basis(
         .accepted_commit_ref
         .as_deref()
         .unwrap_or(&current.genesis_event_ref);
+    let bound_group_id = current
+        .governance_binding
+        .mls_group_id()
+        .map_err(|error| signal_invalid(format!("signal MLS governance binding: {error}")))?;
     if current.effective_scope != envelope.scope_ref
         || current.epoch != envelope.encrypted_payload.epoch
         || current_ref != envelope.encrypted_payload.key_ref.group_state_ref
         || current.governance_binding.effective_scope() != &envelope.scope_ref
-        || current.governance_binding.mls_group_id() != group_id
+        || bound_group_id != group_id
         || current.governance_binding.next_epoch() != current.epoch
     {
         return Err(signal_invalid(
@@ -1107,8 +942,7 @@ pub(crate) async fn admitted_signal_frame(
     envelope: SignalEnvelope,
 ) -> Result<SignalStreamFrame, AppError> {
     use arkret_models_identity::{
-        AccountDeviceSenderKind, AgentSenderKind, CurrentAccountDeviceSelector,
-        CurrentAdmissionMode, CurrentAgentSelector, SignerKeyQueryOutcome, SignerKeyQuerySelector,
+        CurrentSignerKeyQuerySender, SignerKeyQueryResult, SignerKeyQuerySelector,
         SignerKeysQueryRequestBody,
     };
     let actor =
@@ -1124,21 +958,19 @@ pub(crate) async fn admitted_signal_frame(
     )
     .await?;
     let selector = match envelope.sender_device_id.as_ref() {
-        Some(device_id) => {
-            SignerKeyQuerySelector::CurrentAccountDevice(CurrentAccountDeviceSelector {
-                verification_mode: CurrentAdmissionMode::CurrentAdmission,
-                sender_kind: AccountDeviceSenderKind::AccountDevice,
+        Some(device_id) => SignerKeyQuerySelector::CurrentAdmission {
+            sender: CurrentSignerKeyQuerySender::AccountDevice {
                 actor: envelope.sender_actor_id.clone(),
                 device_id: device_id.clone(),
                 verification_method: envelope.proof.verification_method.clone(),
-            })
-        }
-        None => SignerKeyQuerySelector::CurrentAgent(CurrentAgentSelector {
-            verification_mode: CurrentAdmissionMode::CurrentAdmission,
-            sender_kind: AgentSenderKind::Agent,
-            actor: envelope.sender_actor_id.clone(),
-            verification_method: envelope.proof.verification_method.clone(),
-        }),
+            },
+        },
+        None => SignerKeyQuerySelector::CurrentAdmission {
+            sender: CurrentSignerKeyQuerySender::Agent {
+                actor: envelope.sender_actor_id.clone(),
+                verification_method: envelope.proof.verification_method.clone(),
+            },
+        },
     };
     let request = SignerKeysQueryRequestBody {
         request_id: arkret_wire::RequestId::new_v7_at(chrono::Utc::now().timestamp_millis() as u64),
@@ -1153,7 +985,9 @@ pub(crate) async fn admitted_signal_frame(
     outcome
         .validate_for_request(&request)
         .map_err(structural_error)?;
-    let Some(SignerKeyQueryOutcome::Current(result)) = outcome.results.into_iter().next() else {
+    let Some(SignerKeyQueryResult::CurrentResolved { selector, key }) =
+        outcome.results.into_iter().next()
+    else {
         return Err(signal_rail_unavailable("verify current sender authority"));
     };
     // Re-check time/scope after a possible remote round trip and before emitting this frame.
@@ -1178,10 +1012,10 @@ pub(crate) async fn admitted_signal_frame(
     let authority = arkret_wire::SignalDeliveryAuthority {
         recipient_account_id: recipient,
         key: arkret_wire::StationSigningKey {
-            actor: result.selector.actor().clone(),
-            verification_method: result.selector.verification_method().clone(),
-            public_key_b64u: result.key.public_key_b64u,
-            authorization_ref: result.key.authorization_ref,
+            actor: selector.actor().clone(),
+            verification_method: selector.verification_method().clone(),
+            public_key_b64u: key.public_key_b64u,
+            authorization_ref: key.authorization_ref.event_id,
         },
     };
     authority
@@ -1275,7 +1109,6 @@ fn signal_visible_to_subscriber(
 #[cfg(test)]
 mod tests {
     use salvo::http::StatusCode;
-    use serde_json::json;
 
     use super::*;
 
@@ -1374,111 +1207,5 @@ mod tests {
                 SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS < super::super::SUBSCRIBE_RECONNECT_AFTER_MS
             );
         }
-    }
-
-    fn governance_test_actor(name: &str) -> arkret_wire::ActorId {
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        ))
-    }
-
-    fn governance_test_realm() -> arkret_wire::RealmId {
-        arkret_wire::RealmId::new("ak:realm:AVqz6eQZLqR_ZRLY8DW-ewi2BPdIfeJyWu9HXB2dz2Wy").unwrap()
-    }
-
-    #[test]
-    fn signed_view_membership_uses_registry_subjects_for_realm_and_circle() {
-        let actor = governance_test_actor("alice");
-        let realm = governance_test_realm();
-        let circle =
-            arkret_wire::CircleId::new("ak:circle:AVqz6eQZLqR_ZRLY8DW-ewi2BPdIfeJyWu9HXB2dz2Wy")
-                .unwrap();
-        let actor_key = actor.canonical_key().unwrap();
-        let realm_subject = arkret_wire::cell::composite_subject(&[json!(actor_key)]).unwrap();
-        let circle_subject = arkret_wire::cell::composite_subject(&[
-            json!(circle.to_string()),
-            json!(actor.canonical_key().unwrap()),
-        ])
-        .unwrap();
-        let mut view = std::collections::BTreeMap::new();
-        for (family, subject) in [
-            (arkret_wire::CellFamilyId::MEMBER_STATE_V1, realm_subject),
-            (arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1, circle_subject),
-        ] {
-            view.insert(
-                arkret_wire::CellRef::new(arkret_wire::cell::subject_cell(family, &subject))
-                    .unwrap(),
-                arkret_state::state_model::ResolvedCellState::Value(json!("join")),
-            );
-        }
-        assert!(
-            signal_actor_joined_in_view(
-                &view,
-                &arkret_wire::ScopeRef::Realm {
-                    realm_id: realm.clone(),
-                },
-                &actor,
-            )
-            .unwrap()
-        );
-        assert!(
-            signal_actor_joined_in_view(
-                &view,
-                &arkret_wire::ScopeRef::Circle {
-                    realm_id: realm,
-                    circle_id: circle,
-                },
-                &actor,
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn signed_view_moderation_requires_an_active_exact_actor_grant() {
-        let realm = governance_test_realm();
-        let actor = governance_test_actor("moderator");
-        let other = governance_test_actor("other");
-        let grant_id = "ak:grant:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM";
-        let cell = arkret_wire::CellRef::new(arkret_wire::cell::subject_cell(
-            arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1,
-            grant_id,
-        ))
-        .unwrap();
-        let mut view = std::collections::BTreeMap::new();
-        view.insert(
-            cell,
-            arkret_state::state_model::ResolvedCellState::Value(json!([{
-                "tag": "ak:event:AV1bzsPGpTD74Cq12d9EOrCkieTddiSndS0kDtK1W2hM:0",
-                "value": {"grant": {
-                    "issuer_id": actor.clone(),
-                    "subject": actor.clone(),
-                    "actions": [arkret_wire::CapabilityActionId::CALL_MODERATE],
-                    "resources": [{"kind": "realm"}],
-                    "constraints": [],
-                    "issued_at": "2026-08-31T00:00:00.000Z",
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
-                        "realm_id": realm.clone(),
-                        "cell_ref": arkret_wire::cell::REALM_AUTHORITY_ROOT_CELL,
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }]
-                }}
-            }])),
-        );
-        assert!(signal_actor_has_realm_action_in_view(
-            &view,
-            &realm,
-            &actor,
-            arkret_wire::CapabilityActionId::CALL_MODERATE,
-        ));
-        assert!(!signal_actor_has_realm_action_in_view(
-            &view,
-            &realm,
-            &other,
-            arkret_wire::CapabilityActionId::CALL_MODERATE,
-        ));
     }
 }

@@ -293,7 +293,6 @@ pub struct DeviceSigningKeyOutcome {
 struct CanonicalEventDiagnostic {
     event_id: String,
     actor_id: String,
-    actor_seq: u64,
     realm_id: Option<String>,
     kind: String,
     canonical_digest: String,
@@ -364,132 +363,18 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.realm_basis"))]
 pub async fn realm_basis(
-    depot: &mut Depot,
-    body: JsonBody<RealmBasisRequest>,
+    _depot: &mut Depot,
+    _body: JsonBody<RealmBasisRequest>,
 ) -> JsonResult<RealmBasisOutcome> {
     super::ensure_enabled()?;
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let mut body = body.into_inner();
-    let realm_id = arkret_identifiers::RealmId::new(body.realm_id.clone())
-        .map_err(|_| AppError::param_invalid("realm_id must be a canonical Realm id"))?;
-    let subject = arkret_identifiers::Did::new(body.subject.clone())
-        .map_err(|_| AppError::param_invalid("subject must be a canonical DID"))?;
-    let subject_actor_id = arkret_wire::project_did_to_core_id(&subject)
-        .map_err(|_| AppError::param_invalid("subject DID must project to a canonical core id"))?;
-    if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
-        return Err(AppError::param_invalid(
-            "data_plane_actions must contain between 1 and 32 actions",
-        ));
-    }
-    body.data_plane_actions.sort();
-    body.data_plane_actions.dedup();
-    for action in &body.data_plane_actions {
-        let descriptor = arkret_schema::capability_action(action).ok_or_else(|| {
-            AppError::param_invalid(format!("unregistered data-plane action {action}"))
-        })?;
-        if descriptor.event_mapping_kind == "non_event_surface" {
-            return Err(AppError::param_invalid(format!(
-                "data-plane fixture action {action} is not an Event action"
-            )));
-        }
-    }
-
-    // A synthetic conformance basis is valid only for an isolated fixture
-    // Realm. Extending a canonically created Realm would put synthetic
-    // digests (which have no Control Event) into its Seal chain; the next real
-    // control-seal pass could then never reconstruct the committed command closure.
-    let accepted = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("read accepted Realm bootstrap events: {error}"))
-        })?;
-    if accepted.iter().any(|record| {
-        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
-            && record.realm_id.as_deref() == Some(body.realm_id.as_str())
-    }) {
-        return Err(AppError::conflict(
-            "conformance Realm basis cannot modify a canonically created Realm",
-        ));
-    }
-
-    // A synthetic Realm has no accepted create Event and therefore cannot be
-    // classified as a PCR from its subject. Keep its notary service-owned.
-    let local_notary_signer = soland_services::conformance_basis::ConformanceNotarySigner::ed25519(
-        state.service_did(),
-        state
-            .service_verification_method("notary-key")
-            .map_err(|error| {
-                AppError::internal(format!("construct local notary method: {error}"))
-            })?,
-        state.notary_signing_key().to_bytes(),
+    Err(AppError::from_rejection(
+        soland_http::error::ErrorCode::ServiceUnavailable,
+        "conformance Realm fixture requires a registered Event/Commit authority unit",
     )
-    .map_err(|error| AppError::internal(format!("freeze local notary signer: {error}")))?;
-    let notary_cell =
-        arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
-            .map_err(|error| AppError::internal(format!("construct notary cell ref: {error}")))?;
-    let has_existing_notary = !state
-        .projections()
-        .state_writes_for_cell(&realm_id, &notary_cell)
-        .await
-        .map_err(|error| AppError::internal(format!("read current notary state: {error}")))?
-        .is_empty();
-    if has_existing_notary {
-        let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-        let (notary, _) = worker
-            .current_notary_value_for_events(state, &realm_id, &[])
-            .await
-            .map_err(|error| AppError::internal(format!("resolve current notary value: {error}")))?
-            .ok_or_else(|| AppError::conflict("existing notary state is not materializable"))?;
-        if notary.signer != local_notary_signer.descriptor {
-            return Err(AppError::conflict(
-                "existing conformance Realm notary is not controlled by the local frozen signer",
-            ));
-        }
-    }
-    let basis = soland_services::conformance_basis::build_conformance_realm_basis(
-        &body.realm_id,
-        subject_actor_id.as_str(),
-        state.service_id(),
-        &local_notary_signer,
-        !has_existing_notary,
-        &body.data_plane_actions,
-    )
-    .map_err(|error| AppError::internal(format!("build conformance Realm basis: {error}")))?;
-    state
-        .projections()
-        .conformance_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
-        .await
-        .map_err(|error| AppError::internal(format!("store conformance Realm Seal: {error}")))?;
-    state
-        .projections()
-        .conformance_append_confirmed_effects(&basis.seal.realm_id, &basis.seal.id, &basis.ops)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("store conformance sealed basis state: {error}"))
-        })?;
-    state
-        .projections()
-        .conformance_install_realm_bootstrap_facets(
-            &basis.seal.realm_id,
-            basis.genesis,
-            basis.reducer_profile,
-        );
-    json_ok(RealmBasisOutcome {
-        seal_id: basis.seal.id.to_string(),
-        control_event_set_root: basis.seal.control_event_set_root.to_string(),
-        state_root: basis.seal.state_root.to_string(),
-    })
+    .with_rejection_code("service_unavailable"))
 }
-
-/// Install one spec-shaped epoch-0 MLS state for Signal rail fixtures.
-///
-/// This is deliberately an internal-state injection rather than a production
-/// authoring shortcut. `service-http-binding.md` section 2.1.3 assigns such
-/// deterministic fixture setup to the development-only `_conformance`
-/// namespace. Production still accepts MLS Genesis only through the ordinary
-/// signed Event, governance-proof, lease and Seal pipeline.
+/// Refuse the retired synthetic MLS fixture until a committed Genesis Event
+/// and its authority cut can be installed through the current contract.
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.conformance.signal_mls_basis",
     tags("conformance")
@@ -499,158 +384,16 @@ pub async fn realm_basis(
     fields(op = "org.arkret.soland.conformance.signal_mls_basis")
 )]
 pub async fn signal_mls_basis(
-    depot: &mut Depot,
-    body: JsonBody<SignalMlsBasisRequest>,
+    _depot: &mut Depot,
+    _body: JsonBody<SignalMlsBasisRequest>,
 ) -> JsonResult<SignalMlsBasisOutcome> {
     super::ensure_enabled()?;
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    let event: arkret_wire::Event = serde_json::from_value(body.genesis_event)
-        .map_err(|error| AppError::param_invalid(format!("invalid MLS Genesis Event: {error}")))?;
-    if event.kind.as_str() != arkret_wire::EventKind::MlsGenesis.as_str() {
-        return Err(AppError::param_invalid(
-            "genesis_event must be an ak.mls.genesis Event",
-        ));
-    }
-    if event
-        .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-        .map_err(|error| AppError::param_invalid(format!("derive MLS Genesis id: {error}")))?
-        != event.event_id
-    {
-        return Err(AppError::param_invalid(
-            "genesis_event event_id is not content-derived",
-        ));
-    }
-    let creator_device_id = arkret_wire::DeviceId::new(body.creator_device_id)
-        .map_err(|_| AppError::param_invalid("creator_device_id must be canonical"))?;
-    let effective_scope_value = event
-        .payload
-        .get("effective_scope")
-        .cloned()
-        .ok_or_else(|| AppError::param_invalid("MLS Genesis omits effective_scope"))?;
-    let effective_scope: arkret_wire::ScopeRef =
-        serde_json::from_value(effective_scope_value.clone())
-            .map_err(|_| AppError::param_invalid("MLS Genesis effective_scope is invalid"))?;
-    if effective_scope.realm_id_opt() != Some(&event.realm_id) {
-        return Err(AppError::param_invalid(
-            "MLS Genesis effective_scope does not match Event realm_id",
-        ));
-    }
-    let mls_group_id = effective_scope
-        .canonical_mls_group_id()
-        .map_err(|error| AppError::param_invalid(format!("MLS Genesis scope: {error}")))?;
-    if event.payload.get("mls_group_id").and_then(Value::as_str) != Some(mls_group_id.as_str())
-        || event.payload.get("epoch").and_then(Value::as_u64) != Some(0)
-    {
-        return Err(AppError::param_invalid(
-            "MLS Genesis group id or epoch is not canonical",
-        ));
-    }
-    let governance_binding_value = event
-        .payload
-        .get("governance_binding")
-        .cloned()
-        .ok_or_else(|| AppError::param_invalid("MLS Genesis omits governance_binding"))?;
-    let governance_binding: arkret_models_crypto::MlsGovernanceBindingPayload =
-        serde_json::from_value(governance_binding_value).map_err(|error| {
-            AppError::param_invalid(format!("invalid governance binding: {error}"))
-        })?;
-
-    // Signal has no plaintext fallback: only a Realm that was canonically
-    // created with the MLS capability axis may receive this epoch fixture.
-    let canonical_events = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(format!("read Realm genesis: {error}")))?;
-    let is_mls_realm = canonical_events.iter().any(|record| {
-        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
-            && record.realm_id.as_deref() == Some(event.realm_id.as_str())
-            && record
-                .envelope
-                .pointer("/payload/object/encryption_profile")
-                .and_then(Value::as_str)
-                == Some("mls_rfc9420")
-    });
-    if !is_mls_realm {
-        return Err(AppError::conflict(
-            "Signal MLS fixture requires an mls_rfc9420 Realm",
-        ));
-    }
-
-    if let Some(current) = state
-        .mls_commits()
-        .commit(&effective_scope, &mls_group_id)
-        .await
-        .map_err(|error| AppError::internal(format!("read Signal MLS basis: {error}")))?
-    {
-        return json_ok(SignalMlsBasisOutcome {
-            group_state_ref: current
-                .accepted_commit_ref
-                .unwrap_or(current.genesis_event_ref),
-            mls_group_id,
-            epoch: current.epoch,
-        });
-    }
-
-    let canonical_bytes =
-        arkret_canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
-            AppError::param_invalid(format!("MLS Genesis digest payload: {error}"))
-        })?)
-        .map_err(|error| AppError::param_invalid(format!("canonicalize MLS Genesis: {error}")))?;
-    let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
-    let event_id = event.event_id.to_string();
-    state
-        .event_queries()
-        .store_canonical_event(AcceptedEvent {
-            event_id: event_id.clone(),
-            actor_id: event.actor_id.to_string(),
-            actor_seq: event.actor_seq,
-            realm_id: Some(event.realm_id.to_string()),
-            kind: event.kind.to_string(),
-            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest,
-            canonical_bytes,
-            envelope: serde_json::to_value(&event)
-                .map_err(|error| AppError::internal(format!("serialize MLS Genesis: {error}")))?,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .map_err(|error| AppError::internal(format!("store Signal MLS Genesis: {error}")))?;
-    let initialized = state
-        .mls_commits()
-        .initialize_group(soland_services::events::InitializeMlsGroupCommand {
-            effective_scope: effective_scope.clone(),
-            group_id: mls_group_id.clone(),
-            leader_actor_id: event.actor_id.to_string(),
-            creator_device_id: creator_device_id.to_string(),
-            genesis_event_ref: event_id.clone(),
-            governance_binding,
-            committed_at: event.created_at.timestamp(),
-        })
-        .await
-        .map_err(|error| AppError::internal(format!("install Signal MLS epoch: {error}")))?;
-    let current = match initialized {
-        Some(current) => current,
-        None => state
-            .mls_commits()
-            .commit(&effective_scope, &mls_group_id)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("read installed Signal MLS epoch: {error}"))
-            })?
-            .ok_or_else(|| AppError::internal("Signal MLS epoch lost during concurrent install"))?,
-    };
-    json_ok(SignalMlsBasisOutcome {
-        group_state_ref: current
-            .accepted_commit_ref
-            .unwrap_or(current.genesis_event_ref),
-        mls_group_id,
-        epoch: current.epoch,
-    })
+    Err(AppError::from_rejection(
+        soland_http::error::ErrorCode::ServiceUnavailable,
+        "conformance MLS fixture requires a committed Genesis Event and authority cut",
+    )
+    .with_rejection_code("service_unavailable"))
 }
-
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.conformance.device_signing_key_did",
     tags("conformance")
@@ -1740,7 +1483,6 @@ fn canonical_event_diagnostic(record: &AcceptedEvent) -> CanonicalEventDiagnosti
     CanonicalEventDiagnostic {
         event_id: record.event_id.clone(),
         actor_id: record.actor_id.clone(),
-        actor_seq: record.actor_seq,
         realm_id: record.realm_id.clone(),
         kind: record.kind.clone(),
         canonical_digest: record.canonical_digest.clone(),

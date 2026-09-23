@@ -1,9 +1,9 @@
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_crypto::{
     AcceptedSecurityTransactionStep as AcceptedStep, PcrPolicyRecoveryBinding,
-    PcrPolicyRecoveryPlan, PreparedEventUnit, RecoveryIdentityModel,
-    RecoveryTransactionCreateRequest, SecurityTransactionAcceptor, SecurityTransactionPreparedPlan,
-    SecurityTransactionStep, SecurityTransactionTerminalOutcome,
+    PcrPolicyRecoveryPlan, RecoveryIdentityModel, RecoveryTransactionCreateRequest,
+    SecurityTransactionAcceptor, SecurityTransactionPreparedPlan, SecurityTransactionStep,
+    SecurityTransactionTerminalOutcome,
 };
 use arkret_wire::{ActorId, DidCoreId, SchemaId};
 use ed25519_dalek::Signer as _;
@@ -426,89 +426,25 @@ async fn accept_rotation_step(
     json_ok(resource)
 }
 
-async fn submit_rotation_event_unit(
-    state: &AppState,
-    session: &SessionRecord,
-    unit: &PreparedEventUnit,
-) -> Result<Value, AppError> {
-    let request = unit.request.clone();
-    let expected_event_ids = request
-        .events
-        .iter()
-        .map(|event| event.event_id.clone())
-        .collect::<Vec<_>>();
-    let outcome = crate::routing::events::event_log::submit_initial_event_batch_outcome(
-        state,
-        session,
-        request.events,
-    )
-    .await
-    .map_err(|error| {
-        AppError::conflict(format!(
-            "prepared rotation Event unit was rejected: {}",
-            error.message()
-        ))
-        .with_rejection_code(error.code())
-    })?;
-    if !outcome.rejections.is_empty()
-        || !outcome.quarantine.is_empty()
-        || outcome.accepted.len() != expected_event_ids.len()
-        || outcome
-            .accepted
-            .iter()
-            .map(|event_id| event_id.as_str())
-            .ne(expected_event_ids.iter().map(|event_id| event_id.as_str()))
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            format!(
-                "prepared rotation Event unit was not fully accepted: accepted={:?}, rejected={:?}, quarantine={:?}",
-                outcome.accepted, outcome.rejections, outcome.quarantine
-            )
-        ));
-    }
-    serde_json::to_value(outcome).map_err(|error| AppError::internal(error.to_string()))
-}
-
 async fn continue_rotation_revoke(
-    state: &AppState,
-    session: &SessionRecord,
+    _state: &AppState,
+    _session: &SessionRecord,
     transaction: SecurityTransactionRecord,
-    canonical_request: Vec<u8>,
-    res: &mut Response,
+    _canonical_request: Vec<u8>,
+    _res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let plan = rotation_plan(&transaction)?;
-    let revoke_request = plan.revoke_unit.request.clone();
-    let revoke_event_id = revoke_request
-        .events
-        .first()
-        .ok_or_else(|| AppError::internal("prepared revoke unit is empty"))?
-        .event_id
-        .clone();
-    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    begin_rotation_step(
-        state,
-        &transaction_id,
-        SecurityTransactionStep::Revoke,
-        &canonical_request,
-    )
-    .await?;
-    let outcome = submit_rotation_event_unit(state, session, &plan.revoke_unit).await?;
-    let digest = canonical_digest(&outcome)?;
-    accept_rotation_step(
-        state,
-        transaction,
-        SecurityTransactionStep::Revoke,
-        canonical_request,
-        plan.revoke_unit.request_digest,
-        revoke_event_id.as_str().to_owned(),
-        digest,
-        Some(outcome),
-        res,
-    )
-    .await
+    plan.revoke_unit.validate().map_err(|error| {
+        AppError::json_invalid(format!("prepared revoke Event unit is invalid: {error}"))
+    })?;
+    // The old batch submit cannot provide one committed Event/RealmCommit
+    // transaction with the rotation step. Reject before begin_rotation_step,
+    // which would otherwise leave a durable pending step without Events.
+    Err(crate::app_error!(
+        ServiceUnavailable,
+        "rotation revoke awaits atomic Event/RealmCommit admission",
+    ))
 }
-
 fn public_backup_values(
     material: &arkret_wire::CanonicalPublicMaterial,
 ) -> Result<&[Value], AppError> {
@@ -614,42 +550,27 @@ async fn continue_rotation_upload(
 }
 
 async fn continue_rotation_switch(
-    state: &AppState,
-    session: &SessionRecord,
+    _state: &AppState,
+    _session: &SessionRecord,
     transaction: SecurityTransactionRecord,
-    canonical_request: Vec<u8>,
-    res: &mut Response,
+    _canonical_request: Vec<u8>,
+    _res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let plan = rotation_plan(&transaction)?;
-    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    begin_rotation_step(
-        state,
-        &transaction_id,
-        SecurityTransactionStep::SwitchAuthoritativePointer,
-        &canonical_request,
-    )
-    .await?;
-    let mut outcomes = Vec::new();
     for prepared in &plan.backup_rotations {
-        let outcome =
-            submit_rotation_event_unit(state, session, &prepared.active_series_unit).await?;
-        outcomes.push(outcome);
+        prepared.active_series_unit.validate().map_err(|error| {
+            AppError::json_invalid(format!(
+                "prepared active-series Event unit is invalid: {error}"
+            ))
+        })?;
     }
-    let digest = canonical_digest(&outcomes)?;
-    accept_rotation_step(
-        state,
-        transaction,
-        SecurityTransactionStep::SwitchAuthoritativePointer,
-        canonical_request,
-        digest.clone(),
-        digest.as_str().to_owned(),
-        digest,
-        Some(Value::Array(outcomes)),
-        res,
-    )
-    .await
+    // Do not write a pending switch step until every accepted Event and its
+    // RealmCommit can be committed with the pointer change in one transaction.
+    Err(crate::app_error!(
+        ServiceUnavailable,
+        "rotation pointer switch awaits atomic Event/RealmCommit admission",
+    ))
 }
-
 fn backup_rotation_kind_name(kind: arkret_models_crypto::BackupRotationKind) -> &'static str {
     match kind {
         arkret_models_crypto::BackupRotationKind::SecretStorage => "secret_storage",
@@ -1156,11 +1077,8 @@ async fn continue_rotation_local_commit(
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let plan = rotation_plan(&transaction)?;
-    let attestation = request.client_attestation.ok_or_else(|| {
-        AppError::param_invalid("local commit requires client_attestation")
-            .with_wire_code("schema_violation")
-    })?;
-    let arkret_models_crypto::ClientStepAttestationArtifact::SecurityRotationLocalCommit(commit) =
+    let attestation = request.client_attestation;
+    let arkret_models_crypto::ClientStepAttestationArtifact::SecurityRotation(commit) =
         &attestation.artifact
     else {
         return Err(
@@ -1231,11 +1149,9 @@ async fn continue_rotation_local_commit(
     .await
 }
 
-/// `security-transactions.md` §2.3 — the single terminal step of a
-/// RecoveryTransaction. The replacement device delivers the exact frozen Seal
-/// it signed together with the recovery receipt that binds it, and the Station
-/// either commits the Seal, the two Events, the generation, the device, the
-/// session and the transaction, or commits none of them.
+/// The replacement device submits the signed recovery receipt. The Station
+/// signs consecutive PCR RealmCommits for the prepared Events, then stores
+/// both Commits, session consumption and terminal result in one transaction.
 async fn continue_commit_recovery_unit(
     state: &AppState,
     session: &SessionRecord,
@@ -1244,113 +1160,45 @@ async fn continue_commit_recovery_unit(
     canonical_request: Vec<u8>,
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
-    let attestation = request.client_attestation.as_ref().ok_or_else(|| {
-        AppError::param_invalid("terminal recovery step requires client_attestation")
-            .with_wire_code("schema_violation")
-    })?;
-    attestation.validate_structural().map_err(|error| {
+    let attestation = &request.client_attestation;
+    attestation.validate().map_err(|error| {
         AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
     })?;
-    let arkret_models_crypto::ClientStepAttestationArtifact::RecoveryTerminalCommit(
-        terminal_commit,
-    ) = &attestation.artifact
+    let arkret_models_crypto::ClientStepAttestationArtifact::Recovery(terminal_commit) =
+        &attestation.artifact
     else {
-        return Err(AppError::param_invalid(
-            "terminal recovery step requires a RecoveryTerminalCommit artifact",
-        )
-        .with_wire_code("schema_violation"));
+        return Err(
+            AppError::param_invalid("terminal recovery requires RecoveryTerminalCommit")
+                .with_wire_code("schema_violation"),
+        );
     };
     terminal_commit.validate().map_err(|error| {
         AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
     })?;
     let receipt = &terminal_commit.recovery_receipt;
-    let first_generation_seal = &terminal_commit.first_generation_seal;
-    if session.device_id != receipt.new_device_id.as_str() {
-        return Err(crate::app_error!(
-            CapabilityDenied,
-            "terminal recovery commit must be submitted by the replacement device session",
-        ));
-    }
     let (binding, plan) = pcr_policy_parts(&transaction.resource)?;
     let binding = binding.clone();
     let plan = plan.clone();
-    let expected_model = arkret_models_crypto::RecoveryIdentityModel::PcrPolicy;
-    let previous_generation = plan.previous_model_generation_ref;
-    let result_generation = plan.result_model_generation_ref;
-    let proof_digest = plan.proof_digest.clone();
-    let authorize_event_id = binding.authorize_event_id.clone();
-    let reanchor_event_id = binding.reanchor_event_id.clone();
-    let expected_recovery_session_id = &binding.recovery_session_id;
-    let expected_device_id = &binding.replacement_device_id;
-    let recovery_session = state
-        .recovery_sessions()
-        .session(expected_recovery_session_id.as_str())
-        .await
-        .map_err(recovery_service_error)?
-        .ok_or_else(|| {
-            crate::app_error!(FailedPrecondition, "bound recovery session is unavailable")
-        })?;
-    let recovery_proof_summary = recovery_proof_summary(&recovery_session).ok_or_else(|| {
-        crate::app_error!(
-            FailedPrecondition,
-            "bound recovery session has no verified proof summary"
-        )
-    })?;
-    if recovery_session.created_at != receipt.started_at {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "terminal recovery receipt started_at does not match the verified recovery session",
+    let [reanchor_event, authorize_event] = plan.reanchor_unit.request.events.as_slice() else {
+        return Err(AppError::internal(
+            "prepared recovery Event pair is malformed",
         ));
-    }
-    if recovery_session.state != SessionState::Verified
-        || recovery_session.transaction_id.as_deref()
-            != Some(transaction.resource.transaction_id.as_str())
-        || recovery_session.principal_id != transaction.resource.account_id.principal_id
-        || recovery_session.station_id != transaction.resource.account_id.station_id
-        || recovery_session.station_id.as_str() != state.service_id()
-        || recovery_session.requesting_device_id != expected_device_id.as_str()
-        || recovery_session.policy_id != receipt.policy_id.as_str()
-        || u64::from(recovery_session.policy_version) != receipt.policy_version
-        || recovery_session.trust_domain != receipt.trust_domain.as_str()
-        || recovery_proof_summary.kind != receipt.proof_summary.kind
-        || recovery_proof_summary.proof_digest != receipt.proof_summary.proof_digest
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "terminal recovery receipt does not match the verified recovery session snapshot",
-        ));
-    }
-    validate_frozen_session_policy(
-        state,
-        &recovery_session,
-        recovery_session.proof_payload.as_ref(),
-    )
-    .await?;
-    let receipt_previous_generation = serde_json::to_value(receipt.previous_model_generation_ref)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let expected_previous_generation = serde_json::to_value(previous_generation)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt_result_generation = serde_json::to_value(receipt.result_model_generation_ref)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let expected_result_generation = serde_json::to_value(result_generation)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if receipt.receipt_id != binding.terminal_receipt_id
+    };
+    if session.device_id != binding.replacement_device_id.as_str()
+        || receipt.receipt_id != binding.terminal_receipt_id
         || receipt.transaction_id != transaction.resource.transaction_id
         || receipt.transaction_request_digest != transaction.resource.request_digest
         || receipt.prepared_plan_digest != transaction.resource.prepared_plan_digest
         || receipt.account_id != transaction.resource.account_id
-        || receipt.recovery_session_id != *expected_recovery_session_id
-        || receipt.new_device_id != *expected_device_id
-        || receipt.identity_model != expected_model
-        || receipt_previous_generation != expected_previous_generation
-        || receipt_result_generation != expected_result_generation
-        || receipt.authorization_event_id != authorize_event_id
-        || receipt.reanchor_event_id.as_ref() != Some(&reanchor_event_id)
-        // The re-anchor batch receipt id is reserved by the prepare
-        // transaction, so it is checkable before the Events exist.
-        || receipt.reanchor_batch_receipt_id.as_ref() != Some(&binding.reanchor_batch_receipt_id)
-        || receipt.first_generation_seal_id != binding.first_generation_seal_id
-        || receipt.proof_summary.proof_digest != proof_digest
+        || receipt.recovery_session_id != binding.recovery_session_id
+        || receipt.new_device_id != binding.replacement_device_id
+        || receipt.identity_model != RecoveryIdentityModel::PcrPolicy
+        || receipt.recovery_authority_kind != arkret_models_crypto::RecoveryAuthorityKind::PcrPolicy
+        || receipt.previous_model_generation_ref != plan.previous_model_generation_ref
+        || receipt.result_model_generation_ref != plan.result_model_generation_ref
+        || receipt.authorization_event_id != binding.authorize_event_id
+        || receipt.reanchor_event_id != binding.reanchor_event_id
+        || receipt.proof_summary.proof_digest != plan.proof_digest
         || receipt.outcome != arkret_models_crypto::RecoveryReceiptOutcome::Completed
         || attestation.step != SecurityTransactionStep::CommitRecoveryUnit
         || attestation.output_ref != receipt.receipt_id.as_str()
@@ -1360,169 +1208,181 @@ async fn continue_commit_recovery_unit(
     {
         return Err(crate::app_error!(
             FailedPrecondition,
-            "terminal recovery commit or outer attestation changed the durable transaction binding",
+            "terminal recovery receipt changed the durable prepared binding"
         ));
     }
-    let receipt_digest = canonical_digest(receipt)?;
-    // One projection under two names: the derived outer `attestation_digest`
-    // and the coordinator attestation's `terminal_commit_digest` are the same
-    // SHA-256 over the complete `RecoveryTerminalCommit`.
-    let terminal_commit_digest = terminal_commit
-        .terminal_commit_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if attestation
-        .attestation_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?
-        != terminal_commit_digest
+    let recovery_session = state
+        .recovery_sessions()
+        .session(binding.recovery_session_id.as_str())
+        .await
+        .map_err(recovery_service_error)?
+        .ok_or_else(|| {
+            crate::app_error!(FailedPrecondition, "bound recovery session unavailable")
+        })?;
+    let proof_summary = recovery_proof_summary(&recovery_session).ok_or_else(|| {
+        crate::app_error!(
+            FailedPrecondition,
+            "verified recovery proof summary unavailable"
+        )
+    })?;
+    if recovery_session.state != SessionState::Verified
+        || recovery_session.transaction_id.as_deref()
+            != Some(transaction.resource.transaction_id.as_str())
+        || recovery_session.principal_id != transaction.resource.account_id.principal_id
+        || recovery_session.station_id != transaction.resource.account_id.station_id
+        || recovery_session.station_id.as_str() != state.service_id()
+        || recovery_session.requesting_device_id != binding.replacement_device_id.as_str()
+        || recovery_session.created_at != receipt.started_at
+        || recovery_session.policy_id != receipt.policy_id.as_str()
+        || u64::from(recovery_session.policy_version) != receipt.policy_version
+        || recovery_session.trust_domain != receipt.trust_domain.as_str()
+        || proof_summary.kind != receipt.proof_summary.kind
+        || proof_summary.proof_digest != receipt.proof_summary.proof_digest
     {
         return Err(crate::app_error!(
             FailedPrecondition,
-            "outer attestation digest does not bind the terminal recovery commit",
+            "terminal recovery receipt does not match the verified session"
         ));
     }
-    // §2.2 — only the canonical `id` and `notary_signature` may be added to the
-    // frozen body. Byte-comparing the unsigned projection is what makes that
-    // "only": no member of the plan's Seal can have moved.
-    if first_generation_seal
-        .canonical_bytes_for_id()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?
-        != arkret_canonical::canonical_json_bytes(&plan.first_generation_seal_body)
-            .map_err(|error| AppError::internal(error.to_string()))?
-        || first_generation_seal.id != binding.first_generation_seal_id
+    validate_frozen_session_policy(
+        state,
+        &recovery_session,
+        recovery_session.proof_payload.as_ref(),
+    )
+    .await?;
+    let payload = authorize_event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| AppError::internal(format!("prepared authorize payload: {error}")))?;
+    if payload.device_public_key_did.as_str() != recovery_session.requesting_device_public_key_did
+        || payload.device_id != binding.replacement_device_id
+        || payload.recovery_session_id.as_ref() != Some(&binding.recovery_session_id)
     {
         return Err(crate::app_error!(
             FailedPrecondition,
-            "submitted first-generation Seal is not the frozen prepared body",
+            "prepared authorize Event changed the recovery session binding"
         ));
     }
-    let expected_verification_method = plan
-        .reanchor_unit
-        .request
-        .events
-        .get(1)
-        .ok_or_else(|| AppError::internal("prepared recovery unit has no authorize Event"))?
-        .event
+    let expected_method = &authorize_event
         .producer_proof
         .as_ref()
-        .map(|proof| proof.verification_method.clone())
-        .ok_or_else(|| {
-            AppError::internal("prepared replacement authorization Event has no producer proof")
-        })?;
-    if attestation.auth_data.verification_method != expected_verification_method.as_str()
-        || receipt.auth_data.verification_method != expected_verification_method.as_str()
-        || first_generation_seal.notary_signature.verification_method
-            != expected_verification_method.as_str()
+        .ok_or_else(|| AppError::internal("authorize Event has no producer proof"))?
+        .verification_method;
+    if &attestation.auth_data.verification_method != expected_method
+        || &receipt.auth_data.verification_method != expected_method
     {
         return Err(crate::app_error!(
             FailedPrecondition,
-            "terminal recovery signatures are not identified by the replacement device",
+            "terminal signatures are not identified by the replacement device"
         ));
     }
-    let authorization_payload = plan.reanchor_unit.request.events[1]
-        .event
-        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
-        .map_err(|error| {
-            AppError::internal(format!(
-                "prepared device authorization payload is invalid: {error}"
-            ))
-        })?;
-    if authorization_payload.device_public_key_did.as_str()
-        != recovery_session.requesting_device_public_key_did
-        || authorization_payload.device_id != *expected_device_id
-        || authorization_payload.recovery_session_id.as_ref() != Some(expected_recovery_session_id)
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "prepared device authorization Event changed the recovery binding",
-        ));
-    }
-    let recovery_device_key = crate::routing::identity::device_signing::decode_ed25519_key(
-        authorization_payload.device_public_key_did.as_str(),
+    let key = crate::routing::identity::device_signing::decode_ed25519_key(
+        payload.device_public_key_did.as_str(),
         "multibase",
     )
-    .map_err(|error| {
-        AppError::internal(format!("replacement device public key is invalid: {error}"))
-    })?;
+    .map_err(|error| AppError::internal(format!("replacement device key: {error}")))?;
     verify_recovery_device_signature(
-        &recovery_device_key,
+        &key,
         &attestation.auth_data.signature,
         &attestation
             .signing_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
     )?;
     verify_recovery_device_signature(
-        &recovery_device_key,
+        &key,
         &receipt.auth_data.signature,
         &receipt
             .signature_transcript_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
     )?;
-    // The Seal's own `ak.seal.commit.v1` signature is verified where every
-    // other accepted Seal is verified, in `apply_inbound_seal` below, so the
-    // recovery path cannot drift into a second transcript. Its `view` is fixed
-    // at `0` by the PCR `f=0` rule and therefore carries no wire field.
     let committed_at = chrono::Utc::now();
-    // §2.2 — "completed if every check passes" can never be authored after the
-    // commit that would make it true. This is a deterministic refusal of the
-    // whole submission; nothing below it has run, so the request was never
-    // accepted and a corrected receipt may be submitted.
     super::validation::validate_recovery_receipt_completed_at(receipt.completed_at, committed_at)?;
-
-    // Everything above this line is a read-only re-verification, so a refusal
-    // leaves no attempt row, no accepted step and no terminal result.
-    verify_recovery_unit_control_proposal_acks(
-        state,
-        &recovery_session,
-        &plan.reanchor_unit.request.events,
-    )
-    .await?;
-
-    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    let completion_attestation_body = arkret_wire::UnsignedRecoveryCompletionAttestationBody {
-        transaction_id: transaction.resource.transaction_id.clone(),
-        transaction_request_digest: transaction.resource.request_digest.clone(),
-        prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
-        account_id: transaction.resource.account_id.clone(),
-        recovery_session_id: expected_recovery_session_id.clone(),
-        terminal_receipt_id: receipt.receipt_id.clone(),
-        terminal_receipt_digest: receipt_digest.clone(),
-        terminal_commit_digest: terminal_commit_digest.clone(),
-        replacement_device_id: expected_device_id.clone(),
-        device_authorization_event_id: authorize_event_id.clone(),
-        first_generation_seal_id: binding.first_generation_seal_id.clone(),
-        result_model_generation_ref: result_generation,
-        completed_at: committed_at,
-    };
-    let unsigned_completion = arkret_wire::UnsignedRecoveryCompletionAttestation::new(
-        completion_attestation_body,
-        arkret_wire::DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(
-                state.service_did().as_str(),
-            ),
-        )
-        .map_err(|error| {
-            AppError::internal(format!(
-                "federation signature verification method is invalid: {error}"
-            ))
-        })?,
+    let authority = state
+        .authority_commits()
+        .current_authority(&plan.reanchor_commit_intent.realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("PCR authority: {error}")))?
+        .ok_or_else(|| AppError::conflict("PCR Realm has no current authority"))?;
+    if authority.service_id != state.service_core_id()
+        || authority.generation != recovery_session.authority_context.authority_generation
+        || authority.authority_ref != recovery_session.authority_context.authority_ref
+    {
+        return Err(AppError::conflict("PCR authority changed after prepare"));
+    }
+    let predecessor = state
+        .authority_commits()
+        .stream_head(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: plan.reanchor_commit_intent.realm_id.clone(),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("PCR stream head: {error}")))?
+        .ok_or_else(|| AppError::conflict("PCR Realm has no accepted Commit head"))?;
+    if predecessor != recovery_session.authority_context.realm_stream_head
+        || predecessor.commit_id != plan.reanchor_commit_intent.predecessor_ref
+    {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "PCR stream head changed after prepare"
+        ));
+    }
+    let method = arkret_wire::DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
-    let signature = state
-        .notary_signing_key()
-        .sign(&unsigned_completion.signing_bytes().map_err(|error| {
-            AppError::internal(format!(
-                "completion attestation signing transcript is invalid: {error}"
-            ))
-        })?);
-    let completion_attestation = unsigned_completion
+    let commits = state
+        .authority_commits()
+        .prepare_recovery_unit_commits(
+            &[reanchor_event.clone(), authorize_event.clone()],
+            &authority,
+            &predecessor,
+            method.clone(),
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
+        .map_err(|error| AppError::internal(format!("recovery Commit signing: {error}")))?;
+    let committed_ref =
+        |item: &soland_storage::AuthorityCommitTransaction| arkret_wire::CommittedEventRef {
+            event_id: item.event.event_id.clone(),
+            commit_id: item.commit.commit_id.clone(),
+            stream_ref: item.commit.stream_ref.clone(),
+            stream_position: item.commit.stream_position,
+        };
+    let receipt_digest = canonical_digest(receipt)?;
+    let attestation_digest = attestation
+        .attestation_digest()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let unsigned = arkret_wire::UnsignedRecoveryCompletionAttestation::new(
+        arkret_wire::UnsignedRecoveryCompletionAttestationBody {
+            transaction_id: transaction.resource.transaction_id.clone(),
+            transaction_request_digest: transaction.resource.request_digest.clone(),
+            prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
+            account_id: transaction.resource.account_id.clone(),
+            recovery_session_id: binding.recovery_session_id.clone(),
+            terminal_receipt_id: receipt.receipt_id.clone(),
+            terminal_receipt_digest: receipt_digest.clone(),
+            replacement_device_id: binding.replacement_device_id.clone(),
+            result_model_generation_ref: plan.result_model_generation_ref,
+            completed_at: committed_at,
+            reanchor_event_ref: committed_ref(&commits[0]),
+            device_authorization_event_ref: committed_ref(&commits[1]),
+        },
+        method,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let signature = state.notary_signing_key().sign(
+        &unsigned
+            .signing_bytes()
+            .map_err(|error| AppError::internal(error.to_string()))?,
+    );
+    let completion = unsigned
         .attach_signature(
             arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
                 .map_err(|error| AppError::internal(error.to_string()))?,
         )
         .map_err(|error| AppError::internal(error.to_string()))?;
-
     transaction.resource.accepted_steps.push(AcceptedStep {
-        prepared_material_digest: terminal_commit_digest,
+        prepared_material_digest: attestation_digest,
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: state.service_core_id(),
         },
@@ -1533,118 +1393,56 @@ async fn continue_commit_recovery_unit(
     transaction.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Completed {
         completed_at: committed_at,
         receipt_id: Some(receipt.receipt_id.clone()),
-        completion_attestation: Some(completion_attestation),
+        completion_attestation: Some(completion),
     });
     transaction
         .resource
         .validate_structural()
-        .map_err(|error| {
-            AppError::internal(format!(
-                "completed security transaction is invalid: {error}"
-            ))
-        })?;
-    let response = serde_json::to_value(&transaction.resource).map_err(|error| {
-        AppError::internal(format!(
-            "security transaction response encode failed: {error}"
-        ))
-    })?;
-    let participant_outcome = serde_json::to_value(terminal_commit).map_err(|error| {
-        AppError::internal(format!("recovery terminal commit encode failed: {error}"))
-    })?;
-    let resource = transaction.resource.clone();
-    let step_outcome = SecurityTransactionStepOutcomeState {
-        transaction_id,
+        .map_err(|error| AppError::internal(format!("completed transaction: {error}")))?;
+    let outcome = SecurityTransactionStepOutcomeState {
+        transaction_id: transaction.resource.transaction_id.as_str().to_owned(),
         step: SecurityTransactionStep::CommitRecoveryUnit,
         canonical_request,
-        response,
-        participant_outcome: Some(participant_outcome),
+        response: serde_json::to_value(&transaction.resource)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        participant_outcome: Some(
+            serde_json::to_value(terminal_commit)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        ),
     };
-    // §2.3 — one transaction, one set of row locks, one generation CAS. The
-    // admission lock is taken here and held across Seal re-verification and the
-    // durable commit, because the Seal is validated against Events that only
-    // this transaction will make visible.
-    let generation_lock =
-        crate::routing::identity::device_generation::device_generation_admission_lock(
-            transaction.resource.account_id.principal_id.as_str(),
-        );
-    let _generation_guard = generation_lock.lock().await;
-    let outcome = crate::routing::events::event_log::submit_recovery_identity_anchor_batch(
-        state,
-        session,
-        expected_device_id,
-        plan.reanchor_unit.request.events.clone(),
-        binding.reanchor_batch_receipt_id.clone(),
-        crate::routing::events::event_log::RecoveryTerminalIntent {
-            seal: first_generation_seal.clone(),
+    let lock = crate::routing::identity::device_generation::device_generation_admission_lock(
+        transaction.resource.account_id.principal_id.as_str(),
+    );
+    let _guard = lock.lock().await;
+    let accepted = state
+        .security_transactions()
+        .commit_recovery_unit(soland_services::identity::RecoveryUnitCommitWrite {
             transaction,
-            step_outcome,
-        },
-    )
-    .await
-    .map_err(|error| {
-        AppError::conflict(format!("recovery unit was rejected: {}", error.message()))
-            .with_rejection_code(error.code())
-    })?;
-    let expected_ids = [reanchor_event_id.as_str(), authorize_event_id.as_str()];
-    if !outcome.rejections.is_empty()
-        || !outcome.quarantine.is_empty()
-        || outcome.accepted.len() != 2
-        || outcome
-            .accepted
-            .iter()
-            .map(|event_id| event_id.as_str())
-            .ne(expected_ids)
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "recovery unit did not atomically accept the fixed Event pair",
-        ));
-    }
-    // Everything above is durable. What follows only refreshes in-memory
-    // projections derived from it, so a failure here cannot unaccept the unit.
-    crate::routing::events::projection::publish_confirmed_seal_commands(
-        state,
-        first_generation_seal,
-    )
-    .await
-    .map_err(|error| {
-        AppError::internal(format!("confirmed principal command projection: {error}"))
-    })?;
-    state
-        .projections()
-        .reload_cells_from_store(&first_generation_seal.realm_id)
+            step_outcome: outcome,
+            predecessor,
+            commits,
+            queued_at: committed_at,
+        })
         .await
-        .map_err(|error| {
-            AppError::internal(format!(
-                "refresh projected cells after recovery Seal acceptance: {error}"
-            ))
-        })?;
+        .map_err(recovery_service_error)?;
+    let resource = serde_json::from_value(accepted.response)
+        .map_err(|error| AppError::internal(format!("stored recovery response: {error}")))?;
     res.status_code(StatusCode::OK);
     json_ok(resource)
 }
 
-/// `security-transactions.md` §2.1 — the Station-owned prepare that `create`
-/// performs in its own durable transaction.
-///
-/// It locks the verified recovery session, replays the Realm history together
-/// with the closed recovery unit to derive the exact `UnsignedSeal`, derives
-/// the first-generation Seal id, reserves the re-anchor batch receipt id, and
-/// registers the `(realm_id, replacement signer slot, predecessor_ref)`
-/// signing-slot fence on the same table ordinary PCR prepare uses.
-///
-/// It has zero recovery effect: no accepted Event, no committed Seal, no
-/// generation advance, no activated device, no consumed session, no terminal
-/// result.
+/// Validate and freeze the replacement device's two producer Events and the
+/// current PCR RealmCommit predecessor. Prepare has no accepted-event effect:
+/// authority Commit bodies are issued only by terminal admission.
 async fn prepare_recovery_plan(
     state: &AppState,
     session: &SessionRecord,
     request: &RecoveryTransactionCreateRequest,
 ) -> Result<PcrPolicyRecoveryPlan, AppError> {
     let intent = &request.recovery_intent;
-    intent.validate_structural().map_err(|error| {
+    intent.validate(&request.account_id).map_err(|error| {
         AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
     })?;
-    let seal_intent = &intent.first_generation_seal_intent;
     if session.device_id != intent.replacement_device_id.as_str() {
         return Err(crate::app_error!(
             CapabilityDenied,
@@ -1657,7 +1455,7 @@ async fn prepare_recovery_plan(
         .await
         .map_err(recovery_service_error)?
         .ok_or_else(|| AppError::not_found("recovery session not found"))?;
-    if recovery_session.state != SessionState::Verified
+    if recovery_session.state != soland_storage::RecoverySessionLifecycle::Verified
         || recovery_session.principal_id != request.account_id.principal_id
         || recovery_session.station_id != request.account_id.station_id
         || recovery_session.station_id.as_str() != state.service_id()
@@ -1676,52 +1474,80 @@ async fn prepare_recovery_plan(
     let proof_summary = recovery_proof_summary(&recovery_session).ok_or_else(|| {
         AppError::capability_denied("recovery session has no verified proof summary")
     })?;
-    let submissions = &intent.reanchor_unit.request.events;
-    let [reanchor_submission, authorize_submission] = submissions.as_slice() else {
+    let commit_intent = &intent.reanchor_commit_intent;
+    let realm_id = &commit_intent.realm_id;
+    if recovery_session.authority_context.realm_id != *realm_id {
+        return Err(AppError::conflict(
+            "recovery commit intent does not name the session-frozen PCR Realm",
+        ));
+    }
+    let current_authority = state
+        .authority_commits()
+        .current_authority(realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("PCR authority lookup failed: {error}")))?
+        .ok_or_else(|| AppError::conflict("PCR Realm has no current authority"))?;
+    if current_authority.service_id != state.service_core_id()
+        || current_authority.generation != recovery_session.authority_context.authority_generation
+        || current_authority.authority_ref != recovery_session.authority_context.authority_ref
+    {
+        return Err(AppError::conflict(
+            "PCR authority changed after the recovery session was frozen",
+        ));
+    }
+    let stream_head = state
+        .authority_commits()
+        .stream_head(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("PCR stream head lookup failed: {error}")))?
+        .ok_or_else(|| AppError::conflict("PCR Realm has no accepted Commit head"))?;
+    if stream_head != recovery_session.authority_context.realm_stream_head
+        || stream_head.commit_id != commit_intent.predecessor_ref
+    {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "recovery commit intent predecessor_ref is not the session-frozen PCR stream head",
+        ));
+    }
+    let [reanchor_event, authorize_event] = intent.reanchor_unit.request.events.as_slice() else {
         return Err(AppError::param_invalid(
             "recovery unit must contain exactly the ordered re-anchor and authorize Events",
         )
         .with_wire_code("schema_violation"));
     };
-    let reanchor_event_id = reanchor_submission.event.event_id.clone();
-    let authorize_event_id = authorize_submission.event.event_id.clone();
-    let realm_id = &seal_intent.realm_id;
-    if reanchor_submission.event.realm_id != *realm_id
-        || authorize_submission.event.realm_id != *realm_id
-    {
-        return Err(AppError::param_invalid(
-            "recovery unit Events must belong to the sealed principal control Realm",
-        )
-        .with_wire_code("schema_violation"));
-    }
-    // The unit binding is verified once, here, where the two Events first
-    // enter the Station. The plan then freezes them, `prepared_plan_digest`
-    // covers them, and the terminal commit only has to prove byte identity.
-    let transaction_actor = arkret_wire::ActorId::account(request.account_id.clone());
-    if reanchor_submission.event.actor_id != transaction_actor
-        || authorize_submission.event.actor_id != transaction_actor
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "recovery unit Events belong to a different principal",
-        ));
-    }
-    // The reserved Seal id and every unit digest are derived under the Realm
-    // digest algorithm, so the suite is never taken from the caller.
-    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
+    let reanchor_event_id = reanchor_event.event_id.clone();
+    let authorize_event_id = authorize_event.event_id.clone();
+    let digest_suite = arkret_canonical::DigestSuite::Sha256;
     let reanchor_payload: arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload =
         serde_json::from_value(
-            serde_json::to_value(&reanchor_submission.event.payload)
+            serde_json::to_value(&reanchor_event.payload)
                 .map_err(|error| AppError::internal(error.to_string()))?,
         )
         .map_err(|error| {
             AppError::param_invalid(format!("device re-anchor payload is invalid: {error}"))
                 .with_wire_code("schema_violation")
         })?;
-    let authorize_envelope = serde_json::to_value(&authorize_submission.event)
+    let authorization_payload = authorize_event
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .map_err(|error| {
+            AppError::param_invalid(format!(
+                "recovery device authorization payload is invalid: {error}"
+            ))
+        })?;
+    if authorization_payload.device_id != intent.replacement_device_id
+        || authorization_payload.device_public_key_did.as_str()
+            != recovery_session.requesting_device_public_key_did
+        || authorization_payload.recovery_session_id.as_ref() != Some(&intent.recovery_session_id)
+    {
+        return Err(AppError::conflict(
+            "replacement authorization Event changed the session-frozen device identity",
+        ));
+    }
+    let authorize_envelope = serde_json::to_value(authorize_event)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let authorize_envelope_digest = authorize_submission
-        .event
+    let authorize_envelope_digest = authorize_event
         .event_digest_with_digest_suite(digest_suite)
         .map_err(|error| AppError::internal(error.to_string()))?;
     let replacement_payload_digest = soland_services::events::replacement_authorize_payload_digest(
@@ -1729,147 +1555,65 @@ async fn prepare_recovery_plan(
         &authorize_envelope_digest,
     )
     .map_err(AppError::internal)?;
-    // `key-management.md` §5.0.7 — the binding is one-directional: the
-    // authorize envelope names the re-anchor in `prev_refs`, and the re-anchor
-    // payload commits to the authorize payload digest.
     if reanchor_payload.account_id != request.account_id
-        || authorize_submission.event.prev_refs.len() != 1
-        || authorize_submission.event.prev_refs[0] != reanchor_event_id
         || reanchor_payload.replacement_authorize_payload_digest != replacement_payload_digest
     {
         return Err(crate::app_error!(
             FailedPrecondition,
-            "recovery unit Events do not form the fixed re-anchor/authorize binding",
+            "recovery Events do not form the fixed re-anchor/authorize binding",
         ));
     }
-    // The re-anchor unit is closed prepared material: its Control Proposal Acks
-    // are checked here so the frozen plan can only ever have been derived from
-    // an authorized unit.
-    verify_recovery_unit_control_proposal_acks(state, &recovery_session, submissions).await?;
-    let mut events = Vec::with_capacity(submissions.len());
-    for (submission, expected_digest) in submissions.iter().zip(&seal_intent.unit_event_digests) {
-        let digest = Hash::new(
-            submission
-                .event
-                .event_digest_with_digest_suite(digest_suite)
-                .map_err(|error| AppError::internal(error.to_string()))?,
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?;
-        if digest != *expected_digest {
-            return Err(AppError::param_invalid(
-                "recovery seal intent does not name the exact [reanchor, authorize] execution pair",
-            )
-            .with_wire_code("schema_violation"));
-        }
-        events.push((digest, submission.event.clone()));
-    }
-    let mut frontier = state
-        .projections()
-        .realm_seal_basis_leaves(realm_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
-    frontier.sort();
-    if frontier.as_slice() != std::slice::from_ref(&seal_intent.predecessor_ref) {
-        return Err(crate::app_error!(
-            FrontierUnavailable,
-            "recovery seal intent predecessor_ref is not the exact current accepted Seal",
-        ));
-    }
-    let seal_request =
-        arkret_models_collaboration::governance_dependencies::SealPrepareRequestBody {
-            realm_id: realm_id.clone(),
-            predecessor_ref: seal_intent.predecessor_ref.clone(),
-            event_digests: seal_intent.unit_event_digests.clone(),
-            hlc: seal_intent.hlc.clone(),
-        };
-    let request_hash = arkret_canonical::canonical_sha256(&seal_request).map_err(|error| {
-        AppError::internal(format!("recovery seal request is not hashable: {error}"))
+    let key = crate::routing::identity::device_signing::decode_ed25519_key(
+        &recovery_session.requesting_device_public_key_did,
+        "multibase",
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "session-frozen replacement device public key is invalid: {error}"
+        ))
     })?;
-    // The fence slot names the REPLACEMENT device at the result generation:
-    // the signer this plan releases a body to is the fresh device, not any
-    // current accepted one.
-    let signer_slot = format!(
-        "{}#{}@{}",
-        request.account_id.principal_id.as_str(),
-        intent.replacement_device_id.as_str(),
-        intent.result_model_generation_ref
+    let key_multibase = recovery_session
+        .requesting_device_public_key_did
+        .strip_prefix("did:key:")
+        .ok_or_else(|| AppError::internal("replacement device key is not did:key"))?;
+    let verification_method = format!(
+        "{}#{}",
+        recovery_session.requesting_device_public_key_did, key_multibase,
     );
-    let predecessor_basis = arkret_canonical::canonical_sha256(&seal_intent.predecessor_ref)
-        .map_err(|error| {
-            AppError::internal(format!(
-                "recovery seal predecessor basis is not hashable: {error}"
-            ))
-        })?;
-    let sealed_at = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
-        .ok_or_else(|| AppError::internal("recovery sealed_at is outside timestamp range"))?;
-    let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-    let seal_body = match state
-        .persistence()
-        .seal_preparation_fence(realm_id, &signer_slot, &predecessor_basis)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("recovery seal fence lookup failed: {error}"))
-        })? {
-        // Once a body for this slot is visible to the client the fence never
-        // releases a second one. An exact retry replays the frozen body; any
-        // other request for the same slot is refused outright.
-        Some(record) if record.request_hash == request_hash => {
-            serde_json::from_value(record.response_body).map_err(|error| {
-                AppError::internal(format!("frozen recovery seal body is invalid: {error}"))
-            })?
-        }
-        Some(_) => {
-            return Err(crate::app_error!(
-                SealSignerSlotFenced,
-                "this recovery signing position is already frozen for a different canonical request",
+    for event in [reanchor_event, authorize_event] {
+        event
+            .verify_event_id_matches_content_with_digest_suite(digest_suite)
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        let proof = event
+            .producer_proof
+            .as_ref()
+            .ok_or_else(|| AppError::param_invalid("recovery Event has no producer proof"))?;
+        proof
+            .validate_production()
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        if proof.verification_method.as_str() != verification_method {
+            return Err(AppError::conflict(
+                "recovery Event signer differs from the session-frozen replacement key",
             ));
         }
-        None => {
-            let body = worker
-                .prepare_recovery_seal_body(state, &seal_request, events, sealed_at)
-                .await
-                .map_err(|error| crate::app_error!(StateMismatch, error.to_string()))?;
-            let fence = soland_storage::SealPreparationFenceRecord {
-                realm_id: realm_id.clone(),
-                signer_slot,
-                predecessor_basis,
-                request_hash: request_hash.clone(),
-                response_body: serde_json::to_value(&body).map_err(|error| {
-                    AppError::internal(format!("encode recovery seal fence body: {error}"))
-                })?,
-                body_digest: arkret_canonical::canonical_sha256(&body).map_err(|error| {
-                    AppError::internal(format!("hash recovery seal fence body: {error}"))
-                })?,
-                created_at: sealed_at,
-            };
-            match state
-                .persistence()
-                .freeze_seal_preparation(&fence)
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("freeze recovery signing slot: {error}"))
-                })? {
-                soland_storage::SealPreparationFenceOutcome::Frozen(record)
-                | soland_storage::SealPreparationFenceOutcome::Replay(record) => {
-                    serde_json::from_value(record.response_body).map_err(|error| {
-                        AppError::internal(format!("frozen recovery seal body is invalid: {error}"))
-                    })?
-                }
-                soland_storage::SealPreparationFenceOutcome::Fenced => {
-                    return Err(crate::app_error!(
-                        SealSignerSlotFenced,
-                        "this recovery signing position was concurrently frozen for a different canonical request",
-                    ));
-                }
-            }
-        }
-    };
-    let first_generation_seal_id = arkret_wire::Seal::id_from_canonical_bytes(
-        &arkret_canonical::canonical_json_bytes(&seal_body)
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        digest_suite,
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
+        let envelope = arkret_signatures::EventProofBuilder::new()
+            .envelope_bytes(event)
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+            proof,
+            &envelope,
+            &event.actor_id,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: key.to_bytes().to_vec(),
+            },
+            digest_suite,
+        )
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "replacement device Event proof is invalid: {error}"
+            ))
+        })?;
+    }
     let recovery_session_snapshot_digest = Hash::new(
         arkret_canonical::canonical_sha256(
             &super::session_endpoints::typed_recovery_session_state(&recovery_session)?,
@@ -1884,8 +1628,6 @@ async fn prepare_recovery_plan(
             replacement_device_id: intent.replacement_device_id.clone(),
             reanchor_event_id,
             authorize_event_id,
-            reanchor_batch_receipt_id: reserved_receipt_id()?,
-            first_generation_seal_id,
             terminal_receipt_id: intent.terminal_receipt_id.clone(),
         },
         recovery_session_snapshot_digest,
@@ -1893,16 +1635,8 @@ async fn prepare_recovery_plan(
         previous_model_generation_ref: intent.previous_model_generation_ref,
         result_model_generation_ref: intent.result_model_generation_ref,
         reanchor_unit: intent.reanchor_unit.clone(),
-        first_generation_seal_intent: seal_intent.clone(),
-        first_generation_seal_body: seal_body,
+        reanchor_commit_intent: commit_intent.clone(),
     })
-}
-
-/// Reserve the `device_reanchor_unit` batch receipt id the replacement device
-/// signs inside the recovery receipt before either Event is accepted.
-fn reserved_receipt_id() -> Result<arkret_wire::ReceiptId, AppError> {
-    arkret_wire::ReceiptId::new(format!("ak:receipt:{}", uuid::Uuid::now_v7()))
-        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn verify_recovery_device_signature(
@@ -1924,112 +1658,6 @@ fn verify_recovery_device_signature(
             "recovery device signature verification failed"
         )
     })
-}
-
-async fn verify_recovery_unit_control_proposal_acks(
-    state: &AppState,
-    recovery_session: &soland_services::identity::RecoverySessionState,
-    submissions: &[arkret_wire::EventInitialSubmission],
-) -> Result<(), AppError> {
-    let context = &recovery_session.publication_authority_context;
-    context
-        .validate_for(RecoveryIdentityModel::PcrPolicy)
-        .map_err(|error| AppError::conflict(error.to_string()))?;
-    if context
-        .digest()
-        .map_err(|error| AppError::internal(error.to_string()))?
-        != recovery_session.publication_authority_context_digest
-    {
-        return Err(AppError::conflict(
-            "recovery publication authority context digest changed",
-        ));
-    }
-    let proof_summary = recovery_proof_summary(recovery_session).ok_or_else(|| {
-        AppError::capability_denied("recovery session has no verified proof summary")
-    })?;
-    if proof_summary.kind != RecoveryProofKind::RecoveryUnlock {
-        return Err(AppError::capability_denied(
-            "recovery-word transaction requires recovery_unlock publication authority",
-        ));
-    }
-    let verification_method = proof_summary.verification_method.as_ref().ok_or_else(|| {
-        AppError::capability_denied("recovery_unlock proof has no verification method")
-    })?;
-    let rule = context
-        .authority_set_policy
-        .authorization_rules
-        .iter()
-        .find(|rule| rule.rule_id == proof_summary.kind.as_wire_str())
-        .ok_or_else(|| {
-            AppError::capability_denied(
-                "verified recovery method has no frozen publication authority",
-            )
-        })?;
-    if rule.threshold != 1
-        || rule.issuers.len() != 1
-        || rule.issuers[0].verification_method != *verification_method
-    {
-        return Err(AppError::capability_denied(
-            "recovery_unlock publication authority does not match the verified proof",
-        ));
-    }
-    let verifying_key =
-        recovery_session_unlock_verifying_key(recovery_session, verification_method.as_str())?;
-    let events = submissions
-        .iter()
-        .map(|submission| submission.event.clone())
-        .collect::<Vec<_>>();
-    let policy =
-        crate::control_proposal::control_proposal_policy(state, &events[0].realm_id, &events)
-            .await
-            .map_err(|error| AppError::conflict(error.to_string()))?;
-    for submission in submissions {
-        let ack = submission.control_proposal_ack.as_ref().ok_or_else(|| {
-            AppError::conflict(
-                "recovery re-anchor unit requires a Control Proposal Ack for each Control Move",
-            )
-        })?;
-        ack.validate_structural(policy)
-            .map_err(|error| AppError::conflict(error.to_string()))?;
-        let expected_digest = Hash::new(
-            submission
-                .event
-                .event_digest_with_digest_suite(
-                    state
-                        .projections()
-                        .realm_digest_suite(submission.event.realm_id.as_str()),
-                )
-                .map_err(|error| AppError::internal(error.to_string()))?,
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?;
-        if ack.realm_id != submission.event.realm_id
-            || ack.proposal_digest != expected_digest
-            || ack.authority_set_ref != context.authority_set_ref.authority_set_digest
-            || ack.signature.verification_method != *verification_method
-        {
-            return Err(AppError::conflict(
-                "recovery Control Proposal Ack does not bind the frozen authority and exact Event",
-            ));
-        }
-        let member = ack;
-        let signing_bytes = member
-            .canonical_bytes_for_signature()
-            .map_err(|error| AppError::conflict(error.to_string()))?;
-        arkret_signatures::Ed25519DetachedJwsVerifier::new()
-            .verify_detached_jws(
-                &member.signature.jws,
-                &signing_bytes,
-                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                    bytes: verifying_key.to_bytes().to_vec(),
-                },
-            )
-            .map_err(|error| {
-                AppError::capability_denied(format!(
-                    "recovery Control Proposal Ack signature is invalid: {error}"
-                ))
-            })?;
-    }
-    Ok(())
 }
 
 fn pcr_policy_parts(
@@ -2102,7 +1730,7 @@ mod tests {
         let station = core("station-a");
         let account = AccountId::new(principal.clone(), station.clone());
         let actor = transaction_account_actor(&account, &station).unwrap();
-        let expected = arkret_wire::BackupObjectRef {
+        let expected = arkret_models_crypto::BackupObjectRef {
             backup_id: arkret_wire::BackupId::new(
                 "ak:backup:01964137-0000-7000-8000-000000000001".to_owned(),
             )
@@ -2127,7 +1755,7 @@ mod tests {
                 value,
                 &actor,
                 &series_id,
-                arkret_wire::BackupRotationKind::SecretStorage,
+                arkret_models_crypto::BackupRotationKind::SecretStorage,
                 &expected,
             )
         };

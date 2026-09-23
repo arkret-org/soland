@@ -321,6 +321,8 @@ struct RecoverySessionRow {
     policy_payload: Value,
     #[diesel(sql_type = Jsonb)]
     authority_context: Value,
+    #[diesel(sql_type = Jsonb)]
+    publication_authority_context: Value,
     #[diesel(sql_type = Text)]
     publication_authority_context_digest: String,
     #[diesel(sql_type = Text)]
@@ -386,6 +388,13 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id
             ))
         })?;
+        let publication_authority_context =
+            serde_json::from_value(row.publication_authority_context).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session `{}` has invalid publication_authority_context: {error}",
+                    row.recovery_session_id
+                ))
+            })?;
         let publication_authority_context_digest = arkret_identifiers::Hash::new(
             row.publication_authority_context_digest,
         )
@@ -395,6 +404,21 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 row.recovery_session_id
             ))
         })?;
+        let actual_context_digest = arkret_canonical::canonical_sha256(
+            &publication_authority_context,
+        )
+        .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` publication authority context is not canonical: {error}",
+                row.recovery_session_id
+            ))
+        })?;
+        if actual_context_digest != publication_authority_context_digest.as_str() {
+            return Err(PersistenceError::Internal(format!(
+                "recovery session `{}` publication authority context digest mismatch",
+                row.recovery_session_id
+            )));
+        }
         let state = serde_json::from_value(Value::String(row.state)).map_err(|error| {
             PersistenceError::Internal(format!(
                 "recovery session `{}` has invalid state: {error}",
@@ -423,6 +447,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             accepted_stream_head,
             policy_payload: row.policy_payload,
             authority_context,
+            publication_authority_context,
             publication_authority_context_digest,
             challenge: row.challenge,
             state,
@@ -439,7 +464,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, \
      trust_domain, policy_id, policy_version, identity_model, \
      current_device_generation_ref, device_generation_status, accepted_stream_head, \
-     policy_payload, authority_context, publication_authority_context_digest, \
+     policy_payload, authority_context, publication_authority_context, publication_authority_context_digest, \
      challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
 
 /// Snake_case wire name of the canonical SDK `SessionState`, matching the
@@ -540,9 +565,9 @@ impl RecoverySessionStore for PgRecoverySessionStore {
              (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
               device_generation_status, accepted_stream_head, policy_payload, \
-              authority_context, publication_authority_context_digest, challenge, \
+              authority_context, publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -583,6 +608,13 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             serde_json::to_value(&record.authority_context).map_err(|error| {
                 PersistenceError::Internal(format!(
                     "recovery session authority_context encode failed: {error}"
+                ))
+            })?,
+        )
+        .bind::<Jsonb, _>(
+            serde_json::to_value(&record.publication_authority_context).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session publication_authority_context encode failed: {error}"
                 ))
             })?,
         )

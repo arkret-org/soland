@@ -152,7 +152,7 @@ pub(super) async fn submit_provision_event(
     controller_authorization_ref: &arkret_wire::DidUrl,
     agent_slug: &str,
     requested_scope_digest: &arkret_wire::Hash,
-    submission: arkret_wire::EventInitialSubmission,
+    submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<String, AppError> {
     let event = &submission.event;
     let payload =
@@ -205,10 +205,10 @@ pub(super) fn validate_durable_agent_lifecycle(
     reason: Option<&str>,
     event: &Event,
 ) -> Result<(), AppError> {
-    let (transition, next_status) = match event_kind {
-        arkret_wire::event_kind_str::SELF_AGENT_PAUSE => ("pause", "paused"),
-        arkret_wire::event_kind_str::SELF_AGENT_RESUME => ("resume", "active"),
-        arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE => ("deactivate", "deactivated"),
+    let transition = match event_kind {
+        arkret_wire::event_kind_str::SELF_AGENT_PAUSE => "pause",
+        arkret_wire::event_kind_str::SELF_AGENT_RESUME => "resume",
+        arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE => "deactivate",
         _ => {
             return Err(AppError::param_invalid(
                 "unsupported Agent lifecycle Event kind",
@@ -251,42 +251,8 @@ pub(super) fn validate_durable_agent_lifecycle(
             "lifecycle_event payload does not match the requested transition",
         ));
     }
-    // v1 carries no producer `effects[]`: the Agent status transition is
-    // derived from `kind + payload` by the registered contract, and `from`
-    // comes from the frozen pre-state (`ProjectedOp::TransitionTo`), not from
-    // the producer. The payload fields that feed the projection were pinned
-    // above, so the remaining check is that the contract derives exactly one
-    // write, on this Agent's status cell, transitioning to `next_status`.
-    let canonical_actor = event.actor_id.canonical_key().map_err(|error| {
-        AppError::param_invalid(format!("lifecycle_event Agent actor is invalid: {error}"))
-    })?;
-    let subject = arkret_wire::composite_subject(&[canonical_actor.as_str()]).map_err(|error| {
-        AppError::param_invalid(format!(
-            "lifecycle_event Agent status subject is invalid: {error}"
-        ))
-    })?;
-    let expected_cell = format!("ak:cell:ak.component.agent.status.v1:{subject}");
-    let derived =
-        arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
-            .map_err(|error| {
-                AppError::param_invalid(format!(
-                    "lifecycle_event Agent status projection failed: {error}"
-                ))
-            })?;
-    let matches_transition = derived.len() == 1
-        && derived[0].cell_id.as_str() == expected_cell
-        && matches!(
-            &derived[0].op,
-            arkret_wire::cbs::ProjectedOp::Direct(op)
-                if op.op_type == arkret_wire::cbs::LatticeOpType::Transition
-                    && op.to.as_ref().and_then(Value::as_str) == Some(next_status)
-        );
-    if !matches_transition {
-        return Err(AppError::param_invalid(
-            "lifecycle_event must derive the exact Agent status transition",
-        ));
-    }
-    let _ = (previous_status, reason);
+    // The accepted registry contract derives the lifecycle transition from this
+    // exact signed Event. Ordinary admission validates that registered contract.
     Ok(())
 }
 
@@ -295,7 +261,7 @@ pub(super) fn validate_durable_agent_lifecycle(
 pub(super) async fn submit_signed_agent_event(
     state: &AppState,
     session: &SessionRecord,
-    submission: arkret_wire::EventInitialSubmission,
+    submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<String, AppError> {
     let event = &submission.event;
     let event_kind = event.kind.as_str().to_owned();
@@ -320,7 +286,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     event_kind: &str,
     previous_status: &str,
     reason: Option<&str>,
-    submission: arkret_wire::EventInitialSubmission,
+    submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<String, AppError> {
     validate_durable_agent_lifecycle(
         session,

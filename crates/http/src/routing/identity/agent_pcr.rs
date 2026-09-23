@@ -1,11 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use arkret_identifiers::{Did, Hash, RealmId};
-use arkret_models_collaboration::agent_operations::{
-    AgentLifecycleState, agent_requested_scope_digest,
-};
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::agent_scope::agent_requested_scope_digest;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
-use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Event, Seal, SealCommandOutcome};
+use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Event};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_http::error::AppError;
@@ -15,91 +12,6 @@ use soland_services::identity::{
 };
 
 use crate::state::AppState;
-
-pub(crate) struct AgentPcrOrderedHistory {
-    pub(crate) seal_view: crate::notary::MaterializedEventSealView,
-    pub(crate) units: Vec<arkret_state::OrderedControlUnit>,
-    pub(crate) committed_command_results: Vec<SealCommandOutcome>,
-}
-
-/// Resolve one Agent PCR history in its signed Seal command order.
-///
-/// The Event store is only a digest-addressed source of immutable envelopes.
-/// It cannot choose replay order from actor sequence, arrival time, or
-/// `seal_basis`; the accepted Seal lineage and its signed command results own
-/// that order.
-pub(crate) async fn resolve_agent_pcr_ordered_history(
-    state: &AppState,
-    terminal_seal: Seal,
-    events_by_digest: &BTreeMap<Hash, (Event, arkret_canonical::DigestSuite)>,
-) -> Result<AgentPcrOrderedHistory, AppError> {
-    let seal_view = crate::notary::materialized_event_seal_view(state, terminal_seal.clone())
-        .await
-        .map_err(|error| {
-            crate::app_error!(
-                FrontierUnavailable,
-                format!("Agent PCR Seal lineage is unavailable: {error}"),
-            )
-        })?;
-    let mut predecessor_ref = None;
-    let mut seen_seals = BTreeSet::new();
-    let mut command_results = Vec::new();
-    for seal in &seal_view.seal_path {
-        seal.validate_structural().map_err(|error| {
-            crate::app_error!(
-                StateMismatch,
-                format!(
-                    "Agent PCR Seal {} is structurally invalid: {error}",
-                    seal.id
-                ),
-            )
-        })?;
-        if seal.realm_id != terminal_seal.realm_id
-            || seal.predecessor_ref != predecessor_ref
-            || !seen_seals.insert(seal.id.clone())
-        {
-            return Err(crate::app_error!(
-                StateMismatch,
-                "Agent PCR Seal lineage is not one complete ordered chain",
-            ));
-        }
-        predecessor_ref = Some(seal.id.clone());
-        command_results.extend(seal.command_results.iter().cloned());
-    }
-    if predecessor_ref.as_ref() != Some(&terminal_seal.id) {
-        return Err(crate::app_error!(
-            StateMismatch,
-            "Agent PCR Seal lineage does not terminate at the selected Seal",
-        ));
-    }
-    let units = arkret_state::resolve_committed_ordered_control_units(&command_results, |digest| {
-        let (event, digest_suite) = events_by_digest.get(digest).ok_or_else(|| {
-            arkret_state::OrderedControlBatchAbort::Structural(format!(
-                "signed Agent PCR command member {digest} is missing",
-            ))
-        })?;
-        Ok(arkret_state::OrderedControlUnitEvent {
-            digest: digest.clone(),
-            event: event.clone(),
-            digest_suite: *digest_suite,
-        })
-    })
-    .map_err(|error| {
-        crate::app_error!(
-            StateMismatch,
-            format!("Agent PCR signed command history is invalid: {error}"),
-        )
-    })?;
-    let committed_command_results = command_results
-        .into_iter()
-        .filter(|result| result.outcome == arkret_wire::CommandOutcome::Committed)
-        .collect();
-    Ok(AgentPcrOrderedHistory {
-        seal_view,
-        units,
-        committed_command_results,
-    })
-}
 
 fn managed_controller_core_id(controller_principal_id: &str) -> Result<DidCoreId, AppError> {
     DidCoreId::new(controller_principal_id.to_owned())
@@ -339,7 +251,7 @@ pub(crate) async fn active_series_pointer_is_current(
     };
     Ok(
         binding.authorization_event_id == pointer.auth_data.device_authorize_event_id
-            && binding.generation_ref == pointer.frontier_ref.device_generation_ref,
+            && binding.generation_ref == pointer.source_commit_ref.device_generation_ref,
     )
 }
 
@@ -546,42 +458,6 @@ pub(crate) async fn agent_record_for_controller_account_pcr(
         return Ok(None);
     }
     Ok(Some(record))
-}
-
-pub(crate) async fn agent_event_seal_head(
-    state: &AppState,
-    pcr_id: &str,
-) -> Result<Option<Seal>, AppError> {
-    let realm_id = RealmId::new(pcr_id.to_owned())
-        .map_err(|error| AppError::internal(format!("stored Agent PCR id invalid: {error}")))?;
-    let events = state
-        .event_queries()
-        .accepted_events()
-        .await
-        .map_err(|error| AppError::internal(format!("Agent PCR event lookup failed: {error}")))?;
-    let has_events = events.iter().any(|event| {
-        event
-            .envelope
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .or(event.realm_id.as_deref())
-            == Some(pcr_id)
-    });
-    if !has_events {
-        return Ok(None);
-    }
-
-    // A Agent PCR is notarized by its accepted Agent key authority or
-    // by the accountable controller authorized by the accepted PCR history.
-    // The service must never mint a substitute Seal with its own key merely
-    // because accepted Events exist.
-    let Some(seal) = crate::notary::ensure_realm_seal_head(state, &realm_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Agent PCR Seal lookup failed: {error}")))?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(seal))
 }
 
 pub(crate) async fn agent_pcr_genesis_accepted_at(
@@ -853,24 +729,39 @@ fn validate_agent_pcr_genesis_effect(
             "agent_pcr_genesis_ref_forbidden",
         ));
     }
-    // v1 carries no producer `effects[]`: the canonical genesis writes
-    // are derived from `kind + payload` by the registered `ak.realm.create`
-    // contract. Only the targets are asserted — the state model ops come from the
-    // registered `effect_projection`.
-    let derived = arkret_schema::project_registered_cell_writes(
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .map_err(|error| schema_error(format!("Agent PCR create projection failed: {error}")))?;
-    let expected = arkret_bootstrap::expected_realm_create_cells(&event);
-    let actual: std::collections::BTreeSet<String> = derived
-        .iter()
-        .map(|write| write.cell_id.as_str().to_owned())
-        .collect();
-    if derived.len() != expected.len() || actual != expected {
+    if event.kind != arkret_wire::EventKind::RealmCreate
+        || event.scope_ref != arkret_wire::ScopeRef::RealmGenesis
+        || RealmId::from_event_id(&event.event_id) != *realm_id
+    {
         return Err(failed_precondition(
-            "Agent PCR genesis must derive the canonical registered genesis cells",
-            "agent_pcr_create_effect_mismatch",
+            "Agent PCR genesis must be the event-derived Realm create",
+            "agent_pcr_genesis_identity_mismatch",
+        ));
+    }
+    let genesis: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
+            schema_error(format!("Agent PCR payload encoding failed: {error}"))
+        })?)
+        .map_err(|error| schema_error(format!("Agent PCR payload is invalid: {error}")))?;
+    let Some(agent_actor) = event.actor_id.as_account_id() else {
+        return Err(schema_error("Agent PCR genesis actor must be an Account"));
+    };
+    let Some(controller_actor) = event
+        .executed_by
+        .as_ref()
+        .and_then(|actor| actor.as_account_id())
+    else {
+        return Err(schema_error(
+            "Agent PCR genesis controller executor is missing",
+        ));
+    };
+    if event.authorization_ref.is_none()
+        || agent_actor.station_id != controller_actor.station_id
+        || genesis.object.governance_station_id != agent_actor.station_id
+    {
+        return Err(failed_precondition(
+            "Agent PCR genesis controller and governance Station binding is invalid",
+            "agent_pcr_genesis_authority_mismatch",
         ));
     }
     Ok(())
@@ -879,82 +770,38 @@ fn validate_agent_pcr_genesis_effect(
 pub(crate) fn validate_agent_pcr_genesis_object(
     object: &Value,
     agent_id: &str,
-    controller_principal_id: &str,
+    _controller_principal_id: &str,
     expected_realm_id: &str,
     trust_domain: &str,
     expected_initial_resolution: &arkret_models_identity::ResolutionCommitment,
 ) -> Result<(), AppError> {
     RealmId::new(expected_realm_id.to_owned())
         .map_err(|error| schema_error(format!("Agent PCR Realm id is invalid: {error}")))?;
-    let genesis_salt = object
-        .get("genesis_salt")
-        .and_then(Value::as_str)
-        .ok_or_else(|| schema_error("Agent PCR genesis_salt is missing"))?;
-    let initial_resolution = serde_json::from_value::<
-        arkret_models_identity::identity_resolution::ResolutionCommitment,
-    >(
-        object
-            .get("initial_resolution")
-            .cloned()
-            .ok_or_else(|| schema_error("Agent PCR initial_resolution is missing"))?,
-    )
-    .map_err(|error| schema_error(format!("Agent PCR initial_resolution is invalid: {error}")))?;
-    if &initial_resolution != expected_initial_resolution {
+    let genesis: arkret_models_collaboration::events_payloads::RealmGenesis =
+        serde_json::from_value(object.clone())
+            .map_err(|error| schema_error(format!("Agent PCR genesis is invalid: {error}")))?;
+    genesis
+        .validate()
+        .map_err(|error| schema_error(format!("Agent PCR genesis is invalid: {error}")))?;
+    if genesis.initial_resolution.as_ref() != Some(expected_initial_resolution) {
         return Err(failed_precondition(
             "Agent PCR initial_resolution differs from the accepted inception locked by provisioning",
             "agent_initial_resolution_mismatch",
         ));
     }
-    let notary = serde_json::from_value::<arkret_wire::NotaryValue>(
-        object
-            .get("notary")
-            .cloned()
-            .ok_or_else(|| schema_error("Agent PCR notary is missing"))?,
-    )
-    .map_err(|error| schema_error(format!("Agent PCR notary is invalid: {error}")))?;
-    let agent_id = arkret_identifiers::DidCoreId::new(agent_id.to_owned())
-        .map_err(|error| schema_error(format!("Agent core id is invalid: {error}")))?;
-    // The Realm locks its suite at create time and Agent PCRs have no SHA-256
-    // exception, so the canonical rebuild must adopt the declared suite. The
-    // enum is the ordinary Realm digest registry, and the rebuilt object is
-    // still compared verbatim, so an unregistered value cannot get through.
-    let digest_suite = object
-        .get("digest_algorithm")
-        .and_then(Value::as_str)
-        .ok_or_else(|| schema_error("Agent PCR digest_algorithm is missing"))
-        .and_then(|value| {
-            arkret_canonical::digest_suite(value)
-                .map_err(|error| schema_error(format!("Agent PCR digest_algorithm: {error}")))
-        })?;
-    let expected = arkret_bootstrap::build_agent_pcr_create_payload(
-        arkret_bootstrap::AgentPcrCreatePayloadInput {
-            agent_id,
-            notary,
-            initial_resolution: expected_initial_resolution.clone(),
-            controller_principal_id: managed_controller_core_id(controller_principal_id)?,
-            genesis_salt: arkret_wire::GenesisSalt::new(genesis_salt.to_owned()).map_err(
-                |error| schema_error(format!("Agent PCR genesis_salt is invalid: {error}")),
-            )?,
-            trust_domain: arkret_wire::TrustDomainId::new(trust_domain.to_owned()).map_err(
-                |error| schema_error(format!("configured trust domain is invalid: {error}")),
-            )?,
-            digest_suite,
-            created_at: Utc::now(),
-        },
-    )
-    .map_err(|error| {
-        AppError::internal(format!(
-            "canonical Agent PCR genesis construction failed: {error}"
-        ))
-    })?;
-    let expected = serde_json::to_value(expected.object).map_err(|error| {
-        AppError::internal(format!(
-            "canonical Agent PCR genesis encoding failed: {error}"
-        ))
-    })?;
-    if object != &expected {
+    if arkret_wire::project_did_to_core_id(&expected_initial_resolution.did)
+        .map_err(|error| schema_error(format!("Agent DID is invalid: {error}")))?
+        .as_str()
+        != agent_id
+        || genesis.purpose
+            != arkret_models_collaboration::events_payloads::RealmPurpose::AgentControl
+        || genesis.trust_domain.as_str() != trust_domain
+        || genesis.security_class != arkret_wire::SecurityClass::HighAssurance
+        || genesis.initial_history_access != arkret_wire::HistoryAccess::SinceJoin
+        || genesis.founding_device_descriptor.is_some()
+    {
         return Err(failed_precondition(
-            "Agent PCR genesis does not match the canonical profile-closed payload",
+            "Agent PCR genesis does not match the registered control Realm profile",
             "principal_control_realm_profile_mismatch",
         ));
     }
@@ -1090,7 +937,6 @@ mod tests {
         let mut event = soland_services::events::AcceptedEvent {
             event_id: String::new(),
             actor_id: actor.to_string(),
-            actor_seq: 0,
             realm_id: Some(PCR.into()),
             kind: arkret_wire::EventKind::RealmCreate.to_string(),
             schema_id: String::new(),
@@ -1268,20 +1114,23 @@ mod tests {
         let payload = arkret_bootstrap::build_agent_pcr_create_payload(
             arkret_bootstrap::AgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
-                notary: crate::test_notary(AGENT_DID, 42),
+                governance_station_id: arkret_identifiers::DidCoreId::new(
+                    "ak:did_core:web:station.example",
+                )
+                .unwrap(),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
                     did: arkret_identifiers::Did::new(AGENT_DID).unwrap(),
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },
-                controller_principal_id: arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
                 genesis_salt: arkret_wire::GenesisSalt::new(
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 )
                 .unwrap(),
                 trust_domain: arkret_wire::TrustDomainId::new(TRUST_DOMAIN).unwrap(),
-                digest_suite: arkret_canonical::DigestSuite::Sha256,
-                created_at: Utc::now(),
+                initial_join_rule: arkret_wire::JoinRule::Closed,
+                initial_history_access: arkret_wire::HistoryAccess::SinceJoin,
+                initial_discoverability: arkret_wire::Discoverability::Secret,
             },
         )
         .unwrap();
@@ -1327,8 +1176,7 @@ mod tests {
         .expect("strict Agent PCR genesis must pass");
 
         let mut ordinary_realm = pcr_genesis();
-        ordinary_realm["history_access"] = json!("all_history_for_current_members");
-        ordinary_realm["encryption_profile"] = json!("none");
+        ordinary_realm["initial_history_access"] = json!("all_history_for_current_members");
         assert!(
             validate_agent_pcr_genesis_object(
                 &ordinary_realm,
@@ -1359,12 +1207,10 @@ mod tests {
         );
     }
 
-    /// The genesis gate is the registered contract, not a producer array: a
-    /// signed `ak.realm.create` either derives the canonical registered genesis cells
-    /// or fails closed (`event-and-patch.md` §2.4.2). The negative case is a
-    /// genesis payload the contract cannot project at all.
+    /// Agent PCR identity is the accepted Realm-create Event ID, and cannot
+    /// be selected from a payload field or from a retired cell projection.
     #[test]
-    fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
+    fn agent_pcr_genesis_requires_event_derived_realm_id() {
         let mut event = crate::test_event::raw_event(
             arkret_wire::EventKind::RealmCreate.as_str(),
             arkret_wire::ScopeRef::RealmGenesis,
@@ -1374,6 +1220,13 @@ mod tests {
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
+        event.executed_by = Some(super::ActorId::account(super::AccountId::new(
+            super::DidCoreId::new(CONTROLLER).unwrap(),
+            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        )));
+        event.authorization_ref = Some(
+            arkret_wire::AuthorizationRef::new(format!("{AGENT_DID}#managed-controller")).unwrap(),
+        );
         event.semantic_refs.clear();
         event
             .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
@@ -1381,22 +1234,7 @@ mod tests {
         let realm_id = event.realm_id.clone();
         let envelope = serde_json::to_value(&event).unwrap();
         validate_agent_pcr_genesis_effect(envelope.as_object().unwrap(), &realm_id)
-            .expect("canonical Agent PCR create must derive its genesis cells");
-        // The create-log target is the wire singleton, never a per-Realm
-        // subject (`realm-and-space.md` §2.8.3).
-        let derived = arkret_schema::project_registered_cell_writes(
-            &event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
-        assert!(
-            derived
-                .iter()
-                .any(|write| write.cell_id.as_str() == arkret_wire::REALM_CREATE_CELL)
-        );
-        assert!(!derived.iter().any(|write| {
-            write.cell_id.as_str() == format!("ak:cell:ak.component.realm.create.v1:{PCR}")
-        }));
+            .expect("canonical Agent PCR create has its event-derived Realm ID");
 
         let mut unprojectable = envelope;
         unprojectable["payload"] = json!({});

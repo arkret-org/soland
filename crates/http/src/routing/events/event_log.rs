@@ -17,27 +17,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_canonical as canonical;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{DeviceId, DidCoreId, EventId, Hash, Hlc, OperationId, RealmId};
-use arkret_models_collaboration::direct_conversation_ops::{
-    DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingAcceptanceReceipt,
-    DirectConversationFoundingAcceptanceStatus, DirectConversationFoundingAuthorizationCore,
-    DirectConversationFoundingPlan, DirectConversationFoundingUnitKind,
-    DirectConversationFoundingUnitSubmission,
-};
-use arkret_models_collaboration::event_sync::{
-    EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef, RealmActorFrontierView,
-};
-use arkret_models_collaboration::governance_dependencies::{
-    GovernanceDependency, GovernanceDependencySelector, SealPrepareFenceResultOutcome,
-    SealPrepareFenceResultRequestBody, SealPrepareOutcome, SealPrepareRequestBody,
-};
-use arkret_models_collaboration::http_bodies::{
-    EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventSealSubmitOutcome,
-    EventsResolveOutcome, EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
-};
 use arkret_wire::{
     CommittedEventFullView, CommittedEventView, CommittedEventWithheldView, Event, EventDisclosure,
-    EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_RESOLVE,
-    MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS, Seal,
+    EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_RESOLVE, MAX_EVENT_SUBMIT_BATCH,
+    MAX_SEMANTIC_REFS,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -52,9 +35,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
-pub(in crate::routing) use validation::{
-    validate_join_gate_proof_signatures, validate_message_authoring_candidate,
-};
+pub(in crate::routing) use validation::validate_join_gate_proof_signatures;
 
 use super::projection::{
     retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag,
@@ -124,7 +105,7 @@ mod current_budget_error_tests {
                 code: ErrorCode::LimitExceeded,
                 message: "response cannot fit".to_owned(),
             },
-            ErrorCode::FrontierUnavailable,
+            ErrorCode::StateMismatch,
         );
         assert_eq!(oversized.code, ErrorCode::LimitExceeded);
     }
@@ -157,19 +138,15 @@ async fn durable_account_owns_pcr(
 // interop maxima a conformant receiver MUST accept; a stricter local cap would
 // reject another node's valid wire object (spec §1).
 mod admission;
-pub use admission::{
-    EventsSubmitRequestBody, frozen_realm_check, realm_policy_bundle_check, terminal_realm_check,
-};
-use admission::{policy_bundle_value_from_state_payload, validate_federation_service_binding};
+pub use admission::{frozen_realm_check, realm_policy_bundle_check, terminal_realm_check};
+use admission::policy_bundle_value_from_state_payload;
 
 pub(crate) mod endpoints;
 pub(crate) mod governance_proof;
 pub(in crate::routing::events) use endpoints::router;
 
 mod inception;
-use inception::{
-    canonical_value_digest, event_ref_list, require_object_field, resolve_event_root_anchor_method,
-};
+use inception::{canonical_value_digest, require_object_field, resolve_event_root_anchor_method};
 
 mod realm_index;
 pub(in crate::routing) use realm_index::realm_is_indexed;
@@ -181,79 +158,25 @@ use realm_index::{
 };
 
 mod submit;
-pub(crate) use submit::verify_historical_producer;
-
-/// Reuse the durable, closed Ack-less admission classification for external PCR signing.
-pub(crate) async fn validate_pcr_prepare_ackless_ingress(
-    state: &AppState,
-    event: &Event,
-    digest: &Hash,
-) -> Result<(), String> {
-    let snapshot = state
-        .projections()
-        .control_proposal_snapshot(digest)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "PCR preparation has no durable Control Move admission".to_owned())?;
-    // Event proofs remain byte-identical after producer authoring
-    // row is stored. Compare the signed content address, not that proof list.
-    let recorded_digest = snapshot
-        .event
-        .event_digest_with_digest_suite(snapshot.digest_suite)
-        .map_err(|error| error.to_string())?;
-    let requested_digest = event
-        .event_digest_with_digest_suite(snapshot.digest_suite)
-        .map_err(|error| error.to_string())?;
-    if snapshot.event.event_id != event.event_id
-        || recorded_digest != digest.as_str()
-        || requested_digest != digest.as_str()
-        || snapshot.control_proposal_ack.is_some()
-    {
-        return Err("PCR preparation admission does not bind the exact Event".to_owned());
-    }
-    let arkret_state::state::store::ControlProposalIngressClass::AcklessSelfPrincipal(class) =
-        snapshot.ingress_class
-    else {
-        return Err("PCR preparation cannot omit an Ack-required admission".to_owned());
-    };
-    if let Some(reason) =
-        submit::replay_ackless_self_principal_ingress(state, event, &class).await?
-    {
-        return Err(reason.to_owned());
-    }
-    Ok(())
-}
-pub(crate) use endpoints::{VerifiedActorPredecessors, load_realm_actor_frontier};
-pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
-    RecoveryTerminalIntent, ValidatedEventEnvelope, admit_frontier_backfill_event,
-    prepare_service_franking_proof_event_value, service_event_authoring_lock,
-    submit_account_data_event_value, submit_agent_membership_cascade, submit_applet_install_batch,
-    submit_direct_conversation_founding_unit, submit_event_value, submit_ghost_provision_batch,
-    submit_initial_event_batch_outcome, submit_initial_event_submission,
-    submit_initial_event_submission_with_contact_projection,
-    submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
-    submit_mimi_reporter_initial_event_submission, submit_one_error_to_app_error,
-    submit_peer_pcr_genesis, submit_proof_authenticated_publication,
-    submit_recovery_identity_anchor_batch, submit_sidecar_ensure_batch,
-    verify_federated_event_admission, verify_frontier_backfill_event,
+    ValidatedEventEnvelope, prepare_service_franking_proof_event_value,
+    service_event_authoring_lock, submit_account_data_event_value, submit_agent_membership_cascade,
+    submit_applet_install_batch, submit_event_value, submit_ghost_provision_batch,
+    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
+    submit_initial_event_submission_with_device_pairing, submit_one_error_to_app_error,
+    submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
 };
 use submit::{
     IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
-    event_validation_error, events_submit_outcome, is_direct_conversation_admission_reason,
-    render_submit_one_error,
+    event_validation_error, is_direct_conversation_admission_reason,
 };
-pub(crate) use submit::{accepted_event_digest_suites, publish_confirmed_realm_bootstrap};
 
 mod validation;
 use validation::*;
-pub(in crate::routing) use validation::{
-    validate_event_envelope_with_context, validate_private_invite_envelope,
-};
+pub(in crate::routing) use validation::{PrivateInviteEnvelope, validate_private_invite_envelope};
 mod sdk_projection;
 pub(crate) use sdk_projection::*;
-pub(crate) mod lease_issue;
 
 #[cfg(test)]
 #[path = "event_log/admission_tests.rs"]

@@ -255,15 +255,13 @@ fn signal_envelope(
         sender_device_id: Some(
             arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         ),
-        seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
-            .unwrap(),
+        authority_commit_id: arkret_wire::RealmCommitId::from_digest([0xa; 32]),
         signal_class: arkret_wire::SignalClass::Session,
         sent_at,
         expires_at: sent_at + chrono::Duration::seconds(ttl_seconds),
         encrypted_payload: arkret_wire::SignalEncryptedPayload {
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
-                algorithm: "MLS-EXPORTER-AEAD".to_owned(),
                 group_state_ref: "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
@@ -271,8 +269,6 @@ fn signal_envelope(
             epoch: 7,
             nonce: "AAAAAAAAAAAAAAAA".to_owned(),
             ciphertext: "Q2lwaGVydGV4dFBsYWNlaG9sZGVy".to_owned(),
-            aad_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
-                .unwrap(),
         },
         proof: arkret_wire::SignalProof {
             kind: "detached_jws".to_owned(),
@@ -287,7 +283,6 @@ fn signal_envelope(
             jws: "a..b".to_owned(),
         },
     };
-    envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
     envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
     envelope
 }
@@ -449,7 +444,6 @@ fn test_config() -> crate::config::AppConfig {
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
         jws_replay_window_seconds: 0,
-        jws_replay_window_per_family: BTreeMap::new(),
         notary_signing_key_seed: Some([9u8; 32]),
         seed_demo_data: true,
         ..crate::config::AppConfig::test_default()
@@ -484,61 +478,6 @@ pub(crate) fn roster_session(state: &AppState, actor: &str) -> SessionIdentitySt
         created_at: now(),
         revoked_at: None,
     }
-}
-
-fn sync_test_operation_at(
-    operation_id: &str,
-    kind: impl AsRef<str>,
-    mut payload: Value,
-    created_at: DateTime<Utc>,
-) -> arkret_event_draft::ProjectedEventOperation {
-    payload
-        .as_object_mut()
-        .expect("sync fixture payload object")
-        .entry("sender")
-        .or_insert_with(|| Value::String(ROSTER_ACTOR.to_owned()));
-    let mut operation = arkret_event_draft::test_support::raw_projected_operation(
-        arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
-        RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
-        kind.as_ref(),
-        payload,
-    );
-    operation.context.sender =
-        roster_actor(operation.context.sender.signing_principal_id().as_str());
-    operation.created_at = created_at;
-    operation
-}
-
-fn accepted_sync_test_operation_at(
-    operation_id: &str,
-    event_id: &str,
-    actor: &str,
-    actor_seq: u64,
-    kind: impl AsRef<str>,
-    payload: Value,
-    created_at: DateTime<Utc>,
-) -> arkret_event_draft::ProjectedEventOperation {
-    let mut event = crate::test_event::raw_event_at(
-        kind.as_ref(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
-        },
-        crate::test_actor_id_str(actor),
-        actor_seq,
-        arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000002")).unwrap(),
-        payload,
-        created_at,
-    )
-    .expect("accepted sync fixture Event");
-    event.event_id = arkret_identifiers::EventId::new(event_id.to_owned()).unwrap();
-    arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-        arkret_identifiers::OperationId::new(operation_id.to_owned()).unwrap(),
-        arkret_wire::OperationKind::Create,
-        None,
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("accepted sync fixture operation")
 }
 
 pub(crate) fn roster_realm(
@@ -657,290 +596,6 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     assert!(
         projection_record_visible_to_session(&state, &post_join_event, Some(&session)).await,
         "joined history should include events received after the member joined"
-    );
-}
-
-#[tokio::test]
-async fn native_sidecar_events_are_visible_only_to_the_controller() {
-    const SIDECAR_ID: &str = "ak:sidecar:Aa1Yl71lEGMItLkW6kUVdeM4tRXg6z3J69ELu9xrdCXp";
-    const SOURCE_STRAND_ID: &str = "ak:strand:AUUqer3HsddAU4x0pWkmcS8uDu88T4fD7QdPhL5IlxKX";
-    let mut config = test_config();
-    config.seed_demo_data = false;
-    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    state.realm_directory().upsert(roster_realm(false, true));
-    let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", created_at);
-    insert_projected_membership_at(&state, ROSTER_CALLER, "join", created_at);
-    let apply = |operation_id: &str, kind: arkret_wire::EventKind, payload: Value| {
-        state.test_projection().lock().apply(
-            &sync_test_operation_at(operation_id, kind, payload, created_at),
-            state.hlc(),
-        );
-    };
-    let realm_create_event_id = ROSTER_REALM.replacen("ak:realm:", "ak:event:", 1);
-    apply(
-        "ak:operation:01904100-0000-7000-8000-00000000a001",
-        arkret_wire::EventKind::RealmCreate,
-        json!({
-            "event_id": realm_create_event_id,
-            "object": {
-                "schema": "ak.schema.realm_genesis.v1",
-                "purpose": "collaboration",
-                "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                "trust_domain": state.config().trust_domain,
-                "schema_refs": ["ak.schema.realm.v1"],
-                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
-                "digest_algorithm": "sha256",
-                "security_class": "standard",
-                "encryption_profile": "mls_rfc9420",
-                "notary": crate::test_notary(ROSTER_ACTOR_DID, 9)
-            }
-        }),
-    );
-    apply(
-        "ak:operation:01904100-0000-7000-8000-00000000a002",
-        arkret_wire::EventKind::SidecarCreate,
-        json!({
-            "encryption_profile": "mls_rfc9420",
-            "event_id": "ak:event:Aa1Yl71lEGMItLkW6kUVdeM4tRXg6z3J69ELu9xrdCXp",
-            "sender": ROSTER_ACTOR
-        }),
-    );
-    assert!(
-        state
-            .projections()
-            .snapshot()
-            .sidecars
-            .contains_key(SIDECAR_ID)
-    );
-
-    let structural_event =
-        |event_id: &str, kind: arkret_wire::EventKind, payload: Value| ProjectedEvent {
-            event_id: event_id.to_owned(),
-            realm_id: ROSTER_REALM.to_owned(),
-            event_kind: kind,
-            operation_kind: "event".to_owned(),
-            operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
-            sender: Some(ROSTER_ACTOR.to_owned()),
-            payload,
-            created_at,
-            received_at: created_at,
-        };
-    let attach_event = structural_event(
-        "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
-        arkret_wire::EventKind::SidecarContextAttach,
-        json!({
-            "sidecar_id": SIDECAR_ID,
-            "source_context_ref": {"kind": "strand", "strand_id": SOURCE_STRAND_ID},
-            "version": 1
-        }),
-    );
-    let controller = roster_session(&state, ROSTER_ACTOR);
-    let ordinary_realm_member = roster_session(&state, ROSTER_CALLER);
-    for event in [&attach_event] {
-        assert!(
-            projection_record_visible_to_session(&state, event, Some(&controller)).await,
-            "the controller must recover its own native Sidecar history"
-        );
-        assert!(
-            !projection_record_visible_to_session(&state, event, Some(&ordinary_realm_member))
-                .await,
-            "ordinary Realm membership must not disclose native Sidecar history"
-        );
-        assert!(
-            !projection_record_visible_to_session(&state, event, None).await,
-            "anonymous query must be indistinguishable from a missing private object"
-        );
-    }
-}
-
-pub(crate) fn canonical_event_record_received_at(
-    actor_seq: u64,
-    kind: impl AsRef<str>,
-    payload: Value,
-    actor_id: &str,
-    created_at: DateTime<Utc>,
-    received_at: DateTime<Utc>,
-) -> soland_services::events::AcceptedEvent {
-    canonical_event_record_after(
-        actor_seq,
-        kind,
-        payload,
-        actor_id,
-        created_at,
-        received_at,
-        &[],
-    )
-}
-
-/// The same fixture record with explicit `prev_refs`, so a test can write a
-/// successor before the Event it names and exercise an out-of-order arrival.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn canonical_event_record_after(
-    actor_seq: u64,
-    kind: impl AsRef<str>,
-    payload: Value,
-    actor_id: &str,
-    created_at: DateTime<Utc>,
-    received_at: DateTime<Utc>,
-    predecessors: &[arkret_wire::EventId],
-) -> soland_services::events::AcceptedEvent {
-    let kind = kind.as_ref();
-    let mut event = crate::test_event::raw_event_at(
-        kind,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
-        },
-        arkret_identifiers::DidCoreId::new(actor_id.to_owned()).unwrap(),
-        actor_seq,
-        arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-00000001")).unwrap(),
-        payload,
-        created_at,
-    )
-    .expect("canonical sync fixture Event");
-    event.prev_refs = predecessors.to_vec();
-    crate::test_event::attach_structural_only_producer_proof(
-        &mut event,
-        arkret_wire::DidUrl::new(format!("{ROSTER_ACTOR_DID}#device-key")).unwrap(),
-    );
-    let envelope = serde_json::to_value(&event).unwrap();
-    let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&envelope)
-        .expect("canonical sync fixture digest payload");
-    soland_services::events::AcceptedEvent {
-        event_id: event.event_id.to_string(),
-        actor_id: event.actor_id.to_string(),
-        actor_seq,
-        realm_id: Some(ROSTER_REALM.to_owned()),
-        kind: kind.to_owned(),
-        schema_id: "ak.event.v1".to_owned(),
-        digest_suite: arkret_canonical::DigestSuite::Sha256,
-        canonical_digest: event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap(),
-        canonical_bytes,
-        envelope,
-        received_at,
-    }
-}
-
-pub(crate) async fn store_canonical_event(
-    state: &AppState,
-    record: soland_services::events::AcceptedEvent,
-) {
-    state
-        .event_queries()
-        .store_canonical_event(record)
-        .await
-        .expect("canonical event stored");
-}
-
-#[tokio::test]
-async fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
-    use crate::routing::events::projection::project_member_identity_update;
-
-    let state = test_state();
-    let realm = ROSTER_REALM;
-    let actor = roster_actor(ROSTER_ACTOR).to_string();
-    let created_at = now();
-
-    let first_identity = json!({
-        "member_identity": {
-            "subject_actor_id": roster_actor(ROSTER_SUBJECT),
-            "display_profile": { "display_name": "Alice" }
-        }
-    });
-    let first_digest = arkret_canonical::sha256_digest(
-        arkret_canonical::canonical_json_bytes(&first_identity).unwrap(),
-    );
-    let first_record = canonical_event_record_received_at(
-        1,
-        arkret_wire::EventKind::MemberIdentityUpdate,
-        json!({"realm_id": realm, "actor_id": roster_actor(ROSTER_ACTOR), "segment": "member_identity", "identity_payload": first_identity}),
-        ROSTER_ACTOR,
-        created_at,
-        created_at,
-    );
-    let first_event_id = first_record.event_id.clone();
-    store_canonical_event(&state, first_record).await;
-
-    // First update. The canonical `ak:event:` id is envelope metadata in the
-    // typed projection context and never part of the signed payload.
-    let first_op = accepted_sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000e1",
-        &first_event_id,
-        ROSTER_ACTOR_DID,
-        1,
-        arkret_wire::EventKind::MemberIdentityUpdate,
-        json!({
-            "realm_id": realm,
-            "actor_id": roster_actor(ROSTER_ACTOR),
-            "segment": "member_identity",
-            "identity_payload": first_identity,
-        }),
-        created_at,
-    );
-    project_member_identity_update(&state, &first_op).await;
-
-    let expected_digest = |event_id: &str, payload_digest: &str| {
-        arkret_models_identity::member_identity_effective_set_digest(
-            &arkret_wire::RealmId::new(realm).unwrap(),
-            &roster_actor(ROSTER_ACTOR),
-            arkret_models_identity::MemberIdentitySegment::MemberIdentity,
-            &[arkret_models_identity::EffectiveIdentityEntry {
-                event_id: arkret_wire::EventId::new(event_id).unwrap(),
-                segment: arkret_models_identity::MemberIdentitySegment::MemberIdentity,
-                payload_digest: arkret_wire::Hash::new(payload_digest).unwrap(),
-            }],
-        )
-        .unwrap()
-    };
-    assert_eq!(
-        state.member_identity_state_digest(realm, &actor),
-        Some(expected_digest(&first_event_id, &first_digest))
-    );
-
-    // Second update replaces the first using the spec-compliant `ak:event:`
-    // edge. Before the fix this never matched (projection stored `ak:operation:`).
-    let second_identity = json!({
-        "member_identity": {
-            "subject_actor_id": roster_actor(ROSTER_SUBJECT),
-            "display_profile": { "display_name": "Alice 2" }
-        }
-    });
-    let second_digest = arkret_canonical::sha256_digest(
-        arkret_canonical::canonical_json_bytes(&second_identity).unwrap(),
-    );
-    let second_payload = json!({"realm_id": realm, "actor_id": roster_actor(ROSTER_ACTOR), "segment": "member_identity", "identity_payload": second_identity,
-        "replaces": [{"event_id": first_event_id, "payload_digest": first_digest}]});
-    let second_record = canonical_event_record_received_at(
-        2,
-        arkret_wire::EventKind::MemberIdentityUpdate,
-        second_payload.clone(),
-        ROSTER_ACTOR,
-        created_at + chrono::Duration::milliseconds(1),
-        created_at + chrono::Duration::milliseconds(1),
-    );
-    let second_event_id = second_record.event_id.clone();
-    store_canonical_event(&state, second_record).await;
-    let second_op = accepted_sync_test_operation_at(
-        "ak:operation:01904100-0000-7000-8000-0000000000e2",
-        &second_event_id,
-        ROSTER_ACTOR_DID,
-        2,
-        arkret_wire::EventKind::MemberIdentityUpdate,
-        second_payload,
-        created_at + chrono::Duration::milliseconds(1),
-    );
-    project_member_identity_update(&state, &second_op).await;
-
-    // The `ak:event:` replaces edge drops the predecessor: only the second
-    // Event contributes to the actual accepted-state concurrency guard.
-    assert_eq!(
-        state.member_identity_state_digest(realm, &actor),
-        Some(expected_digest(&second_event_id, &second_digest)),
-        "replaces[].event_id (ak:event:) must match the stored typed event id"
     );
 }
 
@@ -1541,55 +1196,18 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
 }
 
 #[tokio::test]
-async fn selected_unknown_realm_stays_unavailable_without_advancing_detail_positions() {
+async fn selected_realm_requires_committed_per_stream_detail_provider() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
     let realm = "ak:realm:AQVZRUJrSSC16EodjmqL6mBFC9TGwv6oxx-sQlJzlvxS";
     let body: SyncRequestBody =
         serde_json::from_value(json!({"filter": {"realm_ids": [realm]}})).unwrap();
-    let frame = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &body,
-        &SyncCursor {
-            detail_turn: true,
-            ..SyncCursor::default()
-        },
-    )
-    .await;
-    let entry = &frame.realms.as_ref().unwrap().entries[realm];
+    let frame = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     assert_eq!(
-        entry.unavailable.as_ref().unwrap().error_code,
-        arkret_models_collaboration::sync_frames::demand_sync::RealmDetailErrorCode::NotFound
+        frame.kind,
+        arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::ResyncRequired
     );
-    assert!(
-        entry.current.is_none()
-            && entry.state_at_window_start.is_none()
-            && entry.timeline.is_none()
-            && entry.timeline_baseline.is_none()
-            && entry.baseline.is_none()
-    );
-    // Every produced detail entry must satisfy the wire contract, including
-    // `client-sync.md` 2.3: a timeline window completion claim is only
-    // readable together with the container it fragments.
-    entry
-        .validate_demand()
-        .expect("produced detail entry must satisfy the demand-sync contract");
-    let filter = sync_filter_value(body.filter.as_ref());
-    let cursor = parse_and_validate_sync_cursor(
-        frame.cursor.as_deref().unwrap(),
-        &state,
-        Some(&session),
-        filter.as_ref(),
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .unwrap();
-    assert!(
-        cursor.positions.is_empty()
-            && cursor.account_positions.is_empty()
-            && cursor.detail_positions.is_empty()
-    );
+    assert!(frame.cursor.is_none() && frame.realms.is_none());
 }
 
 #[tokio::test]

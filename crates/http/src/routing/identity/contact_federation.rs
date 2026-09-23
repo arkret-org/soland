@@ -36,7 +36,7 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
-use arkret_wire::{AccountId, Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolSignature};
+use arkret_wire::{AccountId, DidUrl, Event, IdempotencyKey, ProtocolSignature};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -449,7 +449,7 @@ async fn peer_contacts_submit(
             || current_proof.head_digest()
                 != event_digest_for_frozen_claim(signed_event, &current_proof.head_digest())?
             || !current_proof
-                .accepted_frontier
+                .accepted_commit_event_ids
                 .contains(&signed_event.event_id)
             || current_proof.complete_through == 0
             || current_proof.fresh_until <= now()
@@ -1475,7 +1475,7 @@ async fn validate_proof_refresh_evidence(
         || current_proof.head_event_ref != prior_mirror_receipt.signed_event_ref
         || current_proof.head_digest() != prior_mirror_receipt.signed_event_digest()
         || !current_proof
-            .accepted_frontier
+            .accepted_commit_event_ids
             .contains(&current_proof.head_event_ref)
         || current_proof.complete_through == 0
         || current_proof.fresh_until <= now()
@@ -1736,10 +1736,10 @@ fn validate_glare_finalize_evidence(
                 second.request_acceptance_receipt_digest.clone(),
             ]
         || !attestation
-            .observed_frontier
+            .observed_commit_event_ids
             .contains(&first.request_event_ref)
         || !attestation
-            .observed_frontier
+            .observed_commit_event_ids
             .contains(&second.request_event_ref)
         || attestation.complete_through == 0
     {
@@ -1810,6 +1810,7 @@ async fn finalize_glare_contact_round(
     remote_attestation: &GlareConcurrencyAttestation,
     contact_address: &PeerContactAddress,
 ) -> Result<PeerContactSubmitOutcome, AppError> {
+    require_contact_commit_prefix_provider()?;
     let local_holder = request_receipts
         .iter()
         .find(|receipt| receipt.core.issuer_id.as_str() == state.service_id())
@@ -1923,13 +1924,13 @@ async fn finalize_glare_contact_round(
         "counterpart_mirror_receipt",
     )?;
 
-    let mut observed_frontier = request_receipts
+    let mut observed_commit_event_ids = request_receipts
         .iter()
         .map(|receipt| receipt.core.request_event_ref.clone())
         .collect::<Vec<_>>();
-    observed_frontier
+    observed_commit_event_ids
         .sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    let ordered_digests: [Hash; 2] = observed_frontier
+    let ordered_digests: [Hash; 2] = observed_commit_event_ids
         .iter()
         .map(|event_ref| {
             request_receipts
@@ -1946,23 +1947,21 @@ async fn finalize_glare_contact_round(
         .try_into()
         .map_err(|_| AppError::internal("glare receipt digest cardinality invalid"))?;
     let complete_through = local_request.core.slot_version;
-    let checkpoint = super::account::canonical_contact_digest(&json!({
-        "domain": arkret_wire::DomainSeparationId::CONTACT_GLARE_UNCONSUMED_SLOT_V1,
-        "holder": &local_holder,
-        "peer": &remote_holder,
-        "contact_round_id": contact_round_id,
-        "request_receipt_digests": ordered_digests,
-        "observed_frontier": observed_frontier,
-        "complete_through": complete_through,
-        "slot_state": "pending_unconsumed"
-    }))?;
+    let checkpoint = glare_unconsumed_slot_checkpoint(
+        &local_holder,
+        &remote_holder,
+        contact_round_id,
+        &ordered_digests,
+        &observed_commit_event_ids,
+        complete_through,
+    )?;
     let observed_at = now();
     let mut local_attestation = GlareConcurrencyAttestation {
         subject_id: local_holder.clone(),
         issuer_id: state.service_core_id(),
         peer_id: remote_holder.clone(),
         request_receipt_digests: ordered_digests,
-        observed_frontier: observed_frontier.clone(),
+        observed_commit_event_ids: observed_commit_event_ids.clone(),
         complete_through,
         unconsumed_slot_checkpoint: checkpoint,
         observed_at,
@@ -1987,8 +1986,8 @@ async fn finalize_glare_contact_round(
         peer: local_request.core.peer.clone(),
         terminal: false,
         head_event_ref: local_request.core.request_event_ref.clone(),
-        accepted_frontier: observed_frontier,
-        complete_through,
+        accepted_commit_event_ids: observed_commit_event_ids,
+        complete_through: 1,
         fresh_until,
         signature: placeholder_contact_signature(state, observed_at)?,
     };
@@ -2099,9 +2098,7 @@ fn placeholder_contact_signature(
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
         created_at,
-        jws: Base64UrlString::new("AA".to_owned()).map_err(|error| {
-            AppError::internal(format!("signature placeholder invalid: {error}"))
-        })?,
+        jws: "AA".to_owned(),
     })
 }
 
@@ -2119,43 +2116,22 @@ fn sign_contact_evidence_bytes(
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
         created_at,
-        jws: Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-            .map_err(|error| AppError::internal(format!("Contact signature invalid: {error}")))?,
+        jws: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
     })
 }
 
 fn terminal_ack_contact_current_proof(
-    state: &AppState,
-    peer: ContactPeer,
-    source: &ContactCurrentProof,
+    _state: &AppState,
+    _peer: ContactPeer,
+    _source: &ContactCurrentProof,
 ) -> Result<ContactCurrentProof, AppError> {
-    if !source.terminal {
-        return Err(AppError::internal(
-            "non-terminal Contact proof cannot be acknowledged by the peer service",
-        ));
-    }
-    let created_at = now();
-    let mut proof = ContactCurrentProof {
-        contact_round_id: source.contact_round_id.clone(),
-        issuer_id: state.service_core_id(),
-        peer,
-        terminal: source.terminal,
-        head_event_ref: source.head_event_ref.clone(),
-        accepted_frontier: source.accepted_frontier.clone(),
-        complete_through: source.complete_through,
-        fresh_until: created_at + chrono::Duration::minutes(10),
-        signature: placeholder_contact_signature(state, created_at)?,
-    };
-    proof.signature = sign_contact_evidence_bytes(
-        state,
-        created_at,
-        &proof.canonical_signing_bytes().map_err(|error| {
-            AppError::internal(format!(
-                "terminal Contact acknowledgement transcript: {error}"
-            ))
-        })?,
-    )?;
-    Ok(proof)
+    // A remote terminal proof does not reveal the local direction's last
+    // accepted version. Only the local durable lineage current reader can
+    // authorize this acknowledgement without overstating completeness.
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
+        "local Contact lineage current provider is unavailable for terminal acknowledgement"
+    ))
 }
 
 fn normal_contact_round(
@@ -2297,10 +2273,7 @@ fn sign_contact_mirror_receipt(
     }))
     .map_err(|error| AppError::internal(format!("Contact mirror receipt canonicalize: {error}")))?;
     let signature = state.notary_signing_key().sign(&signing_bytes);
-    let jws =
-        Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes())).map_err(|error| {
-            AppError::internal(format!("Contact mirror signature invalid: {error}"))
-        })?;
+    let jws = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     Ok(PeerContactMirrorReceipt {
         domain: PeerContactMirrorReceiptDomain::V1,
         request_digest,
@@ -2430,30 +2403,31 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         peer_id,
         "glare_remote_mirror_receipt",
     )?;
+    require_contact_commit_prefix_provider()?;
 
     let (contact_round_id, _basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
-    let observed_frontier = request_receipts
+    let mut observed_commit_event_ids = request_receipts
         .iter()
         .map(|receipt| receipt.core.request_event_ref.clone())
         .collect::<Vec<_>>();
+    observed_commit_event_ids
+        .sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
     let complete_through = local_request.core.slot_version;
     let observed_at = record.updated_at;
-    let checkpoint = super::account::canonical_contact_digest(&json!({
-        "domain": arkret_wire::DomainSeparationId::CONTACT_GLARE_UNCONSUMED_SLOT_V1,
-        "holder": holder,
-        "peer": peer,
-        "contact_round_id": contact_round_id,
-        "request_receipt_digests": receipt_digests,
-        "observed_frontier": observed_frontier,
-        "complete_through": complete_through,
-        "slot_state": "pending_unconsumed"
-    }))?;
+    let checkpoint = glare_unconsumed_slot_checkpoint(
+        holder,
+        peer,
+        &contact_round_id,
+        &receipt_digests,
+        &observed_commit_event_ids,
+        complete_through,
+    )?;
     let mut attestation = GlareConcurrencyAttestation {
         subject_id: holder.clone(),
         issuer_id: state.service_core_id(),
         peer_id: peer.clone(),
         request_receipt_digests: receipt_digests,
-        observed_frontier,
+        observed_commit_event_ids,
         complete_through,
         unconsumed_slot_checkpoint: checkpoint,
         observed_at,
@@ -2487,9 +2461,52 @@ fn derive_glare_basis(
     Ok((contact_round_id, contact_round, receipt_digests))
 }
 
+fn require_contact_commit_prefix_provider() -> Result<(), AppError> {
+    // Request receipts prove two accepted facts but cannot enumerate the exact
+    // Commit prefix this Station observed for a glare decision. Signing a
+    // prefix synthesized from the receipts would misstate the transcript.
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
+        "durable Contact Commit-prefix provider is unavailable"
+    ))
+}
+
 fn contact_round_id(contact_round: &ContactRound) -> Result<Hash, AppError> {
-    arkret_models_collaboration::direct_conversation_ops::contact_round_id(contact_round)
-        .map_err(|error| AppError::internal(format!("Contact round digest: {error}")))
+    contact_round.validate_canonical_order().map_err(|error| {
+        super::super::events::peer::schema_violation(format!("Contact round order: {error}"))
+    })?;
+    Hash::new(
+        canonical::domain_prefixed_canonical_sha256("ak.contact.round.v1", contact_round)
+            .map_err(|error| AppError::internal(format!("Contact round digest: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Contact round digest: {error}")))
+}
+
+fn glare_unconsumed_slot_checkpoint(
+    subject_id: &arkret_wire::ActorId,
+    peer_id: &arkret_wire::ActorId,
+    contact_round_id: &Hash,
+    request_receipt_digests: &[Hash; 2],
+    observed_commit_event_ids: &[arkret_identifiers::EventId],
+    complete_through: u64,
+) -> Result<Hash, AppError> {
+    let transcript = json!({
+        "subject_id": subject_id,
+        "peer_id": peer_id,
+        "contact_round_id": contact_round_id,
+        "request_receipt_digests": request_receipt_digests,
+        "observed_commit_event_ids": observed_commit_event_ids,
+        "complete_through": complete_through,
+        "slot_state": "pending_unconsumed",
+    });
+    Hash::new(
+        canonical::domain_prefixed_canonical_sha256(
+            arkret_wire::DomainSeparationId::CONTACT_GLARE_UNCONSUMED_SLOT_V1,
+            &transcript,
+        )
+        .map_err(|error| AppError::internal(format!("glare checkpoint encode: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("glare checkpoint digest: {error}")))
 }
 
 pub(crate) async fn accept_outbound_contact_control_outcome(
@@ -2516,6 +2533,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 current_proof: Some(remote_proof),
             }),
         ) => {
+            require_contact_commit_prefix_provider()?;
             validate_outbound_control_receipt(
                 state,
                 request,
@@ -2564,11 +2582,11 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             if remote_proof.head_event_ref != remote_request.core.request_event_ref
                 || remote_proof.head_digest() != remote_request.core.request_digest()
                 || !remote_proof
-                    .accepted_frontier
+                    .accepted_commit_event_ids
                     .contains(&remote_proof.head_event_ref)
                 || remote_attestation.complete_through == 0
                 || !remote_attestation
-                    .observed_frontier
+                    .observed_commit_event_ids
                     .iter()
                     .all(|event_ref| {
                         request_receipts
@@ -2668,17 +2686,20 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 bundle
             } else {
                 let observed_at = now();
+                let mut accepted_commit_event_ids = request_receipts
+                    .iter()
+                    .map(|receipt| receipt.core.request_event_ref.clone())
+                    .collect::<Vec<_>>();
+                accepted_commit_event_ids
+                    .sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
                 let mut local_proof = ContactCurrentProof {
                     contact_round_id: contact_round_id.clone(),
                     issuer_id: state.service_core_id(),
                     peer: contact_address.recipient.clone(),
                     terminal: false,
                     head_event_ref: local_request.core.request_event_ref.clone(),
-                    accepted_frontier: request_receipts
-                        .iter()
-                        .map(|receipt| receipt.core.request_event_ref.clone())
-                        .collect(),
-                    complete_through: local_request.core.slot_version,
+                    accepted_commit_event_ids,
+                    complete_through: 1,
                     fresh_until: observed_at + chrono::Duration::minutes(10),
                     signature: placeholder_contact_signature(state, observed_at)?,
                 };
@@ -2931,7 +2952,7 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
     };
     if expected_head != Some(&returned_proof.head_event_ref)
         || !returned_proof
-            .accepted_frontier
+            .accepted_commit_event_ids
             .contains(&returned_proof.head_event_ref)
     {
         return Err(super::super::events::peer::schema_violation(
@@ -3194,10 +3215,7 @@ fn sign_contact_control_receipt(
         AppError::internal(format!("Contact control receipt canonicalize: {error}"))
     })?;
     let signature = state.notary_signing_key().sign(&signing_bytes);
-    let jws =
-        Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes())).map_err(|error| {
-            AppError::internal(format!("Contact control signature invalid: {error}"))
-        })?;
+    let jws = URL_SAFE_NO_PAD.encode(signature.to_bytes());
     Ok(PeerContactControlReceipt {
         domain: PeerContactControlReceiptDomain::V1,
         request_kind,
@@ -4008,7 +4026,6 @@ mod tests {
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
             jws_replay_window_seconds: 0,
-            jws_replay_window_per_family: std::collections::BTreeMap::new(),
             trust_domain: arkret_identifiers::TrustDomainId::new("ak:trust_domain:recipient.local")
                 .unwrap(),
             ..AppConfig::test_default()
@@ -4062,10 +4079,7 @@ mod tests {
                 ))
                 .unwrap(),
                 created_at: accepted_at,
-                jws: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
-                    source_key.sign(bytes).to_bytes(),
-                ))
-                .unwrap(),
+                jws: arkret_canonical::base64url_encode(source_key.sign(bytes).to_bytes()),
             })
         })
         .unwrap();
@@ -4483,7 +4497,7 @@ mod tests {
                 },
                 "terminal": false,
                 "head_event_ref": "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
-                "accepted_frontier": ["ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N"],
+                "accepted_commit_event_ids": ["ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N"],
                 "complete_through": 1,
                 "fresh_until": "2026-08-09T00:10:00.000Z",
                 "signature": {

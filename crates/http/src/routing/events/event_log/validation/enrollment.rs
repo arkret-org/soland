@@ -60,6 +60,8 @@ pub(crate) async fn validate_device_authorization_binding(
                                 && candidate.device_public_key_did == payload.device_public_key_did
                                 && candidate.hpke_key == payload.hpke_key
                                 && candidate.algorithms == payload.algorithms
+                                && candidate.authorized_generation_ref
+                                    == payload.authorized_generation_ref
                                 && candidate.authorization_binding_kind
                                     == payload.authorization_binding_kind
                         })
@@ -122,6 +124,7 @@ pub(crate) async fn validate_device_authorization_binding(
             .ok_or_else(|| device_authorization_invalid("device generation is unavailable"))?;
             if record.verification_state != "verified"
                 || record.revoked_at.is_some()
+                || payload.authorized_generation_ref != current.current_ref
                 || record
                     .payload
                     .get("authorized_generation_ref")
@@ -266,6 +269,22 @@ async fn validate_applet_managed_delegation(
             "the Applet install that provisioned this principal has been revoked",
         ));
     }
+    let current =
+        crate::routing::identity::device_generation::current_device_generation(state, actor_id)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "failed_precondition",
+                    format!("device generation state unavailable: {error}"),
+                )
+            })?
+            .ok_or_else(|| device_authorization_invalid("device generation is unavailable"))?;
+    if payload.authorized_generation_ref != current.current_ref {
+        return Err(device_authorization_invalid(
+            "applet_managed_delegation generation does not match the current device generation",
+        ));
+    }
     Ok(())
 }
 
@@ -373,8 +392,6 @@ mod applet_managed_delegation_tests {
             },
             actor_id,
             station,
-            1,
-            arkret_identifiers::Hlc::new("01970e589d21-0007-a13f9c2e").unwrap(),
             payload,
         )
         .expect("fixture delegated device authorize")

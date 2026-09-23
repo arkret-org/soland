@@ -3,10 +3,9 @@ use super::*;
 /// strand-and-message.md §9.8.2 — a reaction MUST target an object inside its
 /// own effective scope. soland's effective scope is the Realm, so a
 /// `ak.reaction.*` whose `target_ref` resolves to a Message in a different
-/// Realm is rejected with `reaction_scope_mismatch` (a `failed_precondition`
-/// sub-reason). The target-kind gate (`reaction_target_unsupported`) already
-/// ran in `validate_operation_semantics`; an unknown / not-yet-observed
-/// target is left to the reducer's dependency handling.
+/// Realm is rejected with active `failed_precondition`. The target-kind gate
+/// already ran in `validate_operation_semantics`; an unknown /
+/// not-yet-observed target is left to the reducer's dependency handling.
 pub(super) fn validate_reaction_scope_policy(
     state: &AppState,
     operation: &Operation,
@@ -35,7 +34,7 @@ pub(super) fn validate_reaction_scope_policy(
     if realm_ids_match(operation.realm_id.as_str(), &target_realm) {
         Ok(())
     } else {
-        Err(arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH)
+        Err("reaction_outside_scope")
     }
 }
 
@@ -265,14 +264,9 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         )
     {
         Ok(())
-    } else if kind.as_str() == arkret_wire::event_kind_str::DEVICE_AUTHORIZE {
-        Err(arkret_wire::ReasonCode::DEVICE_AUTHORIZED_PRINCIPAL_CONTROL_REALM_MISMATCH)
     } else {
-        // device.list_update / device.revoke landing off the bound principal
-        // control Realm has no registered reason code (the registered
-        // principal_control_event_kind_forbidden covers non-control event
-        // kinds, the opposite direction); keep it on the unstable
-        // reason_detail channel.
+        // A principal-control binding failure remains a hard deny. Its
+        // former specialized reason is reserved in the current registry.
         Err("principal_control_realm_mismatch")
     }
 }

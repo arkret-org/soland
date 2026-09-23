@@ -103,7 +103,7 @@ pub(super) async fn logout(
     // introspection so the next `/_arkret/self/*` request re-introspects against
     // coauth and observes `active=false` once the Auth-side chain is terminated
     // below. There is NO local bearer to revoke (② removed the exchange); the
-    // local session revoke + to-device drop + this cache invalidation together
+    // local session revoke + push-route cleanup + this cache invalidation together
     // fail-close the device's subsequent requests without revoking its durable
     // Event-signing authorization.
     super::super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
@@ -158,7 +158,7 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// `dev_login` mints plain soland session bearers (not DPoP-bound grants), so
 /// the Authorization bearer IS the local session bearer. Perform the
 /// principal-side termination directly (revoke the bearer session + remove
-/// push registrations + drop to-device), mirroring the production
+/// push registrations), mirroring the production
 /// principal-side effects without an Account Authority process round-trip. The durable
 /// device authorization remains active across logout and re-login.
 async fn dev_mode_local_logout(

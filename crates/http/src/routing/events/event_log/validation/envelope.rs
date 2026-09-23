@@ -19,64 +19,24 @@ pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
 }
 
 pub(super) async fn event_digest_suite(
-    state: &AppState,
-    kind: &str,
-    realm_id: &str,
+    _state: &AppState,
+    _kind: &str,
+    _realm_id: &str,
     _object: &serde_json::Map<String, Value>,
-    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+    _realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<String, EventValidationError> {
-    let suite = if kind == arkret_wire::event_kind_str::REALM_CREATE {
-        // The Realm-create bridge is always SHA-256. Its declared suite
-        // governs the remaining founding Events and the Genesis Seal.
-        "sha256".to_owned()
-    } else {
-        let projections = state.projections();
-        let projected = projections.snapshot().realm_digest_algorithm(realm_id);
-        let staged_bootstrap = realm_bootstrap_contexts
-            .iter()
-            .find(|context| context.realm_id == realm_id)
-            .and_then(|context| context.digest_algorithm.clone());
-        // A closed Realm bootstrap already carries the signed digest-suite
-        // choice in its validated batch context. It has no durable cells yet,
-        // so consulting that context must precede the accepted-Seal cache
-        // reload. Besides doing needless synchronous storage work, reloading
-        // here can wait on the global history-view CAS lock held by another
-        // concurrent bootstrap.
-        let projected = match projected.or(staged_bootstrap) {
-            Some(projected) => Some(projected),
-            None => {
-                // apply_accepted_seal persists the cell ops before the HTTP
-                // projection cache is refreshed. A concurrent next Event may
-                // therefore observe the accepted frontier during this narrow
-                // cache window. Reload the durable cells once instead of
-                // reporting a false dependency_missing for an already
-                // materialized Realm.
-                let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok();
-                if let Some(typed_realm_id) = typed_realm_id {
-                    let _ = projections.reload_cells_from_store(&typed_realm_id).await;
-                    projections.snapshot().realm_digest_algorithm(realm_id)
-                } else {
-                    None
-                }
-            }
-        };
-        projected.ok_or_else(|| {
-            event_validation_error(
-                StatusCode::CONFLICT,
-                arkret_wire::ErrorCode::DEPENDENCY_MISSING,
-                "Realm digest-suite cell is not materialized; Event identity cannot be verified",
-            )
-        })?
-    };
-    arkret_canonical::digest_suite(&suite)
-        .map(|_| suite.clone())
-        .map_err(|_| unsupported_digest_algorithm_error(&suite))
+    // Current v1 fixes Event and RealmCommit identities to JCS + SHA-256.
+    // Realm state cannot select another identity suite.
+    Ok("sha256".to_owned())
 }
 
 pub(super) fn event_digest_for_suite(
     bytes: &[u8],
     suite: &str,
 ) -> Result<String, EventValidationError> {
+    if suite != "sha256" {
+        return Err(unsupported_digest_algorithm_error(suite));
+    }
     arkret_canonical::canonical_digest_with_suite(bytes, suite)
         .map_err(|_| unsupported_digest_algorithm_error(suite))
 }
@@ -211,14 +171,10 @@ mod proofs;
 mod realm_authority_root;
 
 use applet::*;
-pub(in crate::routing::events::event_log) use capability_refs::validate_ordinary_event_capability_refs;
 use capability_refs::*;
 use control_move::*;
-#[cfg(test)]
-pub(crate) use envelope_core::validate_event_envelope;
-pub(crate) use envelope_core::validate_event_envelope_with_context;
 pub(in crate::routing) use envelope_core::{
-    validate_message_authoring_candidate, validate_private_invite_envelope,
+    PrivateInviteEnvelope, validate_private_invite_envelope,
 };
 pub(crate) use features_schema::{
     event_requirements_schema_id, validate_event_critical_features,

@@ -498,6 +498,7 @@ CREATE TABLE public.applet_transactions (
     applet_id text NOT NULL,
     source_id text NOT NULL,
     idempotency_key text NOT NULL,
+    delivery_authentication_record jsonb NOT NULL,
     delivery_authentication_record_digest text NOT NULL,
     request_digest text NOT NULL,
     outcome jsonb,
@@ -815,6 +816,9 @@ CREATE TABLE public.mls_group_states (
     updated_at timestamptz NOT NULL
 );
 
+-- Both recipient-delivery families consume one durable ordering source.
+CREATE SEQUENCE public.recipient_delivery_position_seq AS bigint;
+
 -- A Welcome is a producer-signed recipient delivery object, not an Event. Its
 -- row is enqueued inside the MLS Commit transaction: all of it commits, or
 -- none of it does.
@@ -823,6 +827,12 @@ CREATE TABLE public.mls_welcome_deliveries (
     realm_id text NOT NULL,
     commit_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     recipient_actor_id text NOT NULL,
+    recipient_endpoint_kind text NOT NULL CHECK (recipient_endpoint_kind IN ('device', 'agent_runtime')),
+    recipient_device_id text,
+    recipient_verification_method text,
+    recipient_authorization_event_ref text NOT NULL,
+    recipient_device_authorization jsonb,
+    position bigint NOT NULL DEFAULT nextval('public.recipient_delivery_position_seq'),
     delivery_json jsonb NOT NULL,
     state text DEFAULT 'queued' NOT NULL CHECK (state IN ('queued', 'delivered')),
     queued_at timestamptz DEFAULT now() NOT NULL,
@@ -830,11 +840,25 @@ CREATE TABLE public.mls_welcome_deliveries (
     CONSTRAINT mls_welcome_deliveries_state_fields CHECK (
         (state = 'queued' AND delivered_at IS NULL)
         OR (state = 'delivered' AND delivered_at IS NOT NULL)
+    ),
+    CONSTRAINT mls_welcome_deliveries_endpoint_fields CHECK (
+        (recipient_endpoint_kind = 'device' AND recipient_device_id IS NOT NULL
+            AND recipient_verification_method IS NULL AND recipient_device_authorization IS NOT NULL)
+        OR (recipient_endpoint_kind = 'agent_runtime' AND recipient_device_id IS NULL
+            AND recipient_verification_method IS NOT NULL AND recipient_device_authorization IS NULL)
     )
 );
 
 CREATE INDEX mls_welcome_deliveries_recipient_idx
-    ON public.mls_welcome_deliveries (recipient_actor_id, state, queued_at);
+    ON public.mls_welcome_deliveries (recipient_actor_id, recipient_endpoint_kind, state, position);
+
+CREATE UNIQUE INDEX mls_welcome_deliveries_device_position_idx
+    ON public.mls_welcome_deliveries (recipient_actor_id, recipient_device_id, position)
+    WHERE recipient_endpoint_kind = 'device';
+
+CREATE UNIQUE INDEX mls_welcome_deliveries_agent_position_idx
+    ON public.mls_welcome_deliveries (recipient_actor_id, recipient_verification_method, position)
+    WHERE recipient_endpoint_kind = 'agent_runtime';
 
 -- Exact public leaf intent atomically retained with MLS Event admission.
 CREATE TABLE public.mls_frontier_inputs (
@@ -1904,7 +1928,7 @@ CREATE TABLE public.device_messages (
     recipient text NOT NULL,
     device_id text NOT NULL,
     recipient_device_authorization jsonb NOT NULL,
-    position bigint NOT NULL,
+    position bigint NOT NULL DEFAULT nextval('public.recipient_delivery_position_seq'),
     content jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -1944,6 +1968,20 @@ CREATE TABLE public.device_message_ack_tokens (
 );
 
 CREATE INDEX device_message_ack_tokens_device_idx ON public.device_message_ack_tokens USING btree (recipient, device_id, expires_at);
+
+CREATE TABLE public.agent_recipient_delivery_ack_tokens (
+    ack_token text PRIMARY KEY,
+    agent_id text NOT NULL,
+    verification_method text NOT NULL,
+    authorization_event_ref text NOT NULL,
+    queue_position bigint NOT NULL,
+    issued_at timestamptz DEFAULT now() NOT NULL,
+    expires_at timestamptz NOT NULL,
+    consumed_at timestamptz
+);
+
+CREATE INDEX agent_recipient_delivery_ack_tokens_endpoint_idx
+    ON public.agent_recipient_delivery_ack_tokens (agent_id, verification_method, authorization_event_ref, expires_at);
 
 CREATE TABLE public.device_message_lost_watermarks (
     recipient text NOT NULL,
@@ -3185,6 +3223,7 @@ CREATE TABLE public.recovery_sessions (
     accepted_stream_head jsonb NOT NULL,
     policy_payload jsonb NOT NULL,
     authority_context jsonb NOT NULL,
+    publication_authority_context jsonb NOT NULL,
     publication_authority_context_digest text NOT NULL,
     challenge text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
@@ -4159,6 +4198,24 @@ CREATE TABLE realm_policy_bundle_current_results (
  CHECK(jsonb_typeof(value)='object')
 );
 
+-- URI-keyed MIMI binding current result. The accepting RealmCommit and the
+-- typed value become visible in the same transaction; URI is unique across
+-- Realms so a room cannot resolve to two current Arkret targets.
+CREATE TABLE mimi_room_binding_current_results (
+ mimi_room_uri TEXT PRIMARY KEY,
+ realm_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ current_event_id TEXT NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'mimi_room_uri'=mimi_room_uri),
+ CHECK(value->'binding_scope'->>'realm_id'=realm_id)
+);
+CREATE INDEX mimi_room_binding_current_result_realm
+ ON mimi_room_binding_current_results(realm_id,mimi_room_uri);
+
 CREATE TABLE realm_link_current_results (
  realm_id TEXT NOT NULL,
  target_realm_id TEXT NOT NULL,
@@ -4191,6 +4248,58 @@ CREATE TABLE member_state_current_results (
 );
 CREATE INDEX member_state_current_result_membership
  ON member_state_current_results(realm_id,membership,member_id);
+
+CREATE TABLE agent_status_current_results (
+ realm_id TEXT NOT NULL,
+ current_key TEXT NOT NULL,
+ agent_id TEXT NOT NULL,
+ actor_id JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,current_key),
+ UNIQUE(realm_id,agent_id),
+ CHECK(jsonb_typeof(value)='string'),
+ CHECK(value #>> '{}' IN ('active','paused','deactivated'))
+);
+CREATE TABLE ordinary_realm_bootstrap_units (
+ realm_id TEXT PRIMARY KEY,
+ idempotency_key TEXT NOT NULL UNIQUE,
+ exact_request_body BYTEA NOT NULL,
+ commits_json JSONB NOT NULL,
+ committed_at TIMESTAMPTZ NOT NULL,
+ CHECK(octet_length(exact_request_body) > 0),
+ CHECK(jsonb_typeof(commits_json)='array')
+);
+CREATE TABLE pcr_genesis_units (
+ realm_id TEXT PRIMARY KEY,
+ idempotency_key TEXT NOT NULL UNIQUE,
+ exact_request_body BYTEA NOT NULL,
+ commits_json JSONB NOT NULL,
+ result_json JSONB NOT NULL,
+ committed_at TIMESTAMPTZ NOT NULL,
+ CHECK(octet_length(exact_request_body) > 0),
+ CHECK(jsonb_typeof(commits_json)='array'),
+ CHECK(jsonb_typeof(result_json)='object')
+);
+CREATE INDEX agent_status_current_result_agent
+ ON agent_status_current_results(realm_id,agent_id);
+
+CREATE TABLE agent_key_current_results (
+ realm_id TEXT NOT NULL,
+ current_key TEXT NOT NULL,
+ agent_id TEXT NOT NULL,
+ agent_key_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,current_key),
+ UNIQUE(realm_id,agent_id,agent_key_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(jsonb_typeof(value->'authorizations')='array')
+);
 
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.

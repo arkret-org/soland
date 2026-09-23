@@ -1,17 +1,21 @@
 use arkret_event_draft::{EventPayloadExt as _, TypedEventDraft};
 use arkret_identifiers::SidecarId;
 use arkret_models_collaboration::agent_operations::{
-    AgentLifecycleState, AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
-    AgentSidecarEncryptionProfile, AgentSidecarExchangeControlPayload, AgentSidecarList,
-    AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState, AgentSidecarView,
-    PendingSidecarAccessReconciliation, PendingSidecarAccessReconciliationStage,
-    agent_sidecar_participant_authority_digest,
+    AgentLifecycleState, AgentSidecarList, AgentSidecarView,
 };
-use arkret_models_collaboration::events_payloads::sidecar::SidecarCreatePayload;
+use arkret_models_collaboration::agent_sidecar::{
+    AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarMlsContext, AgentSidecarState,
+    PendingSidecarAccessReconciliation, SidecarAccessProvisioningPhase,
+};
+use arkret_models_collaboration::events_payloads::sidecar::{
+    AgentSidecarExchangeControlPayload, SidecarContextAttachPayload, SidecarCreatePayload,
+};
 use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
 use arkret_models_collaboration::sidecar_operations::{
-    SidecarContextAttachPayload, SidecarContextRef, SidecarEnsureOutcome, SidecarEnsureRequestBody,
-    SidecarPreparedOutcome,
+    SidecarContextRef, SidecarEnsureAcceptedOutcome, SidecarEnsureAcceptedPhase,
+    SidecarEnsureAcceptedStatus, SidecarEnsureExistingBranch, SidecarEnsureNewBranch,
+    SidecarEnsureOutcome, SidecarEnsurePreparedExistingOutcome, SidecarEnsurePreparedNewOutcome,
+    SidecarEnsurePreparedStatus, SidecarEnsureRequestBody,
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
 use arkret_wire::{MlsGroupId, NonEmptyString};
@@ -21,7 +25,6 @@ use soland_services::identity::{
 };
 
 use super::*;
-use crate::routing::events::event_log::VerifiedActorPredecessors;
 
 const SIDECAR_ENSURE_LOCK_SHARDS: usize = 256;
 const SIDECAR_LIST_PAGE_SIZE: usize = 100;
@@ -139,15 +142,16 @@ pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str)
 
 fn validate_sidecar_context_projection(
     state: &AppState,
-    context_ref: &AgentSidecarContextRef,
+    realm_id: &RealmId,
+    context_ref: &SidecarContextRef,
 ) -> Result<(), AppError> {
     let projection = state.projections().snapshot();
-    let realm_id = context_ref.realm_id().as_str();
+    let realm_id = realm_id.as_str();
     match context_ref {
-        AgentSidecarContextRef::Strand(context) => {
+        SidecarContextRef::Strand { strand_id } => {
             let strand = projection
                 .strands
-                .get(context.strand_id.as_str())
+                .get(strand_id.as_str())
                 .ok_or_else(|| AppError::not_found("context_ref.strand_id not found"))?;
             if strand.realm_id != realm_id {
                 return Err(sidecar_failed_precondition(
@@ -156,10 +160,10 @@ fn validate_sidecar_context_projection(
                 ));
             }
         }
-        AgentSidecarContextRef::Relation(context) => {
+        SidecarContextRef::Relation { relation_id } => {
             let relation = projection
                 .relations
-                .get(context.relation_id.as_str())
+                .get(relation_id.as_str())
                 .ok_or_else(|| AppError::not_found("context_ref.relation_id not found"))?;
             if relation.realm_id != realm_id {
                 return Err(sidecar_failed_precondition(
@@ -237,12 +241,15 @@ fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppE
     Ok(AgentSidecar {
         id: SidecarId::new(record.sidecar_id.clone())
             .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
-        schema: AgentSidecarSchema::V1,
+        schema: arkret_wire::SchemaId::AGENT_SIDECAR_V1.to_owned(),
         realm_id: RealmId::new(record.realm_id.clone())
             .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?,
         controller_account_id: record.controller_account_id.clone(),
-        encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
-        state: record.state,
+        state: match record.state {
+            soland_storage::SidecarLifecycleState::Active => AgentSidecarState::Active,
+            soland_storage::SidecarLifecycleState::Suspended => AgentSidecarState::Suspended,
+            soland_storage::SidecarLifecycleState::Tombstoned => AgentSidecarState::Tombstoned,
+        },
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -259,8 +266,8 @@ fn sidecar_access_readiness(
         || pending.iter().any(|item| {
             matches!(
                 item.provisioning_phase,
-                PendingSidecarAccessReconciliationStage::MlsRemove
-                    | PendingSidecarAccessReconciliationStage::EpochRotation
+                arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase::MlsRemove
+                    | arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase::EpochRotation
             )
         })
     {
@@ -281,45 +288,16 @@ fn typed_agent_ids(agent_ids: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, 
         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))
 }
 
-fn sidecar_control_frontier(
-    projection: &soland_domain::reducer::ProjectionState,
-    record: &AgentSidecarRecord,
-) -> Result<Vec<NonEmptyString>, AppError> {
-    let create_ref = projection
-        .sidecar_create_refs
-        .get(&record.sidecar_id)
-        .cloned()
-        .ok_or_else(|| AppError::internal("Sidecar create control ref is unavailable"))?;
-    Ok(vec![NonEmptyString::new(create_ref).map_err(|error| {
-        AppError::internal(format!("Sidecar control ref: {error}"))
-    })?])
-}
-
 fn sidecar_mls_binding_for_desired(
-    record: &AgentSidecarRecord,
-    desired_agent_ids: &[arkret_wire::DidCoreId],
-    projection: &soland_domain::reducer::ProjectionState,
+    _record: &AgentSidecarRecord,
+    _desired_agent_ids: &[arkret_wire::DidCoreId],
+    _projection: &soland_domain::reducer::ProjectionState,
 ) -> Result<SidecarMlsBinding, AppError> {
-    let sidecar_id = SidecarId::new(record.sidecar_id.clone())
-        .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;
-    let realm_id = RealmId::new(record.realm_id.clone())
-        .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
-    let controller_account_id = record.controller_account_id.clone();
-    let control_frontier = sidecar_control_frontier(projection, record)?;
-    let participant_authority_digest = agent_sidecar_participant_authority_digest(
-        sidecar_id.clone(),
-        realm_id,
-        controller_account_id,
-        desired_agent_ids,
-    )
-    .map_err(|error| {
-        AppError::internal(format!("Sidecar participant authority digest: {error}"))
-    })?;
-    Ok(SidecarMlsBinding {
-        sidecar_id,
-        participant_authority_digest,
-        control_frontier,
-    })
+    // The old projection held only the Sidecar create Event. The signed
+    // binding needs all accepted authority refs at the roster's exact cut.
+    Err(AppError::internal(
+        "Sidecar accepted authority cut is unavailable",
+    ))
 }
 
 fn sidecar_controller_account(
@@ -399,9 +377,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
 ) -> Result<(), &'static str> {
     if !matches!(
         &operation.event_kind,
-        arkret_wire::EventKind::MlsGenesis
-            | arkret_wire::EventKind::MlsProposal
-            | arkret_wire::EventKind::MlsCommit
+        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
     ) {
         return Ok(());
     }
@@ -441,12 +417,17 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     let expected = expected_sidecar_mls_binding(state, &record)
         .await
         .map_err(|_| "mls_sidecar_binding_state_unavailable")?;
-    if supplied != &expected {
+    if supplied != expected {
         return Err("mls_sidecar_binding_stale");
     }
     let payload_group_id = crate::routing::mls::payload_fields::mls_group_id(&operation.payload)
         .ok_or("mls_group_id_missing")?;
-    if binding.mls_group_id() != payload_group_id {
+    if binding
+        .mls_group_id()
+        .map_err(|_| "mls_sidecar_binding_invalid")?
+        .as_str()
+        != payload_group_id.as_str()
+    {
         return Err("mls_sidecar_binding_mismatch");
     }
     let expected_scope = json!({
@@ -518,7 +499,7 @@ fn epoch_matches_sidecar_binding(
 ) -> bool {
     serde_json::from_value::<MlsGovernanceBindingPayload>(row.governance_binding.clone())
         .ok()
-        .and_then(|binding| binding.sidecar_binding().cloned())
+        .and_then(|binding| binding.sidecar_binding())
         .as_ref()
         == Some(expected)
 }
@@ -590,11 +571,10 @@ async fn sidecar_view(
                     agent_id: arkret_wire::DidCoreId::new(agent_id)
                         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
                     provisioning_phase: if epoch_row.is_some() {
-                        PendingSidecarAccessReconciliationStage::EpochRotation
+                        arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase::EpochRotation
                     } else {
-                        PendingSidecarAccessReconciliationStage::MlsWelcome
+                        arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase::MlsWelcome
                     },
-                    membership_frontier: None,
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?
@@ -607,16 +587,18 @@ async fn sidecar_view(
     );
     let mls_context = AgentSidecarMlsContext {
         participant_authority_digest: expected_binding.participant_authority_digest.clone(),
-        control_frontier: expected_binding.control_frontier.clone(),
+        authority_stream_head: expected_binding.authority_stream_head.clone(),
         mls_group_id: epoch_row
             .map(|row| MlsGroupId::new(row.group_id.clone()))
             .transpose()
-            .map_err(|error| AppError::internal(format!("stored MLS group id: {error}")))?,
+            .map_err(|error| AppError::internal(format!("stored MLS group id: {error}")))?
+            .map(|id| id.to_string()),
         epoch: epoch_row.map(|row| row.epoch),
         genesis_event_ref: epoch_row
             .map(|row| EventId::new(row.genesis_event_ref.clone()))
             .transpose()
-            .map_err(|error| AppError::internal(format!("stored genesis Event ref: {error}")))?,
+            .map_err(|error| AppError::internal(format!("stored genesis Event ref: {error}")))?
+            .map(|id| id.to_string()),
         current_controller_device_ready: controller_device_ready,
     };
     let view = AgentSidecarView {
@@ -630,20 +612,6 @@ async fn sidecar_view(
     view.validate()
         .map_err(|error| AppError::internal(format!("Sidecar view invariant: {error}")))?;
     Ok(view)
-}
-
-fn sidecar_context_for_realm(
-    realm_id: &RealmId,
-    context_ref: &SidecarContextRef,
-) -> AgentSidecarContextRef {
-    match context_ref {
-        SidecarContextRef::Strand { strand_id } => {
-            AgentSidecarContextRef::strand(realm_id.clone(), strand_id.clone())
-        }
-        SidecarContextRef::Relation { relation_id } => {
-            AgentSidecarContextRef::relation(realm_id.clone(), relation_id.clone())
-        }
-    }
 }
 
 fn sidecar_event_draft(
@@ -674,21 +642,14 @@ fn sidecar_event_draft(
 fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     scope_ref: arkret_wire::ScopeRef,
     actor_id: arkret_wire::ActorId,
-    actor_seq: u64,
-    hlc: arkret_identifiers::Hlc,
-    prev_refs: Vec<EventId>,
     semantic_refs: Vec<arkret_wire::SemanticRef>,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret_wire::AuthoredEvent, AppError> {
     TypedEventDraft::<K>::new(scope_ref, actor_id, payload)
-        .map(|draft| {
-            draft
-                .with_prev_refs(prev_refs)
-                .with_semantic_refs(semantic_refs)
-        })
-        .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
+        .map(|draft| draft.with_semantic_refs(semantic_refs))
+        .and_then(|draft| draft.author_with_digest_suite(created_at, digest_suite))
         .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
 
@@ -780,8 +741,7 @@ async fn prepare_sidecar(
         ));
     }
     authorize_sidecar_ensure(state, session, body.source_realm_id.as_str()).await?;
-    let context_ref = sidecar_context_for_realm(&body.source_realm_id, &body.context_ref);
-    validate_sidecar_context_projection(state, &context_ref)?;
+    validate_sidecar_context_projection(state, &body.source_realm_id, &body.context_ref)?;
     let normalized_context_ref = serde_json::to_value(&body.context_ref).map_err(|error| {
         AppError::internal(format!("context_ref serialization failed: {error}"))
     })?;
@@ -828,17 +788,18 @@ async fn prepare_sidecar(
                 AppError::internal(format!("Sidecar context lookup failed: {error}"))
             })?
     {
-        return json_ok(SidecarEnsureOutcome::Accepted {
-            operation_id: body.operation_id,
-            accepted_phase:
-                arkret_models_collaboration::sidecar_operations::SidecarAcceptedPhase::Attach,
-            ok: arkret_models_collaboration::sidecar_operations::SidecarAcceptedOk,
-            sidecar_id: SidecarId::new(sidecar.sidecar_id.clone())
-                .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
-            source_context_ref: body.context_ref,
-            access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
-            pending_access_reconciliations: Vec::new(),
-        });
+        return json_ok(SidecarEnsureOutcome::Accepted(
+            SidecarEnsureAcceptedOutcome {
+                status: SidecarEnsureAcceptedStatus::Accepted,
+                operation_id: body.operation_id,
+                accepted_phase: SidecarEnsureAcceptedPhase::Attach,
+                sidecar_id: SidecarId::new(sidecar.sidecar_id.clone())
+                    .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
+                source_context_ref: body.context_ref,
+                access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
+                pending_access_reconciliations: Vec::new(),
+            },
+        ));
     }
 
     let controller_actor =
@@ -846,13 +807,6 @@ async fn prepare_sidecar(
     let digest_suite = state
         .projections()
         .realm_digest_suite(body.source_realm_id.as_str());
-    let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
-        state,
-        body.source_realm_id.clone(),
-        controller_actor.clone(),
-        VerifiedActorPredecessors::none(),
-    )
-    .await?;
     let created_at = chrono::Utc::now();
     let create_event = if existing_sidecar.is_none() {
         Some(author_typed_sidecar_event::<
@@ -862,10 +816,6 @@ async fn prepare_sidecar(
                 realm_id: body.source_realm_id.clone(),
             },
             controller_actor.clone(),
-            frontier.next_actor_seq,
-            arkret_identifiers::Hlc::new(state.hlc().now())
-                .map_err(|error| AppError::internal(format!("Sidecar create HLC: {error}")))?,
-            frontier.frontier_event_ids.clone(),
             Vec::new(),
             created_at,
             SidecarCreatePayload::default(),
@@ -880,23 +830,12 @@ async fn prepare_sidecar(
         (None, Some(event)) => SidecarId::from_event_id(&event.event_id),
         (None, None) => unreachable!("new Sidecar always has a create Event"),
     };
-    let attach_seq = frontier
-        .next_actor_seq
-        .checked_add(u64::from(create_event.is_some()))
-        .ok_or_else(|| AppError::conflict("Sidecar actor sequence is exhausted"))?;
     let attach_event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarContextAttach>(
         arkret_wire::ScopeRef::Sidecar {
             realm_id: body.source_realm_id.clone(),
             sidecar_id: sidecar_id.clone(),
         },
         controller_actor,
-        attach_seq,
-        arkret_identifiers::Hlc::new(state.hlc().now())
-            .map_err(|error| AppError::internal(format!("Sidecar attach HLC: {error}")))?,
-        create_event.as_ref().map_or_else(
-            || frontier.frontier_event_ids.clone(),
-            |event| vec![event.event_id.clone()],
-        ),
         create_event
             .as_ref()
             .map(|event| {
@@ -920,23 +859,27 @@ async fn prepare_sidecar(
         .map_err(AppError::internal)?;
     let expires_at = created_at + chrono::Duration::minutes(10);
     let prepared = if let Some(create_event) = create_event {
-        SidecarPreparedOutcome::New {
+        SidecarEnsureOutcome::PreparedNew(SidecarEnsurePreparedNewOutcome {
+            status: SidecarEnsurePreparedStatus::Prepared,
+            branch: SidecarEnsureNewBranch::New,
             operation_id: body.operation_id.clone(),
             reservation_handle: reservation_handle.clone(),
             expires_at,
             create_event_draft: sidecar_event_draft(&create_event, digest_suite)?,
             context_attach_event_draft,
-        }
+        })
     } else {
-        SidecarPreparedOutcome::Existing {
+        SidecarEnsureOutcome::PreparedExisting(SidecarEnsurePreparedExistingOutcome {
+            status: SidecarEnsurePreparedStatus::Prepared,
+            branch: SidecarEnsureExistingBranch::Existing,
             operation_id: body.operation_id.clone(),
             reservation_handle: reservation_handle.clone(),
             expires_at,
             sidecar_id,
             context_attach_event_draft,
-        }
+        })
     };
-    let outcome = SidecarEnsureOutcome::Prepared { prepared };
+    let outcome = prepared;
     store_sidecar_prepare(
         state,
         session.actor.as_str(),
@@ -995,7 +938,7 @@ async fn validate_sidecar_commit_reservation(
     reservation_handle: &arkret_wire::ReservationHandle,
     create_event: Option<&arkret_wire::Event>,
     context_attach_event: &arkret_wire::Event,
-) -> Result<SidecarPreparedOutcome, AppError> {
+) -> Result<SidecarEnsureOutcome, AppError> {
     let principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     let record = state
@@ -1016,19 +959,19 @@ async fn validate_sidecar_commit_reservation(
     }
     let outcome = serde_json::from_value::<SidecarEnsureOutcome>(record.response_body)
         .map_err(|error| AppError::internal(format!("stored Sidecar reservation: {error}")))?;
-    let SidecarEnsureOutcome::Prepared { prepared } = outcome else {
+    if matches!(outcome, SidecarEnsureOutcome::Accepted(_)) {
         return Err(AppError::conflict(
             "Sidecar reservation is already finalized",
         ));
-    };
-    match &prepared {
-        SidecarPreparedOutcome::New {
+    }
+    match &outcome {
+        SidecarEnsureOutcome::PreparedNew(SidecarEnsurePreparedNewOutcome {
             operation_id: reserved_operation_id,
             reservation_handle: reserved_handle,
             create_event_draft,
             context_attach_event_draft,
             ..
-        } => {
+        }) => {
             if reserved_operation_id != operation_id || reserved_handle != reservation_handle {
                 return Err(AppError::param_invalid(
                     "Sidecar reservation binding mismatch",
@@ -1040,12 +983,12 @@ async fn validate_sidecar_commit_reservation(
             validate_signed_sidecar_draft(create_event, create_event_draft)?;
             validate_signed_sidecar_draft(context_attach_event, context_attach_event_draft)?;
         }
-        SidecarPreparedOutcome::Existing {
+        SidecarEnsureOutcome::PreparedExisting(SidecarEnsurePreparedExistingOutcome {
             operation_id: reserved_operation_id,
             reservation_handle: reserved_handle,
             context_attach_event_draft,
             ..
-        } => {
+        }) => {
             if reserved_operation_id != operation_id || reserved_handle != reservation_handle {
                 return Err(AppError::param_invalid(
                     "Sidecar reservation binding mismatch",
@@ -1058,26 +1001,31 @@ async fn validate_sidecar_commit_reservation(
             }
             validate_signed_sidecar_draft(context_attach_event, context_attach_event_draft)?;
         }
+        SidecarEnsureOutcome::Accepted(_) => unreachable!("accepted reservation rejected above"),
     }
-    Ok(prepared)
+    Ok(outcome)
 }
 
-fn sidecar_prepared_sidecar_id(prepared: &SidecarPreparedOutcome) -> Result<SidecarId, AppError> {
+fn sidecar_prepared_sidecar_id(prepared: &SidecarEnsureOutcome) -> Result<SidecarId, AppError> {
     match prepared {
-        SidecarPreparedOutcome::New {
-            create_event_draft, ..
-        } => create_event_draft
+        SidecarEnsureOutcome::PreparedNew(SidecarEnsurePreparedNewOutcome {
+            create_event_draft,
+            ..
+        }) => create_event_draft
             .event_id()
             .map(|event_id| SidecarId::from_event_id(&event_id))
             .map_err(|error| AppError::internal(format!("stored Sidecar draft: {error}"))),
-        SidecarPreparedOutcome::Existing { sidecar_id, .. } => Ok(sidecar_id.clone()),
+        SidecarEnsureOutcome::PreparedExisting(outcome) => Ok(outcome.sidecar_id.clone()),
+        SidecarEnsureOutcome::Accepted(_) => {
+            Err(AppError::internal("accepted Sidecar is not a preparation"))
+        }
     }
 }
 
 async fn finalize_sidecar_projection_records(
     state: &AppState,
     session: &SessionRecord,
-    prepared: &SidecarPreparedOutcome,
+    prepared: &SidecarEnsureOutcome,
     context_attach_event: &arkret_wire::Event,
 ) -> Result<(), AppError> {
     let sidecar_id = sidecar_prepared_sidecar_id(prepared)?;
@@ -1093,7 +1041,7 @@ async fn finalize_sidecar_projection_records(
                 })?,
                 state.service_core_id().clone(),
             ),
-            state: AgentSidecarState::Active,
+            state: soland_storage::SidecarLifecycleState::Active,
             state_changed_at: None,
             created_at,
             updated_at: None,
@@ -1183,8 +1131,12 @@ async fn ensure_sidecar_impl(
             )
             .await
             .map_err(|error| {
-                crate::app_error!(FailedPrecondition, error.message())
-                    .with_rejection_code(error.code())
+                crate::routing::events::event_log::submit_one_error_to_app_error(
+                    "Sidecar ensure",
+                    error.status(),
+                    error.code(),
+                    &error.message(),
+                )
             })?;
             finalize_sidecar_projection_records(
                 state,
@@ -1199,16 +1151,15 @@ async fn ensure_sidecar_impl(
                 .typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
                 .map_err(|error| AppError::internal(format!("accepted Sidecar context: {error}")))?
                 .source_context_ref;
-            let outcome = SidecarEnsureOutcome::Accepted {
+            let outcome = SidecarEnsureOutcome::Accepted(SidecarEnsureAcceptedOutcome {
+                status: SidecarEnsureAcceptedStatus::Accepted,
                 operation_id: body.operation_id,
-                accepted_phase:
-                    arkret_models_collaboration::sidecar_operations::SidecarAcceptedPhase::Commit,
-                ok: arkret_models_collaboration::sidecar_operations::SidecarAcceptedOk,
+                accepted_phase: SidecarEnsureAcceptedPhase::Commit,
                 sidecar_id: sidecar_id.clone(),
                 source_context_ref,
                 access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
                 pending_access_reconciliations: Vec::new(),
-            };
+            });
             store_sidecar_final_outcome(
                 state,
                 session.actor.as_str(),
@@ -1265,8 +1216,12 @@ async fn ensure_sidecar_impl(
             )
             .await
             .map_err(|error| {
-                crate::app_error!(FailedPrecondition, error.message())
-                    .with_rejection_code(error.code())
+                crate::routing::events::event_log::submit_one_error_to_app_error(
+                    "Sidecar ensure",
+                    error.status(),
+                    error.code(),
+                    &error.message(),
+                )
             })?;
             finalize_sidecar_projection_records(
                 state,
@@ -1281,16 +1236,15 @@ async fn ensure_sidecar_impl(
                 .typed_payload::<arkret_wire::event_spec::SidecarContextAttach>()
                 .map_err(|error| AppError::internal(format!("accepted Sidecar context: {error}")))?
                 .source_context_ref;
-            let outcome = SidecarEnsureOutcome::Accepted {
+            let outcome = SidecarEnsureOutcome::Accepted(SidecarEnsureAcceptedOutcome {
+                status: SidecarEnsureAcceptedStatus::Accepted,
                 operation_id: body.operation_id,
-                accepted_phase:
-                    arkret_models_collaboration::sidecar_operations::SidecarAcceptedPhase::Attach,
-                ok: arkret_models_collaboration::sidecar_operations::SidecarAcceptedOk,
+                accepted_phase: SidecarEnsureAcceptedPhase::Attach,
                 sidecar_id: sidecar_id.clone(),
                 source_context_ref,
                 access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
                 pending_access_reconciliations: Vec::new(),
-            };
+            });
             store_sidecar_final_outcome(
                 state,
                 session.actor.as_str(),
@@ -1409,9 +1363,6 @@ mod tests {
                 crate::test_actor_id_str("did:web:example.com:users:alice"),
                 crate::test_event::station_id(),
             )),
-            1,
-            arkret_identifiers::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
-            Vec::new(),
             Vec::new(),
             created_at,
             SidecarCreatePayload::default(),
@@ -1545,8 +1496,7 @@ mod tests {
         let pending = PendingSidecarAccessReconciliation {
             agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
                 .unwrap(),
-            provisioning_phase: PendingSidecarAccessReconciliationStage::MlsWelcome,
-            membership_frontier: None,
+            provisioning_phase: SidecarAccessProvisioningPhase::MlsWelcome,
         };
 
         assert_eq!(
@@ -1568,10 +1518,7 @@ mod tests {
         let pending = PendingSidecarAccessReconciliation {
             agent_id: DidCoreId::new("ak:did_core:web:example.com:agents:assistant".to_owned())
                 .unwrap(),
-            provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
-            membership_frontier: Some(vec![
-                EventId::new("ak:event:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5").unwrap(),
-            ]),
+            provisioning_phase: SidecarAccessProvisioningPhase::MlsRemove,
         };
 
         assert_eq!(

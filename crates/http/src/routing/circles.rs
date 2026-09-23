@@ -48,9 +48,7 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::AuthArgs;
-use crate::routing::events::event_log::{
-    submit_event_value, submit_initial_event_submission, submit_one_error_to_app_error,
-};
+use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -432,19 +430,24 @@ fn caller_signed_circle_create_id(actor: &ActorId, event: &Event) -> Result<Circ
 async fn submit_caller_signed_circle_event(
     state: &AppState,
     session: &SessionRecord,
-    submission: arkret_wire::EventInitialSubmission,
+    submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<(), AppError> {
-    let kind = submission.event.kind.as_str().to_owned();
-    submit_initial_event_submission(state, session, submission)
+    submission.validate().map_err(|error| {
+        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
+    })?;
+    state
+        .authority()
+        .submit_self_event(session, submission)
         .await
         .map(|_| ())
-        .map_err(|error| {
-            submit_one_error_to_app_error(
-                &format!("{kind} submit failed"),
-                error.status(),
-                error.code(),
-                &error.message(),
-            )
+        .map_err(|error| match error.kind() {
+            soland_services::ServiceErrorKind::Conflict => AppError::conflict(error.detail()),
+            soland_services::ServiceErrorKind::NotFound => AppError::not_found(error.detail()),
+            soland_services::ServiceErrorKind::SchemaViolation => {
+                AppError::param_invalid(error.detail()).with_wire_code("schema_violation")
+            }
+            soland_services::ServiceErrorKind::Database
+            | soland_services::ServiceErrorKind::Internal => AppError::internal(error.detail()),
         })
 }
 

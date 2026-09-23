@@ -234,6 +234,7 @@ diesel::table! {
         applet_id -> Text,
         source_id -> Text,
         idempotency_key -> Text,
+        delivery_authentication_record -> Jsonb,
         delivery_authentication_record_digest -> Text,
         request_digest -> Text,
         outcome -> Nullable<Jsonb>,
@@ -417,6 +418,12 @@ diesel::table! {
         realm_id -> Text,
         commit_event_pk -> Int8,
         recipient_actor_id -> Text,
+        recipient_endpoint_kind -> Text,
+        recipient_device_id -> Nullable<Text>,
+        recipient_verification_method -> Nullable<Text>,
+        recipient_authorization_event_ref -> Text,
+        recipient_device_authorization -> Nullable<Jsonb>,
+        position -> Int8,
         delivery_json -> Jsonb,
         state -> Text,
         queued_at -> Timestamptz,
@@ -508,6 +515,19 @@ diesel::table! {
         recipient -> Text,
         device_id -> Text,
         recipient_device_authorization -> Jsonb,
+        queue_position -> Int8,
+        issued_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        consumed_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    agent_recipient_delivery_ack_tokens (ack_token) {
+        ack_token -> Text,
+        agent_id -> Text,
+        verification_method -> Text,
+        authorization_event_ref -> Text,
         queue_position -> Int8,
         issued_at -> Timestamptz,
         expires_at -> Timestamptz,
@@ -1331,6 +1351,7 @@ diesel::table! {
         accepted_stream_head -> Jsonb,
         policy_payload -> Jsonb,
         authority_context -> Jsonb,
+        publication_authority_context -> Jsonb,
         publication_authority_context_digest -> Text,
         challenge -> Text,
         state -> Text,
@@ -1933,6 +1954,7 @@ diesel::joinable!(account_status_propagation_targets -> account_status_propagati
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
+    agent_recipient_delivery_ack_tokens,
     account_status_affected_services,
     account_status_propagations,
     account_status_propagation_targets,

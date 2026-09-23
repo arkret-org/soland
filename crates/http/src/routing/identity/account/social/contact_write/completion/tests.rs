@@ -144,10 +144,7 @@ fn confirmed_contact_receipt_uses_historical_key_after_rotation_and_keystore_reo
             Ok(ProtocolSignature {
                 verification_method: method,
                 created_at: rotated_at + Duration::seconds(2),
-                jws: Base64UrlString::new(arkret_canonical::base64url_encode(
-                    restored.sign(bytes).to_bytes(),
-                ))
-                .unwrap(),
+                jws: arkret_canonical::base64url_encode(restored.sign(bytes).to_bytes()),
             })
         },
     )

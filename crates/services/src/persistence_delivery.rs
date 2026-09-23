@@ -60,8 +60,10 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         actor_id: &str,
         device_id: &str,
     ) -> crate::ServiceResult<crate::delivery::DeviceDeliveryPurgeResult> {
-        let to_device_messages_dropped =
-            self.0.device_messages().purge(actor_id, device_id).await?;
+        // Queue entries remain durable until their endpoint acknowledges them.
+        // Logout and account lifecycle may revoke push routes, but neither is
+        // evidence of a queue ACK.
+        let to_device_messages_dropped = 0;
         let push_registrations_removed = self
             .0
             .push_devices()
@@ -189,10 +191,11 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         &self,
         device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
         message: crate::delivery::DeviceMessageState,
+        per_device_queue_capacity: usize,
     ) -> crate::ServiceResult<()> {
         self.0
             .device_messages()
-            .append(device_revocation_gate, message)
+            .append(device_revocation_gate, message, per_device_queue_capacity)
             .await?;
         Ok(())
     }
@@ -257,17 +260,41 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
             .await?)
     }
 
-    async fn prune(
+    async fn recipient_deliveries_after(
         &self,
-        per_device_capacity: usize,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<()> {
-        self.0.device_messages().prune_expired(now).await?;
-        self.0
+        selector: &crate::delivery::RecipientQueueSelector,
+        queue_position: i64,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<crate::delivery::RecipientDeliveryRecord>> {
+        Ok(self
+            .0
             .device_messages()
-            .prune_over_capacity(per_device_capacity, now)
-            .await?;
-        Ok(())
+            .list_recipient_deliveries(selector, queue_position, limit)
+            .await?)
+    }
+
+    async fn issue_recipient_ack_token(
+        &self,
+        selector: &crate::delivery::RecipientQueueSelector,
+        queue_position: i64,
+    ) -> crate::ServiceResult<Option<String>> {
+        Ok(self
+            .0
+            .device_messages()
+            .issue_recipient_ack_token(selector, queue_position)
+            .await?)
+    }
+
+    async fn acknowledge_recipient_deliveries(
+        &self,
+        selector: &crate::delivery::RecipientQueueSelector,
+        ack_token: &str,
+    ) -> crate::ServiceResult<Option<usize>> {
+        Ok(self
+            .0
+            .device_messages()
+            .ack_recipient_with_token(selector, ack_token)
+            .await?)
     }
 
     async fn lost_watermark(

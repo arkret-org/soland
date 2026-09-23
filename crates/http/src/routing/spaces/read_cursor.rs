@@ -7,9 +7,6 @@
 use arkret_models_collaboration::objects::read_receipts::{
     ReadCursor, ReadCursorAdvanceRequestBody, ReadCursorList, ReadMarkerOutcome,
 };
-use arkret_models_collaboration::sync_frames::account_sync::{
-    ActorPrivateDeviceUpdate, ActorPrivateReadCursorUpdate, DeviceMessageSender,
-};
 use arkret_wire::{Event, ReadCursorScope, ReadScopeKind};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -17,7 +14,10 @@ use salvo::prelude::*;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
-use crate::routing::identity::device_messages::fanout_actor_private_update;
+use crate::routing::identity::device_messages::{
+    ActorPrivateDeviceUpdate, ActorPrivateReadCursorUpdate, DeviceMessageSender,
+    fanout_actor_private_update,
+};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -78,7 +78,7 @@ pub(super) async fn set_read_cursor(
             state,
             &session.actor,
             ActorPrivateDeviceUpdate::ReadCursor {
-                sender: DeviceMessageSender::Device {
+                sender: DeviceMessageSender::Account {
                     sender_account_id,
                     sender_device_id: arkret_identifiers::DeviceId::new(session.device_id.clone())
                         .map_err(|error| {

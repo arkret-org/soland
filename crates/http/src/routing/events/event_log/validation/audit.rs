@@ -24,10 +24,8 @@ pub(crate) fn is_encrypted_message(parsed: &ValidatedEventEnvelope, envelope: &V
 /// schema: the declared writer is this Event's own actor.
 ///
 /// Everything else about the payload — the closed field set, the `access_kind`
-/// enum, DID / object-ref / cell-ref / hash / timestamp shapes, and the
-/// per-`access_kind` conditional required sets (`watch_set_others` pulls in
-/// `target_actor_id`, `target_cell_id`, `paired_event_id` and both cell
-/// heads) — is already enforced against
+/// enum, DID / object-ref / timestamp shapes, and the closed field set are
+/// enforced against
 /// `event-payload.schema.json#/$defs/audit_accessed_payload` by the SDK
 /// payload validator catalog in `validate_event_schema_and_payload`, which runs
 /// earlier in this same admission pass. A hand-written second copy of those
@@ -104,20 +102,19 @@ pub(super) fn validate_strand_watch_manage_others_levels(
     }
     // `muted` suppresses mention / moderation routing and `level_public` is a
     // personal publication opt-in, so neither may be written on someone's
-    // behalf. Each carries its own reason code (strand-and-message.md 8.4);
-    // both used to report `watch_set_others_audit_missing`, which blamed the
-    // audit pair for a level the audit pair would not have fixed.
+    // behalf. The dedicated reasons in strand-and-message.md 8.4 are still
+    // reserved in the registry, so retain the failed-precondition rejection.
     if matches!(payload.level, Some(StrandWatchLevel::Muted)) {
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
-            arkret_wire::ReasonCode::WATCH_MUTED_MUST_BE_SELF,
+            arkret_wire::ErrorCode::FAILED_PRECONDITION,
             "manage_others strand watch writes cannot set level=muted",
         ));
     }
     if payload.level_public == Some(true) {
         return Err(event_validation_error(
             StatusCode::PRECONDITION_FAILED,
-            arkret_wire::ReasonCode::WATCH_LEVEL_PUBLIC_MUST_BE_SELF,
+            arkret_wire::ErrorCode::FAILED_PRECONDITION,
             "manage_others strand watch writes cannot set level_public=true",
         ));
     }
@@ -131,7 +128,12 @@ pub(super) fn validate_strand_watch_manage_others_levels(
              the audit_pair edge runs audit -> write",
         ));
     }
-    Ok(())
+    // The prose requires a typed result ID and before/after heads, but the
+    // closed audit payload cannot carry them yet (spec-open 2026-09-23-0900).
+    // No cross-actor watch write can be admitted against an incomplete audit.
+    Err(manage_others_audit_error(
+        "cross-actor watch audit carrier is not yet defined by the closed payload schema",
+    ))
 }
 
 /// Batch half: every cross-actor `.others` watch write MUST be paired with exactly one
@@ -180,16 +182,6 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
         if payload.watcher_actor_id == actor_id {
             continue;
         }
-        // The cell the audit has to name comes from the SDK payload type, which
-        // is pinned to the registered `cell_writes` contract — not re-derived
-        // here, where it could drift from what the reducer actually writes.
-        let target_cell_id = payload.cell_ref().map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("strand watch payload does not resolve a watch cell: {error}"),
-            )
-        })?;
         let matches = audits
             .iter()
             .filter(|(audit, audit_payload)| {
@@ -201,7 +193,6 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
                     && audit_payload.target_actor_id.as_ref()
                         == Some(&payload.watcher_actor_id)
                     && audit_payload.target_ref == payload.strand_id.as_str()
-                    && audit_payload.target_cell_id.as_ref() == Some(&target_cell_id)
                     && audit_payload
                         .paired_event_id
                         .as_ref()
@@ -217,7 +208,11 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
             })
             .count();
         match matches {
-            1 => {}
+            1 => {
+                return Err(manage_others_audit_error(
+                    "cross-actor watch audit carrier is not yet defined by the closed payload schema",
+                ));
+            }
             0 => {
                 return Err(manage_others_audit_error(
                     "cross-actor strand watch writes require a same-batch ak.audit.accessed event \
@@ -285,7 +280,7 @@ fn event_refs_with_role(
 fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError {
     event_validation_error(
         StatusCode::PRECONDITION_FAILED,
-        arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING,
+        arkret_wire::ErrorCode::FAILED_PRECONDITION,
         message,
     )
 }
@@ -325,8 +320,6 @@ mod tests {
     }
 
     const WRITE_ID: &str = "ak:event:AcLYVbj_1rgVJeGiPPDHp4GUgpcNGjkVCg8NW-2p21m6";
-    const WRITE_DIGEST: &str =
-        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const WRITER: &str = "ak:did_core:web:alice.example";
     const TARGET: &str = "ak:did_core:web:bob.example";
     const STRAND: &str = "ak:strand:AU6JCWNYlBGUETxX5NBB9hy8YgtevzngI2Yj3vKnYDWb";
@@ -352,15 +345,6 @@ mod tests {
         })
     }
 
-    fn watch_cell_id() -> String {
-        strand_watch_set_payload(others_watch_write().as_object().unwrap())
-            .expect("the fixture write carries a valid strand_watch_set payload")
-            .cell_ref()
-            .expect("the watch payload resolves its causal_register cell")
-            .as_str()
-            .to_owned()
-    }
-
     fn paired_audit() -> Value {
         json!({
             "event_id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
@@ -372,10 +356,7 @@ mod tests {
                 "writer_actor_id": actor(WRITER),
                 "target_actor_id": actor(TARGET),
                 "target_ref": STRAND,
-                "target_cell_id": watch_cell_id(),
                 "paired_event_id": WRITE_ID,
-                "cell_head_before": null,
-                "cell_head_after": WRITE_DIGEST,
                 "purpose": "seed strand watchers on create",
                 "accessed_at": "2026-08-06T00:00:00.000Z"
             }
@@ -388,13 +369,11 @@ mod tests {
 
     #[test]
     fn others_watch_write_needs_a_same_batch_audit_naming_it() {
-        check(&[others_watch_write(), paired_audit()]).expect("the paired batch is admissible");
+        check(&[others_watch_write(), paired_audit()])
+            .expect_err("the closed audit carrier lacks the normative result/head binding");
 
         let alone = check(&[others_watch_write()]).expect_err("a lone .others write is rejected");
-        assert_eq!(
-            alone.code,
-            arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING
-        );
+        assert_eq!(alone.code, arkret_wire::ErrorCode::FAILED_PRECONDITION);
         assert_eq!(alone.status, StatusCode::PRECONDITION_FAILED);
 
         let mut wrong_target = paired_audit();
@@ -457,10 +436,7 @@ mod tests {
             &actor(WRITER),
         )
         .expect_err("muting another Account is not a self write");
-        assert_eq!(
-            error.code,
-            arkret_wire::ReasonCode::WATCH_MUTED_MUST_BE_SELF
-        );
+        assert_eq!(error.code, arkret_wire::ErrorCode::FAILED_PRECONDITION);
     }
 
     #[test]
@@ -478,12 +454,9 @@ mod tests {
     }
 
     #[test]
-    fn the_audit_must_name_the_cell_the_write_targets() {
-        let mut wrong_cell = paired_audit();
-        wrong_cell["payload"]["target_cell_id"] =
-            json!("ak:cell:ak.component.strand.watch.v1:not-the-subject");
-        check(&[others_watch_write(), wrong_cell])
-            .expect_err("an audit naming another watch cell does not pair");
+    fn the_closed_audit_carrier_cannot_authorize_cross_actor_writes() {
+        check(&[others_watch_write(), paired_audit()])
+            .expect_err("missing normative result/head fields must fail closed");
     }
 
     /// The write forms first, so naming the audit is the cycle the migration
@@ -503,17 +476,14 @@ mod tests {
             &actor(WRITER),
         )
         .expect_err("the write must not carry the audit_pair edge");
-        assert_eq!(
-            error.code,
-            arkret_wire::ReasonCode::WATCH_SET_OTHERS_AUDIT_MISSING
-        );
+        assert_eq!(error.code, arkret_wire::ErrorCode::FAILED_PRECONDITION);
 
         validate_strand_watch_manage_others_levels(
             arkret_wire::EventKind::StrandWatchSet.as_str(),
             others_watch_write().as_object().unwrap(),
             &actor(WRITER),
         )
-        .expect("the one-way shape is admissible");
+        .expect_err("the closed audit carrier cannot yet authorize this write");
     }
 
     #[test]
@@ -528,7 +498,7 @@ mod tests {
             )
             .expect_err("muted cannot be written for someone else")
             .code,
-            arkret_wire::ReasonCode::WATCH_MUTED_MUST_BE_SELF
+            arkret_wire::ErrorCode::FAILED_PRECONDITION
         );
 
         let mut public = others_watch_write();
@@ -541,7 +511,7 @@ mod tests {
             )
             .expect_err("level_public is a personal opt-in")
             .code,
-            arkret_wire::ReasonCode::WATCH_LEVEL_PUBLIC_MUST_BE_SELF
+            arkret_wire::ErrorCode::FAILED_PRECONDITION
         );
     }
 

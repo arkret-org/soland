@@ -53,11 +53,11 @@ fn validate_key_backup_active_series_structure(operation: &Operation) -> Result<
 }
 
 /// strand-and-message.md §9.8.2 — v1 core reactions may only target a
-/// `ak:message:`. The reducer keys the OR-Set on the message's storage id
-/// (`ak:event:`), so both the canonical `ak:message:` object ref and the
-/// internal `ak:event:` form are accepted; every other typed object kind
+/// `ak:message:`. The reducer may key the OR-Set on a storage Event id, but
+/// the signed `target_ref` itself must be the canonical Message object ref;
+/// every other typed object kind
 /// (`ak:strand:`, `ak:morph:`, `ak:circle:`, …) is rejected fail-closed with
-/// `reaction_target_unsupported` (a `schema_violation` sub-reason).
+/// active `schema_violation`. The narrower reason is reserved in v1.
 /// Profiles MAY register additional target kinds; v1 core does not.
 pub(crate) fn validate_reaction_target_kind(
     kind: &arkret_wire::EventKind,
@@ -82,13 +82,13 @@ pub(crate) fn validate_reaction_target_kind(
     };
     let Some(target) = target else {
         // Missing target is caught by REACTION_REQUIREMENTS; treat here as
-        // unsupported so the canonical reason still surfaces.
-        return Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED);
+        // unsupported; the active schema rejection still surfaces.
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     };
-    if target.starts_with("ak:message:") || target.starts_with("ak:event:") {
+    if target.starts_with("ak:message:") {
         Ok(())
     } else {
-        Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED)
+        Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
     }
 }
 
@@ -114,7 +114,23 @@ fn validate_moderation_report_provenance(
     if payload.realm_id != operation.realm_id {
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
-    payload.validate_provenance(operation.context.sender.signing_principal_id())?;
+    if &payload.reporter_id != operation.context.sender.signing_principal_id() {
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    }
+    match payload.provenance {
+        Some(
+            arkret_models_collaboration::events_payloads::ModerationReportProvenance::MimiFacade,
+        ) if payload.source_provider_id.is_none() => {
+            return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+        }
+        None
+        | Some(
+            arkret_models_collaboration::events_payloads::ModerationReportProvenance::SelfAuthored,
+        ) if payload.source_provider_id.is_some() => {
+            return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+        }
+        _ => {}
+    }
     // MIMI reports are caller-authored ordinary Events. The interop handler
     // verifies the authenticated provider and exact reporter authority before
     // admission; provenance never authorizes the local facade to substitute
@@ -144,41 +160,14 @@ fn validate_typed_payload_shapes(
                 .validate()
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
-        arkret_wire::EventKind::RealmNotary => {
-            let payload = operation
-                .typed_payload::<arkret_wire::event_spec::RealmNotary>()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
-            if payload.realm_id != operation.realm_id {
-                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-            }
-            payload
-                .validate()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        }
-        arkret_wire::EventKind::RealmDigestSuiteTransition => {
-            let payload = operation
-                .typed_payload::<arkret_wire::event_spec::RealmDigestSuiteTransition>()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
-            payload
-                .validate()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        }
         arkret_wire::EventKind::ConsentGrant => {
             operation
                 .typed_payload::<arkret_wire::event_spec::ConsentGrant>()
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
             Ok(())
         }
-        arkret_wire::EventKind::OrganizationModerationPolicy => operation
-            .typed_payload::<arkret_wire::event_spec::OrganizationModerationPolicy>()
-            .map(|_| ())
-            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
         arkret_wire::EventKind::PolicySet => operation
             .typed_payload::<arkret_wire::event_spec::PolicySet>()
-            .map(|_| ())
-            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
-        arkret_wire::EventKind::PolicyAction => operation
-            .typed_payload::<arkret_wire::event_spec::PolicyAction>()
             .map(|_| ())
             .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
         // ak.space.archive / ak.space.restore use the typed
@@ -444,41 +433,6 @@ mod tests {
             kind.as_ref(),
             payload,
         )
-    }
-
-    #[test]
-    fn typed_realm_control_payloads_enforce_realm_and_transition_rules() {
-        let wrong_realm = operation(
-            arkret_wire::EventKind::RealmNotary,
-            serde_json::json!({
-                "realm_id": "ak:realm:Ab-zkG-9qydcyuk0bIAwMd1Op6VQjpOjQ1PbK_fCMMmz",
-                "notary": serde_json::to_value(crate::test_notary(
-                    "did:web:notary.example",
-                    31,
-                )).unwrap()
-            }),
-        );
-        assert_eq!(
-            validate_typed_payload_shapes(&arkret_wire::EventKind::RealmNotary, &wrong_realm,),
-            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        );
-
-        let noop = operation(
-            arkret_wire::EventKind::RealmDigestSuiteTransition,
-            serde_json::json!({
-                "from_digest_algorithm": "sha256",
-                "to_digest_algorithm": "sha256",
-                "transition_realm_state_snapshot_ref": "ak:realm_state_snapshot:01904100-0000-7000-8000-000000000301",
-                "realm_state_snapshot_commitment": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            }),
-        );
-        assert_eq!(
-            validate_typed_payload_shapes(
-                &arkret_wire::EventKind::RealmDigestSuiteTransition,
-                &noop,
-            ),
-            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        );
     }
 
     #[test]

@@ -1,7 +1,6 @@
 //! `security_class=high_assurance` federation-policy enforcement.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_state::state_model::ResolvedCellState;
 use serde_json::json;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
@@ -23,9 +22,10 @@ fn policy_operation(policy_revision: u64, federation_policy: &str) -> Operation 
 
 fn state_with_security_class(security_class: &str) -> ProjectionState {
     let mut state = ProjectionState::new();
-    state.realm_null_subject_cells.insert(
-        (REALM.to_owned(), arkret_wire::REALM_GENESIS_CELL.to_owned()),
-        ResolvedCellState::Value(json!({"security_class": security_class})),
+    state.set_realm_facet(
+        REALM,
+        soland_domain::reducer::facet::REALM_GENESIS,
+        json!({"security_class": security_class}),
     );
     state
 }
@@ -51,7 +51,7 @@ fn high_assurance_rejects_open_or_omitted_federation_policy() {
     assert!(matches!(
         effect,
         ProjectionEffect::Rejected { reason }
-            if reason == "high_assurance_federation_policy_invalid"
+            if reason == "schema_violation"
     ));
 }
 

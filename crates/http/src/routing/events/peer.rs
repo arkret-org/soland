@@ -8,7 +8,7 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountStatusResolveRequestBody,
 };
 use arkret_models_collaboration::account_status::UnsignedAccountStatusReceipt;
-use arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody;
+use arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest;
 use arkret_models_collaboration::principal_operations::{
     PcrGenesisAdmissionInput, PcrGenesisAdmissionResult,
 };
@@ -38,6 +38,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("signal").post(peer_signal_relay))
 }
 
+#[handler]
 pub(super) async fn admit_private_principal_genesis(
     depot: &mut Depot,
     req: &mut Request,
@@ -45,6 +46,16 @@ pub(super) async fn admit_private_principal_genesis(
     let state = depot.get_typed::<AppState>().expect("state injected");
     authenticate_account_authority_private_request(state, req)?;
     let header_idempotency_key = required_header(req, "idempotency-key")?;
+    // Preserve the authenticated HTTP bytes for the PCR genesis UoW's exact
+    // replay comparison. Re-encoding the typed DTO would merge distinct
+    // requests under one idempotency key.
+    let exact_request_body = req
+        .payload()
+        .await
+        .map_err(|error| {
+            AppError::json_invalid(format!("unable to read principal genesis body: {error}"))
+        })?
+        .to_vec();
     let request = parse_json_body::<PcrGenesisAdmissionInput>(
         req,
         "invalid private principal genesis admission body",
@@ -76,7 +87,7 @@ pub(super) async fn admit_private_principal_genesis(
             "principal genesis creation-proof origin does not match the configured Account Authority",
         ));
     }
-    super::event_log::submit_peer_pcr_genesis(state, &request)
+    super::event_log::submit_peer_pcr_genesis(state, &request, exact_request_body)
         .await
         .map_err(|error| {
             error.rejection().cloned().unwrap_or_else(|| {
@@ -728,7 +739,7 @@ async fn historical_account_status_service_key(
             "account-status {label} method controller mismatch: {error}"
         ))
     })?;
-    let method = arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
+    arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
         schema_violation(format!(
             "account-status {label} verification method invalid: {error}"
         ))
@@ -741,12 +752,8 @@ async fn historical_account_status_service_key(
             )));
         }
     }
-    let evidence = crate::routing::identity::agents::evidence::fetch_service_signer_evidence(
-        state,
-        service_id,
-        None,
-        Some(&method),
-        at,
+    let resolution = crate::routing::identity::agents::evidence::fetch_service_resolution(
+        state, service_id, None,
     )
     .await
     .map_err(|error| {
@@ -754,25 +761,12 @@ async fn historical_account_status_service_key(
             "account-status {label} historical signer evidence unavailable: {error:?}"
         ))
     })?;
-    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service {
-        authenticated_resolution,
-        ..
-    } = evidence
-    else {
-        return Err(AppError::capability_denied(format!(
-            "account-status {label} signer evidence is not service evidence"
-        )));
-    };
-    let document = arkret_identity::authenticated_service_document_at(
-        &authenticated_resolution,
-        service_id,
-        at,
-    )
-    .map_err(|error| {
-        AppError::capability_denied(format!(
-            "account-status {label} historical service document invalid: {error}"
-        ))
-    })?;
+    let document = arkret_identity::authenticated_service_document_at(&resolution, service_id, at)
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "account-status {label} historical service document invalid: {error}"
+            ))
+        })?;
     arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
         .map_err(|error| {
             AppError::capability_denied(format!(
@@ -964,11 +958,14 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit.v1"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    if let Err(error) = validate_peer_request(state, req, true).await {
-        render_app_error(res, error);
-        return;
-    }
-    let body_value = match req.parse_json::<Value>().await {
+    let peer = match authenticated_peer_context(state, req, true).await {
+        Ok(peer) => peer,
+        Err(error) => {
+            render_app_error(res, error);
+            return;
+        }
+    };
+    let submission = match req.parse_json::<PeerAuthoritySubmitRequest>().await {
         Ok(body) => body,
         Err(_) => {
             render_error(
@@ -980,9 +977,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             return;
         }
     };
-    if let Err(error) =
-        serde_json::from_value::<EventsSubmitFederationRequestBody>(body_value.clone())
-    {
+    if let Err(error) = submission.validate() {
         render_app_error(
             res,
             schema_violation(format!(
@@ -991,7 +986,40 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
         );
         return;
     }
-    super::event_log::submit_federation_events(state, req, body_value, res).await;
+    // The current carrier is source-committed Event/RealmCommit material or a
+    // registered atomic unit. The old Seal transport is not an alternate lane.
+    let outcome = match state
+        .authority()
+        .submit_peer(&peer, submission.clone())
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(soland_services::ServiceError::SchemaViolation(detail)) => {
+            render_app_error(res, schema_violation(detail));
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(?error, "peer authority submission unavailable");
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "peer authority submission is unavailable",
+            );
+            return;
+        }
+    };
+    if let Err(error) = outcome.validate_for_request(&submission) {
+        tracing::error!(?error, "peer authority port returned an invalid outcome");
+        render_error(
+            res,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "peer authority response is invalid",
+        );
+        return;
+    }
+    res.render(Json(outcome));
 }
 
 #[derive(Clone, Debug)]
@@ -1379,16 +1407,16 @@ fn history_access_allows(
 fn record_requires_private_plaintext_visibility(record: &AcceptedEvent) -> bool {
     if serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
         .ok()
-        .and_then(|event| {
-            arkret_schema::classify_event_execution(&event)
-                .ok()
-                .flatten()
+        .is_some_and(|event| {
+            matches!(
+                event.kind,
+                arkret_wire::EventKind::MemberState | arkret_wire::EventKind::CircleMemberState
+            )
         })
-        == Some(arkret_wire::CbsEffectPlane::Control)
     {
-        // Control-plane payloads are the signed governance carriers needed
-        // for federation admission and frontier repair. They are not private
-        // content delegated to an auxiliary plaintext-processing service.
+        // Membership changes are the accepted routing control facts used to
+        // decide which peer hosts a joined member. Other plaintext payloads
+        // stay behind the stricter visibility check.
         return false;
     }
     let Some(payload) = record_payload(record) else {
@@ -1518,18 +1546,19 @@ pub(in crate::routing) async fn validate_peer_request(
     Ok(())
 }
 
-pub(in crate::routing) async fn peer_realm_visibility(
+/// Preserve the authenticated peer identity through service admission. The
+/// signature verifier above binds this header to the request body and applies
+/// the inbound deny policy before the context is constructed.
+pub(in crate::routing) async fn authenticated_peer_context(
     state: &AppState,
-    source_id: &str,
-    realm_id: &str,
-) -> Result<bool, AppError> {
-    let records = state
-        .event_queries()
-        .peer_authz_state_records()
-        .await
-        .map_err(|error| AppError::internal(format!("peer Realm visibility: {error}")))?;
-    let authz = PeerReadAuthz::build(state, source_id, &records).await?;
-    Ok(authz.frontier_visible_for_realm(realm_id))
+    req: &mut Request,
+    has_body: bool,
+) -> Result<soland_services::authority_commit::AuthenticatedPeerContext, AppError> {
+    validate_peer_request(state, req, has_body).await?;
+    let source_service_id =
+        arkret_wire::DidCoreId::new(required_header(req, HEADER_SOURCE_SERVICE_ID)?)
+            .map_err(|_| schema_violation("source-service-id must be a service core_id"))?;
+    Ok(soland_services::authority_commit::AuthenticatedPeerContext { source_service_id })
 }
 
 /// Apply the same accepted-Event history and current membership policy used by
@@ -1795,7 +1824,6 @@ mod membership_identity_tests {
         AcceptedEvent {
             event_id: "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD".into(),
             actor_id: actor.to_string(),
-            actor_seq: 0,
             realm_id: Some("ak:realm:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD".into()),
             kind: kind.into(),
             schema_id: String::new(),

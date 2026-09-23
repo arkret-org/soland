@@ -130,7 +130,11 @@ impl FaultInjectingStore {
     }
 }
 
-impl PersistenceStore for FaultInjectingStore {}
+impl PersistenceStore for FaultInjectingStore {
+    fn authority_commits(&self) -> &dyn soland_storage::AuthorityCommitStore {
+        self.inner.authority_commits()
+    }
+}
 
 #[async_trait]
 impl EventCommitUnitOfWork for FaultInjectingStore {
@@ -369,8 +373,8 @@ impl soland_storage::IdentityStoreRegistry for FaultInjectingStore {
     fn invite_new_source_ledger(&self) -> &dyn soland_storage::InviteNewSourceLedgerStore {
         self.inner.invite_new_source_ledger()
     }
-    fn consent_cells(&self) -> &dyn soland_storage::ConsentCellStore {
-        self.inner.consent_cells()
+    fn consent_grants(&self) -> &dyn soland_storage::ConsentGrantStore {
+        self.inner.consent_grants()
     }
     fn mimi_consent_correlations(&self) -> &dyn soland_storage::MimiConsentCorrelationStore {
         self.inner.mimi_consent_correlations()
@@ -402,9 +406,6 @@ impl soland_storage::FederationGovernanceStoreRegistry for FaultInjectingStore {
     fn federation_outbox(&self) -> &dyn soland_storage::FederationOutboxStore {
         self.inner.federation_outbox()
     }
-    fn federation_frontier_exchange(&self) -> &dyn soland_storage::FederationFrontierExchangeStore {
-        self.inner.federation_frontier_exchange()
-    }
     fn handle_releases(&self) -> &dyn soland_storage::HandleReleaseStore {
         self.inner.handle_releases()
     }
@@ -431,18 +432,6 @@ impl soland_storage::FederationGovernanceStoreRegistry for FaultInjectingStore {
     fn audit(&self) -> &dyn soland_storage::AuditStore {
         self.inner.audit()
     }
-    fn governance_dependencies(&self) -> &dyn soland_storage::GovernanceDependencyStore {
-        self.inner.governance_dependencies()
-    }
-    fn history_traversal_retentions(&self) -> &dyn soland_storage::HistoryTraversalRetentionStore {
-        self.inner.history_traversal_retentions()
-    }
-    fn pending_rhrk_acquisitions(&self) -> &dyn soland_storage::PendingRhrkAcquisitionStore {
-        self.inner.pending_rhrk_acquisitions()
-    }
-    fn history_response_streams(&self) -> &dyn soland_storage::HistoryResponseStreamStore {
-        self.inner.history_response_streams()
-    }
 }
 
 impl soland_storage::DeliveryPolicyStoreRegistry for FaultInjectingStore {
@@ -454,6 +443,9 @@ impl soland_storage::DeliveryPolicyStoreRegistry for FaultInjectingStore {
     }
     fn push_devices(&self) -> &dyn soland_storage::PushDeviceStore {
         self.inner.push_devices()
+    }
+    fn push_registration_handoffs(&self) -> &dyn soland_storage::PushRegistrationHandoffStore {
+        self.inner.push_registration_handoffs()
     }
     fn signal_relay(&self) -> &dyn soland_storage::SignalRelayStore {
         self.inner.signal_relay()
@@ -546,6 +538,9 @@ impl soland_storage::MlsAgentStoreRegistry for FaultInjectingStore {
     }
     fn agent_membership_cascades(&self) -> &dyn soland_storage::AgentMembershipCascadeStore {
         self.inner.agent_membership_cascades()
+    }
+    fn agent_draft_pending_intents(&self) -> &dyn soland_storage::AgentDraftPendingIntentStore {
+        self.inner.agent_draft_pending_intents()
     }
     fn sidecars(&self) -> &dyn soland_storage::SidecarStore {
         self.inner.sidecars()

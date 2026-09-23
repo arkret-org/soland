@@ -1,71 +1,12 @@
-use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
-
 use super::*;
 
-/// Look up which Arkret `realm_id` (if any) the MIMI `room_id` is
-/// bound to. Scans the persistence projection event log for the
-/// most recent `ak.mimi.room_binding` event whose
-/// `payload.mimi_room_id` (or trailing segment of `mimi_room_uri`)
-/// matches `room_id`. Returns `None` when no binding has been
-/// recorded; callers translate that into a 404/400 rather than
-/// silently routing the request at a hard-coded demo Realm.
+/// Resolve the exact canonical room URI against its authority-committed
+/// typed current result.
 pub(super) async fn latest_mimi_room_binding(
     state: &AppState,
     room_id: &str,
 ) -> Result<Option<MimiRoomBindingProjection>, AppError> {
-    let entries = state
-        .event_queries()
-        .projected_events_for_kind(arkret_wire::EventKind::MimiRoomBinding)
-        .await
-        .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
-    // Walk in reverse so the most-recently-recorded binding wins.
-    for entry in entries.iter().rev() {
-        if entry.event_kind != arkret_wire::EventKind::MimiRoomBinding {
-            continue;
-        }
-        let payload_room = entry
-            .payload
-            .get("mimi_room_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .or_else(|| {
-                entry
-                    .payload
-                    .get("mimi_room_uri")
-                    .and_then(Value::as_str)
-                    .and_then(|uri| uri.rsplit('/').next().map(ToOwned::to_owned))
-            });
-        let binding = entry.payload.get("binding").unwrap_or(&entry.payload);
-        let binding_payload = mimi_room_binding_security_payload(binding);
-        let binding_room = binding_payload
-            .get("mimi_room_uri")
-            .and_then(Value::as_str)
-            .and_then(|uri| uri.rsplit('/').next().map(str::to_owned));
-        if payload_room.as_deref() == Some(room_id) || binding_room.as_deref() == Some(room_id) {
-            let Some(realm_id) = entry
-                .payload
-                .get("binding_scope")
-                .and_then(|s| s.get("realm_id"))
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    binding_payload
-                        .get("binding_scope")
-                        .and_then(|s| s.get("realm_id"))
-                        .and_then(Value::as_str)
-                })
-                .or_else(|| entry.payload.get("realm_id").and_then(Value::as_str))
-                .or_else(|| binding_payload.get("realm_id").and_then(Value::as_str))
-            else {
-                continue;
-            };
-            return Ok(Some(MimiRoomBindingProjection {
-                event_id: entry.event_id.clone(),
-                realm_id: realm_id.to_owned(),
-                binding: binding.clone(),
-            }));
-        }
-    }
-    Ok(None)
+    current_mimi_room_binding_for_uri(state, &mimi_room_uri(state, room_id)?).await
 }
 
 /// Resolve the unique current binding by the full canonical room URI.
@@ -73,57 +14,23 @@ pub(super) async fn current_mimi_room_binding_for_uri(
     state: &AppState,
     room_uri: &str,
 ) -> Result<Option<MimiRoomBindingProjection>, AppError> {
-    let records = state
-        .event_queries()
-        .canonical_events()
+    let room_uri = arkret_wire::MimiRoomUri::new(room_uri.to_owned())
+        .map_err(|error| AppError::param_invalid(format!("invalid MIMI room URI: {error}")))?;
+    state
+        .authority_commits()
+        .current_mimi_room_binding(&room_uri)
         .await
-        .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
-    let mut candidates = Vec::new();
-    for record in records {
-        let event: arkret_wire::Event = serde_json::from_value(record.envelope)
-            .map_err(|error| AppError::internal(format!("MIMI binding decode failed: {error}")))?;
-        if event.kind != arkret_wire::EventKind::MimiRoomBinding
-            || event.payload.get("mimi_room_uri").and_then(Value::as_str) != Some(room_uri)
-        {
-            continue;
-        }
-        candidates.push(event);
-    }
-    let candidate_ids = candidates
-        .iter()
-        .map(|event| event.event_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let superseded = candidates
-        .iter()
-        .flat_map(|event| event.prev_refs.iter())
-        .filter(|event_id| candidate_ids.contains(event_id.as_str()))
-        .map(|event_id| event_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut heads = candidates
-        .iter()
-        .filter(|event| !superseded.contains(event.event_id.as_str()));
-    let current = heads.next();
-    if heads.next().is_some() {
-        return Err(
-            AppError::capability_denied("MIMI room binding is ambiguous")
-                .with_wire_code("mimi_reporter_resolution_required"),
-        );
-    }
-    current
-        .map(|event| {
-            let realm_id = event
-                .payload
-                .get("binding_scope")
-                .and_then(|scope| scope.get("realm_id"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    AppError::capability_denied("MIMI room binding has no current Realm")
-                        .with_wire_code("mimi_reporter_resolution_required")
-                })?;
+        .map_err(|error| {
+            AppError::internal(format!("MIMI current binding lookup failed: {error}"))
+        })?
+        .map(|record| {
+            let binding = serde_json::to_value(record.current.value).map_err(|error| {
+                AppError::internal(format!("MIMI current binding encoding: {error}"))
+            })?;
             Ok(MimiRoomBindingProjection {
-                event_id: event.event_id.to_string(),
-                realm_id: realm_id.to_owned(),
-                binding: Value::Object(event.payload.clone().into_iter().collect()),
+                event_id: record.source_event_id.to_string(),
+                realm_id: record.realm_id.to_string(),
+                binding,
             })
         })
         .transpose()
@@ -135,24 +42,17 @@ pub(super) async fn current_mimi_room_binding_for_event_id(
     state: &AppState,
     event_id: &arkret_wire::EventId,
 ) -> Result<Option<MimiRoomBindingProjection>, AppError> {
-    let records = state
-        .event_queries()
-        .canonical_events()
+    let room_uri = state
+        .authority_commits()
+        .committed_event(event_id)
         .await
-        .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
-    let room_uri = records
-        .into_iter()
-        .map(|record| {
-            serde_json::from_value::<arkret_wire::Event>(record.envelope)
-                .map_err(|error| AppError::internal(format!("MIMI binding decode failed: {error}")))
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .find(|event| {
-            event.event_id == *event_id && event.kind == arkret_wire::EventKind::MimiRoomBinding
-        })
-        .and_then(|event| {
-            event
+        .map_err(|error| {
+            AppError::internal(format!("MIMI committed Event lookup failed: {error}"))
+        })?
+        .filter(|record| record.event.kind == arkret_wire::EventKind::MimiRoomBinding)
+        .and_then(|record| {
+            record
+                .event
                 .payload
                 .get("mimi_room_uri")
                 .and_then(Value::as_str)
@@ -223,12 +123,15 @@ pub(super) async fn enforce_mimi_submit_binding(
         AppError::param_invalid("MIMI submit_message is missing mls_group_id")
             .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
     })?;
-    if submit_group_id != binding_group_id {
-        return Err(AppError::param_invalid(
-            "MIMI submit_message mls_group_id does not match room binding",
-        )
-        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
-    }
+    let expected_scope: arkret_wire::ScopeRef = serde_json::from_value(serde_json::json!({
+        "kind": "realm",
+        "realm_id": room_binding.realm_id,
+    }))
+    .map_err(|_| {
+        AppError::param_invalid("MIMI room binding has an invalid Realm scope")
+            .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+    })?;
+    validate_mimi_group_ids(&expected_scope, binding_group_id, submit_group_id)?;
     let epoch = mimi_submit_epoch(body).ok_or_else(|| {
         AppError::param_invalid("MIMI submit_message is missing MLS epoch")
             .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
@@ -275,13 +178,25 @@ pub(super) async fn enforce_mimi_submit_binding(
     let current = projection
         .mls_commit_epochs
         .values()
-        .find(|row| row.group_id == binding_group_id && row.effective_scope == effective_scope);
+        .find(|row| row.effective_scope == effective_scope);
     let Some(current) = current else {
         return Err(AppError::param_invalid(
             "MIMI submit_message has no accepted MLS security frontier",
         )
         .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
+    let current_scope: arkret_wire::ScopeRef =
+        serde_json::from_value(current.effective_scope.clone()).map_err(|_| {
+            AppError::param_invalid("MIMI accepted MLS scope is invalid")
+                .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+        })?;
+    if current_scope != expected_scope {
+        return Err(AppError::param_invalid(
+            "MIMI accepted MLS scope does not match the room binding",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
+    }
+    validate_mimi_group_ids(&current_scope, binding_group_id, &current.group_id)?;
     if current.epoch != epoch
         || arkret_canonical::canonical_json_bytes(&current.governance_binding).map_err(|error| {
             AppError::internal(format!("MLS frontier canonicalization: {error}"))
@@ -291,6 +206,26 @@ pub(super) async fn enforce_mimi_submit_binding(
     {
         return Err(AppError::param_invalid(
             "MIMI submit_message does not match the current accepted MLS security frontier",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
+    }
+    Ok(())
+}
+
+fn validate_mimi_group_ids(
+    scope: &arkret_wire::ScopeRef,
+    room_binding_group_id: &str,
+    other_group_id: &str,
+) -> Result<(), AppError> {
+    let derived_group_id = scope.canonical_mls_group_id().map_err(|_| {
+        AppError::param_invalid("MIMI MLS scope cannot derive a group id")
+            .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+    })?;
+    if room_binding_group_id != derived_group_id.as_str()
+        || other_group_id != derived_group_id.as_str()
+    {
+        return Err(AppError::param_invalid(
+            "MIMI MLS group id does not match the accepted security scope",
         )
         .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
     }
@@ -380,18 +315,19 @@ pub(super) fn validate_mimi_submit_governance_binding(
     binding
         .validate()
         .map_err(|_| error("mls_governance_binding_invalid"))?;
-    if binding.mls_group_id() != group_id || binding.next_epoch() != epoch {
+    let derived_group_id = binding
+        .mls_group_id()
+        .map_err(|_| error("mls_governance_binding_invalid"))?;
+    if derived_group_id.as_str() != group_id || binding.next_epoch() != epoch {
         return Err(error("mls_governance_binding_generation_mismatch"));
     }
-    if binding.realm_id().as_str() != realm_id
-        || binding.effective_scope().realm_id().as_str() != realm_id
+    if binding
+        .effective_scope()
+        .realm_id_opt()
+        .map(|id| id.as_str())
+        != Some(realm_id)
     {
         return Err(error("mls_governance_binding_scope_mismatch"));
-    }
-    if binding.binding_profile() != ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1
-        || binding.reducer_profile() != CORE_REDUCER_PROFILE
-    {
-        return Err(error("mls_governance_binding_profile_invalid"));
     }
     Ok(())
 }
@@ -404,7 +340,7 @@ pub(super) async fn admit_mimi_room_binding_event(
     binding: &Value,
     submission: Value,
 ) -> Result<String, AppError> {
-    let submission: arkret_wire::EventInitialSubmission = serde_json::from_value(submission)
+    let submission: arkret_wire::EventAdmissionSubmission = serde_json::from_value(submission)
         .map_err(|error| {
             AppError::param_invalid(format!("MIMI room binding Event is invalid: {error}"))
                 .with_wire_code("schema_violation")
@@ -448,20 +384,23 @@ pub(super) async fn admit_mimi_room_binding_event(
     }
     // Reject all cross-bound request/Event identities before domain-state validation.
     validate_mimi_room_binding_payload(binding)?;
-    if let Some(current) =
-        current_mimi_room_binding_for_uri(state, expected_room_uri.as_str()).await?
-    {
-        let current_status = mimi_room_binding_security_payload(&current.binding)
-            .get("status")
-            .and_then(Value::as_str);
-        let next_status = binding.get("status").and_then(Value::as_str);
-        if current_status == Some("revoked") && next_status != Some("revoked") {
-            return Err(AppError::param_invalid(
-                "a revoked MIMI room binding cannot transition to another state",
-            )
-            .with_wire_code("mimi_room_binding_status_transition_invalid"));
-        }
-    }
+    let next: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingPayload =
+        serde_json::from_value(binding.clone()).map_err(|error| {
+            AppError::param_invalid(format!("MIMI binding payload is invalid: {error}"))
+                .with_wire_code("schema_violation")
+        })?;
+    next.validate_shape().map_err(|error| {
+        AppError::param_invalid(format!("MIMI binding payload is invalid: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
+    let current = state
+        .authority_commits()
+        .current_mimi_room_binding(&next.mimi_room_uri)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("MIMI current binding lookup failed: {error}"))
+        })?;
+    validate_mimi_binding_transition_preflight(current.as_ref(), &next)?;
     let sender_account = local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
     let device_id = event
         .producer_proof
@@ -500,6 +439,54 @@ pub(super) async fn admit_mimi_room_binding_event(
     Ok(event_id)
 }
 
+fn validate_mimi_binding_transition_preflight(
+    current: Option<&soland_storage::MimiRoomBindingCurrentRecord>,
+    next: &arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingPayload,
+) -> Result<(), AppError> {
+    use arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingStatus as Status;
+
+    let status = current.map(|record| record.current.value.status);
+    let allowed = matches!(
+        (status, next.status),
+        (None, Status::Proposed | Status::Accepted)
+            | (Some(Status::Proposed), Status::Accepted | Status::Revoked)
+            | (Some(Status::Accepted), Status::Migrating | Status::Revoked)
+            | (Some(Status::Migrating), Status::Accepted | Status::Revoked)
+    );
+    if !allowed {
+        return Err(
+            AppError::param_invalid("MIMI room binding status transition is invalid")
+                .with_reason_code(
+                    arkret_wire::ReasonCode::MIMI_ROOM_BINDING_STATUS_TRANSITION_INVALID,
+                ),
+        );
+    }
+    if status == Some(Status::Migrating) && next.status == Status::Accepted {
+        let proof = next.migration_proof.as_ref().ok_or_else(|| {
+            AppError::param_invalid("MIMI migration resolution requires committed lineage proof")
+                .with_reason_code(
+                    arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID,
+                )
+        })?;
+        let current = current.expect("migrating status has current row");
+        if current.source_event_id != proof.migrating_event_id
+            || current.current.revision.commit_id != proof.migrating_commit_id
+            || current.realm_id != next.binding_scope.realm_id
+        {
+            return Err(AppError::param_invalid(
+                "MIMI migration proof does not name current binding",
+            )
+            .with_reason_code(arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID));
+        }
+    } else if next.migration_outcome.is_some() || next.migration_proof.is_some() {
+        return Err(AppError::param_invalid(
+            "MIMI migration fields are not valid on this transition",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID));
+    }
+    Ok(())
+}
+
 // This local submit path has no accepted foreign-account authority bridge.
 // Do not manufacture one from a provider signature or from a bare principal.
 fn local_mimi_sender_account(
@@ -522,6 +509,19 @@ fn local_mimi_sender_account(
 )]
 mod local_sender_tests {
     use super::*;
+
+    #[test]
+    fn mimi_group_id_guard_uses_the_accepted_scope_derivation() {
+        let scope: arkret_wire::ScopeRef = serde_json::from_value(json!({
+            "kind": "realm",
+            "realm_id": "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"
+        }))
+        .unwrap();
+        let group_id = scope.canonical_mls_group_id().unwrap();
+        assert!(validate_mimi_group_ids(&scope, &group_id, &group_id).is_ok());
+        assert!(validate_mimi_group_ids(&scope, "wrong-room-group", &group_id).is_err());
+        assert!(validate_mimi_group_ids(&scope, &group_id, "wrong-message-group").is_err());
+    }
 
     #[test]
     fn room_binding_accepts_the_registered_hub_provider_id_and_rejects_the_retired_field() {

@@ -168,25 +168,12 @@ async fn install_preview_endpoint(
     for event in
         std::iter::once(&basis.registration_event).chain(basis.capability_grant_events.iter())
     {
-        let envelope = serde_json::to_value(event).map_err(|error| {
-            AppError::param_invalid(format!("install admin Event is not encodable: {error}"))
-        })?;
-        crate::routing::events::event_log::validate_event_envelope_with_context(
-            state,
-            &session,
-            &envelope,
-            &[],
-            None,
-        )
-        .await
-        .map_err(|error| {
-            AppError::from_rejection(
-                soland_http::error::ErrorCode::from_wire(error.code)
-                    .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-                error.message,
-            )
-            .with_rejection_code(error.code)
-        })?;
+        crate::state::verify_self_event_producer(state, &session, event)
+            .await
+            .map_err(|error| {
+                AppError::param_invalid(format!("install admin Event producer is invalid: {error}"))
+                    .with_wire_code("signature_invalid")
+            })?;
     }
     let validated_admin =
         validate_admin_install_events(&preview.applet_package, basis, &session_actor)?;
@@ -213,9 +200,7 @@ async fn install_preview_endpoint(
     let authoring_request = AppletManagedActorAuthoringRequest::sign(
         preview.authoring_request_basis,
         plan.plan_digest.clone(),
-        state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?,
+        state.service_core_id(),
         issued_at,
         expires_at,
         &signer,
@@ -406,10 +391,10 @@ fn require_exact_successful_install_replay(
     requested_digest: &str,
 ) -> Result<(), AppError> {
     if stored_key != requested_key {
-        return Err(crate::app_error!(
-            AppletAlreadyRegistered,
-            "applet package is already installed in this scope",
-        ));
+        return Err(
+            AppError::conflict("applet package is already installed in this scope")
+                .with_wire_code("duplicate_conflict"),
+        );
     }
     if stored_digest == requested_digest {
         return Ok(());
@@ -452,7 +437,7 @@ fn applet_authoring_preview_basis_digest(
         "purpose": request.purpose,
         "basis": request.basis,
         "plan_digest": request.plan_digest,
-        "hosting_notary": request.hosting_notary,
+        "governance_station_id": request.governance_station_id,
     }))
 }
 
@@ -1049,6 +1034,40 @@ async fn durable_revoke_event_ref(
         stream_ref: record.commit.stream_ref,
         stream_position: record.commit.stream_position,
     }))
+}
+
+/// Resolve the winning signed Commit for one exact Ghost Event. A fresh
+/// provision has no such result before the current batch writer runs, so it
+/// stops without persisting anything until the Applet authority UoW returns
+/// the complete response from its own transaction.
+async fn durable_ghost_event_ref(
+    state: &AppState,
+    event: &arkret_wire::Event,
+) -> Result<CommittedEventRef, AppError> {
+    let accepted = state
+        .persistence()
+        .committed_event(&event.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Ghost Commit lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::from_rejection(
+                soland_http::error::ErrorCode::ServiceUnavailable,
+                "Ghost atomic Event/RealmCommit result construction is unavailable",
+            )
+            .with_rejection_code("service_unavailable")
+        })?;
+    if accepted.event != *event {
+        return Err(AppError::conflict(
+            "Ghost Event id is committed with different canonical content",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
+    Ok(CommittedEventRef {
+        event_id: event.event_id.clone(),
+        commit_id: accepted.commit.commit_id,
+        stream_ref: accepted.commit.stream_ref,
+        stream_position: accepted.commit.stream_position,
+    })
 }
 
 fn deduplicate_revoke_effect_refs(refs: &mut Vec<AppletRevokeEffectRef>) -> Result<(), AppError> {
@@ -1680,9 +1699,7 @@ async fn preview_ghost_actor_endpoint(
     );
     let authoring_request = AppletManagedActorAuthoringRequest::sign_ghost(
         basis,
-        state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?,
+        state.service_core_id(),
         issued_at,
         issued_at + chrono::Duration::minutes(5),
         &signer,
@@ -1774,13 +1791,9 @@ async fn provision_ghost_actor_endpoint(
         state.service_id(),
         &expected_ps_method,
     )?;
-    if provision.authoring_request.hosting_notary
-        != state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?
-    {
+    if provision.authoring_request.governance_station_id != state.service_core_id() {
         return Err(AppError::param_invalid(
-            "Ghost authoring request does not pin the current hosting notary",
+            "Ghost authoring request does not pin the current governance Station",
         )
         .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
     }
@@ -1877,10 +1890,18 @@ async fn provision_ghost_actor_endpoint(
         })?;
         let outcome = GhostActorProvisionOutcome {
             ghost_actor_id,
-            managed_actor_provision_ref: existing.managed_actor_provision_event.event_id.clone(),
+            managed_actor_provision_ref: durable_ghost_event_ref(
+                state,
+                &existing.managed_actor_provision_event,
+            )
+            .await?,
             principal_control_realm_id: existing.principal_control_realm_id(),
-            profile_event_ref: existing.profile_event.event_id.clone(),
-            accountability_grant_ref: existing.accountability_grant_event.event_id.clone(),
+            profile_event_ref: durable_ghost_event_ref(state, &existing.profile_event).await?,
+            accountability_grant_ref: durable_ghost_event_ref(
+                state,
+                &existing.accountability_grant_event,
+            )
+            .await?,
             authorization_ref: existing_provision.applet_authority_ref,
             display_name: existing.display_name.clone(),
         };
@@ -1924,16 +1945,24 @@ async fn provision_ghost_actor_endpoint(
     })?;
     let outcome = GhostActorProvisionOutcome {
         ghost_actor_id: ghost_actor_id.clone(),
-        managed_actor_provision_ref: provision
-            .managed_actor_bundle
-            .managed_actor_provision_event
-            .event_id
-            .clone(),
+        managed_actor_provision_ref: durable_ghost_event_ref(
+            state,
+            &provision.managed_actor_bundle.managed_actor_provision_event,
+        )
+        .await?,
         principal_control_realm_id: arkret_wire::RealmId::from_event_id(
             &provision.managed_actor_bundle.pcr_genesis_event.event_id,
         ),
-        profile_event_ref: profile_event_ref.clone(),
-        accountability_grant_ref: accountability_grant_ref.clone(),
+        profile_event_ref: durable_ghost_event_ref(
+            state,
+            &provision.managed_actor_bundle.profile_event,
+        )
+        .await?,
+        accountability_grant_ref: durable_ghost_event_ref(
+            state,
+            &provision.managed_actor_bundle.accountability_grant_event,
+        )
+        .await?,
         authorization_ref: authorization_ref.clone(),
         display_name: authoring_basis.display_name.clone(),
     };
@@ -2411,8 +2440,6 @@ mod revoke_saga_tests {
             scope,
             actor.signing_principal_id().clone(),
             actor.route_service_id().clone(),
-            1,
-            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             json!({"member_id": member, "membership": "join"}),
         )
         .unwrap();
@@ -2528,8 +2555,6 @@ mod revoke_saga_tests {
             scope.clone(),
             actor.signing_principal_id().clone(),
             actor.route_service_id().clone(),
-            1,
-            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             json!({"member_id": member, "membership": "leave", "reason": "requested_by_admin"}),
         )
         .unwrap();
@@ -2549,7 +2574,7 @@ mod revoke_saga_tests {
             reason_code: plan.reason_code.clone(),
             revoke_mode: plan.revoke_mode,
             capability_revoke_events: Vec::new(),
-            membership_state_events: vec![arkret_wire::EventInitialSubmission::online(event)],
+            membership_state_events: vec![arkret_wire::EventAdmissionSubmission::new(event)],
             proof: None,
         };
         assert!(validate_revoke_submissions(&actor, &plan, &request).is_ok());
@@ -2621,8 +2646,6 @@ mod revoke_saga_tests {
             realm_scope(),
             actor.signing_principal_id().clone(),
             actor.route_service_id().clone(),
-            1,
-            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             json!({
                 "grant_id": TARGET_GRANT,
                 "expected_revision": expected_revision,
@@ -2636,7 +2659,7 @@ mod revoke_saga_tests {
             effective_scope: realm_scope(),
             reason_code: plan.reason_code.clone(),
             revoke_mode: plan.revoke_mode,
-            capability_revoke_events: vec![arkret_wire::EventInitialSubmission::online(event)],
+            capability_revoke_events: vec![arkret_wire::EventAdmissionSubmission::new(event)],
             membership_state_events: Vec::new(),
             proof: None,
         };

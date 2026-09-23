@@ -1,6 +1,6 @@
 use arkret_wire::{
     AuthorityCommitStatus, AuthorityRejectionStatus, AuthoritySubmitOutcome,
-    AuthoritySubmitRequest, EventCommitSubmission,
+    AuthoritySubmitRequest, EventAdmissionSubmission,
 };
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -16,6 +16,7 @@ use crate::state::AppState;
 /// queue+commit persistence call is one transaction. It therefore returns an
 /// accepted result only after the exact `Event` and its signed `RealmCommit`
 /// are durably visible together.
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "soland.account_authority.events.admit"))]
 pub(super) async fn admit_event(
     depot: &mut Depot,
@@ -25,7 +26,7 @@ pub(super) async fn admit_event(
     super::peer::authenticate_account_authority_private_request(state, req)?;
 
     let submission = req
-        .parse_json::<EventCommitSubmission>()
+        .parse_json::<EventAdmissionSubmission>()
         .await
         .map_err(|_| AppError::json_invalid("invalid private Event admission body"))?;
     submission

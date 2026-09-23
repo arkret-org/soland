@@ -1,14 +1,13 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
-use arkret_models_collaboration::sync_frames::account_sync::{
-    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
-    ActorPrivateReadCursorUpdate, DeviceMessageSender,
-};
 use serde_json::Value;
 use soland_services::identity::AccountDataState;
 use soland_services::operation_semantics as kinds;
 
-use crate::routing::identity::device_messages::fanout_actor_private_update;
+use crate::routing::identity::device_messages::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
+    ActorPrivateReadCursorUpdate, DeviceMessageSender, fanout_actor_private_update,
+};
 use crate::state::AppState;
 
 pub(super) fn actor_private_read_cursor_matches_origin(
@@ -196,7 +195,7 @@ pub(super) async fn project_account_data_set(
             );
             return;
         };
-        let sender = DeviceMessageSender::Device {
+        let sender = DeviceMessageSender::Account {
             sender_account_id: account_id.clone(),
             sender_device_id,
         };
@@ -283,7 +282,7 @@ pub(super) async fn project_account_blocklist(
         state,
         account_id.principal_id.as_str(),
         ActorPrivateDeviceUpdate::Blocklist {
-            sender: DeviceMessageSender::Device {
+            sender: DeviceMessageSender::Account {
                 sender_account_id: account_id.clone(),
                 sender_device_id,
             },
@@ -321,7 +320,7 @@ pub(super) async fn fanout_projection_effect_private_update(
         state,
         marker.actor_id.signing_principal_id().as_str(),
         ActorPrivateDeviceUpdate::ReadCursor {
-            sender: DeviceMessageSender::Device {
+            sender: DeviceMessageSender::Account {
                 sender_account_id: match marker.actor_id.as_account_id() {
                     Some(account_id) => account_id.clone(),
                     None => return,

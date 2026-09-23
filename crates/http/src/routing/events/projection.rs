@@ -1,23 +1,12 @@
 //! Projection writers + read-side helpers.
 //!
-//! This is the in-process projection layer: ingestion of accepted operations
-//! (local service writes + standard peer events), per-Realm lifecycle materialization, the
-//! `state.projection_events` log, redaction tombstones, read-side helpers,
-//! and the deterministic reducer fan-out owned by the projection application service.
+//! This module owns read-side helpers, projection event views, and local
+//! reducer context helpers. Accepted Event/RealmCommit effects are installed
+//! through the authority transaction and durable hydration paths.
 //!
-//! Surfaces:
-//! - **inbound**: local operation builders and the standard peer-event handler call
-//!   `project_accepted_operations` from here.
-//! - **outbound**: event-query and account-subscribe handlers consume the projection event log and
-//!   typed SDK response models.
-//!
-//! Today this layer only fans out `ak.message.*` / `ak.member.state` /
-//! `ak.realm.*` (security boundary, was `ak.space.*` pre-R1.2) lifecycle
-//! events plus the container `ak.space.*` (was `ak.space.*`) family;
-//! everything else is dropped on the floor (`project_accepted_operations`
-//! only routes message+membership+lifecycle).
-//! Persistence: `projection_events` is in-memory plus a Pg mirror via
-//! `space_state_events` + `space_members`.
+//! Event-query and account-subscribe handlers consume committed projection
+//! rows and typed SDK response models. The retired post-accept Cell/Seal
+//! publisher is intentionally absent.
 
 pub(super) use super::{
     discussion_track_for_projection_event, is_valid_discoverability, message_id_from_event_id, now,

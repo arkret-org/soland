@@ -11,11 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{
-    ActorProfileId, BlobRef, CellRef, DeviceId, DidCoreId, EventId, Hash, RealmId, StrandId,
-};
-use arkret_models_collaboration::account_lifecycle::{
-    AccountProfileAcceptedBasis, AccountUpdateProfileRequestBody, AccountView,
+use arkret_identifiers::{BlobRef, DeviceId, DidCoreId, EventId, Hash, RealmId, StrandId};
+use arkret_models_collaboration::account_operations::{
+    AccountUpdateProfileRequestBody, AccountView,
 };
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
@@ -33,7 +31,6 @@ use arkret_models_collaboration::direct_conversation::{
     DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
     DirectConversationSendBlocker,
 };
-use arkret_models_collaboration::events_payloads::ActorProfileCreatePayload;
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence;
@@ -52,8 +49,6 @@ use arkret_models_identity::{
     DeviceSummaryStatus, DeviceSummaryVerificationState, PrincipalResolutionAuditEvidence,
     PrincipalResolutionAuditRequest,
 };
-use arkret_state::state_model::ResolvedCellState;
-use arkret_wire::SignerEvidenceRef;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -979,7 +974,7 @@ async fn add_account_localpart(
     })
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer", tags("identity"))]
+#[salvo::handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.read.viewer.v1"))]
 pub(crate) async fn account_viewer(
     aa: AuthArgs,
@@ -989,10 +984,7 @@ pub(crate) async fn account_viewer(
     account_viewer_impl(aa, depot, req).await
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.account.query.viewer",
-    tags("admin", "identity")
-)]
+#[salvo::handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.account.query.viewer"))]
 pub(crate) async fn admin_account_viewer(
     aa: AuthArgs,
@@ -1184,10 +1176,7 @@ async fn project_account(
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.account.command.update_profile",
-    tags("identity")
-)]
+#[salvo::handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile.v1"))]
 async fn update_profile(
     aa: AuthArgs,
@@ -1196,309 +1185,35 @@ async fn update_profile(
     body: JsonBody<AccountUpdateProfileRequestBody>,
 ) -> JsonResult<AccountUpdateProfileOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let account_exists = state
-        .identities()
-        .account(&arkret_wire::AccountId::new(
-            DidCoreId::new(session.actor.clone())
-                .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
-            state.service_core_id().clone(),
-        ))
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .is_some();
-    if !account_exists {
-        return Err(AppError::not_found("account not found"));
-    }
-
-    let event = &body.profile_event.event;
-    let principal_id = DidCoreId::new(session.actor.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "authenticated session principal id is invalid: {error}"
-        ))
-    })?;
-    let pcr_realm_id = event.realm_id.clone();
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(pcr_realm_id.as_str());
-    require_current_profile_authority(state, &principal_id, &pcr_realm_id).await?;
-    let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id).await?;
-    let profile_id = body
-        .profile_id(digest_suite)
+    let _session = aa.authenticated_session(state, req).await?;
+    body.into_inner()
+        .validate()
         .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
-    let accepted_basis = profile_context_validation_basis(
-        accepted.as_ref().map(|accepted| &accepted.basis),
-        &event.kind,
-        &profile_id,
-    );
-    let account_id =
-        arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id().clone());
-    body.validate_authoring_context(&account_id, &pcr_realm_id, accepted_basis, digest_suite)
-        .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
-    let submission = body.profile_event;
-    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
-        .await
-        .map_err(|error| {
-            crate::routing::events::event_log::submit_one_error_to_app_error(
-                "account profile Event submit failed",
-                error.status(),
-                error.code(),
-                &error.message(),
-            )
-        })?;
-    let accepted = accepted_account_profile_in_realm(state, &principal_id, &pcr_realm_id)
-        .await?
-        .ok_or_else(|| {
-            profile_frontier_unavailable(
-                "accepted account profile Event did not materialize its profile cell",
-            )
-        })?;
-    if accepted.basis.profile_id != profile_id {
-        return Err(profile_projection_precondition(
-            "accepted account profile projection does not match the submitted profile Event",
-        ));
-    }
-    json_ok(AccountUpdateProfileOutcome {
-        profile: accepted.profile,
-    })
-}
-
-struct AcceptedAccountProfile {
-    basis: AccountProfileAcceptedBasis,
-    profile: AccountMaterializedProfile,
-}
-
-fn profile_context_validation_basis<'a>(
-    accepted_basis: Option<&'a AccountProfileAcceptedBasis>,
-    event_kind: &arkret_wire::EventKind,
-    submitted_profile_id: &ActorProfileId,
-) -> Option<&'a AccountProfileAcceptedBasis> {
-    if event_kind == &arkret_wire::EventKind::ProfileCreate
-        && accepted_basis.is_some_and(|basis| &basis.profile_id == submitted_profile_id)
-    {
-        // The same create-derived id may be an exact replay. Validate its
-        // actor/PCR/payload as a create, then let ordinary admission decide
-        // exact duplicate versus duplicate conflict from the signed bytes.
-        None
-    } else {
-        accepted_basis
-    }
-}
-
-fn profile_projection_precondition(message: impl Into<String>) -> AppError {
-    crate::app_error!(FailedPrecondition, message).with_wire_code("failed_precondition")
-}
-
-fn profile_frontier_unavailable(message: impl Into<String>) -> AppError {
-    crate::app_error!(FrontierUnavailable, message)
-}
-
-async fn require_current_profile_authority(
-    state: &AppState,
-    principal_id: &DidCoreId,
-    pcr_realm_id: &RealmId,
-) -> Result<(), AppError> {
-    let resolution = state
-        .persistence()
-        .principal_resolution_for_realm(pcr_realm_id)
-        .await
-        .map_err(|error| AppError::internal(format!("load principal authority state: {error}")))?
-        .ok_or_else(|| {
-            profile_projection_precondition(
-                "account profile Event requires an accepted account-local PCR lineage",
-            )
-        })?;
-    if resolution.account_id.principal_id != *principal_id
-        || resolution.pcr_realm_id != *pcr_realm_id
-    {
-        return Err(profile_projection_precondition(
-            "account profile Event PCR does not belong to the authenticated principal",
-        ));
-    }
-    Ok(())
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
+        "accepted account profile current provider is unavailable"
+    ))
 }
 
 pub(crate) async fn accepted_account_profile(
-    state: &AppState,
-    principal: &str,
+    _state: &AppState,
+    _principal: &str,
 ) -> Result<Option<AccountMaterializedProfile>, AppError> {
-    let principal_id = DidCoreId::new(principal.to_owned()).map_err(|error| {
-        AppError::internal(format!("stored account principal id is invalid: {error}"))
-    })?;
-    let station_id = DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
-    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), station_id);
-    let Some(authority) = state
-        .persistence()
-        .principal_resolution_by_account_id(&authority_key)
-        .await
-        .map_err(|error| AppError::internal(format!("load account authority pair: {error}")))?
-    else {
-        return Ok(None);
-    };
-    accepted_account_profile_in_realm(state, &principal_id, &authority.pcr_realm_id)
-        .await
-        .map(|accepted| accepted.map(|accepted| accepted.profile))
-}
-
-async fn accepted_account_profile_in_realm(
-    state: &AppState,
-    principal_id: &DidCoreId,
-    pcr_realm_id: &RealmId,
-) -> Result<Option<AcceptedAccountProfile>, AppError> {
-    require_current_profile_authority(state, principal_id, pcr_realm_id).await?;
-    let expected_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        principal_id.clone(),
-        state.service_core_id().clone(),
-    ));
-    let projected = state
-        .event_queries()
-        .projected_events_for_realm(pcr_realm_id.as_str())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut creates = projected
-        .iter()
-        .filter(|event| {
-            event.event_kind == arkret_wire::EventKind::ProfileCreate
-                && projected_sender_matches_actor(event.sender.as_deref(), &expected_actor)
-        })
-        .filter_map(|event| {
-            let payload =
-                serde_json::from_value::<ActorProfileCreatePayload>(event.payload.clone()).ok()?;
-            (payload.object.principal_id == *principal_id).then_some(event)
-        });
-    let Some(create) = creates.next() else {
-        return Ok(None);
-    };
-    if creates.next().is_some() {
-        return Err(profile_projection_precondition(
-            "multiple accepted profile create Events exist in the selected PCR",
-        ));
-    }
-    let create_event_id = EventId::new(create.event_id.clone()).map_err(|error| {
-        profile_projection_precondition(format!(
-            "accepted profile create has an invalid Event id: {error}"
-        ))
-    })?;
-    let profile_id = ActorProfileId::from_event_id(&create_event_id);
-    let cell = CellRef::new(format!(
-        "ak:cell:{}:{profile_id}",
-        arkret_wire::CellFamilyId::PROFILE_CREATE_V1
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
+        "accepted account profile current provider is unavailable"
     ))
-    .map_err(|error| AppError::internal(format!("profile cell id is invalid: {error}")))?;
-    // Profile is ordinary causal state. Its live projection materializes at
-    // ordinary admission and never waits for a covering Seal.
-    let projection = state.projections().snapshot();
-    let cell_value = match projection.realm_cell(pcr_realm_id.as_str(), &cell) {
-        Some(value) if value.settled_value().is_some() => value
-            .settled_value()
-            .expect("checked settled value")
-            .clone(),
-        Some(ResolvedCellState::Bottom(_)) => {
-            return Err(crate::app_error!(
-                FailedPrecondition,
-                "accepted account profile is unavailable because a registered cross-cell invariant failed",
-            )
-            .with_wire_code("failed_bottom"));
-        }
-        Some(_) => unreachable!("all settled state variants handled above"),
-        None => {
-            return Err(profile_frontier_unavailable(
-                "accepted profile create has no materialized profile cell",
-            ));
-        }
-    };
-    let mut profile: ActorProfile = serde_json::from_value(cell_value).map_err(|error| {
-        profile_projection_precondition(format!("settled account profile cell is invalid: {error}"))
-    })?;
-    if profile.principal_id != *principal_id
-        || profile
-            .id
-            .as_ref()
-            .is_some_and(|stored| stored != &profile_id)
-        || profile
-            .realm_id
-            .as_ref()
-            .is_some_and(|stored| stored != pcr_realm_id)
-    {
-        return Err(profile_projection_precondition(
-            "settled account profile cell does not match its create Event basis",
-        ));
-    }
-    profile.id = Some(profile_id.clone());
-    profile.realm_id = Some(pcr_realm_id.clone());
-    let profile = AccountMaterializedProfile::try_from(profile).map_err(|error| {
-        profile_projection_precondition(format!(
-            "settled account profile is not materialized: {error}"
-        ))
-    })?;
-    Ok(Some(AcceptedAccountProfile {
-        basis: AccountProfileAcceptedBasis {
-            profile_id,
-            principal_id: principal_id.clone(),
-            principal_control_realm_id: pcr_realm_id.clone(),
-        },
-        profile,
-    }))
-}
-
-fn projected_sender_matches_actor(sender: Option<&str>, expected: &arkret_wire::ActorId) -> bool {
-    sender
-        .and_then(|sender| serde_json::from_str::<arkret_wire::ActorId>(sender).ok())
-        .is_some_and(|sender| sender == *expected)
 }
 
 async fn resolved_actor_profile_evidence(
-    state: &AppState,
-    actor_id: &arkret_wire::ActorId,
+    _state: &AppState,
+    _actor_id: &arkret_wire::ActorId,
 ) -> Result<Option<ResolvedActorProfile>, AppError> {
-    let mut candidates = state
-        .event_queries()
-        .canonical_events_for_actor(&actor_id.to_string())
-        .await
-        .map_err(|error| AppError::internal(format!("load Actor Profile Events: {error}")))?
-        .into_iter()
-        .filter(|record| {
-            matches!(
-                record.kind.as_str(),
-                arkret_wire::event_kind_str::PROFILE_CREATE
-                    | arkret_wire::event_kind_str::PROFILE_UPDATE
-            )
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        right
-            .actor_seq
-            .cmp(&left.actor_seq)
-            .then_with(|| right.event_id.cmp(&left.event_id))
-    });
-    for candidate in candidates {
-        let event: arkret_wire::Event = match serde_json::from_value(candidate.envelope) {
-            Ok(event) => event,
-            Err(error) => {
-                tracing::warn!(%error, event_id = %candidate.event_id, "stored Actor Profile Event envelope is invalid");
-                continue;
-            }
-        };
-        let Some(accepted) = accepted_account_profile_in_realm(
-            state,
-            actor_id.signing_principal_id(),
-            &event.realm_id,
-        )
-        .await?
-        else {
-            continue;
-        };
-        return Ok(Some(ResolvedActorProfile {
-            actor_id: actor_id.clone(),
-            actor_profile: accepted.profile.into_inner(),
-            profile_event: event,
-        }));
-    }
-    Ok(None)
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
+        "accepted Actor Profile current provider is unavailable"
+    ))
 }
-
 #[salvo::oapi::endpoint(operation_id = "ak.self.actor_profile.read.resolve", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.actor_profile.read.resolve.v1"))]
 async fn resolve_actor_profiles(
@@ -1903,22 +1618,6 @@ async fn direct_conversation_resolve(
                 send_blockers.push(DirectConversationSendBlocker::AgentRuntimeUnavailable);
             }
         }
-        let realm_id = RealmId::new(binding.realm_id.clone())
-            .map_err(|error| AppError::internal(format!("direct Realm id invalid: {error}")))?;
-        let notary_available = crate::notary::NotaryWorker::for_service(state.service_id().clone())
-            .current_notary_value_for_events(state, &realm_id, &[])
-            .await
-            .ok()
-            .flatten()
-            .is_some();
-        if !notary_available {
-            send_blockers.push(DirectConversationSendBlocker::NotaryUnavailable);
-        }
-        if projection.realm_reducer_profile(&binding.realm_id)
-            != Some(arkret_wire::CORE_REDUCER_PROFILE)
-        {
-            send_blockers.push(DirectConversationSendBlocker::UnsupportedProfile);
-        }
         send_blockers.sort_by_key(|blocker| format!("{blocker:?}"));
         send_blockers.dedup();
         let Some(group_state_ref) = group_state else {
@@ -2183,7 +1882,7 @@ async fn account_device_summaries(
 
 async fn account_device_summary(
     state: &AppState,
-    actor: &str,
+    _actor: &str,
     device: DeviceIdentity,
     current_generation: Option<&super::device_generation::DeviceGenerationView>,
 ) -> Result<AccountDeviceSummary, AppError> {
@@ -2197,219 +1896,90 @@ async fn account_device_summary(
         .display_name
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
-    let authorized_event_ref = device
+    let authorized_event_id = device
         .payload
         .get("device_authorize_event_id")
         .and_then(Value::as_str)
-        .filter(|event_id| !event_id.trim().is_empty())
-        .map(|event_id| {
-            EventId::new(event_id.to_owned()).map_err(|error| {
-                AppError::internal(format!(
-                    "stored device_authorize_event_id `{event_id}` is invalid: {error}"
-                ))
-            })
-        })
-        .transpose()?;
-    let authorized_generation_ref = device
-        .payload
-        .get("authorized_generation_ref")
-        .and_then(Value::as_u64);
-    let signer_resolution_evidence_ref = device
-        .payload
-        .get("signer_resolution_evidence_ref")
-        .and_then(Value::as_str)
-        .filter(|reference| !reference.trim().is_empty())
-        .map(|reference| {
-            SignerEvidenceRef::new(reference.to_owned()).map_err(|error| {
-                AppError::internal(format!(
-                    "stored signer_resolution_evidence_ref `{reference}` is invalid: {error}"
-                ))
-            })
-        })
-        .transpose()?;
-    let mut revocation_states = if let (Some(event_id), Some(generation_ref)) =
-        (authorized_event_ref.as_ref(), authorized_generation_ref)
-    {
-        let selector = soland_storage::DeviceRevocationGateSelector {
-            principal_id: DidCoreId::new(actor).map_err(|error| {
-                AppError::internal(format!("authenticated principal_id is invalid: {error}"))
-            })?,
-            station_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
-                AppError::internal(format!("service station_id is invalid: {error}"))
-            })?,
-            device_id: device_id.to_string(),
-            target_device_authorize_event_id: event_id.to_string(),
-            target_device_generation_ref: generation_ref,
-        };
-        state
+        .map(|value| EventId::new(value.to_owned()))
+        .transpose()
+        .map_err(|error| {
+            AppError::internal(format!("stored authorization Event id is invalid: {error}"))
+        })?;
+    let accepted = match authorized_event_id.as_ref() {
+        Some(event_id) => state
             .persistence()
-            .device_revocation_targets(&selector)
+            .committed_event(event_id)
             .await
             .map_err(|error| {
-                AppError::internal(format!("device revocation state is unavailable: {error}"))
-            })?
-            .into_iter()
-            .filter_map(device_revocation_gate_record)
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        Vec::new()
+                AppError::internal(format!("device authorization Commit unavailable: {error}"))
+            })?,
+        None => None,
     };
-    revocation_states.sort_by(|left, right| {
-        (left.acceptance_seq(), left.proposal_event_id().as_str())
-            .cmp(&(right.acceptance_seq(), right.proposal_event_id().as_str()))
-    });
-    let has_revoked = revocation_states
-        .iter()
-        .any(arkret_wire::DeviceRevocationGateRecord::is_revoked);
-    let has_pending = revocation_states
-        .iter()
-        .any(arkret_wire::DeviceRevocationGateRecord::is_pending);
-    if device.revoked_at.is_some() && !has_revoked {
+    if accepted.as_ref().is_some_and(|record| {
+        authorized_event_id.as_ref() != Some(&record.commit.event_ref)
+            || record.event.event_id != record.commit.event_ref
+            || record.event.kind != arkret_wire::EventKind::DeviceAuthorize
+    }) {
         return Err(AppError::internal(
-            "revoked device has no durable covering revocation record",
+            "device authorization Commit does not bind the accepted DeviceAuthorize Event",
         ));
     }
+    let generation_fenced = current_generation.is_some_and(|current| {
+        current.status == super::device_generation::DeviceGenerationStatus::Conflicted
+            || device
+                .payload
+                .get("authorized_generation_ref")
+                .and_then(Value::as_u64)
+                != Some(current.current_ref)
+    });
     let expired = device
         .payload
         .get("expires_at")
         .and_then(Value::as_str)
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|value| value.with_timezone(&chrono::Utc) <= now());
-    let status = if has_revoked {
+    let status = if device.revoked_at.is_some() {
         DeviceSummaryStatus::Revoked
-    } else if has_pending {
-        DeviceSummaryStatus::RevocationPending
     } else if expired {
         DeviceSummaryStatus::Expired
-    } else if current_generation.is_some_and(|generation| {
-        generation.status == super::device_generation::DeviceGenerationStatus::Conflicted
-    }) {
-        DeviceSummaryStatus::Conflicted
-    } else if authorized_generation_ref.is_some_and(|authorized| {
-        current_generation.is_some_and(|current| authorized != current.current_ref)
-    }) {
+    } else if generation_fenced {
         DeviceSummaryStatus::GenerationFenced
     } else {
         DeviceSummaryStatus::Active
     };
-    let has_successful_confirmation = device
-        .payload
-        .get("confirmed_seal_id")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty());
-    // `crypto-media/device-lifecycle.md` §10.1: evidence=verified only comes
-    // from a verification checkpoint, and its provenance is a closed set. The
-    // projected device payload is the accepted `ak.device.authorize` payload,
-    // so the binding kind that authorized this device is the checkpoint source.
-    // A row we cannot place in that closed set has no checkpoint, so it is
-    // `unresolved` rather than a verified row with an invented provenance.
-    let authorization_binding_kind = device
-        .payload
-        .get("authorization_binding_kind")
-        .and_then(Value::as_str);
     let (verification_state, verification_source) =
         soland_services::identity::fold_device_verification_checkpoint(
             device.verification_state.as_str(),
-            has_successful_confirmation,
-            authorization_binding_kind,
-            status == DeviceSummaryStatus::GenerationFenced,
+            accepted.is_some(),
+            device
+                .payload
+                .get("authorization_binding_kind")
+                .and_then(Value::as_str),
+            generation_fenced,
         );
-    if verification_state == DeviceSummaryVerificationState::Verified {
-        let authorization_event_ref = authorized_event_ref.as_ref().ok_or_else(|| {
-            AppError::internal("verified device has no durable authorization Event reference")
+    let authorization_ref = if verification_state == DeviceSummaryVerificationState::Unresolved {
+        None
+    } else {
+        let accepted = accepted.as_ref().ok_or_else(|| {
+            AppError::internal("verified device has no accepted authorization Commit")
         })?;
-        let generation_ref = authorized_generation_ref.ok_or_else(|| {
-            AppError::internal("verified device has no durable authorization generation")
-        })?;
-        let evidence_ref = signer_resolution_evidence_ref.as_ref().ok_or_else(|| {
-            AppError::internal("verified device has no durable Control signer evidence reference")
-        })?;
-        let selector = arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-            content_digest: evidence_ref.content_digest().map_err(|error| {
-                AppError::internal(format!("stored Control signer evidence ref is invalid: {error}"))
-            })?,
-        };
-        let dependency = state
-            .persistence()
-            .governance_dependency_store()
-            .get_unscoped_signer_evidence(&selector)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "stored Control signer evidence is unavailable: {error}"
-                ))
-            })?
-            .ok_or_else(|| {
-                AppError::internal("verified device Control signer evidence root is missing")
-            })?;
-        let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-            authenticated_signer_resolution_evidence: evidence,
-            ..
-        } = dependency
-        else {
-            return Err(AppError::internal(
-                "Control signer evidence selector resolved to another dependency kind",
-            ));
-        };
-        evidence.validate_attester_binding().map_err(|error| {
-            AppError::internal(format!(
-                "stored Control signer evidence is invalid: {error}"
-            ))
-        })?;
-        if &evidence.evidence_ref().map_err(|error| {
-            AppError::internal(format!(
-                "stored Control signer evidence cannot be hashed: {error}"
-            ))
-        })? != evidence_ref
-        {
-            return Err(AppError::internal(
-                "stored Control signer evidence bytes differ from their reference",
-            ));
-        }
-        let expected_account = arkret_wire::AccountId::new(
-            DidCoreId::new(actor).map_err(|error| {
-                AppError::internal(format!("authenticated principal_id is invalid: {error}"))
-            })?,
-            DidCoreId::new(state.service_id().clone()).map_err(|error| {
-                AppError::internal(format!("service station_id is invalid: {error}"))
-            })?,
-        );
-        let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDeviceControl {
-            signer_id,
-            account_id,
-            device_id: evidence_device_id,
-            authorization_event_ref: evidence_authorization_event_ref,
-            authorized_generation_ref: evidence_generation_ref,
-            ..
-        } = evidence.as_ref()
-        else {
-            return Err(AppError::internal(
-                "verified device signer evidence is not account_device_control",
-            ));
-        };
-        if signer_id != &expected_account.principal_id
-            || account_id != &expected_account
-            || evidence_device_id != &device_id
-            || evidence_authorization_event_ref != authorization_event_ref
-            || *evidence_generation_ref != generation_ref
-        {
-            return Err(AppError::internal(
-                "verified device row differs from its Control signer evidence root",
-            ));
-        }
-    }
+        Some(arkret_wire::CommittedEventRef {
+            event_id: accepted.commit.event_ref.clone(),
+            commit_id: accepted.commit.commit_id.clone(),
+            stream_ref: accepted.commit.stream_ref.clone(),
+            stream_position: accepted.commit.stream_position,
+        })
+    };
     let summary = AccountDeviceSummary {
         device_id,
         status,
         verification_state,
         verification_source,
         display_name,
-        authorized_at: authorized_event_ref.as_ref().map(|_| device.created_at),
-        authorized_event_ref,
-        signer_resolution_evidence_ref,
+        authorization_ref,
+        authorized_at: accepted.as_ref().map(|record| record.commit.committed_at),
         last_seen_at: None,
         revoked_at: device.revoked_at,
-        revocation_states: (!revocation_states.is_empty()).then_some(revocation_states),
     };
     summary
         .validate()
@@ -2418,116 +1988,13 @@ async fn account_device_summary(
 }
 
 pub(crate) fn device_revocation_gate_record(
-    record: soland_storage::DeviceRevocationTargetRecord,
+    _record: soland_storage::DeviceRevocationTargetRecord,
 ) -> Option<Result<arkret_wire::DeviceRevocationGateRecord, AppError>> {
-    use arkret_wire::{
-        AccountId, DEVICE_REVOCATION_DENIED_ACTIONS, DeviceRevocationDecisionState,
-        DeviceRevocationFaultReason, DeviceRevocationGateRecord, DeviceRevocationPendingState,
-        DeviceRevocationPendingStatus, DeviceRevocationStateSchema, DeviceRevokedState,
-        DeviceRevokedStatus, SealId,
-    };
-
-    let soland_storage::DeviceRevocationTargetRecord {
-        selector,
-        proposal_event_id,
-        proposal_digest: _,
-        accepted_at,
-        acceptance_seq,
-        control_proposal_ack,
-        status,
-    } = record;
-    let common = (|| -> Result<_, AppError> {
-        Ok((
-            AccountId {
-                principal_id: selector.principal_id.clone(),
-                station_id: selector.station_id.clone(),
-            },
-            DeviceId::new(selector.device_id.clone()).map_err(|error| {
-                AppError::internal(format!("stored revocation device invalid: {error}"))
-            })?,
-            EventId::new(selector.target_device_authorize_event_id.clone()).map_err(|error| {
-                AppError::internal(format!(
-                    "stored revocation authorization Event invalid: {error}"
-                ))
-            })?,
-            EventId::new(proposal_event_id.clone()).map_err(|error| {
-                AppError::internal(format!("stored revoke proposal Event invalid: {error}"))
-            })?,
-        ))
-    })();
-
-    match status {
-        soland_storage::DeviceRevocationTargetStatus::Rejected { .. } => None,
-        soland_storage::DeviceRevocationTargetStatus::Pending {
-            decisions,
-            decision_overdue,
-        } => Some(common.and_then(
-            |(account_id, device_id, authorize_event_id, proposal_event_id)| {
-                let (decision_state, decisions, fault_reason) = if decision_overdue {
-                    (
-                        DeviceRevocationDecisionState::Overdue,
-                        (!decisions.is_empty()).then_some(decisions),
-                        Some(DeviceRevocationFaultReason::ControlProposalDecisionOverdue),
-                    )
-                } else if decisions.is_empty() {
-                    (DeviceRevocationDecisionState::Pending, None, None)
-                } else {
-                    (
-                        DeviceRevocationDecisionState::Deferred,
-                        Some(decisions),
-                        None,
-                    )
-                };
-                let state = DeviceRevocationPendingState {
-                    schema: DeviceRevocationStateSchema::V1,
-                    account_id,
-                    device_id,
-                    target_device_authorize_event_id: authorize_event_id,
-                    target_device_generation_ref: selector.target_device_generation_ref,
-                    proposal_event_id,
-                    accepted_at,
-                    acceptance_seq,
-                    control_proposal_ack,
-                    status: DeviceRevocationPendingStatus::RevocationPending,
-                    decision_state,
-                    denied_actions: DEVICE_REVOCATION_DENIED_ACTIONS,
-                    decisions,
-                    fault_reason,
-                };
-                state.validate().map_err(|error| {
-                    AppError::internal(format!("stored pending revocation state invalid: {error}"))
-                })?;
-                Ok(DeviceRevocationGateRecord::Pending(state))
-            },
-        )),
-        soland_storage::DeviceRevocationTargetStatus::Revoked {
-            covering_seal_id,
-            sealed_at,
-        } => Some(common.and_then(
-            |(account_id, device_id, authorize_event_id, proposal_event_id)| {
-                let state = DeviceRevokedState {
-                    schema: DeviceRevocationStateSchema::V1,
-                    account_id,
-                    device_id,
-                    target_device_authorize_event_id: authorize_event_id,
-                    target_device_generation_ref: selector.target_device_generation_ref,
-                    proposal_event_id,
-                    accepted_at,
-                    acceptance_seq,
-                    control_proposal_ack,
-                    status: DeviceRevokedStatus::Revoked,
-                    covering_seal_id: SealId::new(covering_seal_id).map_err(|error| {
-                        AppError::internal(format!("stored covering Seal id invalid: {error}"))
-                    })?,
-                    sealed_at,
-                };
-                state.validate().map_err(|error| {
-                    AppError::internal(format!("stored revoked state invalid: {error}"))
-                })?;
-                Ok(DeviceRevocationGateRecord::Revoked(state))
-            },
-        )),
-    }
+    // The old Control proposal/Seal snapshot has been retired. Its pending
+    // decision fields and generation sequence cannot be reconstructed from
+    // the accepted revoke Commit alone. Keep the legacy adapter fail closed
+    // until the caller consumes the typed current revocation result directly.
+    None
 }
 
 #[cfg(test)]
@@ -2575,83 +2042,6 @@ mod tests {
             serde_json::from_value::<AccountProjectionRequestBody>(did_url).is_err(),
             "did must not contain DID URL path, query, or fragment components"
         );
-    }
-
-    #[test]
-    fn exact_profile_create_replay_reaches_ordinary_admission() {
-        let accepted_id = ActorProfileId::new(
-            "ak:actor_profile:ASZ8VNF9qzH4Hcjd-1qOOKONYlZmfQOIRvMYdkQ0XXBH".to_owned(),
-        )
-        .unwrap();
-        let different_id = ActorProfileId::new(
-            "ak:actor_profile:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned(),
-        )
-        .unwrap();
-        let basis = AccountProfileAcceptedBasis {
-            profile_id: accepted_id.clone(),
-            principal_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
-            principal_control_realm_id: RealmId::new(
-                "ak:realm:ASZ8VNF9qzH4Hcjd-1qOOKONYlZmfQOIRvMYdkQ0XXBH".to_owned(),
-            )
-            .unwrap(),
-        };
-
-        assert!(
-            profile_context_validation_basis(
-                Some(&basis),
-                &arkret_wire::EventKind::ProfileCreate,
-                &accepted_id,
-            )
-            .is_none(),
-            "same create-derived id must be passed to ordinary admission for replay classification"
-        );
-        assert!(
-            profile_context_validation_basis(
-                Some(&basis),
-                &arkret_wire::EventKind::ProfileCreate,
-                &different_id,
-            )
-            .is_some(),
-            "a different create id must still observe the existing accepted basis"
-        );
-        assert!(
-            profile_context_validation_basis(
-                Some(&basis),
-                &arkret_wire::EventKind::ProfileUpdate,
-                &accepted_id,
-            )
-            .is_some(),
-            "update replay must validate against the accepted create basis"
-        );
-    }
-
-    #[test]
-    fn profile_projection_matches_the_exact_account_actor_wire_identity() {
-        let principal = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let station = DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap();
-        let expected = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal.clone(),
-            station.clone(),
-        ));
-        let encoded = serde_json::to_string(&expected).unwrap();
-
-        assert!(projected_sender_matches_actor(Some(&encoded), &expected));
-        assert!(!projected_sender_matches_actor(
-            Some(principal.as_str()),
-            &expected
-        ));
-        assert!(!projected_sender_matches_actor(
-            Some(
-                &serde_json::to_string(&arkret_wire::ActorId::account(
-                    arkret_wire::AccountId::new(
-                        principal,
-                        DidCoreId::new("ak:did_core:web:other.example".to_owned()).unwrap(),
-                    ),
-                ))
-                .unwrap()
-            ),
-            &expected,
-        ));
     }
 
     #[test]

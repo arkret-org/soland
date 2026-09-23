@@ -10,8 +10,8 @@
 //!     whenever the update body carries a `room_binding` block.
 //!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic
 //!     `ak.open.mimi.command.notify.v1` projection event so live subscribers observe MIMI fanout.
-//!   * `POST /mimi/report-abuse` -> verifies the closed reporter authority and submits the exact
-//!     caller-authored `ak.self.moderation.report` Event through ordinary admission.
+//!   * `POST /mimi/report-abuse` -> verifies the closed reporter claim and current authority, then
+//!     submits a facade-service-authored `ak.self.moderation.report` Event atomically.
 //!
 //! Canonical message-ingress Events carry `payload.mimi_provenance` metadata
 //! (provider id, original MIMI envelope hash, MIMI message id) so the receiver
@@ -19,15 +19,15 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{EventId, Hash, ReportId};
+use arkret_identifiers::{EventId, Hash};
 use arkret_models_collaboration::events_payloads::consent::ConsentPeer;
 use arkret_models_collaboration::mimi_operations::{
     MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome,
     MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
     MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
-    MimiReportAbuseStatus, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
-    MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome,
-    MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
+    MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
+    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
+    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
 };
 use arkret_models_collaboration::objects::mimi::{
     MimiCiphertext, MimiConsentPurpose, MimiDelivery, MimiDeliveryStatus, MimiIdentifierMatch,
@@ -48,10 +48,6 @@ use soland_http::http_signature;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::MimiConsentCorrelation;
 
-use super::moderation::{
-    moderation_request_source_ip_hash, moderation_request_source_service,
-    validate_moderation_report_safety,
-};
 use super::{append_audit_log, now};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;

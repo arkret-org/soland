@@ -777,6 +777,7 @@ pub struct CommitAcceptedEventCommand {
     /// Circle or Sidecar stream. One `RealmCommit` accepts exactly one Event,
     /// so the signed commit travels with the Event it admits.
     pub authority_commit: soland_storage::AuthorityCommitTransaction,
+    pub self_producer_guard: Option<soland_storage::SelfProducerCommitGuard>,
     pub event: AcceptedEvent,
     pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
@@ -2267,6 +2268,7 @@ mod tests {
             },
             mls_state: None,
             welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
         }
     }
 
@@ -2285,6 +2287,7 @@ mod tests {
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
                 authority_commit,
+                self_producer_guard: None,
                 parent_membership_admission: None,
                 device_pairing_authorization: None,
                 contact_projection: None,

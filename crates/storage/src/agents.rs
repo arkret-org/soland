@@ -44,7 +44,8 @@ pub struct AgentRuntimeActivation {
     /// together with the terminal lifecycle it settled. One `RealmCommit`
     /// carries exactly one `event_ref`, so this names both the Event and the
     /// commit that made it the activation precondition.
-    pub outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome,
+    pub authorize_ref: arkret_wire::CommittedEventRef,
+    pub status: arkret_models_collaboration::agent_operations::AgentLifecycleState,
     pub authorized_key_event: arkret_wire::Event,
     pub signer_resolution_evidence_ref: Option<arkret_wire::SignerEvidenceRef>,
     pub current_signer_evidence: Option<

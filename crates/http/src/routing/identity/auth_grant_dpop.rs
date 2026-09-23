@@ -597,22 +597,25 @@ fn session_binding_from_introspection(
     }
     if let SessionGrantHolderBinding::AgentRuntime {
         agent_id,
-        device_id,
         agent_key_authorization_ref,
         verification_method,
     } = &grant.holder_binding
     {
         // The wire DTO closes agent grants to the self-contained typed holder
         // binding: top-level `device_id`/`device_binding` are the human-device
-        // shape and MUST be absent, so the binding itself is the only device
-        // authority to check.
+        // shape and MUST be absent. Agent authority is the exact principal,
+        // method and accepted key-authorization Event triple.
         if agent_id != &grant.account_id.principal_id {
             return Err(unauthenticated(
                 "agent holder binding does not match the introspected subject",
             ));
         }
         return Ok((
-            device_id.as_str().to_owned(),
+            // SessionIdentityState still has a Human-only internal field. An
+            // Agent carries no DeviceId; the empty value is never a queue or
+            // MLS endpoint selector and every Agent operation uses the typed
+            // holder binding above instead.
+            String::new(),
             Some(AgentSessionRecord {
                 granted_scope: grant.scopes.clone(),
                 scope_details: serde_json::json!({
@@ -1341,7 +1344,6 @@ mod tests {
         grant.scopes = vec!["ak.self.committed_event.read.scan.v1".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
-            device_id: DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             agent_key_authorization_ref: arkret_identifiers::EventId::new(
                 "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             )

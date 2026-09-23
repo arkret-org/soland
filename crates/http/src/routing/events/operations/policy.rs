@@ -60,8 +60,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
         || message.starts_with("direct_conversation_")
-        || message == arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH
-        || message == arkret_wire::ReasonCode::HISTORY_ACCESS_REQUIRES_HISTORY_CAPABLE_SCHEME
+        || message == "reaction_outside_scope"
     {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -80,19 +79,8 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::FORBIDDEN,
             arkret_wire::ReasonCode::TRANSCRIPTION_DENIED,
         )
-    } else if message == arkret_wire::ReasonCode::DEVICE_AUTHORIZED_PRINCIPAL_CONTROL_REALM_MISMATCH
-    {
-        (
-            salvo::http::StatusCode::FORBIDDEN,
-            arkret_wire::ReasonCode::DEVICE_AUTHORIZED_PRINCIPAL_CONTROL_REALM_MISMATCH,
-        )
     } else if message == "principal_control_realm_mismatch" {
-        // Unregistered internal discriminator: `with_internal_reason` routes
-        // it onto the unstable `reason_detail` channel.
-        (
-            salvo::http::StatusCode::FORBIDDEN,
-            "principal_control_realm_mismatch",
-        )
+        (salvo::http::StatusCode::FORBIDDEN, "capability_denied")
     } else if message == arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_UNRESOLVED {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
@@ -107,11 +95,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
             soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND,
-        )
-    } else if message == arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
-        (
-            salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
-            arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED,
         )
     } else if message == "sidecar_create_denied" {
         (salvo::http::StatusCode::FORBIDDEN, "sidecar_create_denied")

@@ -25,13 +25,18 @@ async fn authorize_account_device_pair(
     session: &SessionRecord,
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(body.authorize_event.event.realm_id.as_str());
-    body.validate_authorize_event_binding(digest_suite)
-        .map_err(|error| {
-            AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-        })?;
+    body.authorize_event.validate().map_err(|error| {
+        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
+    })?;
+    arkret_schema::validate_event_for_submit(&body.authorize_event.event).map_err(|error| {
+        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
+    })?;
+    if body.authorize_event.event.kind != arkret_wire::EventKind::DeviceAuthorize {
+        return Err(
+            AppError::param_invalid("pairing requires a device authorize Event")
+                .with_wire_code("schema_violation"),
+        );
+    }
     let authorizing_device = ensure_authorizing_device_verified(state, session).await?;
     let active_generation = crate::routing::identity::device_generation::current_device_generation(
         state,
@@ -113,13 +118,18 @@ async fn authorize_account_device_pair(
                 "device pairing request identity conflicts with its terminal outcome",
             ));
         }
-        return serde_json::from_value(
-            record
-                .get("outcome")
-                .cloned()
-                .ok_or_else(|| AppError::internal("pairing terminal outcome missing"))?,
-        )
-        .map_err(|error| AppError::internal(error.to_string()));
+        let event_id = record
+            .get("authorized_event_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::internal("pairing terminal Event reference missing"))?;
+        let device_id = body
+            .authorize_event
+            .event
+            .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+            .map_err(|error| AppError::param_invalid(error.to_string()))?
+            .device_id
+            .to_string();
+        return paired_device_outcome(state, device_id, event_id).await;
     }
     let pairing_code = body.pairing_code.as_str().trim();
     if pairing_code.is_empty() {
@@ -255,14 +265,6 @@ async fn authorize_account_device_pair(
             pairing_challenge_transcript_digest: authorize_payload.pairing_challenge_transcript_digest.clone().ok_or_else(|| AppError::param_missing("pairing challenge digest is required"))?,
             device_signature: authorize_payload.device_signature.clone(),
         };
-    target_proof
-        .validate_against_pair_request(&body, digest_suite)
-        .map_err(|error| {
-            AppError::param_invalid(format!(
-                "pairing target attestation does not bind the exact authorize Event: {error}"
-            ))
-            .with_wire_code("schema_violation")
-        })?;
     arkret_signatures::device_pairing::verify_server_device_pairing_target_proof(
         &body.new_device_pubkey,
         &challenge,
@@ -304,7 +306,7 @@ async fn authorize_account_device_pair(
         authorized_by_actor_id,
         authorized_event_ref: body.authorize_event.event.event_id.to_string(),
         changed_at: authorized_at,
-        terminal_record: json!({"account_id": account_id, "approving_device_id": session.device_id, "request_digest": request_digest, "outcome": paired_device_outcome(device_id.clone(), body.authorize_event.event.event_id.as_str())?}),
+        terminal_record: json!({"account_id": account_id, "approving_device_id": session.device_id, "request_digest": request_digest, "authorized_event_ref": body.authorize_event.event.event_id}),
     });
     let submitted =
         crate::routing::events::event_log::submit_initial_event_submission_with_device_pairing(
@@ -358,18 +360,36 @@ async fn authorize_account_device_pair(
     )
     .await;
 
-    paired_device_outcome(device_id, &authorized_event_ref)
+    paired_device_outcome(state, device_id, &authorized_event_ref).await
 }
 
-fn paired_device_outcome(
+async fn paired_device_outcome(
+    state: &AppState,
     device_id: String,
     authorized_event_ref: &str,
 ) -> Result<AccountDevicePairOutcome, AppError> {
+    let event_id = EventId::new(authorized_event_ref.to_owned())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let committed = state
+        .persistence()
+        .committed_event(&event_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("pairing Event has no accepted RealmCommit"))?;
+    if committed.commit.event_ref != event_id {
+        return Err(AppError::internal(
+            "pairing Event/Commit reference mismatch",
+        ));
+    }
     Ok(AccountDevicePairOutcome {
         device_id: DeviceId::new(device_id)
             .map_err(|error| AppError::internal(error.to_string()))?,
-        authorized_event_ref: EventId::new(authorized_event_ref.to_owned())
-            .map_err(|error| AppError::internal(error.to_string()))?,
+        authorized_event_ref: arkret_wire::CommittedEventRef {
+            event_id,
+            commit_id: committed.commit.commit_id,
+            stream_ref: committed.commit.stream_ref,
+            stream_position: committed.commit.stream_position,
+        },
         device_grant: None,
         key_backup_hint: None,
     })

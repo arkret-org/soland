@@ -2,7 +2,9 @@ use diesel::sql_types::{Bool, SmallInt};
 use serde::de::DeserializeOwned;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,
-    CurrentRealmAuthority, QueuedEventRecord, QueuedEventStatus,
+    CurrentRealmAuthority, OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
+    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, QueuedEventRecord, QueuedEventStatus,
+    SelfProducerCommitGuard,
 };
 
 use super::{
@@ -10,7 +12,12 @@ use super::{
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
     Text, Timestamptz, Value, async_trait, ids, pg_conn, sql_query,
 };
+use crate::agent_current_results::{
+    lock_agent_producer_current, project_agent_key_in_connection,
+    project_agent_status_in_connection,
+};
 use crate::capability_grant_current_results::commit_capability_grant_current_result_in_connection;
+use crate::capability_grant_current_results::commit_realm_authority_root_current_result_in_connection;
 
 #[derive(Clone)]
 pub struct PgAuthorityCommitStore {
@@ -64,6 +71,28 @@ struct CommitRow {
 }
 
 #[derive(QueryableByName)]
+struct OrdinaryBootstrapUnitRow {
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Binary)]
+    exact_request_body: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    commits_json: Value,
+}
+
+#[derive(QueryableByName)]
+struct PcrGenesisUnitRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    idempotency_key: String,
+    #[diesel(sql_type = Binary)]
+    exact_request_body: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    result_json: Value,
+}
+
+#[derive(QueryableByName)]
 struct HeadRow {
     #[diesel(sql_type = Jsonb)]
     stream_ref: Value,
@@ -77,14 +106,317 @@ struct HeadRow {
 struct SnapshotCurrentRow {
     #[diesel(sql_type = Text)]
     selector_kind: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    actor_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    selector_subject: Option<Value>,
     #[diesel(sql_type = Text)]
     current_commit_id: String,
     #[diesel(sql_type = BigInt)]
     current_stream_position: i64,
     #[diesel(sql_type = Jsonb)]
     value: Value,
+}
+
+#[derive(QueryableByName)]
+struct MimiRoomBindingCurrentRow {
+    #[diesel(sql_type = Text)]
+    mimi_room_uri: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Text)]
+    current_event_id: String,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+fn decode_mimi_room_binding_current(
+    row: MimiRoomBindingCurrentRow,
+) -> PersistenceResult<soland_storage::MimiRoomBindingCurrentRecord> {
+    let selector = arkret_wire::CurrentSelector::MimiRoomBinding {
+        mimi_room_uri: arkret_wire::MimiRoomUri::new(row.mimi_room_uri)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    };
+    let current =
+        arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingCurrentResult {
+            selector,
+            revision: arkret_wire::CurrentRevision {
+                commit_id: decode_text(row.current_commit_id, "MIMI current RealmCommit id")?,
+                stream_position: to_u64(
+                    row.current_stream_position,
+                    "MIMI current stream position",
+                )?,
+            },
+            value: decode_json(row.value, "MIMI current binding payload")?,
+        };
+    current
+        .validate()
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+    Ok(soland_storage::MimiRoomBindingCurrentRecord {
+        current,
+        source_event_id: decode_text(row.current_event_id, "MIMI current source Event id")?,
+        realm_id: decode_text(row.realm_id, "MIMI current Realm id")?,
+    })
+}
+
+#[derive(QueryableByName)]
+struct MimiMlsCurrentRow {
+    #[diesel(sql_type = Text)]
+    group_id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    effective_scope: Value,
+    #[diesel(sql_type = Jsonb)]
+    commit_json: Value,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+}
+
+fn invalid_mimi_migration() -> PersistenceError {
+    PersistenceError::Conflict(
+        soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid.to_string(),
+    )
+}
+
+fn mimi_migration_topology_matches(left: &Value, right: &Value) -> bool {
+    [
+        "hub_provider_id",
+        "follower_provider_ids",
+        "local_provider_role",
+        "mls_group_id",
+    ]
+    .iter()
+    .all(|field| left.get(*field) == right.get(*field))
+}
+
+async fn verify_mimi_migration_in_connection(
+    conn: &mut AsyncPgConnection,
+    payload: &arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingPayload,
+    value: &Value,
+    previous: &MimiRoomBindingCurrentRow,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingMigrationOutcome;
+
+    let proof = payload
+        .migration_proof
+        .as_ref()
+        .ok_or_else(invalid_mimi_migration)?;
+    let outcome = payload
+        .migration_outcome
+        .ok_or_else(invalid_mimi_migration)?;
+    if previous.current_event_id != proof.migrating_event_id.as_str()
+        || previous.current_commit_id != proof.migrating_commit_id.as_str()
+        || previous.realm_id != payload.binding_scope.realm_id.as_str()
+    {
+        return Err(invalid_mimi_migration());
+    }
+    let migrating_row = sql_query(
+        "SELECT c.commit_json, e.envelope FROM realm_commits c \
+         JOIN canonical_events e ON e.pk=c.event_pk WHERE c.commit_id=$1 FOR UPDATE",
+    )
+    .bind::<Text, _>(proof.migrating_commit_id.as_str())
+    .get_result::<CommitStreamRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(invalid_mimi_migration)?;
+    let migrating_commit: arkret_wire::RealmCommit =
+        decode_json(migrating_row.commit_json, "MIMI migrating RealmCommit")?;
+    let migrating_event: arkret_wire::Event =
+        decode_json(migrating_row.envelope, "MIMI migrating Event")?;
+    if migrating_commit.commit_id != proof.migrating_commit_id
+        || migrating_commit.event_ref != proof.migrating_event_id
+        || migrating_event.event_id != proof.migrating_event_id
+        || migrating_event.kind != arkret_wire::EventKind::MimiRoomBinding
+        || migrating_commit.realm_id != payload.binding_scope.realm_id
+        || migrating_event.realm_id != payload.binding_scope.realm_id
+        || migrating_commit.stream_position
+            != u64::try_from(previous.current_stream_position)
+                .map_err(|_| invalid_mimi_migration())?
+    {
+        return Err(invalid_mimi_migration());
+    }
+    let migrating_value =
+        serde_json::to_value(&migrating_event.payload).map_err(PersistenceError::database)?;
+    if migrating_value != previous.value
+        || migrating_value.get("status").and_then(Value::as_str) != Some("migrating")
+    {
+        return Err(invalid_mimi_migration());
+    }
+    let prior_row = sql_query(
+        "SELECT c.commit_json, e.envelope FROM realm_commits c \
+         JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.realm_id=$1 AND c.stream_ref=$2 AND c.stream_position<$3 \
+           AND e.envelope->>'kind'='ak.mimi.room_binding' \
+           AND e.envelope->'payload'->>'mimi_room_uri'=$4 \
+         ORDER BY c.stream_position DESC LIMIT 1 FOR UPDATE",
+    )
+    .bind::<Text, _>(payload.binding_scope.realm_id.as_str())
+    .bind::<Jsonb, _>(
+        serde_json::to_value(&migrating_commit.stream_ref).map_err(PersistenceError::database)?,
+    )
+    .bind::<BigInt, _>(previous.current_stream_position)
+    .bind::<Text, _>(payload.mimi_room_uri.as_str())
+    .get_result::<CommitStreamRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(invalid_mimi_migration)?;
+    let prior_commit: arkret_wire::RealmCommit =
+        decode_json(prior_row.commit_json, "MIMI previous accepted RealmCommit")?;
+    let prior_event: arkret_wire::Event =
+        decode_json(prior_row.envelope, "MIMI previous accepted Event")?;
+    if prior_commit.commit_id != proof.previous_accepted_commit_id
+        || prior_commit.event_ref != proof.previous_accepted_event_id
+        || prior_event.event_id != proof.previous_accepted_event_id
+        || prior_event.kind != arkret_wire::EventKind::MimiRoomBinding
+        || prior_commit.realm_id != payload.binding_scope.realm_id
+        || prior_event.realm_id != payload.binding_scope.realm_id
+        || prior_commit.stream_ref != migrating_commit.stream_ref
+    {
+        return Err(invalid_mimi_migration());
+    }
+    let prior_value =
+        serde_json::to_value(&prior_event.payload).map_err(PersistenceError::database)?;
+    if prior_value.get("status").and_then(Value::as_str) != Some("accepted") {
+        return Err(invalid_mimi_migration());
+    }
+    for state in [&prior_value, &migrating_value] {
+        for field in ["profile", "mimi_room_uri", "binding_scope"] {
+            if state.get(field) != value.get(field) {
+                return Err(invalid_mimi_migration());
+            }
+        }
+    }
+    let expected_topology = match outcome {
+        MimiRoomBindingMigrationOutcome::Completed => &migrating_value,
+        MimiRoomBindingMigrationOutcome::RolledBack => &prior_value,
+    };
+    if !mimi_migration_topology_matches(value, expected_topology) {
+        return Err(invalid_mimi_migration());
+    }
+    if let Some(group_id) = payload.mls_group_id.as_ref() {
+        let group_row = sql_query(
+            "SELECT s.group_id,s.realm_id,s.effective_scope,c.commit_json,e.envelope \
+             FROM mls_group_states s JOIN canonical_events e ON e.pk=s.commit_event_pk \
+             JOIN realm_commits c ON c.event_pk=e.pk WHERE s.group_id=$1 FOR UPDATE",
+        )
+        .bind::<Text, _>(group_id.as_str())
+        .get_result::<MimiMlsCurrentRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(invalid_mimi_migration)?;
+        let scope: arkret_wire::ScopeRef = decode_json(
+            group_row.effective_scope,
+            "MIMI current MLS effective scope",
+        )?;
+        let group_commit: arkret_wire::RealmCommit =
+            decode_json(group_row.commit_json, "MIMI current MLS RealmCommit")?;
+        let group_event: arkret_wire::Event =
+            decode_json(group_row.envelope, "MIMI current MLS Event")?;
+        let derived = scope
+            .canonical_mls_group_id()
+            .map_err(|_| invalid_mimi_migration())?;
+        if group_row.group_id != group_id.as_str()
+            || group_row.realm_id != payload.binding_scope.realm_id.as_str()
+            || derived != *group_id
+            || group_commit.realm_id != payload.binding_scope.realm_id
+            || group_commit.event_ref != group_event.event_id
+            || group_event.realm_id != payload.binding_scope.realm_id
+        {
+            return Err(invalid_mimi_migration());
+        }
+        // The installed MLS state does not carry an authenticated MIMI
+        // GroupInfo. Until admission can pin that evidence to this transaction,
+        // an encrypted-room migration cannot be finalized.
+        return Err(invalid_mimi_migration());
+    }
+    Ok(())
+}
+
+async fn commit_mimi_room_binding_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::MimiRoomBinding {
+        return Ok(());
+    }
+    let value = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    let payload: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingPayload =
+        decode_json(value.clone(), "MIMI room binding Event payload")?;
+    payload.validate_shape().map_err(invalid)?;
+    if payload.binding_scope.realm_id != event.realm_id {
+        return Err(PersistenceError::SchemaViolation(
+            "MIMI room binding Realm does not match its Event".to_owned(),
+        ));
+    }
+    let room_uri = payload.mimi_room_uri.as_str();
+    let previous = sql_query(
+        "SELECT mimi_room_uri,realm_id,current_commit_id,current_stream_position,current_event_id,value \
+         FROM mimi_room_binding_current_results WHERE mimi_room_uri=$1 FOR UPDATE",
+    )
+    .bind::<Text, _>(room_uri)
+    .get_result::<MimiRoomBindingCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let previous_status = previous
+        .as_ref()
+        .and_then(|row| row.value.get("status"))
+        .and_then(Value::as_str);
+    let next_status = value.get("status").and_then(Value::as_str);
+    let allowed = matches!(
+        (previous_status, next_status),
+        (None, Some("proposed" | "accepted"))
+            | (Some("proposed"), Some("accepted" | "revoked"))
+            | (Some("accepted"), Some("migrating" | "revoked"))
+            | (Some("migrating"), Some("accepted"))
+            | (Some("migrating"), Some("revoked"))
+    );
+    if !allowed {
+        return Err(PersistenceError::SchemaViolation(
+            "mimi_room_binding_status_transition_invalid".to_owned(),
+        ));
+    }
+    if previous_status == Some("migrating") && next_status == Some("accepted") {
+        verify_mimi_migration_in_connection(
+            conn,
+            &payload,
+            &value,
+            previous.as_ref().ok_or_else(invalid_mimi_migration)?,
+        )
+        .await?;
+    } else if payload.migration_outcome.is_some() || payload.migration_proof.is_some() {
+        return Err(invalid_mimi_migration());
+    }
+    let stream_position = i64::try_from(commit.stream_position).map_err(|_| {
+        PersistenceError::SchemaViolation("MIMI current stream position exceeds i64".to_owned())
+    })?;
+    sql_query(
+        "INSERT INTO mimi_room_binding_current_results \
+         (mimi_room_uri,realm_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7) \
+         ON CONFLICT (mimi_room_uri) DO UPDATE SET \
+           realm_id=EXCLUDED.realm_id,current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_position=EXCLUDED.current_stream_position, \
+           current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+    )
+    .bind::<Text, _>(room_uri)
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<BigInt, _>(stream_position)
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Jsonb, _>(value)
+    .bind::<Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
 }
 
 #[derive(QueryableByName)]
@@ -108,9 +440,15 @@ struct CommitStreamRow {
 }
 
 #[derive(QueryableByName)]
-struct EpochRow {
+struct PriorMlsStateRow {
     #[diesel(sql_type = BigInt)]
     epoch: i64,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    effective_scope: Value,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
 }
 
 #[derive(QueryableByName)]
@@ -214,13 +552,25 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
 
     let rows = sql_query(
-        "SELECT 'realm_policy'::text AS selector_kind, NULL::text AS actor_id, \
+        "SELECT 'realm_policy'::text AS selector_kind, NULL::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM realm_policy_bundle_current_results WHERE realm_id = $1 \
          UNION ALL \
-         SELECT 'member_state'::text AS selector_kind, member_id AS actor_id, \
+         SELECT 'member_state'::text AS selector_kind, member_id::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
-           FROM member_state_current_results WHERE realm_id = $1",
+           FROM member_state_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM mimi_room_binding_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'agent_status'::text AS selector_kind, to_jsonb(agent_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM agent_status_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'agent_key'::text AS selector_kind, jsonb_build_object('agent_id',agent_id,'agent_key_id',agent_key_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM agent_key_current_results WHERE realm_id = $1",
     )
     .bind::<Text, _>(realm_id.as_str())
     .load::<SnapshotCurrentRow>(&mut *conn)
@@ -229,15 +579,54 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     let current_state_entries = rows
         .into_iter()
         .map(|row| {
-            let selector = match (row.selector_kind.as_str(), row.actor_id) {
+            let selector = match (row.selector_kind.as_str(), row.selector_subject) {
                 ("realm_policy", None) => arkret_wire::CurrentSelector::RealmPolicy,
                 ("member_state", Some(actor_id)) => arkret_wire::CurrentSelector::MemberState {
-                    actor_id: serde_json::from_str(&actor_id).map_err(|error| {
+                    actor_id: serde_json::from_value(actor_id).map_err(|error| {
                         PersistenceError::Internal(format!(
                             "stored snapshot member actor id is invalid: {error}"
                         ))
                     })?,
                 },
+                ("mimi_room_binding", Some(room_uri)) => {
+                    arkret_wire::CurrentSelector::MimiRoomBinding {
+                        mimi_room_uri: arkret_wire::MimiRoomUri::new(
+                            room_uri.as_str().ok_or_else(|| {
+                                PersistenceError::Internal(
+                                    "stored MIMI room URI is not a string".to_owned(),
+                                )
+                            })?,
+                        )
+                        .map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored snapshot MIMI room URI is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
+                ("agent_status", Some(agent_id)) => arkret_wire::CurrentSelector::AgentStatus {
+                    agent_id: serde_json::from_value(agent_id).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Agent status identity is invalid: {error}"
+                        ))
+                    })?,
+                },
+                ("agent_key", Some(subject)) => {
+                    let mut selector = subject
+                        .as_object()
+                        .ok_or_else(|| {
+                            PersistenceError::Internal(
+                                "stored Agent key selector is invalid".to_owned(),
+                            )
+                        })?
+                        .clone();
+                    selector.insert("kind".to_owned(), Value::String("agent_key".to_owned()));
+                    serde_json::from_value(Value::Object(selector)).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Agent key selector is invalid: {error}"
+                        ))
+                    })?
+                }
                 _ => {
                     return Err(PersistenceError::Internal(
                         "stored snapshot current selector is invalid".to_owned(),
@@ -500,12 +889,19 @@ pub(crate) async fn commit_transaction_in_connection(
     .execute(&mut *conn)
     .await?;
     if let Some(mls_state) = &transaction.mls_state {
-        let previous =
-            sql_query("SELECT epoch FROM mls_group_states WHERE group_id = $1 FOR UPDATE")
-                .bind::<Text, _>(&mls_state.group_id)
-                .get_result::<EpochRow>(&mut *conn)
-                .await
-                .optional()?;
+        let payload: arkret_models_crypto::MlsCommitPayload = serde_json::from_value(
+            serde_json::to_value(&transaction.event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(invalid)?;
+        let previous = sql_query(
+            "SELECT s.epoch,s.realm_id,s.effective_scope,e.envelope \
+             FROM mls_group_states s JOIN canonical_events e ON e.pk=s.commit_event_pk \
+             WHERE s.group_id=$1 FOR UPDATE OF s",
+        )
+        .bind::<Text, _>(&mls_state.group_id)
+        .get_result::<PriorMlsStateRow>(&mut *conn)
+        .await
+        .optional()?;
         let epoch = to_i64(mls_state.epoch, "MLS epoch")?;
         let valid_successor = previous.as_ref().map_or(mls_state.epoch == 1, |row| {
             row.epoch.checked_add(1) == Some(epoch)
@@ -515,6 +911,22 @@ pub(crate) async fn commit_transaction_in_connection(
                 "MLS staged Commit does not advance the installed epoch exactly".into(),
             )
             .into());
+        }
+        if let Some(prior) = previous {
+            let prior_event: arkret_wire::Event =
+                decode_json(prior.envelope, "previous installed MLS Commit Event")?;
+            let prior_scope: arkret_wire::ScopeRef =
+                decode_json(prior.effective_scope, "previous installed MLS scope")?;
+            if prior.realm_id != transaction.event.realm_id.as_str()
+                || prior_scope != mls_state.effective_scope
+                || prior_event.event_id != *payload.base_group_state_ref()
+                || prior_event.kind != arkret_wire::EventKind::MlsCommit
+            {
+                return Err(PersistenceError::Conflict(
+                    "MLS Commit base does not match the installed authority state".into(),
+                )
+                .into());
+            }
         }
         sql_query(
             "INSERT INTO mls_group_states \
@@ -536,18 +948,13 @@ pub(crate) async fn commit_transaction_in_connection(
         .await?;
     }
     for welcome in &transaction.welcomes {
-        sql_query(
-            "INSERT INTO mls_welcome_deliveries \
-             (welcome_id, realm_id, commit_event_pk, recipient_actor_id, delivery_json, state, queued_at) \
-             VALUES ($1, $2, $3, $4, $5, 'queued', $6)",
+        crate::devices::enqueue_mls_welcome_in_connection(
+            conn,
+            welcome,
+            event_row.event_pk,
+            transaction.commit.committed_at,
+            transaction.recipient_queue_capacity,
         )
-        .bind::<Text, _>(welcome.welcome_id.as_str())
-        .bind::<Text, _>(welcome.realm_id.as_str())
-        .bind::<BigInt, _>(event_row.event_pk)
-        .bind::<Text, _>(welcome.recipient_actor_id.to_string())
-        .bind::<Jsonb, _>(serde_json::to_value(welcome).map_err(PersistenceError::database)?)
-        .bind::<Timestamptz, _>(transaction.commit.committed_at)
-        .execute(&mut *conn)
         .await?;
     }
     Ok(AuthorityCommitWriteOutcome::Committed)
@@ -566,8 +973,535 @@ fn require_atomic_admission_outcome(
     }
 }
 
+#[derive(QueryableByName)]
+struct ProducerCurrentValueRow {
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(QueryableByName)]
+struct ProducerAuthorizationRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+    #[diesel(sql_type = Jsonb)]
+    commit_json: Value,
+}
+
+pub(crate) async fn check_self_producer_guard_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    guard: &SelfProducerCommitGuard,
+    committed_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let actor = event.actor_id.as_account_id().ok_or_else(|| {
+        PersistenceError::Conflict("self Event producer is not an account".to_owned())
+    })?;
+    let method = &event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| {
+            PersistenceError::Conflict("self Event producer proof is missing".to_owned())
+        })?
+        .verification_method;
+    if event.executed_by.is_some() {
+        return Err(PersistenceError::Conflict(
+            "self Event cannot delegate its producer".to_owned(),
+        ));
+    }
+    match guard {
+        SelfProducerCommitGuard::HumanDevice(selector) => {
+            if selector.principal_id != actor.principal_id
+                || selector.station_id != actor.station_id
+                || !method
+                    .as_str()
+                    .ends_with(&format!("#{}", selector.device_id))
+            {
+                return Err(PersistenceError::Conflict(
+                    "self Event device guard differs from producer".to_owned(),
+                ));
+            }
+            crate::ensure_gate_allowed_in_transaction(conn, selector).await
+        }
+        SelfProducerCommitGuard::Agent {
+            pcr_realm_id,
+            agent_id,
+            authorization_ref,
+            verification_method,
+        } => {
+            if agent_id != &actor.principal_id
+                || verification_method != method
+                || authorization_ref.stream_ref.realm_id() != pcr_realm_id
+            {
+                return Err(PersistenceError::Conflict(
+                    "self Event Agent guard differs from producer".to_owned(),
+                ));
+            }
+            let authorization = sql_query(
+                "SELECT e.envelope,c.commit_json FROM canonical_events e \
+                 JOIN realm_commits c ON c.event_pk=e.pk \
+                 WHERE e.id=$1 AND e.state='committed'",
+            )
+            .bind::<Binary, _>(
+                ids::parse_event_id(authorization_ref.event_id.as_str())
+                    .ok_or_else(|| invalid("Agent authorization Event id is invalid"))?
+                    .to_vec(),
+            )
+            .get_result::<ProducerAuthorizationRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .ok_or_else(|| {
+                PersistenceError::Conflict("Agent authorization Event is not committed".to_owned())
+            })?;
+            let source_event: arkret_wire::Event =
+                decode_json(authorization.envelope, "Agent authorization Event")?;
+            let source_commit: arkret_wire::RealmCommit =
+                decode_json(authorization.commit_json, "Agent authorization Commit")?;
+            if source_event.kind != arkret_wire::EventKind::AgentKeyAuthorize
+                || source_event.event_id != authorization_ref.event_id
+                || source_event.realm_id != *pcr_realm_id
+                || source_commit.event_ref != authorization_ref.event_id
+                || source_commit.commit_id != authorization_ref.commit_id
+                || source_commit.stream_ref != authorization_ref.stream_ref
+                || source_commit.stream_position != authorization_ref.stream_position
+            {
+                return Err(PersistenceError::Conflict(
+                    "Agent authorization Commit differs from guarded source".to_owned(),
+                ));
+            }
+            lock_agent_producer_current(conn, pcr_realm_id, agent_id).await?;
+            let status = sql_query("SELECT value FROM agent_status_current_results WHERE realm_id=$1 AND agent_id=$2 FOR SHARE")
+                .bind::<Text, _>(pcr_realm_id.as_str())
+                .bind::<Text, _>(agent_id.as_str())
+                .get_result::<ProducerCurrentValueRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+            if status.as_ref().and_then(|row| row.value.as_str()) != Some("active") {
+                return Err(PersistenceError::Conflict(
+                    "Agent producer is no longer active".to_owned(),
+                ));
+            }
+            let rows = sql_query("SELECT value FROM agent_key_current_results WHERE realm_id=$1 AND agent_id=$2 FOR SHARE")
+                .bind::<Text, _>(pcr_realm_id.as_str())
+                .bind::<Text, _>(agent_id.as_str())
+                .load::<ProducerCurrentValueRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+            let mut active = Vec::new();
+            for row in rows {
+                let entries = row
+                    .value
+                    .get("authorizations")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "stored Agent key current result has no authorizations".to_owned(),
+                        )
+                    })?;
+                for entry in entries {
+                    let Some(raw_method) = entry
+                        .pointer("/value/verification_method")
+                        .and_then(Value::as_str)
+                    else {
+                        continue;
+                    };
+                    let payload: arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload =
+                        serde_json::from_value(entry.get("value").cloned().unwrap_or(Value::Null))
+                        .map_err(|error| PersistenceError::Internal(format!("stored Agent key authorization invalid: {error}")))?;
+                    if payload
+                        .expires_at
+                        .is_some_and(|expiry| expiry <= committed_at)
+                    {
+                        continue;
+                    }
+                    if payload.agent_id != *agent_id
+                        || entry.get("value")
+                            != Some(
+                                &serde_json::to_value(&source_event.payload)
+                                    .map_err(PersistenceError::database)?,
+                            )
+                    {
+                        return Err(PersistenceError::Conflict(
+                            "Agent current authorization differs from its accepted Event"
+                                .to_owned(),
+                        ));
+                    }
+                    let tag = entry.get("tag_id").and_then(Value::as_str).ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "stored Agent authorization has no tag id".to_owned(),
+                        )
+                    })?;
+                    active.push((tag.to_owned(), raw_method.to_owned()));
+                }
+            }
+            if active.len() != 1
+                || active[0].0 != format!("{}:1", authorization_ref.event_id)
+                || active[0].1 != method.as_str()
+            {
+                return Err(PersistenceError::Conflict(
+                    "Agent producer authorization changed before commit".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
+    async fn pcr_genesis_replay(
+        &self,
+        submission: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
+        exact_request_body: &[u8],
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult>,
+    > {
+        use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult;
+
+        let mut conn = pg_conn(&self.pool).await?;
+        let key = submission.idempotency_key.to_string();
+        let existing = sql_query(
+            "SELECT realm_id,idempotency_key,exact_request_body,result_json \
+             FROM pcr_genesis_units WHERE realm_id=$1 OR idempotency_key=$2 \
+             ORDER BY (realm_id=$1) DESC LIMIT 1",
+        )
+        .bind::<Text, _>(submission.pcr_realm_id.as_str())
+        .bind::<Text, _>(&key)
+        .get_result::<PcrGenesisUnitRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        let Some(existing) = existing else {
+            return Ok(None);
+        };
+        if existing.realm_id != submission.pcr_realm_id.as_str()
+            || existing.idempotency_key != key
+            || existing.exact_request_body != exact_request_body
+        {
+            return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+        }
+        let stored: PcrGenesisAdmissionResult =
+            decode_json(existing.result_json, "PCR genesis result")?;
+        stored.validate_against(submission).map_err(invalid)?;
+        Ok(Some(stored))
+    }
+
+    async fn admit_pcr_genesis_unit(
+        &self,
+        unit: &PcrGenesisCommitUnit,
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<PcrGenesisCommitOutcome> {
+        use arkret_models_collaboration::events_payloads::DeviceAuthorizePayload;
+        use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult;
+
+        unit.validate().map_err(invalid)?;
+        let submission = &unit.submission;
+        let authority = &unit.transactions[0].expected_authority;
+        let realm_id = submission.pcr_realm_id.as_str();
+        let key = submission.idempotency_key.to_string();
+        let authorize_payload: DeviceAuthorizePayload = serde_json::from_value(Value::Object(
+            unit.transactions[1]
+                .event
+                .payload
+                .clone()
+                .into_iter()
+                .collect(),
+        ))
+        .map_err(|error| invalid(format!("founding device payload is invalid: {error}")))?;
+        let commits = unit
+            .transactions
+            .clone()
+            .map(|transaction| transaction.commit);
+        let result = PcrGenesisAdmissionResult {
+            principal_id: submission.principal_id.clone(),
+            pcr_realm_id: submission.pcr_realm_id.clone(),
+            accepted_device_id: authorize_payload.device_id.clone(),
+            resolution: arkret_models_identity::PrincipalResolutionProjection {
+                did: submission.did.clone(),
+                method_history_head: submission
+                    .registration_did_evidence
+                    .method_history_head
+                    .clone(),
+                version_id: submission.did_version_id.clone(),
+                resolution_event_ref: unit.transactions[0].event.event_id.to_string(),
+                updated_at: commits[0].committed_at,
+            },
+            commits,
+        };
+        result.validate_against(submission).map_err(invalid)?;
+        let result_json = serde_json::to_value(&result).map_err(PersistenceError::database)?;
+        let commits_json =
+            serde_json::to_value(&result.commits).map_err(PersistenceError::database)?;
+        let resolution_json =
+            serde_json::to_value(&result.resolution).map_err(PersistenceError::database)?;
+        let create_json = serde_json::to_value(&unit.transactions[0].event)
+            .map_err(PersistenceError::database)?;
+        let authorization_ref = arkret_wire::CommittedEventRef {
+            event_id: unit.transactions[1].event.event_id.clone(),
+            commit_id: result.commits[1].commit_id.clone(),
+            stream_ref: result.commits[1].stream_ref.clone(),
+            stream_position: result.commits[1].stream_position,
+        };
+        let mut device_json =
+            serde_json::to_value(&authorize_payload).map_err(PersistenceError::database)?;
+        let device_fields = device_json
+            .as_object_mut()
+            .ok_or_else(|| invalid("founding device payload must be a JSON object"))?;
+        device_fields.insert(
+            "device_authorization_ref".to_owned(),
+            serde_json::to_value(&authorization_ref).map_err(PersistenceError::database)?,
+        );
+        device_fields.insert(
+            "device_authorize_event_id".to_owned(),
+            serde_json::to_value(&unit.transactions[1].event.event_id)
+                .map_err(PersistenceError::database)?,
+        );
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let inserted = sql_query(
+                "INSERT INTO pcr_genesis_units \
+                 (realm_id,idempotency_key,exact_request_body,commits_json,result_json,committed_at) \
+                 VALUES ($1,$2,$3,'[]'::jsonb,'{}'::jsonb,$4) ON CONFLICT DO NOTHING",
+            )
+            .bind::<Text, _>(realm_id)
+            .bind::<Text, _>(&key)
+            .bind::<Binary, _>(&unit.exact_request_body)
+            .bind::<Timestamptz, _>(queued_at)
+            .execute(&mut *conn)
+            .await?;
+            if inserted == 0 {
+                let existing = sql_query(
+                    "SELECT realm_id,idempotency_key,exact_request_body,result_json \
+                     FROM pcr_genesis_units WHERE realm_id=$1 OR idempotency_key=$2 \
+                     ORDER BY (realm_id=$1) DESC LIMIT 1 FOR UPDATE",
+                )
+                .bind::<Text, _>(realm_id)
+                .bind::<Text, _>(&key)
+                .get_result::<PcrGenesisUnitRow>(&mut *conn)
+                .await
+                .optional()?;
+                let Some(existing) = existing else {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                };
+                if existing.realm_id != realm_id || existing.idempotency_key != key || existing.exact_request_body != unit.exact_request_body {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                }
+                let stored: PcrGenesisAdmissionResult = decode_json(existing.result_json, "PCR genesis result")?;
+                stored.validate_against(submission).map_err(invalid)?;
+                return Ok(PcrGenesisCommitOutcome::Duplicate(stored));
+            }
+            let authority_inserted = sql_query(
+                "INSERT INTO realm_authorities \
+                 (realm_id,generation,service_id,authority_ref,last_handoff_ref) \
+                 VALUES ($1,0,$2,$3,NULL) ON CONFLICT (realm_id) DO NOTHING",
+            )
+            .bind::<Text, _>(realm_id)
+            .bind::<Text, _>(authority.service_id.as_str())
+            .bind::<Jsonb, _>(serde_json::to_value(&authority.authority_ref).map_err(PersistenceError::database)?)
+            .execute(&mut *conn)
+            .await?;
+            if authority_inserted != 1 {
+                return Err(PersistenceError::Conflict("realm_already_exists".to_owned()).into());
+            }
+            for transaction in &unit.transactions {
+                queue_event_in_connection(conn, &transaction.event, queued_at).await?;
+                match commit_transaction_in_connection(conn, transaction).await? {
+                    AuthorityCommitWriteOutcome::Committed => {}
+                    AuthorityCommitWriteOutcome::Duplicate => {
+                        return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                    }
+                    AuthorityCommitWriteOutcome::StaleAuthority(_) => {
+                        return Err(PersistenceError::Conflict("stale_realm_authority".to_owned()).into());
+                    }
+                }
+                commit_realm_authority_root_current_result_in_connection(conn, &transaction.event, &transaction.commit).await?;
+                commit_capability_grant_current_result_in_connection(conn, &transaction.event, &transaction.commit).await?;
+            }
+            let resolution_inserted = sql_query(
+                "WITH inserted AS ( \
+                   INSERT INTO principal_resolutions \
+                     (principal_id,station_id,pcr_realm_id,genesis_event_id,current_event_id,projection,updated_at) \
+                   VALUES ($1,$2,$3,$4,$4,$5,$6) ON CONFLICT DO NOTHING \
+                   RETURNING principal_id,station_id \
+                 ), inserted_event AS ( \
+                   INSERT INTO principal_resolution_events \
+                     (principal_id,station_id,event_id,previous_event_id,method_history_head,event_json,created_at) \
+                   SELECT principal_id,station_id,$4,NULL,$7,$8,$6 FROM inserted \
+                 ) SELECT EXISTS(SELECT 1 FROM inserted) AS present",
+            )
+            .bind::<Text, _>(submission.principal_id.as_str())
+            .bind::<Text, _>(submission.account_authority_id.as_str())
+            .bind::<Text, _>(realm_id)
+            .bind::<Text, _>(unit.transactions[0].event.event_id.as_str())
+            .bind::<Jsonb, _>(&resolution_json)
+            .bind::<Timestamptz, _>(result.resolution.updated_at)
+            .bind::<Text, _>(&result.resolution.method_history_head)
+            .bind::<Jsonb, _>(&create_json)
+            .get_result::<PresenceRow>(&mut *conn)
+            .await?;
+            if !resolution_inserted.present {
+                return Err(PersistenceError::Conflict("principal_resolution_already_exists".to_owned()).into());
+            }
+            let device_inserted = sql_query(
+                "INSERT INTO devices \
+                 (id,station_id,actor_id,device_id,device_key,verification_state,payload,created_at,updated_at) \
+                 VALUES ($1,$2,$3,$4,$5,'verified',$6,$7,$7) \
+                 ON CONFLICT(actor_id,device_id) DO NOTHING",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
+            .bind::<Text, _>(submission.account_authority_id.as_str())
+            .bind::<Text, _>(submission.principal_id.as_str())
+            .bind::<Text, _>(result.accepted_device_id.as_str())
+            .bind::<Text, _>(authorize_payload.device_public_key_did.as_str())
+            .bind::<Jsonb, _>(&device_json)
+            .bind::<Timestamptz, _>(result.commits[1].committed_at)
+            .execute(&mut *conn)
+            .await?;
+            if device_inserted != 1 {
+                return Err(PersistenceError::Conflict("founding_device_already_exists".to_owned()).into());
+            }
+            sql_query("UPDATE pcr_genesis_units SET commits_json=$2,result_json=$3 WHERE realm_id=$1")
+                .bind::<Text, _>(realm_id)
+                .bind::<Jsonb, _>(&commits_json)
+                .bind::<Jsonb, _>(&result_json)
+                .execute(&mut *conn)
+                .await?;
+            Ok(PcrGenesisCommitOutcome::Committed(result))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn admit_ordinary_realm_bootstrap_unit(
+        &self,
+        unit: &OrdinaryRealmBootstrapCommitUnit,
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome> {
+        unit.validate().map_err(invalid)?;
+        let first = &unit.transactions[0];
+        let authority = &first.expected_authority;
+        if authority.generation != 0
+            || authority.last_handoff_ref.is_some()
+            || authority.authority_ref
+                != arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    first.event.event_id.clone(),
+                )
+        {
+            return Err(invalid(
+                "ordinary Realm bootstrap requires its exact genesis authority",
+            ));
+        }
+        let realm_id = authority.realm_id.as_str().to_owned();
+        let key = unit.submission.idempotency_key.as_uuid().to_string();
+        let commits = unit
+            .transactions
+            .iter()
+            .map(|transaction| transaction.commit.clone())
+            .collect::<Vec<_>>();
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let inserted = sql_query(
+                "INSERT INTO ordinary_realm_bootstrap_units \
+                 (realm_id,idempotency_key,exact_request_body,commits_json,committed_at) \
+                 VALUES ($1,$2,$3,'[]'::jsonb,$4) ON CONFLICT DO NOTHING",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&key)
+            .bind::<Binary, _>(&unit.exact_request_body)
+            .bind::<Timestamptz, _>(queued_at)
+            .execute(&mut *conn)
+            .await?;
+            if inserted == 0 {
+                let existing = sql_query(
+                    "SELECT idempotency_key,exact_request_body,commits_json \
+                     FROM ordinary_realm_bootstrap_units WHERE realm_id=$1 FOR UPDATE",
+                )
+                .bind::<Text, _>(&realm_id)
+                .get_result::<OrdinaryBootstrapUnitRow>(&mut *conn)
+                .await
+                .optional()?;
+                let Some(existing) = existing else {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                };
+                if existing.idempotency_key != key
+                    || existing.exact_request_body != unit.exact_request_body
+                {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                }
+                let stored = decode_json::<Vec<arkret_wire::RealmCommit>>(
+                    existing.commits_json,
+                    "ordinary Realm bootstrap committed unit",
+                )?;
+                if stored.len() != commits.len() || stored.is_empty() {
+                    return Err(PersistenceError::Internal(
+                        "stored ordinary Realm bootstrap unit is incomplete".to_owned(),
+                    )
+                    .into());
+                }
+                return Ok(OrdinaryRealmBootstrapCommitOutcome::Duplicate(stored));
+            }
+            let authority_inserted = sql_query(
+                "INSERT INTO realm_authorities \
+                 (realm_id,generation,service_id,authority_ref,last_handoff_ref) \
+                 VALUES ($1,0,$2,$3,NULL) ON CONFLICT (realm_id) DO NOTHING",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(authority.service_id.as_str())
+            .bind::<Jsonb, _>(
+                serde_json::to_value(&authority.authority_ref)
+                    .map_err(PersistenceError::database)?,
+            )
+            .execute(&mut *conn)
+            .await?;
+            if authority_inserted != 1 {
+                return Err(PersistenceError::Conflict("realm_already_exists".to_owned()).into());
+            }
+            for transaction in &unit.transactions {
+                queue_event_in_connection(conn, &transaction.event, queued_at).await?;
+                match commit_transaction_in_connection(conn, transaction).await? {
+                    AuthorityCommitWriteOutcome::Committed => {}
+                    AuthorityCommitWriteOutcome::Duplicate => {
+                        return Err(
+                            PersistenceError::Conflict("duplicate_conflict".to_owned()).into()
+                        );
+                    }
+                    AuthorityCommitWriteOutcome::StaleAuthority(_) => {
+                        return Err(
+                            PersistenceError::Conflict("stale_realm_authority".to_owned()).into(),
+                        );
+                    }
+                }
+                commit_capability_grant_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                commit_mimi_room_binding_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+            }
+            sql_query(
+                "UPDATE ordinary_realm_bootstrap_units SET commits_json=$2 WHERE realm_id=$1",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Jsonb, _>(serde_json::to_value(&commits).map_err(PersistenceError::database)?)
+            .execute(&mut *conn)
+            .await?;
+            Ok(OrdinaryRealmBootstrapCommitOutcome::Committed(commits))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn install_genesis_authority(
         &self,
         authority: &CurrentRealmAuthority,
@@ -730,6 +1664,60 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     &transaction.commit,
                 )
                 .await?;
+                commit_mimi_room_binding_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+            }
+            Ok(outcome)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn admit_self_event_transaction(
+        &self,
+        transaction: &AuthorityCommitTransaction,
+        guard: &SelfProducerCommitGuard,
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<AuthorityCommitWriteOutcome> {
+        transaction.validate().map_err(invalid)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            check_self_producer_guard_in_connection(
+                conn,
+                &transaction.event,
+                guard,
+                transaction.commit.committed_at,
+            )
+            .await?;
+            queue_event_in_connection(conn, &transaction.event, queued_at).await?;
+            let outcome = require_atomic_admission_outcome(
+                commit_transaction_in_connection(conn, transaction).await?,
+            )?;
+            if matches!(outcome, AuthorityCommitWriteOutcome::Committed) {
+                commit_capability_grant_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                commit_mimi_room_binding_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
             }
             Ok(outcome)
         })
@@ -751,6 +1739,16 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     &transaction.commit,
                 )
                 .await?;
+                commit_mimi_room_binding_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
             }
             Ok(outcome)
         })
@@ -811,6 +1809,61 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             Ok(soland_storage::CommittedEventRecord { commit, event })
         })
         .transpose()
+    }
+
+    async fn committed_event_by_commit_id(
+        &self,
+        commit_id: &arkret_wire::RealmCommitId,
+    ) -> PersistenceResult<Option<soland_storage::CommittedEventRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT c.commit_json, e.envelope FROM realm_commits c \
+             JOIN canonical_events e ON e.pk = c.event_pk \
+             WHERE c.commit_id = $1",
+        )
+        .bind::<Text, _>(commit_id.as_str())
+        .get_result::<CommitStreamRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        row.map(|row| {
+            let commit: arkret_wire::RealmCommit = decode_json(row.commit_json, "RealmCommit")?;
+            let event: arkret_wire::Event = decode_json(row.envelope, "committed Event")?;
+            if commit.commit_id != *commit_id || commit.event_ref != event.event_id {
+                return Err(PersistenceError::Internal(
+                    "durable committed Event pair disagrees with its Commit id".into(),
+                ));
+            }
+            Ok(soland_storage::CommittedEventRecord { commit, event })
+        })
+        .transpose()
+    }
+
+    async fn current_mimi_room_binding(
+        &self,
+        room_uri: &arkret_wire::MimiRoomUri,
+    ) -> PersistenceResult<Option<soland_storage::MimiRoomBindingCurrentRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT mimi_room_uri,realm_id,current_commit_id,current_stream_position,current_event_id,value \
+             FROM mimi_room_binding_current_results WHERE mimi_room_uri=$1",
+        )
+        .bind::<Text, _>(room_uri.as_str())
+        .get_result::<MimiRoomBindingCurrentRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(decode_mimi_room_binding_current)
+        .transpose()
+    }
+
+    async fn current_agent_result(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_wire::CurrentSelector,
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+        crate::agent_current_results::read_agent_current_result(&self.pool, realm_id, selector)
+            .await
     }
 
     async fn realm_stream_heads(
@@ -1132,5 +2185,27 @@ mod tests {
             Err(PersistenceError::Conflict(reason))
                 if reason.starts_with("duplicate_conflict:")
         ));
+    }
+
+    #[test]
+    fn mimi_migration_topology_preserves_optional_field_presence() {
+        let absent = serde_json::json!({
+            "hub_provider_id": "ak:did_core:web:hub.example",
+            "local_provider_role": "hub"
+        });
+        let present_empty_followers = serde_json::json!({
+            "hub_provider_id": "ak:did_core:web:hub.example",
+            "local_provider_role": "hub",
+            "follower_provider_ids": []
+        });
+        assert!(!mimi_migration_topology_matches(
+            &absent,
+            &present_empty_followers
+        ));
+        assert!(mimi_migration_topology_matches(&absent, &absent));
+        assert_eq!(
+            invalid_mimi_migration().conflict_code(),
+            Some(soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid)
+        );
     }
 }

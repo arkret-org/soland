@@ -1,16 +1,14 @@
-pub use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
-pub use arkret_models_collaboration::http_bodies::{
+pub use arkret_models_collaboration::contact_operations::{
     ContactListRow, ContactState, DirectConversationSummary, DirectConversationSummaryState,
 };
-pub use arkret_models_collaboration::session_grant_bodies::SessionLoginOutcome;
-pub use arkret_models_collaboration::session_grants::{
-    SessionGrantHolderProof, SessionGrantValidationInput, SessionGrantValidationMetadata,
-    SessionGrantValidationResult,
-};
-pub use arkret_models_collaboration::sync_frames::account_sync::{
+pub use arkret_models_collaboration::device_messages::{
     DeviceMessageEnvelope, DeviceMessageSender, DeviceMessageTarget, DeviceMessagesAckOutcome,
     DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome, DeviceMessagesSendOutcome,
     DeviceMessagesSendRequestBody,
+};
+pub use arkret_models_collaboration::session_grants::{
+    SessionGrantHolderProof, SessionGrantValidationInput, SessionGrantValidationMetadata,
+    SessionGrantValidationResult,
 };
 pub use arkret_models_crypto::{
     DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
@@ -22,16 +20,13 @@ use arkret_models_discovery::{
     AccountAuthority, AuthGrantExchange, AuthGrantExchangeKind, AuthMetadata, AuthMethod,
     AuthMethodKind, ServiceDescribe,
 };
-pub use arkret_models_discovery::{
-    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
-    RealmJoinCandidateSource, RealmJoinMethod,
-};
+pub use arkret_models_discovery::{RealmJoinCandidate, RealmJoinCandidateServiceKind};
 pub use arkret_models_identity::admin_grant::SessionGrantAdminIntrospectionStatus;
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
 pub use arkret_models_integration::OkOutcome;
 use arkret_wire::{
-    MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES,
-    MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS, ProfileId,
+    MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_SUBMIT_BATCH, MAX_SEMANTIC_REFS,
+    ProfileId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -41,9 +36,6 @@ pub use soland_contracts::admin::{
     DeviceSigningKeyDirectoryQueryRequestBody,
 };
 use soland_services::protocol_artifacts as artifacts;
-
-/// Reducer profiles whose complete semantics this Soland build implements.
-pub const SUPPORTED_REDUCER_PROFILES: &[&str] = &[arkret_wire::CORE_REDUCER_PROFILE];
 
 #[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct HealthOutcome {
@@ -187,6 +179,16 @@ pub struct DevLoginRequestBody {
     pub actor: String,
     pub device_id: String,
     pub display_name: Option<String>,
+}
+
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
+pub struct SessionLoginOutcome {
+    pub session_credential: String,
+    pub token_type: String,
+    pub actor: String,
+    pub device_id: String,
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(salvo::oapi::ToSchema, Debug, Serialize)]
@@ -783,7 +785,7 @@ pub fn describe(
                 "max_semantic_refs": MAX_SEMANTIC_REFS,
                 "max_auth_refs": MAX_AUTHORIZED_BY_REFS,
                 "max_relation_expansion_depth": 32,
-                "max_authority_depth": MAX_AUTHORITY_CHAIN_DEPTH,
+                "max_authority_depth": 4,
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,

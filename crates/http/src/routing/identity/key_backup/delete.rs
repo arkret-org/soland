@@ -205,7 +205,12 @@ pub(super) async fn authorize_key_backup_delete(
 
     let mut expected_policy = None;
     let proof_branch = match &body.proof {
-        KeyBackupDeleteProof::RecoveryUnlock {
+        KeyBackupDeleteProof::CurrentDevice { .. } => {
+            return Err(AppError::capability_denied(
+                "current-device backup deletion requires a confirmed device authorization provider",
+            ));
+        }
+        KeyBackupDeleteProof::RecoverySession {
             recovery_session_id,
             proof,
         } => {
@@ -237,23 +242,6 @@ pub(super) async fn authorize_key_backup_delete(
             );
             "device_quorum"
         }
-        KeyBackupDeleteProof::TrustedRecoveryService {
-            service_id,
-            recovery_session_id,
-            proof,
-        } => {
-            verify_trusted_recovery_service_delete(
-                state,
-                &challenge,
-                service_id,
-                recovery_session_id.as_str(),
-                proof,
-                &expected_digest,
-                &canonical,
-            )
-            .await?;
-            "trusted_recovery_service"
-        }
     };
 
     let mut device_gates = Vec::new();
@@ -265,21 +253,18 @@ pub(super) async fn authorize_key_backup_delete(
     device_gates.sort_unstable();
     Ok(AuthorizedKeyBackupDelete {
         gate: soland_storage::KeyBackupDeleteGate {
-            active_basis: serde_json::json!({"realm_id":pointers.control_realm_id,"seal_basis":pointers.seal_basis}),
+            active_basis: serde_json::json!({"realm_id":pointers.control_realm_id,"authority_commit_id":pointers.authority_commit_id}),
             device_gates,
             expected_policy,
         },
         challenge_id: challenge.challenge_id.as_str().to_owned(),
         recovery_session_id: match &body.proof {
-            KeyBackupDeleteProof::RecoveryUnlock {
-                recovery_session_id,
-                ..
-            }
-            | KeyBackupDeleteProof::TrustedRecoveryService {
+            KeyBackupDeleteProof::RecoverySession {
                 recovery_session_id,
                 ..
             } => Some(recovery_session_id.as_str().to_owned()),
-            KeyBackupDeleteProof::DeviceQuorum { .. } => None,
+            KeyBackupDeleteProof::CurrentDevice { .. }
+            | KeyBackupDeleteProof::DeviceQuorum { .. } => None,
         },
         proof_branch,
     })
@@ -439,7 +424,7 @@ async fn verify_recovery_unlock_delete(
             "key backup delete recovery session belongs to another account",
         ));
     }
-    if session.state != arkret_models_crypto::SessionState::Verified
+    if session.state != soland_storage::RecoverySessionLifecycle::Verified
         || session.transaction_id.is_some()
     {
         return Err(AppError::capability_denied(
@@ -492,7 +477,12 @@ async fn verify_device_quorum_delete(
         serde_json::from_value(accepted.raw_payload.clone())
             .map_err(|e| AppError::capability_denied(format!("accepted policy invalid: {e}")))?;
     let Some(arkret_models_crypto::RecoveryMethod::DeviceQuorum { member_ids, .. }) =
-        policy.method(arkret_models_crypto::RecoveryProofKind::DeviceQuorum)
+        policy.methods.iter().find(|method| {
+            matches!(
+                method,
+                arkret_models_crypto::RecoveryMethod::DeviceQuorum { .. }
+            )
+        })
     else {
         return Err(AppError::capability_denied(
             "device quorum method not enabled",
@@ -529,124 +519,6 @@ async fn verify_device_quorum_delete(
         )));
     }
     Ok(accepted.raw_payload)
-}
-
-/// `trusted_recovery_service`: never sufficient alone. The referenced session
-/// MUST be unexpired, unconsumed and established by recovery unlock or device
-/// quorum.
-#[allow(clippy::too_many_arguments)]
-async fn verify_trusted_recovery_service_delete(
-    state: &AppState,
-    challenge: &KeysBackupsDeleteChallenge,
-    service_id: &arkret_wire::DidCoreId,
-    recovery_session_id: &str,
-    proof: &PayloadProof,
-    expected_digest: &arkret_identifiers::Hash,
-    canonical: &[u8],
-) -> Result<(), AppError> {
-    check_proof_envelope(challenge, proof, expected_digest)?;
-    if !recovery_session_id.starts_with(RECOVERY_SESSION_ID_PREFIX) {
-        return Err(AppError::param_invalid(
-            "key backup delete recovery_session_id must start with ak:recovery_session:",
-        ));
-    }
-    let session = state
-        .recovery_sessions()
-        .session(recovery_session_id)
-        .await
-        .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
-        .ok_or_else(|| {
-            AppError::capability_denied("key backup delete recovery session is unknown")
-        })?;
-    super::super::recovery::validate_frozen_session_policy(state, &session, None).await?;
-    if session.principal_id != challenge.account_id.principal_id
-        || session.station_id != challenge.account_id.station_id
-    {
-        return Err(AppError::capability_denied(
-            "key backup delete recovery session belongs to another account",
-        ));
-    }
-    // A verified service-only session is not a second factor. Require the
-    // session's accepted proof summary to name one of the two establishing
-    // authority branches and reject sessions already bound to a transaction.
-    let establishing_kind =
-        super::super::recovery::recovery_session_proof_kind_and_digest(&session)
-            .map(|(kind, _)| kind)
-            .ok_or_else(|| {
-                AppError::capability_denied(
-                    "key backup delete recovery session has no accepted proof summary",
-                )
-            })?;
-    if session.state != arkret_models_crypto::SessionState::Verified
-        || session.transaction_id.is_some()
-        || !matches!(
-            establishing_kind.as_str(),
-            "recovery_unlock" | "device_quorum"
-        )
-    {
-        return Err(AppError::capability_denied(
-            "key backup delete recovery session was not established by recovery_unlock or device_quorum",
-        ));
-    }
-    if proof.created_at < session.created_at || proof.created_at > session.expires_at {
-        return Err(AppError::capability_denied(
-            "key backup delete recovery session is expired for this proof",
-        ));
-    }
-    let policy: arkret_models_crypto::RecoveryPolicy =
-        serde_json::from_value(session.policy_payload.clone())
-            .map_err(|e| AppError::capability_denied(format!("bound policy invalid: {e}")))?;
-    let Some(arkret_models_crypto::RecoveryMethod::TrustedRecoveryService { services }) =
-        policy.method(arkret_models_crypto::RecoveryProofKind::TrustedRecoveryService)
-    else {
-        return Err(AppError::capability_denied(
-            "trusted service method not enabled",
-        ));
-    };
-    services
-        .iter()
-        .find(|service| {
-            service.service_id == *service_id
-                && service.audience == challenge.audience
-                && service.authorization_verification_method == proof.verification_method
-        })
-        .ok_or_else(|| {
-            AppError::capability_denied("service method does not exactly match accepted policy")
-        })?;
-    if policy.cooldown_seconds.is_some_and(|seconds| {
-        proof
-            .created_at
-            .signed_duration_since(session.created_at)
-            .num_seconds()
-            < i64::try_from(seconds).unwrap_or(i64::MAX)
-    }) {
-        return Err(AppError::capability_denied(
-            "policy recovery cooldown has not elapsed",
-        ));
-    }
-    let service_did = arkret_identity::verification_method_did(proof.verification_method.as_str())
-        .map_err(|error| AppError::capability_denied(error.to_string()))?;
-    let service_core_id = arkret_wire::project_did_to_core_id(&service_did)
-        .map_err(|error| AppError::capability_denied(error.to_string()))?;
-    if service_core_id != *service_id {
-        return Err(AppError::capability_denied(
-            "key backup delete service proof does not bind the declared service core id",
-        ));
-    }
-    let key =
-        crate::jws_verify::resolve_ed25519_pubkey_async(state, proof.verification_method.as_str())
-            .await
-            .map_err(|error| {
-                AppError::capability_denied(format!(
-                    "key backup delete service key could not be resolved: {error}"
-                ))
-            })?;
-    if !verify_detached_jws(&key, canonical, &proof.jws) {
-        return Err(AppError::capability_denied(
-            "key backup delete service proof signature is invalid",
-        ));
-    }
-    Ok(())
 }
 
 fn verify_detached_jws(key: &ed25519_dalek::VerifyingKey, canonical: &[u8], jws: &str) -> bool {

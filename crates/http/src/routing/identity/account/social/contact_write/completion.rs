@@ -64,9 +64,9 @@ async fn materialize_one(
     state: &AppState,
     ready: &CommittedContactCompletionIntent,
 ) -> Result<(), AppError> {
-    let snapshot = state
-        .projections()
-        .control_proposal_snapshot(&ready.event_digest)
+    let committed = state
+        .persistence()
+        .committed_event(&ready.committed_ref.event_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
@@ -75,8 +75,12 @@ async fn materialize_one(
                 "Contact command evidence is unavailable"
             )
         })?;
-    if snapshot.event.event_id != ready.intent.plan.event.event_id
-        || !matches!(snapshot.command_decisions.as_slice(),[decision] if decision.outcome==arkret_wire::CommandOutcome::Committed && decision.seal_id==ready.deciding_seal_id)
+    if committed.event != ready.intent.plan.event
+        || committed.event.event_id.event_digest() != ready.event_digest
+        || committed.commit.commit_id != ready.committed_ref.commit_id
+        || committed.commit.stream_ref != ready.committed_ref.stream_ref
+        || committed.commit.stream_position != ready.committed_ref.stream_position
+        || committed.commit.event_ref != ready.committed_ref.event_id
     {
         return Err(crate::app_error!(
             FailedPrecondition,
@@ -153,8 +157,7 @@ async fn sign_outcome(
         Ok(ProtocolSignature {
             verification_method: method.clone(),
             created_at: now(),
-            jws: Base64UrlString::new(URL_SAFE_NO_PAD.encode(key.sign(bytes).to_bytes()))
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
+            jws: URL_SAFE_NO_PAD.encode(key.sign(bytes).to_bytes()),
         })
     };
     let sign_lineage = |bytes: &[u8]| {
@@ -330,9 +333,9 @@ async fn latest_direction_proof(
             "Contact current directional head is unavailable"
         )
     })?;
-    let snapshot = state
-        .projections()
-        .control_proposal_snapshot(&head.event_digest())
+    let committed = state
+        .persistence()
+        .committed_event(head)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
@@ -341,9 +344,9 @@ async fn latest_direction_proof(
                 "Contact current head confirmation is unavailable"
             )
         })?;
-    if &snapshot.event.event_id != head
-        || snapshot.event.actor_id != *holder
-        || !matches!(snapshot.command_decisions.as_slice(),[decision] if decision.outcome==arkret_wire::CommandOutcome::Committed)
+    if &committed.event.event_id != head
+        || committed.event.actor_id != *holder
+        || committed.commit.event_ref != *head
     {
         return Err(crate::app_error!(
             TemporarilyUnavailable,
@@ -354,8 +357,8 @@ async fn latest_direction_proof(
         state,
         round_id.clone(),
         direction_peer.clone(),
-        &snapshot.event,
-        snapshot
+        &committed.event,
+        committed
             .event
             .event_id
             .event_digest()

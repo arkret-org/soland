@@ -63,10 +63,3 @@ pub(crate) fn rfc9530_content_digest(bytes: &[u8]) -> String {
 pub fn federation_service_signature_key_id(service_did: &str) -> String {
     format!("{service_did}#federation-fanout-key")
 }
-
-/// Operator seal-signing endpoint (`POST /_soland/admin/seals/sign`). Mounted
-/// at the bare deployment-local `/admin/*` namespace on the root router
-/// (NOT under `/_arkret/...`), alongside the rest of the admin surface.
-pub fn admin_seal_sign_router() -> Router {
-    move_seal::api_admin_router()
-}

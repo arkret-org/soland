@@ -47,13 +47,6 @@ pub fn router() -> Router {
         .push(projection_query::protocol_router())
 }
 
-/// `/_arkret/ws` — the WebSocket binding endpoint. Mounted at the `_arkret`
-/// root, not under `self`, because §2 gives the profile one `base_url` that
-/// carries all three operations as channels.
-pub fn websocket_router() -> Router {
-    Router::with_path(sync::websocket::WS_PATH_SEGMENT).get(sync::websocket::websocket_subscribe)
-}
-
 pub(crate) fn require_agent_session_scope(
     session: &SessionRecord,
     required_scope: &str,

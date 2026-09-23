@@ -23,76 +23,6 @@ pub(super) fn require_object_field(
     }
 }
 
-pub(super) fn event_ref_list(
-    object: &serde_json::Map<String, Value>,
-    key: &str,
-    max_len: usize,
-) -> Result<Vec<String>, EventValidationError> {
-    let Some(value) = object.get(key) else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "param_missing",
-            "event reference lists are required",
-        ));
-    };
-    let Some(values) = value.as_array() else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "event reference lists must be arrays",
-        ));
-    };
-    // scalability-constraints.md section 2. `prev_refs` carries reason_code
-    // `prev_refs_too_large` (which also covers the MUST-dedup rule); other ref
-    // lists carry `refs_too_large`. Both are `schema_violation` reasons.
-    let too_large_reason = if key == "prev_refs" {
-        "prev_refs_too_large"
-    } else {
-        "refs_too_large"
-    };
-    let count_error = if key == "prev_refs" {
-        arkret_wire::event_envelope::validate_event_prev_ref_count(values.len()).is_err()
-    } else {
-        arkret_wire::event_envelope::validate_semantic_ref_count(values.len()).is_err()
-    };
-    if values.len() > max_len || count_error {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            too_large_reason,
-            "event reference list exceeds the v1 maximum entry count",
-        ));
-    }
-    let mut seen = std::collections::HashSet::with_capacity(values.len());
-    values
-        .iter()
-        .map(|value| {
-            let Some(event_id) = value.as_str() else {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    "event references must be strings",
-                ));
-            };
-            if !is_valid_event_id(event_id) {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    "event references must use the ak:event: typed prefix",
-                ));
-            }
-            // Entries MUST be deduplicated.
-            if !seen.insert(event_id) {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    too_large_reason,
-                    "event reference list MUST NOT contain duplicate entries",
-                ));
-            }
-            Ok(event_id.to_owned())
-        })
-        .collect()
-}
-
 pub(super) fn principal_control_genesis_shape(
     object: &serde_json::Map<String, Value>,
     actor_id: &str,
@@ -279,45 +209,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    fn object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
-        json!({ "prev_refs": refs }).as_object().unwrap().clone()
-    }
-
-    fn event_ref(index: usize) -> String {
-        arkret_identifiers::EventId::from_digest(
-            arkret_canonical::DigestSuite::Sha256,
-            arkret_canonical::sha256_bytes(index.to_be_bytes()),
-        )
-        .to_string()
-    }
-
-    #[test]
-    fn prev_refs_over_max_rejected() {
-        let refs: Vec<Value> = (0..(MAX_EVENT_PREV_REFS + 1))
-            .map(|i| json!(event_ref(i)))
-            .collect();
-        let err =
-            event_ref_list(&object(json!(refs)), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
-        assert_eq!(err.code, "prev_refs_too_large");
-    }
-
-    #[test]
-    fn duplicate_prev_refs_rejected() {
-        let duplicate = event_ref(1);
-        let refs = json!([duplicate.clone(), duplicate]);
-        let err = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap_err();
-        assert_eq!(err.code, "prev_refs_too_large");
-    }
-
-    #[test]
-    fn distinct_prev_refs_within_limit_ok() {
-        let first = event_ref(1);
-        let second = event_ref(2);
-        let refs = json!([first, second]);
-        let out = event_ref_list(&object(refs), "prev_refs", MAX_EVENT_PREV_REFS).unwrap();
-        assert_eq!(out, vec![event_ref(1), event_ref(2)]);
-    }
 
     #[test]
     fn principal_control_genesis_resolves_did_from_initial_resolution() {

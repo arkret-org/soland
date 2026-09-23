@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use futures_util::stream::BoxStream;
 use serde_json::Value;
 pub use soland_storage::{
-    AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
+    AccountNotificationDeltaWrite, RecipientDeliveryRecord, RecipientNotificationRecord,
+    RecipientQueueSelector, StoredAccountNotificationDelta,
 };
 use soland_storage::{AccountPk, SignalRelayRecord};
 
@@ -152,6 +153,7 @@ pub trait DeviceMessagePort: Send + Sync {
         &self,
         device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
         message: DeviceMessageState,
+        per_device_queue_capacity: usize,
     ) -> ServiceResult<()>;
     async fn inspect_batch(
         &self,
@@ -182,7 +184,22 @@ pub trait DeviceMessagePort: Send + Sync {
         queue_position: i64,
         limit: usize,
     ) -> ServiceResult<Vec<DeviceMessageState>>;
-    async fn prune(&self, per_device_capacity: usize, now: DateTime<Utc>) -> ServiceResult<()>;
+    async fn recipient_deliveries_after(
+        &self,
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+        limit: usize,
+    ) -> ServiceResult<Vec<RecipientDeliveryRecord>>;
+    async fn issue_recipient_ack_token(
+        &self,
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+    ) -> ServiceResult<Option<String>>;
+    async fn acknowledge_recipient_deliveries(
+        &self,
+        selector: &RecipientQueueSelector,
+        ack_token: &str,
+    ) -> ServiceResult<Option<usize>>;
     async fn lost_watermark(&self, recipient: &str, device_id: &str) -> ServiceResult<Option<i64>>;
 }
 
@@ -340,9 +357,10 @@ impl DeliveryService {
         &self,
         device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
         message: DeviceMessageState,
+        per_device_queue_capacity: usize,
     ) -> ServiceResult<()> {
         self.device_messages
-            .append(device_revocation_gate, message)
+            .append(device_revocation_gate, message, per_device_queue_capacity)
             .await
     }
 
@@ -398,12 +416,35 @@ impl DeliveryService {
             .await
     }
 
-    pub async fn prune_device_messages(
+    pub async fn recipient_deliveries_after(
         &self,
-        per_device_capacity: usize,
-        now: DateTime<Utc>,
-    ) -> ServiceResult<()> {
-        self.device_messages.prune(per_device_capacity, now).await
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+        limit: usize,
+    ) -> ServiceResult<Vec<RecipientDeliveryRecord>> {
+        self.device_messages
+            .recipient_deliveries_after(selector, queue_position, limit)
+            .await
+    }
+
+    pub async fn issue_recipient_ack_token(
+        &self,
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+    ) -> ServiceResult<Option<String>> {
+        self.device_messages
+            .issue_recipient_ack_token(selector, queue_position)
+            .await
+    }
+
+    pub async fn acknowledge_recipient_deliveries(
+        &self,
+        selector: &RecipientQueueSelector,
+        ack_token: &str,
+    ) -> ServiceResult<Option<usize>> {
+        self.device_messages
+            .acknowledge_recipient_deliveries(selector, ack_token)
+            .await
     }
 
     pub async fn device_message_lost_watermark(
@@ -582,6 +623,7 @@ mod tests {
             &self,
             _device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
             _message: DeviceMessageState,
+            _per_device_queue_capacity: usize,
         ) -> ServiceResult<()> {
             Ok(())
         }
@@ -626,12 +668,27 @@ mod tests {
         ) -> ServiceResult<Vec<DeviceMessageState>> {
             Ok(Vec::new())
         }
-        async fn prune(
+        async fn recipient_deliveries_after(
             &self,
-            _per_device_capacity: usize,
-            _now: DateTime<Utc>,
-        ) -> ServiceResult<()> {
-            Ok(())
+            _selector: &RecipientQueueSelector,
+            _queue_position: i64,
+            _limit: usize,
+        ) -> ServiceResult<Vec<RecipientDeliveryRecord>> {
+            Ok(Vec::new())
+        }
+        async fn issue_recipient_ack_token(
+            &self,
+            _selector: &RecipientQueueSelector,
+            _queue_position: i64,
+        ) -> ServiceResult<Option<String>> {
+            Ok(None)
+        }
+        async fn acknowledge_recipient_deliveries(
+            &self,
+            _selector: &RecipientQueueSelector,
+            _ack_token: &str,
+        ) -> ServiceResult<Option<usize>> {
+            Ok(None)
         }
         async fn lost_watermark(
             &self,

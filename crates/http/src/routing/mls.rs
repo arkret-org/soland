@@ -354,10 +354,18 @@ async fn upload_keypackage(
     let owner_account_pk = local_keypackage_owner_account_pk(state, &session).await?;
 
     let body = body.into_inner();
+    // The minimal-metadata Realm profile was retired. The compatibility DTO
+    // still deserializes these legacy fields, but they cannot admit a new
+    // KeyPackage under the current closed wire contract.
+    if body.pairwise_verification_method.is_some() || body.intended_realm_id.is_some() {
+        return Err(AppError::param_invalid(
+            "minimal-metadata pairwise KeyPackage upload is retired",
+        ));
+    }
     body.validate_shape().map_err(AppError::param_invalid)?;
     let principal_id = body.principal_id.clone();
     let actor_id = body.principal_id.to_string();
-    if body.pairwise_verification_method.is_none() && actor_id != session.actor {
+    if actor_id != session.actor {
         return Err(AppError::capability_denied(
             "actor_id must match the calling session",
         ));
@@ -651,6 +659,16 @@ async fn peer_claim_keypackage(
 ) -> JsonResult<PeerKeyPackagesClaimQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let (body, authorization) = verify_peer_claim_source_attestation(state, req).await?;
+    if body.target_pairwise_verification_method.is_some()
+        || matches!(
+            &body.requester_authorization,
+            PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
+        )
+    {
+        return Err(peer_claim_schema_violation(
+            "minimal-metadata pairwise KeyPackage claim is retired",
+        ));
+    }
     let digest = arkret_wire::Hash::new(
         arkret_canonical::canonical_sha256(&body)
             .map_err(|error| AppError::internal(error.to_string()))?,
@@ -696,6 +714,16 @@ async fn claim_keypackage_at_destination(
     body: &PeerKeyPackagesClaimRequestBody,
     authorization: VerifiedClaimAuthorization,
 ) -> JsonResult<PeerKeyPackagesClaimOutcome> {
+    if body.target_pairwise_verification_method.is_some()
+        || matches!(
+            &body.requester_authorization,
+            PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
+        )
+    {
+        return Err(peer_claim_schema_violation(
+            "minimal-metadata pairwise KeyPackage claim is retired",
+        ));
+    }
     let target_principal_id = body
         .unsigned_request()
         .target_principal_id()
@@ -1871,6 +1899,16 @@ async fn claim_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
+    if body.target_pairwise_verification_method.is_some()
+        || matches!(
+            &body.requester_authorization,
+            PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
+        )
+    {
+        return Err(peer_claim_schema_violation(
+            "minimal-metadata pairwise KeyPackage claim is retired",
+        ));
+    }
     let requester_id = body
         .unsigned_request()
         .requester_principal_id(&body.requester_authorization)
@@ -2423,15 +2461,19 @@ async fn consume_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
+    if matches!(
+        &body.recipient_durable_receipt.recipient,
+        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise { .. }
+    ) {
+        return Err(AppError::param_invalid(
+            "minimal-metadata pairwise KeyPackage consume is retired",
+        ));
+    }
     let durable_receipt = &body.recipient_durable_receipt;
     let recipient_principal_id = durable_receipt
         .recipient_principal_id()
         .ok_or_else(|| AppError::param_invalid("durable recipient identity is incomplete"))?;
-    if !matches!(
-        &durable_receipt.recipient,
-        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise { .. }
-    ) && recipient_principal_id.as_str() != session.actor
-    {
+    if recipient_principal_id.as_str() != session.actor {
         return Err(AppError::capability_denied(
             "durable recipient principal must match the calling principal",
         ));
@@ -3028,7 +3070,7 @@ async fn keypackage_device_revocation_gate(
             )
             .with_wire_code("claim_failed")
         })?;
-    if selector.target_device_authorize_event_id != device_authorize_event_id {
+    if selector.authorization_ref.event_id.as_str() != device_authorize_event_id {
         return Err(crate::app_error!(
             FailedPrecondition,
             "KeyPackage device authorization is not current",
@@ -3134,7 +3176,7 @@ async fn verify_agent_keypackage_batch(
         .try_into()
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
     let actual_public_key_digest =
-        arkret_signatures::agent_evidence::agent_signing_public_key_digest(&binding.public_key)
+        arkret_wire::Hash::new(arkret_canonical::sha256_digest(public_key))
             .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if actual_public_key_digest.as_str() != expected_public_key_digest
         || signature.kid.as_str() != verification_method
@@ -3269,47 +3311,19 @@ fn validate_actor_keypackage_leaf(
 }
 
 async fn ensure_pairwise_realm_affinity(
-    state: &AppState,
-    principal: &arkret_wire::DidCoreId,
-    verification_method: &arkret_wire::DidUrl,
-    realm_id: &RealmId,
-    expected_service_id: &str,
+    _state: &AppState,
+    _principal: &arkret_wire::DidCoreId,
+    _verification_method: &arkret_wire::DidUrl,
+    _realm_id: &RealmId,
+    _expected_service_id: &str,
 ) -> Result<(), AppError> {
-    arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
-        principal.clone(),
-        verification_method.clone(),
+    // There is no registered governance profile that could authorize this
+    // identity. A stale local realm_metadata bit cannot revive it.
+    Err(crate::app_error!(
+        FailedPrecondition,
+        "minimal-metadata pairwise Realm profile is retired",
     )
-    .map_err(|_| AppError::capability_denied("pairwise endpoint binding is invalid"))?;
-    let minimal_metadata_realm = state
-        .realms()
-        .realm_metadata(realm_id.as_str())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .is_some_and(|record| record.minimal_metadata_realm);
-    if !minimal_metadata_realm {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "pairwise endpoint requires the current minimal-metadata Realm profile",
-        )
-        .with_reason_code("claim_generation_mismatch"));
-    }
-    let snapshot = state.projections().snapshot();
-    let membership_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        principal.clone(),
-        arkret_wire::DidCoreId::new(expected_service_id.to_owned())
-            .map_err(|_| AppError::param_invalid("invalid expected service id"))?,
-    ));
-    if snapshot
-        .member(realm_id.as_str(), &membership_actor.to_string())
-        .is_none_or(|membership| membership.state != "join")
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "pairwise endpoint has no current Realm membership affinity",
-        )
-        .with_reason_code("claim_generation_mismatch"));
-    }
-    Ok(())
+    .with_reason_code("claim_generation_mismatch"))
 }
 
 async fn validate_device_keypackage_leaf(
@@ -4081,8 +4095,28 @@ async fn keypackage_claim_record(
     record: &MlsKeyPackageRow,
     claim_request_id: &str,
 ) -> Result<KeyPackageClaimRecord, AppError> {
+    if record.device_authorize_event_id.is_none() && record.agent_key_authorize_event_id.is_none() {
+        return Err(AppError::capability_denied(
+            "retired pairwise KeyPackage cannot be claimed",
+        ));
+    }
     let principal_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?;
+    let owner = state
+        .identities()
+        .account_by_id(record.owner_account_pk)
+        .await
+        .map_err(|error| AppError::internal(format!("KeyPackage owner lookup failed: {error}")))?
+        .ok_or_else(|| AppError::internal("KeyPackage owner account is unavailable"))?;
+    if owner.principal_id != principal_id {
+        return Err(AppError::internal(
+            "KeyPackage principal differs from its durable owner account",
+        ));
+    }
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        owner.account_id.station_id,
+    ));
     let pairwise_verification_method = if record.device_authorize_event_id.is_none()
         && record.agent_key_authorize_event_id.is_none()
     {
@@ -4143,6 +4177,7 @@ async fn keypackage_claim_record(
     Ok(KeyPackageClaimRecord {
         claim_id,
         keypackage_ref: record.keypackage_ref.clone(),
+        actor_id,
         principal_id,
         device_id,
         agent_id,
@@ -4194,8 +4229,6 @@ mod trust_binding_tests {
     use serde_json::json;
 
     use super::*;
-
-    #[tokio::test]
 
     fn signed_claim_authorization_fixture(
         source: arkret_wire::DidCoreId,
@@ -4340,8 +4373,6 @@ mod trust_binding_tests {
         );
     }
 
-    #[test]
-
     fn pairwise_endpoint(seed: [u8; 32]) -> (arkret_wire::DidCoreId, arkret_wire::DidUrl) {
         let key = ed25519_dalek::SigningKey::from_bytes(&seed)
             .verifying_key()
@@ -4379,7 +4410,6 @@ mod trust_binding_tests {
         );
     }
 
-    #[test]
     #[test]
     fn agent_binding_is_an_exclusive_branch() {
         let event_id = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
@@ -4446,200 +4476,12 @@ mod trust_binding_tests {
         assert!(trust_binding_from_row(&row).is_err());
     }
 
-    #[tokio::test]
-    async fn agent_keypackage_upload_binds_leaf_and_publish_signature_to_authorized_key() {
-        let state = AppState::new(
-            crate::config::AppConfig::test_default(),
-            soland_storage_postgres::Db { pool: None },
-        );
-        let principal =
-            arkret_identifiers::Did::new("did:webvh:z6mkfixtureagent:agent.example".to_owned())
-                .unwrap();
-        let principal_core = arkret_wire::project_did_to_core_id(&principal).unwrap();
-        let verification_method = "did:webvh:z6mkfixtureagent:agent.example#runtime-1";
-        let signing_seed = [17_u8; 32];
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
-        let public_key_digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
-            signing_key.verifying_key().to_bytes(),
-        ))
-        .unwrap();
-        let realm_id = arkret_identifiers::RealmId::new(
-            "ak:realm:AYKC0LicsGtFBq78orvaQecIZl8Bxv9zAaV4Eg66tdIr".to_owned(),
-        )
-        .unwrap();
-        let authorize_event = crate::test_event::raw_event(
-            arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
-            arkret_wire::ScopeRef::Realm { realm_id },
-            principal_core.clone(),
-            1,
-            arkret_identifiers::Hlc::new("019041000000-0001-0000000f").unwrap(),
-            json!({
-                "agent_id": principal_core.as_str(),
-                "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
-                "verification_method": verification_method,
-                "public_key": {"kty":"OKP","kid":verification_method,"algorithm":"Ed25519","key":URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes())},
-                "accountable_principal_id": "ak:did_core:web:alice.example",
-                "agent_key_scope": {"actions": ["ak.message.create"]},
-                "audience": [state.service_id().as_str()],
-                "issued_at": "2026-01-01T00:00:00.000Z",
-                "expires_at": "2099-01-01T00:00:00.000Z"
-            }),
-        )
-        .unwrap();
-        let authorize_event_id = authorize_event.event_id.to_string();
-        let authorize_envelope = serde_json::to_value(&authorize_event).unwrap();
-        let authorize_canonical_bytes =
-            crate::routing::events::event_log::event_canonical_bytes(&authorize_envelope).unwrap();
-        let authorize_canonical_digest = authorize_event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
-        state
-            .event_queries()
-            .store_canonical_event(soland_services::events::AcceptedEvent {
-                event_id: authorize_event_id.clone(),
-                actor_id: principal.to_string(),
-                actor_seq: 1,
-                realm_id: Some(authorize_event.realm_id.to_string()),
-                kind: arkret_wire::EventKind::AgentKeyAuthorize
-                    .as_str()
-                    .to_owned(),
-                schema_id: "ak.schema.event.v1".to_owned(),
-                digest_suite: arkret_canonical::DigestSuite::Sha256,
-                canonical_digest: authorize_canonical_digest,
-                canonical_bytes: authorize_canonical_bytes,
-                envelope: authorize_envelope,
-                received_at: now(),
-            })
-            .await
-            .unwrap();
-
-        let mut agent = soland_services::identity::AgentPairingState::new(
-            principal_core.to_string(),
-            "ak:did_core:web:alice.example".to_owned(),
-            authorize_event.realm_id.to_string(),
-            arkret_wire::DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#managed-controller")
-                .unwrap(),
-            AgentLifecycleState::Active,
-            now(),
-        );
-        let key_authorization_event = authorize_event.clone();
-        agent.authorized_event_ref = Some(authorize_event_id.clone());
-        agent.authorized_verification_method = Some(verification_method.to_owned());
-        agent.authorized_public_key_digest = Some(public_key_digest.to_string());
-        agent.authorized_key_event = Some(key_authorization_event);
-        state.agent_pairings().save_agent(agent).await.unwrap();
-
-        let mut authorize_projection = arkret_event_draft::test_support::raw_projected_operation(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-00000000000f",
-            )
-            .unwrap(),
-            authorize_event.realm_id.clone(),
-            arkret_wire::EventKind::AgentKeyAuthorize,
-            json!({
-                "agent_id": principal_core.as_str(),
-                "key_id": "ak:agent_key:01904100-0000-7000-8000-00000000000f",
-                "verification_method": verification_method,
-            }),
-        );
-        let authorize_projection_event_id =
-            arkret_wire::EventId::new(authorize_event_id.clone()).unwrap();
-        authorize_projection.context.event_id = authorize_projection_event_id.clone();
-        authorize_projection.context.accepted_event_id = authorize_projection_event_id;
-        let effect = state
-            .test_projection()
-            .lock()
-            .apply(&authorize_projection, state.hlc());
-        assert!(matches!(
-            effect,
-            soland_domain::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
-        ));
-
-        let identity = arkret_mls::ArkretMlsIdentity::new_agent(
-            principal_core.clone(),
-            arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
-            arkret_wire::EventId::new(authorize_event_id.clone()).unwrap(),
-            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
-                ed25519_dalek::SigningKey::from_bytes(&signing_seed),
-            ),
-        )
-        .unwrap();
-        let record = identity.key_package_record().unwrap();
-        let key_package_bytes = URL_SAFE_NO_PAD.decode(record.keypackage.as_str()).unwrap();
-        let upload = identity
-            .signed_key_packages_upload_request(&[record], verification_method, None)
-            .unwrap();
-        let signing_input =
-            arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&upload.unsigned())
-                .unwrap();
-
-        validate_agent_keypackage_upload(
-            &state,
-            &principal_core,
-            &authorize_event_id,
-            &key_package_bytes,
-            &upload.endpoint_signature,
-            &signing_input,
-        )
-        .await
-        .unwrap();
-        // Consume receipts use the same accepted runtime key as upload; that
-        // private runtime method need not appear in the public DID document.
-        let session = SessionRecord {
-            token_hash: "agent-consume-test".to_owned(),
-            account_pk: Some(soland_storage::AccountPk(1)),
-            actor: principal_core.to_string(),
-            device_id: "unrelated-session-device".to_owned(),
-            audience: state.service_id().clone(),
-            session_public_key: None,
-            agent_session: None,
-            session_grant: None,
-            expires_at: now() + chrono::Duration::minutes(5),
-            created_at: now(),
-            revoked_at: None,
-        };
-        let recipient = arkret_models_crypto::RecipientMlsDurableSigner::Agent {
-            recipient_agent_id: principal_core.clone(),
-            recipient_agent_verification_method: arkret_wire::DidUrl::new(verification_method)
-                .unwrap(),
-            agent_key_authorize_event_id: arkret_wire::EventId::new(authorize_event_id).unwrap(),
-        };
-        verify_keypackage_consumer_signature(
-            &state,
-            &session,
-            &principal_core,
-            &recipient,
-            None,
-            &[],
-            &upload.endpoint_signature,
-            &signing_input,
-            None,
-        )
-        .await
-        .unwrap();
-        assert!(
-            verify_keypackage_consumer_signature(
-                &state,
-                &session,
-                &principal_core,
-                &recipient,
-                None,
-                &[],
-                &upload.endpoint_signature,
-                b"tampered",
-                None
-            )
-            .await
-            .is_err()
-        );
-    }
-
     #[test]
     fn pairwise_keypackage_upload_binds_outer_signature_leaf_actor_and_leaf_key() {
         let seed = [19_u8; 32];
         let (pairwise_actor, method) = pairwise_endpoint(seed);
         let identity = arkret_mls::ArkretMlsIdentity::new_minimal_metadata_pairwise(
-            pairwise_actor.clone(),
+            arkret_wire::ActorId::service(pairwise_actor.clone()),
             method.clone(),
             arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
                 ed25519_dalek::SigningKey::from_bytes(&seed),
@@ -4675,7 +4517,7 @@ mod trust_binding_tests {
         let other_seed = [23_u8; 32];
         let (other_actor, other_method) = pairwise_endpoint(other_seed);
         let other_identity = arkret_mls::ArkretMlsIdentity::new_minimal_metadata_pairwise(
-            other_actor,
+            arkret_wire::ActorId::service(other_actor),
             other_method,
             arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
                 ed25519_dalek::SigningKey::from_bytes(&other_seed),
@@ -4724,7 +4566,6 @@ mod trust_binding_tests {
         ));
     }
 
-    #[test]
     #[test]
     fn terminal_query_requires_exact_refs_and_non_early_expiry() {
         assert!(terminal_claim_coordinates_match(

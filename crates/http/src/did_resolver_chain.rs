@@ -645,7 +645,6 @@ mod tests {
                 "uuid".to_owned(),
                 "webvh".to_owned(),
             ],
-            jws_replay_window_per_family: std::collections::BTreeMap::new(),
             seed_demo_data: true,
             ..AppConfig::test_default()
         }

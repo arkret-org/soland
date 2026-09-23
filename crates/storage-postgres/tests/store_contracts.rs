@@ -921,6 +921,7 @@ impl FixtureCommitStream {
             event: event.clone(),
             mls_state: None,
             welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
         };
         if settlement == FixtureCommitSettlement::Accepted {
             self.next_position += 1;
@@ -1032,6 +1033,7 @@ fn franking_event_request(
     let authority_commit = stream.order(settlement, &event, received_at);
     soland_storage::EventCommitRequest {
         authority_commit,
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -1084,6 +1086,60 @@ async fn assert_event_and_commit_absent(
         count.value, 0,
         "rejected CAS must roll back its RealmCommit"
     );
+}
+
+#[tokio::test]
+async fn postgres_self_producer_guard_rejects_before_event_and_commit_writes() {
+    use soland_storage::EventCommitUnitOfWork;
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let namespace = format!("self-producer-guard:{}", uuid::Uuid::now_v7());
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
+        .expect("fixture Realm id");
+    let station_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:self-guard-station.example").unwrap();
+    let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:self-guard-actor.example").unwrap();
+    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
+    stream.install(&pool).await;
+    let now = chrono::Utc::now();
+    let mut request = franking_event_request(
+        &mut stream,
+        FixtureCommitSettlement::RolledBack,
+        &realm_id,
+        actor_id.clone(),
+        &station_id,
+        arkret_wire::EventKind::MessageCreate.as_str(),
+        serde_json::json!({"body":"guard must reject"}),
+        now,
+    );
+    let event_id = request.authority_commit.event.event_id.clone();
+    let commit_id = request.authority_commit.commit.commit_id.clone();
+    request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::Agent {
+        pcr_realm_id: realm_id.clone(),
+        agent_id: actor_id,
+        authorization_ref: arkret_wire::CommittedEventRef {
+            event_id: event_id.clone(),
+            commit_id: commit_id.clone(),
+            stream_ref: request.authority_commit.commit.stream_ref.clone(),
+            stream_position: request.authority_commit.commit.stream_position,
+        },
+        verification_method: request
+            .authority_commit
+            .event
+            .producer_proof
+            .as_ref()
+            .unwrap()
+            .verification_method
+            .clone(),
+    });
+    assert!(
+        PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(request)
+            .await
+            .is_err()
+    );
+    assert_event_and_commit_absent(&pool, event_id, commit_id).await;
 }
 
 #[tokio::test]

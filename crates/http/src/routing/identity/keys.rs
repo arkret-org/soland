@@ -101,22 +101,24 @@ async fn keys_upload(
     let original_device = current_device
         .as_ref()
         .ok_or_else(|| AppError::capability_denied("device authorization unavailable"))?;
-    let (authorization_event_id, generation) =
+    let (authorization_event_id, _generation) =
         super::device_generation::verified_device_authorization_binding(original_device)
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::capability_denied("device authorization unavailable"))?;
-    // Freeze the same instance whose key verified this upload. Storage compares
-    // this original tuple under its device lock; it never substitutes a successor.
-    let authorization = soland_storage::DeviceRevocationGateSelector {
-        principal_id: session
-            .actor
-            .parse()
-            .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
-        station_id: state.service_core_id().clone(),
-        device_id: device_id.clone(),
-        target_device_authorize_event_id: authorization_event_id.to_string(),
-        target_device_generation_ref: generation,
-    };
+    // Freeze the accepted authorization instance whose key verified this
+    // upload. Storage rechecks its Commit ref under the device lock.
+    let authorization = super::device_generation::active_device_revocation_gate_selector(
+        state,
+        &session.actor,
+        &device_id,
+    )
+    .await
+    .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    if authorization.authorization_ref.event_id != authorization_event_id {
+        return Err(AppError::capability_denied(
+            "device authorization changed during key upload",
+        ));
+    }
 
     let one_time_key_count = body.one_time_keys.len() as u64;
     let mut one_time_key_alg_counts = BTreeMap::new();
@@ -185,15 +187,8 @@ async fn keys_upload(
     })
 }
 
-/// Freshness window of a device projection attestation.
-///
-/// Short by design: `device-lifecycle.md` §8.3 lets a consumer cache the
-/// verified projection under `(principal_id, station_id, device_id,
-/// authorized_generation_ref, attested_at)`, and this bound is what stops that
-/// cache from outliving a device revocation the caller has not re-fetched.
-const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
-
-/// Build one complete, origin-Station-attested device row.
+/// Build one complete, origin-Station-attested device row when its current
+/// signer-evidence provider is available.
 ///
 /// This is the **origin** shape of `device-lifecycle.md` §8.2: the signed
 /// `device_projection_attestation` plus the `signer_evidence_ref` that locates
@@ -209,153 +204,17 @@ const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
 /// anti-enumeration shape, since an omission is indistinguishable from "no
 /// relationship" and from "no such device".
 pub(crate) async fn attested_device_record(
-    state: &AppState,
-    account_id: &arkret_wire::AccountId,
-    device_id: &arkret_wire::DeviceId,
-    facet: crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
-    algorithms: arkret_models_crypto::AlgorithmKeyRecords,
+    _state: &AppState,
+    _account_id: &arkret_wire::AccountId,
+    _device_id: &arkret_wire::DeviceId,
+    _facet: crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
+    _algorithms: arkret_models_crypto::AlgorithmKeyRecords,
 ) -> Result<Option<PeerQueryDeviceRecord>, AppError> {
-    if !matches!(facet.status, DeviceStatus::Active) {
-        return Ok(None);
-    }
-    let (_, verification_method) = state
-        .current_service_receipt_binding()
-        .await
-        .map_err(AppError::internal)?;
-    let Some(authorization) = super::device_signing::current_device_authorization(
-        state,
-        &arkret_wire::ActorId::account(account_id.clone()),
-        device_id,
-        &facet,
-    )
-    .await
-    .map_err(|error| AppError::internal(error.to_string()))?
-    else {
-        return Ok(None);
-    };
-    let (
-        Some(signing_key_did),
-        Some(hpke_key),
-        Some(trust_algorithms),
-        Some(device_authorize_event_id),
-        Some(authorized_generation_ref),
-    ) = (
-        facet.signing_key_did,
-        facet.hpke_key,
-        facet.trust_algorithms,
-        facet.device_authorize_event_id,
-        facet.authorized_generation_ref,
-    )
-    else {
-        return Ok(None);
-    };
-    let device_signing_key_did = arkret_wire::DidKey::new(signing_key_did).map_err(|error| {
-        AppError::internal(format!("stored device signing key is invalid: {error}"))
-    })?;
-    let hpke_key = arkret_wire::NonEmptyString::new(hpke_key)
-        .map_err(|error| AppError::internal(format!("stored HPKE key is invalid: {error}")))?;
-    let trust_algorithms = trust_algorithms
-        .into_iter()
-        .map(arkret_wire::NonEmptyString::new)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            AppError::internal(format!("stored trust algorithm is invalid: {error}"))
-        })?;
-
-    let attested_at = now();
-    if !super::device_signing::device_authorization_is_effective_at(&authorization, attested_at) {
-        return Ok(None);
-    }
-    let default_expiry =
-        attested_at + chrono::Duration::seconds(DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS);
-    let expires_at = authorization
-        .expires_at
-        .flatten()
-        .map_or(default_expiry, |expiry| expiry.min(default_expiry));
-    let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
-        arkret_models_crypto::DeviceProjectionAttestationCore {
-            account_id: account_id.clone(),
-            device_id: device_id.clone(),
-            device_signing_key_did: device_signing_key_did.clone(),
-            hpke_key: hpke_key.clone(),
-            device_authorize_event_id: device_authorize_event_id.clone(),
-            authorized_generation_ref,
-            authorization_window: arkret_models_crypto::DeviceAuthorizationWindow {
-                not_before: authorization.not_before,
-                expires_at: authorization.expires_at.flatten(),
-            },
-            device_status: DeviceStatus::Active,
-            attested_at,
-            expires_at,
-        },
-        verification_method,
-        state.notary_signing_key().as_ref(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!("device projection attestation failed: {error}"))
-    })?;
-
-    let principal = state
-        .persistence()
-        .principal_resolution_by_account_id(account_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("device account resolution is unavailable"))?;
-    let resolution =
-        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
-            .await?;
-    let attester =
-        arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(
-            resolution,
-            &account_id.station_id,
-            attestation.proof.verification_method.clone(),
-            attested_at,
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let evidence = arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
-        signer_id: account_id.principal_id.clone(),
-        verification_method: arkret_wire::DidUrl::new(format!(
-            "{}#{}",
-            principal.projection.did, device_id
-        ))
-        .map_err(|error| AppError::internal(error.to_string()))?,
-        device_projection_attestation: attestation.clone(),
-        attester_signer_evidence_ref: attester
-            .evidence_ref()
-            .map_err(|error| AppError::internal(error.to_string()))?,
-    };
-    evidence
-        .validate_attester_binding()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let signer_evidence_ref = evidence
-        .evidence_ref()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    // Return the coordinate only after both immutable objects are durable.
-    for item in [attester, evidence] {
-        let content_digest = item
-            .canonical_sha256_digest()
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        state.persistence().governance_dependency_store().put_unscoped_signer_evidence_exact(
-            arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest },
-                authenticated_signer_resolution_evidence: Box::new(item),
-            },
-        ).await.map_err(|error| AppError::internal(error.to_string()))?;
-    }
-    let record = PeerQueryDeviceRecord {
-        signer_evidence_ref,
-        algorithms,
-        trust_algorithms,
-        device_projection_attestation: attestation,
-    };
-    record
-        .validate_attestation_binding(account_id, device_id)
-        .map_err(|error| {
-            AppError::internal(format!(
-                "device projection attestation does not bind its own row: {error}"
-            ))
-        })?;
-    Ok(Some(record))
+    // The current signer-evidence contract requires an authority Commit backed
+    // evidence object and a durable read provider. Neither is available from
+    // the service WebVH resolution used by the retired implementation. A
+    // peer device row with a synthetic evidence ref would be unverifiable.
+    Ok(None)
 }
 
 /// `device-lifecycle.md` §8.2 check 3 / check 4 applied to one attested row

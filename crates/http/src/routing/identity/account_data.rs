@@ -728,8 +728,6 @@ mod tests {
                 .unwrap(),
             },
             actor.clone(),
-            0,
-            arkret_wire::Hlc::new("019f00000000-0000-00000000").unwrap(),
             json!({"key": "ak.dnd_schedule", "expected_server_revision": 0, "tombstone": true}),
             chrono::Utc::now(),
         )

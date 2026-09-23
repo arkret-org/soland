@@ -224,7 +224,7 @@ mod reaction_and_window_policy_tests {
     }
 
     #[test]
-    fn reaction_on_event_storage_id_is_accepted() {
+    fn reaction_on_event_storage_id_is_rejected() {
         let op = reaction_op(
             arkret_wire::EventKind::ReactionAdd,
             json!({
@@ -232,7 +232,10 @@ mod reaction_and_window_policy_tests {
                 "key": "👍"
             }),
         );
-        assert!(validate_reaction_target_kind(&arkret_wire::EventKind::ReactionAdd, &op).is_ok());
+        assert_eq!(
+            validate_reaction_target_kind(&arkret_wire::EventKind::ReactionAdd, &op),
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+        );
     }
 
     #[test]
@@ -248,7 +251,7 @@ mod reaction_and_window_policy_tests {
             );
             assert_eq!(
                 validate_reaction_target_kind(&arkret_wire::EventKind::ReactionAdd, &op),
-                Err(arkret_wire::ReasonCode::REACTION_TARGET_UNSUPPORTED),
+                Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION),
                 "target {target} must be rejected",
             );
         }
@@ -357,7 +360,7 @@ mod reaction_and_window_policy_tests {
             "failed_precondition"
         );
         assert_eq!(
-            operation_policy_reason_code(arkret_wire::ReasonCode::REACTION_SCOPE_MISMATCH).1,
+            operation_policy_reason_code("reaction_outside_scope").1,
             "failed_precondition"
         );
         assert_eq!(

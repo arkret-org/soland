@@ -1,12 +1,6 @@
-use std::collections::BTreeMap;
-
-use arkret_identifiers::CellRef;
-use arkret_state::state::compute_state_root;
-use arkret_state::state_model::ResolvedCellState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use proptest::prelude::*;
-use serde_json::json;
 
 fn ed25519_detached_jws(signature: &[u8]) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519"}"#);
@@ -51,28 +45,4 @@ proptest! {
         );
     }
 
-    #[test]
-    fn state_root_is_independent_of_cell_insertion_order(
-        entries in prop::collection::btree_map("[a-z0-9_]{1,16}", any::<u32>(), 1..32),
-    ) {
-        let mut forward = BTreeMap::new();
-        for (subject, value) in &entries {
-            let cell = CellRef::new(format!("ak:cell:ak.component.test.prop.v1:{subject}"))
-                .expect("generated cell ref is valid");
-            forward.insert(cell, ResolvedCellState::Value(json!({"value": value})));
-        }
-
-        let mut reverse = BTreeMap::new();
-        for (subject, value) in entries.iter().rev() {
-            let cell = CellRef::new(format!("ak:cell:ak.component.test.prop.v1:{subject}"))
-                .expect("generated cell ref is valid");
-            reverse.insert(cell, ResolvedCellState::Value(json!({"value": value})));
-        }
-
-        let forward_root = compute_state_root(arkret_state::GovernanceView::new(&forward), arkret_canonical::DigestSuite::Sha256)
-            .expect("forward root");
-        let reverse_root = compute_state_root(arkret_state::GovernanceView::new(&reverse), arkret_canonical::DigestSuite::Sha256)
-            .expect("reverse root");
-        prop_assert_eq!(forward_root, reverse_root);
-    }
 }

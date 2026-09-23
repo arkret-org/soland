@@ -494,7 +494,7 @@ pub(crate) fn delta_is_empty(
         && response
             .to_device
             .as_ref()
-            .is_none_or(|to_device| to_device.messages.is_empty() && to_device.lost != Some(true))
+            .is_none_or(|to_device| to_device.deliveries.is_empty() && to_device.lost != Some(true))
         && response
             .notifications
             .as_ref()

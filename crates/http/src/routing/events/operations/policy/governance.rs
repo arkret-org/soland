@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
@@ -133,14 +135,7 @@ pub(super) async fn validate_direct_conversation_admission(
         return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN);
     }
 
-    // 6. An accepted Direct Conversation has left the founding/materializing
-    // root phase.  No general owner aggregation can reopen operational,
-    // governance, policy, grant, or terminal writes.
-    if authorization_ref == Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL) {
-        return Err(arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION);
-    }
-
-    // 7. The expensive closed evaluator runs during envelope validation where
+    // The expensive closed evaluator runs during envelope validation where
     // the accepted-Seal state is available.  This policy-stage assertion keeps
     // an unsupported participant-source action fail-closed under the same
     // non-enumerating reason.
@@ -698,13 +693,19 @@ pub(super) fn validate_organization_moderation_policy_authority(
     {
         return Ok(());
     }
-    let payload = operation
-        .typed_payload::<arkret_wire::event_spec::OrganizationModerationPolicy>()
-        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    let organization_id = operation
+        .payload
+        .get("organization_id")
+        .cloned()
+        .ok_or(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+        .and_then(|value| {
+            serde_json::from_value::<arkret_wire::DidCoreId>(value)
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+        })?;
     if !matches!(
         operation.context.sender,
         arkret_wire::ActorId::Service { .. }
-    ) || operation.context.sender.signing_principal_id() != &payload.organization_id
+    ) || operation.context.sender.signing_principal_id() != &organization_id
     {
         return Err("organization_policy_author_mismatch");
     }

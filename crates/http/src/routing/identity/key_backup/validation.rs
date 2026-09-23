@@ -56,22 +56,13 @@ pub(super) fn validate_key_backup_body_typed(
     }
     validate_key_backup_encryption_typed(backup)?;
     validate_key_backup_domain_separation_typed(backup)?;
-    if backup.backup_kind == BackupKind::MlsHistory {
-        validate_mls_history_opaque_only_typed(backup)?;
-    }
     validate_recovery_policy_ref_shape_typed(backup)?;
     validate_key_backup_auth_data_typed(backup)?;
     if backup.contents.is_empty() {
         return Err(schema_error("key backup contents must not be empty"));
     }
-    // `KeyBackupContentIndex` is the closed union of
-    // `key-backup.schema.json#/properties/contents`, so the `item_kind`
-    // vocabulary and the per-branch field sets are already decided by the type.
-    // `validate_envelope_fields` adds the branch rules (`mls_history` indexes
-    // exactly one canonical `history_secret_ranges` entry).
-    backup
-        .validate_envelope_fields()
-        .map_err(|error| schema_error(error.to_string()))
+    // KeyBackup::validate checks every closed secret_storage content entry.
+    Ok(())
 }
 
 pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
@@ -93,11 +84,6 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
         })?;
     match backup.encryption.recipient_method {
         KeyBackupRecipientMethod::PassphraseKdf => {
-            if backup.backup_kind == BackupKind::MlsHistory {
-                return Err(schema_error(
-                    "mls_history key backups must use secret_storage_key or recovery_public_key",
-                ));
-            }
             validate_key_backup_kdf_typed(backup)?;
             let nonce_salt = backup
                 .encryption
@@ -113,7 +99,8 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
             let key_commitment = backup
                 .encryption
                 .key_commitment
-                .as_deref()
+                .as_ref()
+                .map(arkret_wire::Hash::as_str)
                 .unwrap_or_default();
             if !is_sha_digest(key_commitment) {
                 return Err(schema_error(
@@ -123,14 +110,6 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
             Ok(())
         }
         KeyBackupRecipientMethod::SecretStorageKey => {
-            if !matches!(
-                backup.backup_kind,
-                BackupKind::MlsHistory | BackupKind::SecretStorage
-            ) {
-                return Err(schema_error(
-                    "secret_storage_key is only valid for mls_history or secret_storage key backups",
-                ));
-            }
             if backup.encryption.kdf.is_some() {
                 return Err(schema_error(
                     "secret_storage_key key backups must not carry encryption.kdf",
@@ -256,93 +235,6 @@ pub(super) fn validate_key_backup_kdf_typed(backup: &KeyBackup) -> Result<(), Ap
     Ok(())
 }
 
-pub(super) fn scan_mls_history_opaque_value(value: &Value, path: &str) -> Result<(), AppError> {
-    match value {
-        Value::Object(map) => {
-            for (key, child) in map {
-                scan_mls_history_opaque_field(key, child, path)?;
-            }
-            Ok(())
-        }
-        Value::Array(items) => {
-            for (idx, child) in items.iter().enumerate() {
-                scan_mls_history_opaque_value(child, &format!("{path}/{idx}"))?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-pub(super) fn scan_mls_history_opaque_field(
-    key: &str,
-    child: &Value,
-    path: &str,
-) -> Result<(), AppError> {
-    let key_lower = key.to_ascii_lowercase();
-    if matches!(
-        key_lower.as_str(),
-        "plaintext"
-            | "plain_text"
-            | "serialized_state"
-            | "state_bytes"
-            | "group_state"
-            | "passphrase"
-            | "mls_passphrase"
-            | "snapshot_secret"
-    ) {
-        return Err(schema_error(format!(
-            "mls_history key backups must not carry plaintext field {path}/{key}"
-        )));
-    }
-    let child_path = if path.is_empty() {
-        format!("/{key}")
-    } else {
-        format!("{path}/{key}")
-    };
-    scan_mls_history_opaque_value(child, &child_path)
-}
-
-pub(super) fn validate_mls_history_opaque_only_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    for (key, value) in backup.extra.iter() {
-        scan_mls_history_opaque_field(key, value, "")?;
-    }
-    for (key, value) in backup.encryption.extra.iter() {
-        scan_mls_history_opaque_field(key, value, "/encryption")?;
-    }
-    if let Some(kdf) = &backup.encryption.kdf {
-        for (key, value) in kdf.params.extra.iter() {
-            scan_mls_history_opaque_field(key, value, "/encryption/kdf/params")?;
-        }
-        for (key, value) in kdf.extra.iter() {
-            scan_mls_history_opaque_field(key, value, "/encryption/kdf")?;
-        }
-    }
-    for (key, value) in backup.encryption.aead.extra.iter() {
-        scan_mls_history_opaque_field(key, value, "/encryption/aead")?;
-    }
-    for (idx, item) in backup.contents.iter().enumerate() {
-        let extra = match item {
-            arkret_models_crypto::KeyBackupContentIndex::SecretStorage(index) => &index.extra,
-            arkret_models_crypto::KeyBackupContentIndex::HistorySecretRanges(index) => &index.extra,
-        };
-        for (key, value) in extra.iter() {
-            scan_mls_history_opaque_field(key, value, &format!("/contents/{idx}"))?;
-        }
-    }
-    if let Some(auth_data) = &backup.auth_data {
-        for (key, value) in auth_data.extra.iter() {
-            scan_mls_history_opaque_field(key, value, "/auth_data")?;
-        }
-    }
-    if let Some(retention) = &backup.retention {
-        for (key, value) in &retention.extra {
-            scan_mls_history_opaque_field(key, value, "/retention")?;
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn typed_recovery_policy_ref(backup: &KeyBackup) -> Option<(&str, u64)> {
     let policy_ref = backup.recovery_policy_ref.as_ref()?;
     Some((policy_ref.policy_id.as_str(), policy_ref.policy_version))
@@ -372,10 +264,9 @@ pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Re
 }
 
 pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    backup
-        .auth_data
-        .as_ref()
-        .ok_or_else(|| schema_error("key backup auth_data is required"))?;
+    if backup.auth_data.signature.as_str().is_empty() {
+        return Err(schema_error("key backup signature is required"));
+    }
     Ok(())
 }
 
@@ -429,7 +320,7 @@ pub(super) async fn validate_current_recovery_recipient(
             "accepted recovery policy failed strong decoding: {error}"
         ))
     })?;
-    policy.validate().map_err(|error| {
+    policy.validate_shape().map_err(|error| {
         AppError::internal(format!(
             "accepted recovery policy failed validation: {error}"
         ))
@@ -444,16 +335,22 @@ pub(super) async fn validate_current_recovery_recipient(
         .hpke_suite
         .as_deref()
         .unwrap_or(arkret_wire::HPKE_SUITE_X25519_CHACHA20POLY1305_V1);
-    let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
-        .map_err(|_| {
+    let suite: arkret_models_crypto::RecoveryBackupHpkeSuite =
+        serde_json::from_value(Value::String(suite_id.to_owned())).map_err(|_| {
             crate::app_error!(
                 UnsupportedHpkeSuite,
                 format!("key backup HPKE suite is unsupported: {suite_id}"),
             )
         })?;
-    let agreements = policy.active_hpke_recipients(evaluated_at);
-    let matching_recipient = agreements
+    let matching_recipient = policy
+        .methods
         .iter()
+        .filter_map(|method| match method {
+            arkret_models_crypto::RecoveryMethod::RecoveryUnlock { keys } => Some(keys.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .map(|key| &key.backup_hpke)
         .find(|entry| current_backup_hpke_agreement(entry, recipient, evaluated_at));
     let Some(agreement) = matching_recipient else {
         return Err(failed_precondition(
@@ -478,7 +375,7 @@ fn current_backup_hpke_agreement(
     evaluated_at: DateTime<Utc>,
 ) -> bool {
     entry.key_agreement_ref.as_str() == recipient
-        && entry.usage == RecoveryKeyAgreementUse::BackupHpke
+        && entry.r#use == RecoveryKeyAgreementUse::BackupHpke
         && entry.revoked_at.is_none()
         && entry.not_before <= evaluated_at
         && entry.expires_at > evaluated_at
@@ -499,14 +396,12 @@ mod tests {
                 "{RECOVERY_CONTROLLER_DID}#backup-hpke-1"
             ))
             .unwrap(),
-            key_agreement_algorithm:
-                arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
-            public_key_multibase: arkret_wire::NonEmptyString::new(
-                "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
-            )
-            .unwrap(),
-            hpke_suites: vec![RecoveryHpkeSuite::X25519ChaCha20Poly1305],
-            usage: RecoveryKeyAgreementUse::BackupHpke,
+            key_agreement_algorithm: arkret_models_crypto::RecoveryKeyAgreementAlgorithm::X25519,
+            public_key_multibase: "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
+            hpke_suites: vec![
+                arkret_models_crypto::RecoveryBackupHpkeSuite::X25519AeadChacha20Poly1305V1,
+            ],
+            r#use: RecoveryKeyAgreementUse::BackupHpke,
             not_before: now - chrono::TimeDelta::minutes(1),
             expires_at: now + chrono::TimeDelta::days(1),
             revoked_at: None,

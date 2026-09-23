@@ -42,9 +42,10 @@ use arkret_models_collaboration::agent_operations::{
     AgentProvisionOutcome, AgentProvisionPreparePhase, AgentProvisionRequestBody, AgentReadiness,
     AgentReadinessBlocker, AgentReadinessState, AgentRenewPairingOutcome,
     AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
-    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
-    AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
+    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
+    AgentView, KeyState,
 };
+use arkret_models_collaboration::agent_scope::AgentRuntimeApprovalRequestBody;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{

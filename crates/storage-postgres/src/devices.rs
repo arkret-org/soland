@@ -1,5 +1,7 @@
 mod queue_authority;
 
+pub(crate) use queue_authority::enqueue_mls_welcome_in_connection;
+
 use super::{
     AsyncConnection, AsyncPgConnection, BTreeMap, BTreeSet, BigInt, Bool, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
@@ -7,9 +9,9 @@ use super::{
     DeviceMessageRecord, DeviceMessageStore, DeviceRevocationGateSelector,
     DeviceRevocationGateStatus, Integer, JsonPayloadRow, Jsonb, MaxSeqRow, Nullable,
     OneTimeKeyStore, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value,
-    async_trait, ensure_device_message_id, fresh_device_message_ack_token, pg_conn, sql_query,
-    sql_types,
+    PgTransactionError, QueryableByName, RecipientDeliveryRecord, RecipientQueueSelector,
+    RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, ensure_device_message_id,
+    fresh_device_message_ack_token, pg_conn, sql_query, sql_types,
 };
 pub struct PgDeviceMessageStore {
     pub pool: PgPool,
@@ -93,6 +95,7 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         &self,
         device_revocation_gate: Option<&DeviceRevocationGateSelector>,
         mut message: DeviceMessageRecord,
+        per_device_queue_capacity: usize,
     ) -> PersistenceResult<()> {
         ensure_device_message_id(&mut message);
         let mut conn = pg_conn(&self.pool)
@@ -107,10 +110,24 @@ impl DeviceMessageStore for PgDeviceMessageStore {
             if let Some(selector) = device_revocation_gate {
                 crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
             }
+            queue_authority::lock_delivery_order_in_transaction(conn).await?;
+            if !queue_authority::human_queue_has_capacity_in_transaction(
+                conn,
+                &message,
+                per_device_queue_capacity,
+            )
+            .await?
+            {
+                return Err(PersistenceError::Conflict(format!(
+                    "{}: recipient queue is at capacity",
+                    soland_storage::ConflictCode::RecipientQueueAtCapacity
+                ))
+                .into());
+            }
             sql_query(
                 "INSERT INTO device_messages \
              (id, idempotency_key, sender, recipient, device_id, position, content, created_at, recipient_device_authorization) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             VALUES ($1, $2, $3, $4, $5, nextval('public.recipient_delivery_position_seq'), $6, $7, $8) \
              ON CONFLICT (recipient, device_id, position) DO NOTHING",
             )
             .bind::<sql_types::Uuid, _>(Uuid::new_v4())
@@ -118,7 +135,6 @@ impl DeviceMessageStore for PgDeviceMessageStore {
             .bind::<Text, _>(&message.sender)
             .bind::<Text, _>(&message.recipient)
             .bind::<Text, _>(&message.device_id)
-            .bind::<BigInt, _>(message.position)
             .bind::<Jsonb, _>(&message.content)
             .bind::<Timestamptz, _>(message.created_at)
             .bind::<Jsonb, _>(serde_json::to_value(&message.recipient_device_authorization).map_err(PersistenceError::database)?)
@@ -291,6 +307,8 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 }
             }
 
+            queue_authority::lock_delivery_order_in_transaction(conn).await?;
+
             let mut batch_digests = BTreeMap::new();
             let mut fresh_message_keys = BTreeSet::new();
             for item in &batch.items {
@@ -357,18 +375,26 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                     continue;
                 };
                 crate::ensure_gate_allowed_in_transaction(conn, &message.recipient_device_authorization).await?;
+                if !queue_authority::human_queue_has_capacity_in_transaction(
+                    conn,
+                    &message,
+                    batch.per_device_queue_capacity,
+                )
+                .await?
+                {
+                    return Ok(DeviceMessageBatchCommitOutcome::QueueAtCapacity);
+                }
                 ensure_device_message_id(&mut message);
                 sql_query(
                     "INSERT INTO device_messages \
                      (id, idempotency_key, sender, recipient, device_id, position, content, created_at, recipient_device_authorization) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                     VALUES ($1, $2, $3, $4, $5, nextval('public.recipient_delivery_position_seq'), $6, $7, $8)",
                 )
                 .bind::<sql_types::Uuid, _>(Uuid::new_v4())
                 .bind::<Text, _>(&message.idempotency_key)
                 .bind::<Text, _>(&message.sender)
                 .bind::<Text, _>(&message.recipient)
                 .bind::<Text, _>(&message.device_id)
-                .bind::<BigInt, _>(message.position)
                 .bind::<Jsonb, _>(&message.content)
                 .bind::<Timestamptz, _>(message.created_at)
             .bind::<Jsonb, _>(serde_json::to_value(&message.recipient_device_authorization).map_err(PersistenceError::database)?)
@@ -426,78 +452,30 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         queue_authority::list_after(&self.pool, recipient, device_id, queue_position, limit).await
     }
 
-    async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)
+    async fn list_recipient_deliveries(
+        &self,
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<RecipientDeliveryRecord>> {
+        queue_authority::list_recipient_deliveries(&self.pool, selector, queue_position, limit)
             .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "WITH expired AS ( \
-                 SELECT recipient, device_id, MAX(position) AS lost_through \
-                 FROM device_messages \
-                 WHERE COALESCE(NULLIF(content->>'expires_at', '')::timestamptz, created_at + interval '1 hour') <= $1 \
-                 GROUP BY recipient, device_id \
-             ), upserted AS ( \
-                 INSERT INTO device_message_lost_watermarks \
-                     (recipient, device_id, lost_through, updated_at) \
-                 SELECT recipient, device_id, lost_through, $1 FROM expired \
-                 ON CONFLICT (recipient, device_id) DO UPDATE \
-                 SET lost_through = GREATEST(device_message_lost_watermarks.lost_through, EXCLUDED.lost_through), \
-                     updated_at = EXCLUDED.updated_at \
-                 RETURNING 1 \
-             ) \
-            DELETE FROM device_messages \
-             WHERE COALESCE(NULLIF(content->>'expires_at', '')::timestamptz, created_at + interval '1 hour') <= $1",
-        )
-        .bind::<Timestamptz, _>(now)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)
     }
 
-    async fn prune_over_capacity(
+    async fn issue_recipient_ack_token(
         &self,
-        per_device_capacity: usize,
-        now: chrono::DateTime<Utc>,
-    ) -> PersistenceResult<usize> {
-        if per_device_capacity == 0 {
-            return Ok(0);
-        }
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "WITH ranked AS ( \
-                 SELECT recipient, device_id, position, \
-                        ROW_NUMBER() OVER ( \
-                            PARTITION BY recipient, device_id \
-                            ORDER BY position DESC \
-                        ) AS keep_rank \
-                 FROM device_messages \
-             ), evicted AS ( \
-                 SELECT recipient, device_id, MAX(position) AS lost_through \
-                 FROM ranked \
-                 WHERE keep_rank > $1 \
-                 GROUP BY recipient, device_id \
-             ), upserted AS ( \
-                 INSERT INTO device_message_lost_watermarks \
-                     (recipient, device_id, lost_through, updated_at) \
-                 SELECT recipient, device_id, lost_through, $2 FROM evicted \
-                 ON CONFLICT (recipient, device_id) DO UPDATE \
-                 SET lost_through = GREATEST(device_message_lost_watermarks.lost_through, EXCLUDED.lost_through), \
-                     updated_at = EXCLUDED.updated_at \
-                 RETURNING 1 \
-             ) \
-             DELETE FROM device_messages USING ranked \
-             WHERE device_messages.recipient = ranked.recipient \
-               AND device_messages.device_id = ranked.device_id \
-               AND device_messages.position = ranked.position \
-               AND ranked.keep_rank > $1",
-        )
-        .bind::<BigInt, _>(per_device_capacity as i64)
-        .bind::<Timestamptz, _>(now)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+    ) -> PersistenceResult<Option<String>> {
+        queue_authority::issue_recipient_ack_token(&self.pool, selector, queue_position).await
+    }
+
+    async fn ack_recipient_with_token(
+        &self,
+        selector: &RecipientQueueSelector,
+        ack_token: &str,
+    ) -> PersistenceResult<Option<usize>> {
+        queue_authority::ack_recipient_with_token(&self.pool, selector, ack_token).await
     }
 
     async fn lost_watermark(
@@ -519,30 +497,6 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         .await
         .optional()
         .map(|row| row.and_then(|row| row.max_seq))
-        .map_err(PersistenceError::database)
-    }
-
-    async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "DELETE FROM device_message_ack_tokens \
-             WHERE recipient = $1 AND device_id = $2",
-        )
-        .bind::<Text, _>(recipient)
-        .bind::<Text, _>(device_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        sql_query(
-            "DELETE FROM device_messages \
-             WHERE recipient = $1 AND device_id = $2",
-        )
-        .bind::<Text, _>(recipient)
-        .bind::<Text, _>(device_id)
-        .execute(&mut *conn)
-        .await
         .map_err(PersistenceError::database)
     }
 }
@@ -612,16 +566,21 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
 
     #[cfg(any(test, feature = "test-support"))]
     async fn seed_test_record(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
+        let station_id = record
+            .payload
+            .get("station_id")
+            .and_then(serde_json::Value::as_str);
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "INSERT INTO devices (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+            "INSERT INTO devices (id, station_id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
+             VALUES ($1, COALESCE($2, current_device_inventory_station()), $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (actor_id, device_id) DO UPDATE SET payload = EXCLUDED.payload, \
              verification_state = EXCLUDED.verification_state, updated_at = EXCLUDED.updated_at, revoked_at = EXCLUDED.revoked_at",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
+        .bind::<Nullable<Text>, _>(station_id)
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.device_id)
         .bind::<Jsonb, _>(&record.payload)

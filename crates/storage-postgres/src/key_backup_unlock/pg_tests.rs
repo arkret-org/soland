@@ -284,13 +284,20 @@ impl Fixture {
         ] {
             session.as_object_mut().unwrap().remove(field);
         }
-        for (dto, column) in [
-            ("realm_stream_head", "accepted_stream_head"),
-            ("publication_authority_context", "authority_context"),
-        ] {
-            let value = session.as_object_mut().unwrap().remove(dto).unwrap();
-            session[column] = value;
-        }
+        let accepted_stream_head = session
+            .as_object_mut()
+            .unwrap()
+            .remove("realm_stream_head")
+            .unwrap();
+        session["accepted_stream_head"] = accepted_stream_head.clone();
+        session["authority_context"] =
+            serde_json::to_value(soland_storage::RecoveryAuthorityContext {
+                realm_id: realm.clone(),
+                authority_generation: 0,
+                authority_ref: basis_commit.authority_ref.clone(),
+                realm_stream_head: serde_json::from_value(accepted_stream_head).unwrap(),
+            })
+            .unwrap();
         session["id"] = json!(ids::typed_uuid_part_expect_internal(SESSION));
         session["create_intent_digest"] = json!(REQUEST);
         session["principal_id"] = json!(PRINCIPAL);

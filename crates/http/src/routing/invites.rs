@@ -17,10 +17,6 @@ use arkret_models_collaboration::governance::invite_addressing::{
 };
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvitePresentRequestBody;
-use arkret_models_collaboration::sync_frames::account_sync::{
-    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
-};
-use arkret_models_discovery::DirectoryIntent;
 use arkret_models_identity::handle::Handle;
 use arkret_models_identity::proof::DetachedPayloadProof;
 use arkret_models_identity::{HandleClaim, HandleClaimStatus, ServiceResolutionCarrier};
@@ -52,6 +48,7 @@ use soland_services::identity::{
 use soland_storage::NewSourceAdmission;
 
 use crate::routing::identity::device_messages::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
     fanout_actor_private_update, station_device_message_sender,
 };
 use crate::routing::system::extract::AuthArgs;
@@ -665,7 +662,6 @@ async fn require_dispatchable_invite_event(
         .map_err(|error| AppError::internal(format!("invite event lookup: {error}")))?
     else {
         return Err(invite_event_precondition(
-            arkret_wire::ReasonCode::INVITE_EVENT_UNACCEPTED,
             "invite_event has not been accepted by this Station",
         ));
     };
@@ -710,17 +706,14 @@ async fn require_dispatchable_invite_event(
     }
     if event.executed_by.as_ref().unwrap_or(&accepted_actor) != &session_actor {
         return Err(invite_event_precondition(
-            arkret_wire::ReasonCode::INVITE_EVENT_ACTOR_MISMATCH,
             "invite_event was not signed by the authenticated session actor",
         ));
     }
     Ok(accepted)
 }
 
-fn invite_event_precondition(reason_code: &'static str, message: &'static str) -> AppError {
-    crate::app_error!(FailedPrecondition, message)
-        .with_wire_code("failed_precondition")
-        .with_reason_code(reason_code)
+fn invite_event_precondition(message: &'static str) -> AppError {
+    crate::app_error!(FailedPrecondition, message).with_wire_code("failed_precondition")
 }
 
 /// Spec invite-addressing.md §7 — hand the exact canonical request body to the
@@ -820,7 +813,7 @@ async fn persist_private_invite_projection(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
     body: &Value,
-    validated: &super::events::event_log::ValidatedEventEnvelope,
+    validated: &super::events::event_log::PrivateInviteEnvelope,
 ) -> Result<bool, AppError> {
     if account_id.station_id != state.service_core_id() {
         return Err(AppError::capability_denied(
@@ -1624,87 +1617,6 @@ pub(crate) fn resolve_core_invite_receive_policy(
         .unwrap_or_else(|| InviteReceivePolicy::spec_default(account_id.clone()))
 }
 
-/// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
-pub(crate) fn directory_handle_claim_resolve_allowed(
-    state: &AppState,
-    intent: Option<DirectoryIntent>,
-    requester_id: Option<&DidCoreId>,
-    subject: &str,
-    recipient_id: &str,
-    source_id: &str,
-    handle_claim: &HandleClaim,
-    resolved_by: Option<DidCoreId>,
-) -> bool {
-    if !matches!(
-        intent,
-        Some(
-            DirectoryIntent::ContactRequest | DirectoryIntent::Invite | DirectoryIntent::MemberAdd
-        )
-    ) {
-        return true;
-    }
-    let Some(requester_id) = requester_id else {
-        return false;
-    };
-    let handle = handle_claim.claim.handle.clone();
-    let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
-        return false;
-    };
-    let Ok(station_id) = DidCoreId::new(recipient_id.to_owned()) else {
-        return false;
-    };
-    let policy = resolve_core_invite_receive_policy(
-        state,
-        &arkret_wire::AccountId::new(subject_id, station_id),
-    );
-    let Ok(requester_station_id) = DidCoreId::new(source_id.to_owned()) else {
-        return false;
-    };
-    let requester_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        requester_id.clone(),
-        requester_station_id,
-    ));
-    let decision = match intent {
-        Some(DirectoryIntent::ContactRequest) => {
-            let evidence = ContactIntroductionEvidence::HandleClaim {
-                handle,
-                handle_claim: Box::new(handle_claim.clone()),
-                resolved_by,
-                resolved_at: Some(chrono::Utc::now()),
-            };
-            evaluate_contact_receive(
-                state,
-                &policy,
-                &evidence,
-                requester_id.as_str(),
-                subject,
-                recipient_id,
-                source_id,
-            )
-        }
-        Some(DirectoryIntent::Invite | DirectoryIntent::MemberAdd) => {
-            let evidence = IntroductionEvidence::HandleClaim {
-                handle,
-                handle_claim: Box::new(handle_claim.clone()),
-                resolved_by,
-                resolved_at: Some(chrono::Utc::now()),
-            };
-            evaluate_invite_receive(
-                state,
-                &policy,
-                &evidence,
-                &requester_actor_id,
-                subject,
-                recipient_id,
-                source_id,
-                false,
-            )
-        }
-        _ => return true,
-    };
-    decision.effective_kind == "handle_claim" && decision.action != InviteReceiveAction::Drop
-}
-
 fn evaluate_invite_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,
@@ -2365,7 +2277,7 @@ async fn authenticate_invite_notification(
     state: &AppState,
     body: &Value,
     projection: &InvitePrivateProjection<'_>,
-) -> Result<Option<super::events::event_log::ValidatedEventEnvelope>, AppError> {
+) -> Result<Option<super::events::event_log::PrivateInviteEnvelope>, AppError> {
     validate_invite_delivery_event_kind(body)?;
     match projection {
         InvitePrivateProjection::FromDeliveredEvent { session } => {
@@ -2664,7 +2576,7 @@ mod invite_locator_security_tests {
             assert_eq!(envelope.recipient_device_id.as_str(), device_id);
             assert!(matches!(
                 &envelope.sender,
-                crate::wire::DeviceMessageSender::Service { sender_id }
+                crate::wire::DeviceMessageSender::Station { sender_id }
                     if sender_id.as_str() == state.service_id()
             ));
             let content = serde_json::to_value(&envelope.content).unwrap();
@@ -3656,35 +3568,17 @@ mod invite_locator_security_tests {
                 }
             }
         });
-        let validated = crate::routing::events::event_log::ValidatedEventEnvelope {
+        let validated = crate::routing::events::event_log::PrivateInviteEnvelope {
             event_id: arkret_identifiers::EventId::new(
                 "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2".to_owned(),
             )
             .unwrap(),
-            // `ValidatedEventEnvelope::actor_id` is a `DidCoreId`, whose wire
-            // form is `ak:did_core:<method>:<rest>`; a bare `did:web:` string
-            // is a DID and belongs only where a complete DID is required
-            // (verification methods, proof controllers).
-            actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                state.service_core_id().clone(),
+                state.service_core_id(),
             )),
-            device_id: Some(
-                arkret_wire::DeviceId::new(
-                    "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
-                )
-                .unwrap(),
-            ),
-            actor_seq: 7,
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            kind: arkret_wire::EventKind::InviteCreate.as_str().to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            prev_refs: Vec::new(),
             canonical_digest: format!("sha256:{}", "b".repeat(64)),
-            canonical_bytes: Vec::new(),
-            producer_signing_key: None,
         };
         let invite_id = arkret_wire::InviteId::from_event_id(&validated.event_id).to_string();
 

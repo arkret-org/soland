@@ -1478,7 +1478,6 @@ mod relation_actor_endpoint_tests {
             &session,
             &local.to_string(),
             now,
-            &[],
             None,
             "since_join"
         ));
@@ -1489,7 +1488,6 @@ mod relation_actor_endpoint_tests {
             &session,
             &foreign.to_string(),
             now,
-            &[],
             None,
             "since_join"
         ));
@@ -1500,7 +1498,6 @@ mod relation_actor_endpoint_tests {
             &session,
             principal.as_str(),
             now,
-            &[],
             None,
             "since_join"
         ));
@@ -1552,11 +1549,6 @@ mod relation_actor_endpoint_tests {
                 directory_visibility: "members".into(),
                 join_rule: "invite".into(),
                 history_access: "since_join".into(),
-                content_encryption_floor: None,
-                metadata_encryption_floor: None,
-                encryption_profile: "none".into(),
-                content_scheme: None,
-                durability_policy: None,
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,

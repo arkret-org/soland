@@ -58,11 +58,15 @@ pub async fn authenticated_session(
             request_requires_fresh_introspection(req),
         )
         .await?;
+        // A persisted or introspected Agent holder may never fall through to
+        // the Human device path when its internal session marker is missing.
+        classify_agent_session(&session)?;
         if is_recovery_session_grant(&session) {
             enforce_recovery_session_grant_operation(state, req, &session).await?;
         } else {
             enforce_session_device_revocation_gate(state, &session).await?;
         }
+        enforce_agent_session_operation(req, &session)?;
         bind_session_account(state, &mut session).await?;
         return Ok(session);
     }
@@ -124,7 +128,8 @@ pub async fn authenticated_session(
             "session revoked",
         ));
     }
-    if is_device_revoked(state, &session.actor, &session.device_id).await {
+    let is_agent = classify_agent_session(&session)?;
+    if !is_agent && is_device_revoked(state, &session.actor, &session.device_id).await {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
@@ -135,6 +140,7 @@ pub async fn authenticated_session(
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
     }
     enforce_session_device_revocation_gate(state, &session).await?;
+    enforce_agent_session_operation(req, &session)?;
     bind_session_account(state, &mut session).await?;
     Ok(session)
 }
@@ -216,7 +222,12 @@ pub(crate) async fn revalidate_stream_session(
     {
         return Err(rejected);
     }
-    if is_device_revoked(state, &current.actor, &current.device_id).await {
+    let original_is_agent = classify_agent_session(original)?;
+    let current_is_agent = classify_agent_session(&current)?;
+    if original_is_agent != current_is_agent {
+        return Err(rejected);
+    }
+    if !current_is_agent && is_device_revoked(state, &current.actor, &current.device_id).await {
         return Err(rejected);
     }
     enforce_session_device_revocation_gate(state, &current).await?;
@@ -300,7 +311,7 @@ async fn enforce_recovery_session_grant_operation(
             "capability_denied",
             "recovery proof has not been verified",
         ))?;
-    if recovery.state != arkret_models_crypto::SessionState::Verified
+    if recovery.state != soland_storage::RecoverySessionLifecycle::Verified
         || recovery.expires_at <= now()
         || recovery.principal_id.as_str() != session.actor
         || recovery.station_id.as_str() != session.audience
@@ -416,11 +427,86 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
     }
 }
 
+/// Agent sessions have no DeviceId. Until every legacy handler is migrated to
+/// the Agent authorization triple, only the formally registered recipient
+/// queue read and ACK operations may receive one.
+fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
+    use arkret_wire::ServiceOperationId;
+    match (method, path) {
+        ("GET", "/_arkret/self/device_messages") => {
+            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1)
+        }
+        ("POST", "/_arkret/self/device_messages/ack") => {
+            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1)
+        }
+        _ => None,
+    }
+}
+
+/// Classify the typed holder and internal marker together. Any disagreement
+/// is invalid, including an Agent marker without a durable grant.
+fn classify_agent_marker(
+    marker_present: bool,
+    holder_is_agent: Option<bool>,
+) -> Result<bool, (StatusCode, &'static str, &'static str)> {
+    match (marker_present, holder_is_agent) {
+        (true, Some(true)) => Ok(true),
+        (false, None | Some(false)) => Ok(false),
+        _ => Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "session Agent marker disagrees with its typed holder binding",
+        )),
+    }
+}
+
+fn classify_agent_session(
+    session: &SessionRecord,
+) -> Result<bool, (StatusCode, &'static str, &'static str)> {
+    classify_agent_marker(
+        session.agent_session.is_some(),
+        session.session_grant.as_ref().map(|grant| {
+            matches!(
+                &grant.holder_binding,
+                arkret_models_identity::SessionGrantHolderBinding::AgentRuntime { .. }
+            )
+        }),
+    )
+}
+
+fn enforce_agent_session_operation(
+    req: &Request,
+    session: &SessionRecord,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    if !classify_agent_session(session)? {
+        return Ok(());
+    }
+    let Some(operation) = agent_recipient_operation(req.method().as_str(), req.uri().path()) else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "Agent operation requires a migrated endpoint authorization",
+        ));
+    };
+    if !session
+        .session_grant
+        .as_ref()
+        .is_some_and(|grant| grant.scopes.iter().any(|scope| scope == operation))
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            "Agent grant does not authorize this recipient queue operation",
+        ));
+    }
+    Ok(())
+}
+
 async fn enforce_session_device_revocation_gate(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<(), (StatusCode, &'static str, &'static str)> {
-    if session.agent_session.is_some() {
+    if classify_agent_session(session)? {
         return enforce_agent_session_authority(state, session).await;
     }
     let current = super::super::device_generation::active_device_revocation_gate_selector(
@@ -489,25 +575,25 @@ async fn enforce_session_device_revocation_gate(
                 "session grant device binding does not match the session",
             ));
         }
-        soland_storage::DeviceRevocationGateSelector {
-            principal_id: arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|_| {
-                (
+        let generation =
+            super::super::device_generation::current_device_generation(state, &session.actor)
+                .await
+                .map_err(|error| session_device_selector_error(&error))?
+                .ok_or((
                     StatusCode::UNAUTHORIZED,
-                    "unauthenticated",
-                    "session principal_id is invalid",
-                )
-            })?,
-            station_id: arkret_wire::DidCoreId::new(session.audience.clone()).map_err(|_| {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    "unauthenticated",
-                    "session station_id is invalid",
-                )
-            })?,
-            device_id: binding.device_id.to_string(),
-            target_device_authorize_event_id: binding.authorization_event_id.to_string(),
-            target_device_generation_ref: binding.model_generation_ref,
+                    "auth_expired",
+                    "session device generation is unavailable",
+                ))?;
+        if current.authorization_ref.event_id != binding.authorization_event_id
+            || generation.current_ref != binding.model_generation_ref
+        {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "auth_expired",
+                "session grant device binding is no longer current",
+            ));
         }
+        current.clone()
     } else {
         state
             .persistence()
@@ -546,11 +632,6 @@ async fn enforce_session_device_revocation_gate(
         })?;
     match status {
         soland_storage::DeviceRevocationGateStatus::Active => Ok(()),
-        soland_storage::DeviceRevocationGateStatus::Pending { .. } => Err((
-            StatusCode::CONFLICT,
-            "device_revocation_pending",
-            "device revocation is pending",
-        )),
         soland_storage::DeviceRevocationGateStatus::Revoked { .. } => Err((
             StatusCode::CONFLICT,
             "device_revoked",
@@ -602,9 +683,9 @@ async fn enforce_agent_session_authority(
     };
     let arkret_models_identity::SessionGrantHolderBinding::AgentRuntime {
         agent_id,
-        device_id,
         agent_key_authorization_ref,
         verification_method,
+        ..
     } = &grant.holder_binding
     else {
         return Err((
@@ -613,11 +694,11 @@ async fn enforce_agent_session_authority(
             "Agent session has a human-device grant binding",
         ));
     };
-    if agent_id.as_str() != session.actor || device_id.as_str() != session.device_id {
+    if agent_id.as_str() != session.actor {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
-            "Agent grant binding does not match the authenticated session",
+            "Agent grant principal does not match the authenticated session",
         ));
     }
     let record = state
@@ -724,6 +805,37 @@ mod tests {
     use salvo::http::Method;
 
     use super::*;
+
+    #[test]
+    fn agent_holder_without_marker_fails_closed() {
+        assert_eq!(classify_agent_marker(true, Some(true)), Ok(true));
+        assert_eq!(classify_agent_marker(false, Some(false)), Ok(false));
+        assert_eq!(classify_agent_marker(false, None), Ok(false));
+        assert!(classify_agent_marker(false, Some(true)).is_err());
+        assert!(classify_agent_marker(true, Some(false)).is_err());
+        assert!(classify_agent_marker(true, None).is_err());
+    }
+
+    #[test]
+    fn agent_endpoint_gate_admits_only_registered_queue_read_and_ack() {
+        use arkret_wire::ServiceOperationId;
+        assert_eq!(
+            agent_recipient_operation("GET", "/_arkret/self/device_messages"),
+            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1),
+        );
+        assert_eq!(
+            agent_recipient_operation("POST", "/_arkret/self/device_messages/ack"),
+            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1),
+        );
+        for (method, path) in [
+            ("POST", "/_arkret/self/device_messages"),
+            ("GET", "/_arkret/self/account/stream"),
+            ("POST", "/_arkret/self/events"),
+            ("GET", "/_arkret/self/keys/backups"),
+        ] {
+            assert!(agent_recipient_operation(method, path).is_none());
+        }
+    }
 
     #[test]
     fn fresh_introspection_required_for_writes() {

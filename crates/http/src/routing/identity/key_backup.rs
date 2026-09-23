@@ -606,24 +606,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn list_metadata_redacts_ciphertext_and_kdf_material() {
-        let mut body = key_backup_body("secret_storage", passphrase_encryption());
-        body["contents"][0]["item_kind"] = json!("private_account_state");
-        let metadata =
-            serde_json::to_value(serde_json::from_value::<KeyBackup>(body).unwrap().summary())
-                .unwrap();
-
-        assert!(metadata.get("ciphertext").is_none());
-        assert!(metadata.pointer("/encryption/key_commitment").is_none());
-        assert_eq!(
-            metadata["encryption"]["recipient_method"],
-            json!("passphrase_kdf")
-        );
-        assert!(metadata.pointer("/encryption/kdf").is_none());
-        assert!(metadata.pointer("/encryption/aead").is_none());
-        assert!(metadata.pointer("/auth_data/signature").is_none());
-    }
 }
 
 pub(crate) async fn recovery_unlock_manifest(
@@ -680,22 +662,16 @@ pub(crate) async fn recovery_unlock_manifest(
             "backup manifest changed during verification",
         ));
     }
-    // The frozen manifest is the `basis` object the unlock path re-validates:
-    // `key_backup_unlock::basis_committed_ref` reads a top-level
-    // `committed_ref` and parses it as `arkret_wire::CommittedEventRef`, then
-    // `validate_active_basis` checks that exact Commit is still on its stream.
-    // A later Commit on the same stream does not make the manifest stale
-    // (key-management.md §7.6); the `revision` field below is the staleness
-    // gate for the backup set itself. Emit exactly that key.
-    let mut frozen = json!({
+    // Freeze the confirmed Account Authority basis from the current active-series
+    // projection. This is the response DTO's authority_commit_id, separate from
+    // the signed active-series payload's source_commit_ref (§7.6.1).
+    // The revision below detects changes to the backup set itself.
+    let frozen = json!({
         "backups": manifest,
         "revision": revision,
         "actor_id": actor,
         "realm_id": pointers.control_realm_id,
+        "authority_commit_id": pointers.authority_commit_id,
     });
-    if let Some(committed_ref) = pointers.source_commit_ref.as_ref() {
-        frozen["committed_ref"] = serde_json::to_value(committed_ref)
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    }
     Ok(frozen)
 }

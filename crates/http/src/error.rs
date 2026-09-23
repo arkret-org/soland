@@ -160,15 +160,15 @@ mod tests {
             Some(ErrorCode::JsonInvalid)
         );
         assert_eq!(
-            ErrorCode::from_wire("directory_unauthorized"),
-            Some(ErrorCode::DirectoryUnauthorized),
+            ErrorCode::from_wire("capability_denied"),
+            Some(ErrorCode::CapabilityDenied),
         );
         assert_eq!(
             error_http_status(ErrorCode::JsonInvalid),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            error_http_status(ErrorCode::DirectoryUnauthorized),
+            error_http_status(ErrorCode::CapabilityDenied),
             StatusCode::FORBIDDEN,
         );
     }

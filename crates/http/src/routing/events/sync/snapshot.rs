@@ -12,10 +12,8 @@ pub(crate) async fn build_sync_snapshot(
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
-    if after_cursor.detail_turn {
-        if let Some(frame) = current_details::frame(state, session, body, after_cursor).await {
-            return frame;
-        }
+    if let Some(frame) = current_details::frame(state, session, body, after_cursor).await {
+        return frame;
     }
     let filter_value = sync_filter_value(body.filter.as_ref());
     // Capture the Station-CAS retention coordinate before reading the
@@ -91,10 +89,8 @@ pub(crate) async fn build_sync_snapshot(
     let mut to_device_limited = false;
     let mut to_device_next_cursor = None;
     let mut to_device_lost = None;
-    let to_device = if let Some(session) = session {
-        if let Err(error) = prune_device_messages_for_limits(state).await {
-            tracing::error!(%error, "failed to prune to-device messages during sync snapshot");
-        }
+    let to_device = if let Some(session) = session.filter(|session| session.agent_session.is_none())
+    {
         let lost_watermark = match state
             .deliveries()
             .device_message_lost_watermark(&session.actor, &session.device_id)
@@ -112,16 +108,25 @@ pub(crate) async fn build_sync_snapshot(
                 to_device_position = to_device_position.max(lost_watermark);
             }
         }
-        let queued = state
+        let selector = crate::routing::identity::device_messages::recipient_queue_selector(session)
+            .expect("human account stream has a human recipient selector");
+        let queued = match state
             .deliveries()
-            .device_messages_after(&session.actor, &session.device_id, 0, 101)
+            .recipient_deliveries_after(&selector, after_cursor.to_device_position, 101)
             .await
-            .unwrap_or_default();
+        {
+            Ok(queued) => queued,
+            Err(error) => {
+                tracing::error!(%error, "recipient delivery queue unavailable during account delta");
+                return serde_json::from_value(json!({"kind":"resync_required"}))
+                    .expect("resync frame");
+            }
+        };
         let queued_count = queued.len();
         let mut page = Vec::new();
         let mut page_bytes = 0usize;
         for message in queued.into_iter().take(100) {
-            let bytes = arkret_canonical::canonical_json_bytes(&message.content)
+            let bytes = arkret_canonical::canonical_json_bytes(&message.delivery)
                 .map_or(usize::MAX, |value| value.len());
             if page_bytes.saturating_add(bytes) > 512 * 1024 {
                 break;
@@ -129,38 +134,63 @@ pub(crate) async fn build_sync_snapshot(
             page_bytes += bytes;
             page.push(message);
         }
+        if page.is_empty() && queued_count > 0 {
+            tracing::warn!(
+                "recipient delivery exceeds account delta frame budget; use the queue pull operation"
+            );
+            return serde_json::from_value(json!({"kind":"resync_required"}))
+                .expect("resync frame");
+        }
         to_device_limited = page.len() < queued_count;
-        let events = device_message_envelopes_after(state, &page);
+        let deliveries = page.iter().map(|record| record.delivery.clone()).collect();
         if let Some(max_position) = page.iter().map(|message| message.position).max() {
             to_device_position = to_device_position.max(max_position);
-            to_device_ack_token = state
+            to_device_ack_token = match state
                 .deliveries()
-                .issue_device_message_ack_token(&session.actor, &session.device_id, max_position)
+                .issue_recipient_ack_token(&selector, max_position)
                 .await
-                .ok()
-                .flatten();
+            {
+                Ok(Some(token)) => Some(token),
+                Ok(None) => {
+                    tracing::error!("recipient delivery ACK token was not issued for a queued row");
+                    return serde_json::from_value(json!({"kind":"resync_required"}))
+                        .expect("resync frame");
+                }
+                Err(error) => {
+                    tracing::error!(%error, "recipient delivery ACK token unavailable");
+                    return serde_json::from_value(json!({"kind":"resync_required"}))
+                        .expect("resync frame");
+                }
+            };
             if to_device_limited {
-                to_device_next_cursor = Some(
-                    cursor::device_messages_cursor(state, session, to_device_position)
-                        .await
-                        .unwrap_or_else(|error| {
-                            tracing::error!(?error, "device queue continuation unavailable");
-                            String::new()
-                        }),
-                );
+                to_device_next_cursor = match cursor::device_messages_cursor(
+                    state,
+                    session,
+                    to_device_position,
+                )
+                .await
+                {
+                    Ok(cursor) => Some(cursor),
+                    Err(error) => {
+                        tracing::error!(?error, "recipient queue continuation unavailable");
+                        return serde_json::from_value(json!({"kind":"resync_required"}))
+                            .expect("resync frame");
+                    }
+                };
             }
         }
         if to_device_limited && to_device_next_cursor.is_none() {
-            to_device_next_cursor = Some(
-                cursor::device_messages_cursor(state, session, to_device_position)
-                    .await
-                    .unwrap_or_else(|error| {
-                        tracing::error!(?error, "device queue continuation unavailable");
-                        String::new()
-                    }),
-            );
+            to_device_next_cursor =
+                match cursor::device_messages_cursor(state, session, to_device_position).await {
+                    Ok(cursor) => Some(cursor),
+                    Err(error) => {
+                        tracing::error!(?error, "recipient queue continuation unavailable");
+                        return serde_json::from_value(json!({"kind":"resync_required"}))
+                            .expect("resync frame");
+                    }
+                };
         }
-        events
+        deliveries
     } else {
         Vec::new()
     };
@@ -209,8 +239,8 @@ pub(crate) async fn build_sync_snapshot(
         realms: Some(arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeRealms {
             entries: sync_realms,
         }),
-        to_device: Some(arkret_models_collaboration::sync_frames::account_subscribe::DeviceMessageContainer {
-            messages: to_device,
+        to_device: Some(arkret_models_collaboration::sync_frames::account_subscribe::RecipientDeliveryContainer {
+            deliveries: to_device,
             ack_token: to_device_ack_token,
             lost: to_device_lost,
             limited: to_device_limited.then_some(true),
@@ -415,7 +445,7 @@ mod account_notification_tests {
                 Some(
                     arkret_models_collaboration::sync_frames::account_subscribe::NotificationData::AgentRuntimeApproval(
                         arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalNotificationData {
-                            approval_request_id: arkret_wire::OpaqueLocalId::new(
+                            approval_request_id: arkret_models_collaboration::account_subscribe_projections::AgentRuntimeApprovalRequestId::new(
                                 "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
                             )
                             .unwrap(),

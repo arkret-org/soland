@@ -1,235 +1,27 @@
-//! Development-only accepted Realm Event installation for live conformance.
+//! Development-only Realm fixture admission.
 //!
-//! The installer persists canonical Events and drives the production SDK cell
-//! projector plus Soland reducer. It does not create federation outcomes or
-//! mutate the outbox, so live scenarios still exercise the production submit,
-//! fanout, retry, authority recheck, and delivery-status paths.
+//! The former installer wrote Events directly to the canonical log and Cell
+//! projection, then returned success without a signed RealmCommit. That is not
+//! an accepted Event under the current authority protocol. Keep the route
+//! explicit until conformance fixtures can submit a verified Event/Commit unit
+//! through the same durable authority transaction as production requests.
 
-use arkret_wire::{ControlProposalAck, Event, EventKind, OperationId, OperationKind};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use soland_http::error::AppError;
-use soland_services::events::{AcceptedEvent, ProjectedEvent};
-use soland_services::projection::ProjectionEffectView;
 
-use crate::state::AppState;
-use crate::{JsonResult, json_ok};
-
-const MAX_FIXTURE_EVENTS: usize = 64;
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmFixtureInstallRequest {
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
-    events: Vec<Event>,
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
-    control_proposal_acks: Vec<ControlProposalAck>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RealmFixtureInstallOutcome {
-    accepted_event_count: usize,
-    projected_event_count: usize,
-}
+use crate::JsonResult;
 
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.conformance.realm_fixture.install",
     tags("conformance")
 )]
-pub async fn install(
-    depot: &mut Depot,
-    body: JsonBody<RealmFixtureInstallRequest>,
-) -> JsonResult<RealmFixtureInstallOutcome> {
+pub async fn install(_body: JsonBody<Value>) -> JsonResult<Value> {
     super::ensure_enabled()?;
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    if body.events.is_empty() || body.events.len() > MAX_FIXTURE_EVENTS {
-        return Err(AppError::param_invalid(
-            "Realm fixture requires between one and 64 Events",
-        ));
-    }
-    let realm_id = body.events[0].realm_id.clone();
-    if body.events.iter().any(|event| event.realm_id != realm_id) {
-        return Err(AppError::param_invalid(
-            "Realm fixture Events must share one Realm",
-        ));
-    }
-    let already_has_realm = state
-        .projections()
-        .snapshot()
-        .realm_null_subject_cells
-        .keys()
-        .any(|(candidate, _)| candidate == realm_id.as_str());
-    if !already_has_realm && body.events[0].kind != EventKind::RealmCreate {
-        return Err(AppError::param_invalid(
-            "a new Realm fixture must begin with ak.realm.create",
-        ));
-    }
-
-    let ack_by_digest = body
-        .control_proposal_acks
-        .iter()
-        .map(|ack| (ack.proposal_digest.clone(), ack))
-        .collect::<std::collections::BTreeMap<_, _>>();
-
-    let received_at = chrono::Utc::now();
-    let mut projected = 0;
-    let mut staged_bootstrap = Vec::new();
-    let mut pending_bootstrap_unit = Vec::new();
-    let genesis_live_digest_suite = (!already_has_realm)
-        .then(|| arkret::declared_genesis_live_digest_suite(&body.events[0]))
-        .transpose()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    for (index, event) in body.events.iter().enumerate() {
-        let digest_suite = if already_has_realm {
-            state
-                .projections()
-                .realm_digest_suite(event.realm_id.as_str())
-        } else if index == 0 {
-            arkret_canonical::DigestSuite::Sha256
-        } else {
-            genesis_live_digest_suite.expect("new Realm fixture derived its genesis digest suite")
-        };
-        let event_digest = event
-            .event_digest_with_digest_suite(digest_suite)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        if arkret_schema::classify_event_execution(event)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?
-            == Some(arkret_wire::CbsEffectPlane::Control)
-            || genesis_live_digest_suite.is_some()
-        {
-            let proposal_digest = arkret_wire::Hash::new(event_digest.clone())
-                .map_err(|error| AppError::param_invalid(error.to_string()))?;
-            let ack = ack_by_digest.get(&proposal_digest).ok_or_else(|| {
-                AppError::param_invalid(format!(
-                    "Realm fixture Control Event {} is missing its Control Proposal Ack",
-                    event.event_id
-                ))
-            })?;
-            let member = arkret_state::state::ControlUnitIngressMember {
-                event: event.clone(),
-                digest_suite,
-                ingress: arkret_state::state::store::ControlProposalIngress::AckRequired(
-                    (*ack).clone(),
-                ),
-            };
-            if already_has_realm {
-                state
-                    .projections()
-                    .put_pending_control_unit(std::slice::from_ref(&member))
-                    .await
-                    .map_err(|error| AppError::param_invalid(error.to_string()))?;
-            } else {
-                pending_bootstrap_unit.push(member);
-            }
-        }
-        let envelope = serde_json::to_value(event)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        let digest_payload = event
-            .digest_payload()
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        let canonical_bytes = arkret_canonical::canonical_json_bytes(&digest_payload)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        state
-            .event_queries()
-            .store_canonical_event(AcceptedEvent {
-                event_id: event.event_id.to_string(),
-                actor_id: event.actor_id.to_string(),
-                actor_seq: event.actor_seq,
-                realm_id: Some(event.realm_id.to_string()),
-                kind: event.kind.as_str().to_owned(),
-                schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
-                digest_suite,
-                canonical_digest: event_digest,
-                canonical_bytes,
-                envelope,
-                received_at,
-            })
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-
-        let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-            OperationId::new(arkret_identifiers::new_prefixed_uuid7("ak:operation:"))
-                .map_err(|error| AppError::internal(error.to_string()))?,
-            OperationKind::Create,
-            None,
-            event,
-            digest_suite,
-        )
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        let writes = state
-            .projections()
-            .project_accepted_cell_writes_with_digest_suite(event, digest_suite)
-            .map_err(AppError::param_invalid)?;
-        if already_has_realm {
-            if let ProjectionEffectView::Rejected { reason } =
-                state
-                    .projections()
-                    .apply_projected(&operation, &writes, state.hlc())
-            {
-                return Err(AppError::param_invalid(format!(
-                    "Realm fixture projection rejected: {reason}"
-                )));
-            }
-        } else {
-            staged_bootstrap.push(soland_services::projection::ProjectedOperation {
-                operation: operation.clone(),
-                cell_writes: writes,
-            });
-        }
-        state
-            .event_queries()
-            .append_projected_event(ProjectedEvent {
-                event_id: event.event_id.to_string(),
-                realm_id: event.realm_id.to_string(),
-                event_kind: event.kind.clone(),
-                operation_kind: "create".to_owned(),
-                operation_id: Some(operation.operation_id.to_string()),
-                sender: Some(event.actor_id.to_string()),
-                payload: serde_json::Value::Object(event.payload.clone().into_iter().collect()),
-                created_at: event.created_at,
-                received_at,
-            })
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        projected += 1;
-    }
-    if !already_has_realm {
-        state
-            .projections()
-            .put_pending_control_unit(&pending_bootstrap_unit)
-            .await
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        let staged = state
-            .projections()
-            .stage_realm_bootstrap(&staged_bootstrap, false)
-            .map_err(|error| {
-                AppError::param_invalid(format!(
-                    "Realm fixture bootstrap projection rejected: {}",
-                    error.reason
-                ))
-            })?;
-        state
-            .projections()
-            .install_staged_realm_bootstrap(staged)
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "Realm fixture bootstrap projection merge failed: {}",
-                    error.reason
-                ))
-            })?;
-        for projected_operation in &staged_bootstrap {
-            crate::routing::events::projection::ensure_projected_realm(
-                state,
-                body.events[0].actor_id.signing_principal_id().as_str(),
-                &projected_operation.operation,
-            )
-            .await;
-        }
-    }
-
-    json_ok(RealmFixtureInstallOutcome {
-        accepted_event_count: body.events.len(),
-        projected_event_count: projected,
-    })
+    Err(crate::app_error!(
+        FailedPrecondition,
+        "Realm fixture installation requires a signed Event/RealmCommit unit and atomic authority admission",
+    )
+    .with_internal_reason("conformance_fixture_commit_unit_unavailable"))
 }
