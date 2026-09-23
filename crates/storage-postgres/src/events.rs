@@ -114,8 +114,6 @@ struct DirectConversationFoundingSlotRow {
     event_ids: Value,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
-    #[diesel(sql_type = Binary)]
-    receipt_bytes: Vec<u8>,
     #[diesel(sql_type = Timestamptz)]
     accepted_at: chrono::DateTime<chrono::Utc>,
 }
@@ -133,7 +131,6 @@ impl TryFrom<DirectConversationFoundingSlotRow> for DirectConversationFoundingSl
             main_strand_id: row.main_strand_id,
             event_ids: serde_json::from_value(row.event_ids).map_err(PersistenceError::database)?,
             idempotency_key: row.idempotency_key,
-            receipt_bytes: row.receipt_bytes,
             accepted_at: row.accepted_at,
         })
     }
@@ -174,7 +171,7 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT founder_id, trust_domain_id, pair_key, founding_unit_digest, realm_id, \
-                    main_strand_id, event_ids, idempotency_key, receipt_bytes, accepted_at \
+                    main_strand_id, event_ids, idempotency_key, accepted_at \
              FROM direct_conversation_founding_slots \
              WHERE founder_id = $1 AND trust_domain_id = $2 AND pair_key = $3",
         )

@@ -3618,7 +3618,6 @@ CREATE TABLE public.direct_conversation_founding_slots (
     main_strand_id text NOT NULL,
     event_ids jsonb NOT NULL,
     idempotency_key text NOT NULL,
-    receipt_bytes bytea NOT NULL,
     accepted_at timestamptz NOT NULL,
     CONSTRAINT direct_conversation_founding_slots_trust_domain_check CHECK ((trust_domain_id ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
     PRIMARY KEY (founder_id, trust_domain_id, pair_key),
@@ -4063,78 +4062,6 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER account_global_realm_create_withdrawal AFTER UPDATE OF state ON canonical_events FOR EACH ROW EXECUTE FUNCTION invalidate_account_device_create();
-
--- Data-plane materialized sources remain independent from receiver arrival
--- order and from the governance Seal checkpoints. Scope is part of identity.
-CREATE TABLE current_data_sources (
-    target_kind TEXT NOT NULL, target_key TEXT NOT NULL,
-    realm_id TEXT NOT NULL,
-    scope_key TEXT NOT NULL,
-    cell_id TEXT NOT NULL,
-    event_id BYTEA NOT NULL REFERENCES canonical_events(id),
-    event_digest TEXT NOT NULL,
-    source_value JSONB NOT NULL,
-    causal_bases TEXT[] NOT NULL,
-    causal_depth BIGINT NOT NULL CHECK(causal_depth BETWEEN 0 AND 9007199254740991),
-    available BOOLEAN NOT NULL DEFAULT TRUE,
-    PRIMARY KEY (realm_id,scope_key,cell_id,event_id),
-    UNIQUE (realm_id,scope_key,cell_id,event_digest)
-);
-CREATE INDEX current_data_source_dependency ON current_data_sources USING gin(causal_bases);
-CREATE INDEX current_data_source_event ON current_data_sources(event_id);
-CREATE INDEX current_data_source_digest ON current_data_sources(event_digest);
--- A source withdrawal or an unfinished domain fold must never look like an
--- empty complete baseline. Rebuilders clear this only with full publication.
-CREATE TABLE current_data_pending (
- target_kind TEXT NOT NULL, target_key TEXT NOT NULL,
- realm_id TEXT NOT NULL, scope_key TEXT NOT NULL, cell_id TEXT NOT NULL,
- PRIMARY KEY(realm_id,scope_key,cell_id)
-);
-CREATE INDEX current_data_pending_target ON current_data_pending(realm_id,target_kind,target_key);
-CREATE TABLE current_data_winners (
-    realm_id TEXT NOT NULL,
-    scope_key TEXT NOT NULL,
-    cell_id TEXT NOT NULL,
-    event_id BYTEA NOT NULL,
-    PRIMARY KEY (realm_id,scope_key,cell_id),
-    FOREIGN KEY (realm_id,scope_key,cell_id,event_id)
-      REFERENCES current_data_sources(realm_id,scope_key,cell_id,event_id)
-);
-
-CREATE TABLE current_data_dependencies (
- source_event_id BYTEA NOT NULL REFERENCES canonical_events(id),
- ancestor_event_id BYTEA NOT NULL REFERENCES canonical_events(id),
- PRIMARY KEY(source_event_id,ancestor_event_id)
-);
-CREATE INDEX current_data_dependencies_ancestor ON current_data_dependencies(ancestor_event_id,source_event_id);
-
-CREATE FUNCTION invalidate_current_data_sources() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF OLD.state='committed' AND NEW.state<>'committed' THEN
-        WITH RECURSIVE affected(realm_id,scope_key,cell_id,event_digest) AS (
-            SELECT realm_id,scope_key,cell_id,event_digest FROM current_data_sources
-            WHERE event_id=OLD.id OR event_id IN (
-                SELECT source_event_id FROM current_data_dependencies WHERE ancestor_event_id=OLD.id)
-            UNION
-            SELECT child.realm_id,child.scope_key,child.cell_id,child.event_digest
-            FROM current_data_sources child JOIN affected parent
-              ON child.realm_id=parent.realm_id AND child.scope_key=parent.scope_key
-             AND child.cell_id=parent.cell_id AND child.causal_bases @> ARRAY[parent.event_digest]
-        ), updated AS (
-            UPDATE current_data_sources source SET available=FALSE FROM affected
-            WHERE source.realm_id=affected.realm_id AND source.scope_key=affected.scope_key
-              AND source.cell_id=affected.cell_id AND source.event_digest=affected.event_digest
-            RETURNING source.realm_id,source.scope_key,source.cell_id,source.target_kind,source.target_key
-        )
-        INSERT INTO current_data_pending(realm_id,scope_key,cell_id,target_kind,target_key)
-        SELECT DISTINCT realm_id,scope_key,cell_id,target_kind,target_key FROM updated
-        ON CONFLICT DO NOTHING;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-CREATE TRIGGER current_data_source_withdrawal AFTER UPDATE OF state ON canonical_events
-FOR EACH ROW EXECUTE FUNCTION invalidate_current_data_sources();
 
 CREATE TABLE current_result_heads (
  realm_id TEXT NOT NULL, selector_key TEXT COLLATE "C" NOT NULL,

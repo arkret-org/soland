@@ -558,41 +558,13 @@ pub async fn invite_token_matches_realm(state: &AppState, realm_id: &str, token:
         .is_some_and(|resolved_realm_id| resolved_realm_id == realm_id)
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum InviteTokenRealmResolution {
-    NotFound,
-    FrontierUnavailable,
-}
-
-pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<String> {
-    let _ = invite_token_realm_resolution(state, token).await;
+/// A pending invite has no proven lifecycle state until the accepted
+/// Event/Commit projection exposes an authority cut for that invite, so no
+/// token resolves to a Realm yet.
+pub async fn invite_token_realm_id(_state: &AppState, _token: &str) -> Option<String> {
     None
 }
 
-/// A pending invite has no proven lifecycle state until the accepted
-/// Event/Commit projection exposes an authority cut for that invite.
-pub(crate) async fn invite_token_realm_resolution(
-    state: &AppState,
-    token: &str,
-) -> InviteTokenRealmResolution {
-    let token = token.trim();
-    if token.is_empty() {
-        return InviteTokenRealmResolution::NotFound;
-    }
-    let Ok(invites) = state.realm_invites().snapshot_all().await else {
-        return InviteTokenRealmResolution::FrontierUnavailable;
-    };
-    let now = now();
-    if invites.into_iter().any(|invite| {
-        invite.status == "pending"
-            && invite.invite_token == token
-            && invite.expires_at.is_none_or(|expires_at| expires_at > now)
-    }) {
-        InviteTokenRealmResolution::FrontierUnavailable
-    } else {
-        InviteTokenRealmResolution::NotFound
-    }
-}
 // `realm_id_accessible_for_id` is the visibility path with looser semantics
 // for the backfill / subscribe edge.
 

@@ -787,7 +787,7 @@ mod account_query_tests {
             "kind": "delta",
             "cursor": "ak:cursor:pending",
             "realms": {
-                "ak:realm:pending": {"unavailable": {"error_code": "frontier_unavailable"}}
+                "ak:realm:pending": {"unavailable": {"error_code": "revision_unavailable"}}
             }
         });
         let frame = serde_json::from_value(pending.clone()).unwrap();
