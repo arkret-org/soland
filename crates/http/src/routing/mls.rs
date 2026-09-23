@@ -1642,8 +1642,7 @@ async fn build_peer_claim_outcome(
     request_digest: &str,
     claimed: &MlsKeyPackageRow,
 ) -> Result<PeerKeyPackagesClaimOutcome, AppError> {
-    let claims =
-        vec![keypackage_claim_record(state, claimed, body.claim_request_id.as_str()).await?];
+    let claims = vec![keypackage_claim_record(state, claimed, body).await?];
     let claims_value = serde_json::to_value(&claims)
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
@@ -3028,7 +3027,7 @@ async fn keypackage_device_revocation_gate(
             )
             .with_wire_code("claim_failed")
         })?;
-    if selector.target_device_authorize_event_id != device_authorize_event_id {
+    if selector.authorization_ref.event_id.as_str() != device_authorize_event_id {
         return Err(crate::app_error!(
             FailedPrecondition,
             "KeyPackage device authorization is not current",
@@ -3134,7 +3133,7 @@ async fn verify_agent_keypackage_batch(
         .try_into()
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
     let actual_public_key_digest =
-        arkret_signatures::agent_evidence::agent_signing_public_key_digest(&binding.public_key)
+        arkret_signatures::agent::agent_runtime_public_key_digest(&binding.public_key)
             .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if actual_public_key_digest.as_str() != expected_public_key_digest
         || signature.kid.as_str() != verification_method
@@ -4079,10 +4078,20 @@ fn last_resort_matches_realm(kp: &MlsKeyPackageRow, intended_realm_id: &str) -> 
 async fn keypackage_claim_record(
     state: &AppState,
     record: &MlsKeyPackageRow,
-    claim_request_id: &str,
+    request: &PeerKeyPackagesClaimRequestBody,
 ) -> Result<KeyPackageClaimRecord, AppError> {
     let principal_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
         .map_err(|error| AppError::internal(format!("invalid principal_id: {error}")))?;
+    let account_id = if let Some(target) = &request.target_account_id {
+        if target.principal_id != principal_id || target.station_id != state.service_core_id() {
+            return Err(AppError::capability_denied(
+                "KeyPackage claim target account is not hosted by this Station",
+            ));
+        }
+        target.clone()
+    } else {
+        arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id())
+    };
     let pairwise_verification_method = if record.device_authorize_event_id.is_none()
         && record.agent_key_authorize_event_id.is_none()
     {
@@ -4135,7 +4144,7 @@ async fn keypackage_claim_record(
     claim_id_preimage.push(0);
     claim_id_preimage.extend(record.id.as_bytes());
     claim_id_preimage.push(0);
-    claim_id_preimage.extend(claim_request_id.as_bytes());
+    claim_id_preimage.extend(request.claim_request_id.as_str().as_bytes());
     let claim_id = format!(
         "claim-{}",
         URL_SAFE_NO_PAD.encode(arkret_canonical::sha256_digest(claim_id_preimage))
@@ -4143,6 +4152,7 @@ async fn keypackage_claim_record(
     Ok(KeyPackageClaimRecord {
         claim_id,
         keypackage_ref: record.keypackage_ref.clone(),
+        actor_id: arkret_wire::ActorId::account(account_id),
         principal_id,
         device_id,
         agent_id,
