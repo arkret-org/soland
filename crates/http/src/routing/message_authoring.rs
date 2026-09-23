@@ -66,8 +66,7 @@ async fn device_active(
 /// authenticated device is `capability_denied`; absent accepted MLS state is
 /// `revision_unavailable`; an uncovered key-access revision is
 /// `failed_precondition` / `epoch_update_required`; and a frozen epoch or group
-/// state the scope has moved past is `failed_precondition` /
-/// `mls_governance_binding_stale`.
+/// state the scope has moved past is `epoch_mismatch`.
 async fn validate_encryption_context(
     state: &AppState,
     content: &MessageAuthoringContent,
@@ -157,10 +156,9 @@ async fn validate_encryption_context(
         })
     {
         return Err(crate::app_error!(
-            FailedPrecondition,
+            EpochMismatch,
             "frozen message encryption context is no longer applicable",
-        )
-        .with_reason_code(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE));
+        ));
     }
     Ok(())
 }
@@ -655,10 +653,18 @@ mod tests {
             Some("epoch_update_required"),
         )
         .await;
+        accept_commit(&state, &scope, &event_ref(1), &event_ref(2)).await;
+        assert_problem(
+            validate_encryption_context(&state, &content, &scope, DEVICE).await,
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            Some("epoch_update_required"),
+        )
+        .await;
     }
 
     #[tokio::test]
-    async fn message_authoring_superseded_epoch_is_mls_governance_binding_stale() {
+    async fn message_authoring_superseded_epoch_is_epoch_mismatch() {
         let state = test_state();
         let scope = realm_scope(REALM);
         let (genesis, commit) = (event_ref(1), event_ref(2));
@@ -668,8 +674,8 @@ mod tests {
         assert_problem(
             validate_encryption_context(&state, &stale_content, &scope, DEVICE).await,
             StatusCode::CONFLICT,
-            "failed_precondition",
-            Some("mls_governance_binding_stale"),
+            "epoch_mismatch",
+            None,
         )
         .await;
         let stale_metadata = mls_content(
@@ -681,16 +687,16 @@ mod tests {
         assert_problem(
             validate_encryption_context(&state, &stale_metadata, &scope, DEVICE).await,
             StatusCode::CONFLICT,
-            "failed_precondition",
-            Some("mls_governance_binding_stale"),
+            "epoch_mismatch",
+            None,
         )
         .await;
         let wrong_group_state = mls_content(standard(1, event_ref(3)), None, scope.clone(), DEVICE);
         assert_problem(
             validate_encryption_context(&state, &wrong_group_state, &scope, DEVICE).await,
             StatusCode::CONFLICT,
-            "failed_precondition",
-            Some("mls_governance_binding_stale"),
+            "epoch_mismatch",
+            None,
         )
         .await;
     }
