@@ -187,6 +187,21 @@ fn unlock_audience(state: &AppState) -> Result<String, AppError> {
     Ok(url.origin().ascii_serialization())
 }
 
+fn enforce_unlock_signer_admission(
+    key: &ed25519_dalek::VerifyingKey,
+    method: &str,
+) -> Result<(), AppError> {
+    let verification_method = arkret_wire::DidUrl::new(method.to_owned())
+        .map_err(|_| AppError::capability_denied("unlock verification method is invalid"))?;
+    let did = arkret_identity::verification_method_did(method)
+        .map_err(|_| AppError::capability_denied("unlock signer DID is invalid"))?;
+    crate::test_material_admission::enforce_ed25519_admission(key, &did, &verification_method, None)
+        .map_err(|_| {
+            AppError::capability_denied("unlock signer uses formal test material")
+                .with_reason_code(arkret_wire::ReasonCode::TEST_SIGNING_MATERIAL_DENIED)
+        })
+}
+
 pub(super) async fn verify_key_backup_unlock_proof(
     state: &AppState,
     proof: &Value,
@@ -344,6 +359,10 @@ pub(super) async fn verify_key_backup_unlock_proof(
                 .map_err(|_| AppError::capability_denied("invalid frozen replacement key"))?
         }
     };
+    // The method and key have been bound to the selected device or frozen
+    // replacement identity. Published fixture keys and reserved identifiers
+    // cannot become an unlock authority even when their signature is valid.
+    enforce_unlock_signer_admission(&key, method)?;
     let signature = URL_SAFE_NO_PAD
         .decode(typed.auth_data.signature.as_str())
         .map_err(|_| AppError::capability_denied("invalid unlock signature"))?;
@@ -445,7 +464,47 @@ pub(super) async fn issue_key_backup_unlock_challenge(
 
 #[cfg(test)]
 mod tests {
-    use super::key_backup_verification_method_matches_device_key;
+    use ed25519_dalek::{Signer as _, SigningKey, Verifier as _};
+
+    use super::{
+        enforce_unlock_signer_admission, key_backup_verification_method_matches_device_key,
+    };
+
+    #[test]
+    fn published_unlock_signer_is_denied_even_with_a_valid_signature() {
+        let fixture_seed = std::array::from_fn(|index| index as u8);
+        let published = SigningKey::from_bytes(&fixture_seed);
+        let transcript = b"key backup unlock proof transcript";
+        let signature = published.sign(transcript);
+        published
+            .verifying_key()
+            .verify(transcript, &signature)
+            .unwrap();
+
+        assert!(
+            enforce_unlock_signer_admission(
+                &published.verifying_key(),
+                "did:web:keys.example#runtime-1",
+            )
+            .is_err()
+        );
+
+        let ordinary = SigningKey::from_bytes(&[42; 32]);
+        assert!(
+            enforce_unlock_signer_admission(
+                &ordinary.verifying_key(),
+                "did:web:keys.example#runtime-1",
+            )
+            .is_ok()
+        );
+        assert!(
+            enforce_unlock_signer_admission(
+                &ordinary.verifying_key(),
+                "did:web:keys.example#device-fixture",
+            )
+            .is_err()
+        );
+    }
 
     // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
     // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
