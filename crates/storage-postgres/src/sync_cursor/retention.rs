@@ -170,7 +170,7 @@ pub(super) async fn prune(pool: &PgPool, now_ms: i64) -> PersistenceResult<usize
         lock(conn,true).await?;
         let pruned = sql_query("DELETE FROM sync_cursor_handles WHERE id IN (SELECT id FROM sync_cursor_handles WHERE expires_at_ms<=$1 ORDER BY expires_at_ms LIMIT 10000)")
             .bind::<BigInt,_>(now_ms).execute(&mut *conn).await?;
-        sql_query("DELETE FROM account_sync_snapshot_reservations WHERE expires_at_ms<=$1")
+        sql_query("DELETE FROM account_sync_snapshot_reservations WHERE bucket IN (SELECT bucket FROM account_sync_snapshot_reservations WHERE expires_at_ms<=$1 ORDER BY bucket LIMIT 10000)")
             .bind::<BigInt,_>(now_ms).execute(&mut *conn).await?;
         // Indexed minima avoid scanning every active handle. Expired handles
         // awaiting the next bounded deletion batch conservatively retain data.
