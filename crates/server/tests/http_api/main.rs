@@ -20,3 +20,4 @@ mod organization_registration;
 mod retired_seal_mls_routes;
 mod retired_seal_pending_control;
 mod seal_frontier;
+mod self_signer_keys_query;
