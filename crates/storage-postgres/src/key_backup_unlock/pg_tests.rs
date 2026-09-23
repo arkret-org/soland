@@ -112,8 +112,7 @@ impl Fixture {
             },
             contents: vec![crypto::SecretStorageContentIndex {
                 item_kind: crypto::SecretStorageItemKind::RecoveryKeyShare,
-                secret_id: Some("share".into()),
-                secret_version: None,
+                secret_id: "share".into(),
             }],
             ciphertext: wire::Base64UrlString::new(arkret_canonical::base64url_encode([0u8; 24]))
                 .unwrap(),

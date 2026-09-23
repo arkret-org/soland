@@ -56,22 +56,10 @@ pub(super) fn validate_key_backup_body_typed(
     }
     validate_key_backup_encryption_typed(backup)?;
     validate_key_backup_domain_separation_typed(backup)?;
-    if backup.backup_kind == BackupKind::MlsHistory {
-        validate_mls_history_opaque_only_typed(backup)?;
-    }
     validate_recovery_policy_ref_shape_typed(backup)?;
-    validate_key_backup_auth_data_typed(backup)?;
-    if backup.contents.is_empty() {
-        return Err(schema_error("key backup contents must not be empty"));
-    }
-    // `KeyBackupContentIndex` is the closed union of
-    // `key-backup.schema.json#/properties/contents`, so the `item_kind`
-    // vocabulary and the per-branch field sets are already decided by the type.
-    // `validate_envelope_fields` adds the branch rules (`mls_history` indexes
-    // exactly one canonical `history_secret_ranges` entry).
-    backup
-        .validate_envelope_fields()
-        .map_err(|error| schema_error(error.to_string()))
+    // The SDK's closed SecretStorageContentIndex and KeyBackup::validate above
+    // require a nonempty index containing only item_kind and secret_id.
+    Ok(())
 }
 
 pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
@@ -93,11 +81,6 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
         })?;
     match backup.encryption.recipient_method {
         KeyBackupRecipientMethod::PassphraseKdf => {
-            if backup.backup_kind == BackupKind::MlsHistory {
-                return Err(schema_error(
-                    "mls_history key backups must use secret_storage_key or recovery_public_key",
-                ));
-            }
             validate_key_backup_kdf_typed(backup)?;
             let nonce_salt = backup
                 .encryption
@@ -113,7 +96,8 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
             let key_commitment = backup
                 .encryption
                 .key_commitment
-                .as_deref()
+                .as_ref()
+                .map(arkret_wire::Hash::as_str)
                 .unwrap_or_default();
             if !is_sha_digest(key_commitment) {
                 return Err(schema_error(
@@ -123,14 +107,6 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
             Ok(())
         }
         KeyBackupRecipientMethod::SecretStorageKey => {
-            if !matches!(
-                backup.backup_kind,
-                BackupKind::MlsHistory | BackupKind::SecretStorage
-            ) {
-                return Err(schema_error(
-                    "secret_storage_key is only valid for mls_history or secret_storage key backups",
-                ));
-            }
             if backup.encryption.kdf.is_some() {
                 return Err(schema_error(
                     "secret_storage_key key backups must not carry encryption.kdf",
@@ -256,93 +232,6 @@ pub(super) fn validate_key_backup_kdf_typed(backup: &KeyBackup) -> Result<(), Ap
     Ok(())
 }
 
-pub(super) fn scan_mls_history_opaque_value(value: &Value, path: &str) -> Result<(), AppError> {
-    match value {
-        Value::Object(map) => {
-            for (key, child) in map {
-                scan_mls_history_opaque_field(key, child, path)?;
-            }
-            Ok(())
-        }
-        Value::Array(items) => {
-            for (idx, child) in items.iter().enumerate() {
-                scan_mls_history_opaque_value(child, &format!("{path}/{idx}"))?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-pub(super) fn scan_mls_history_opaque_field(
-    key: &str,
-    child: &Value,
-    path: &str,
-) -> Result<(), AppError> {
-    let key_lower = key.to_ascii_lowercase();
-    if matches!(
-        key_lower.as_str(),
-        "plaintext"
-            | "plain_text"
-            | "serialized_state"
-            | "state_bytes"
-            | "group_state"
-            | "passphrase"
-            | "mls_passphrase"
-            | "snapshot_secret"
-    ) {
-        return Err(schema_error(format!(
-            "mls_history key backups must not carry plaintext field {path}/{key}"
-        )));
-    }
-    let child_path = if path.is_empty() {
-        format!("/{key}")
-    } else {
-        format!("{path}/{key}")
-    };
-    scan_mls_history_opaque_value(child, &child_path)
-}
-
-pub(super) fn validate_mls_history_opaque_only_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    for (key, value) in backup.extra.iter() {
-        scan_mls_history_opaque_field(key, value, "")?;
-    }
-    for (key, value) in backup.encryption.extra.iter() {
-        scan_mls_history_opaque_field(key, value, "/encryption")?;
-    }
-    if let Some(kdf) = &backup.encryption.kdf {
-        for (key, value) in kdf.params.extra.iter() {
-            scan_mls_history_opaque_field(key, value, "/encryption/kdf/params")?;
-        }
-        for (key, value) in kdf.extra.iter() {
-            scan_mls_history_opaque_field(key, value, "/encryption/kdf")?;
-        }
-    }
-    for (key, value) in backup.encryption.aead.extra.iter() {
-        scan_mls_history_opaque_field(key, value, "/encryption/aead")?;
-    }
-    for (idx, item) in backup.contents.iter().enumerate() {
-        let extra = match item {
-            arkret_models_crypto::KeyBackupContentIndex::SecretStorage(index) => &index.extra,
-            arkret_models_crypto::KeyBackupContentIndex::HistorySecretRanges(index) => &index.extra,
-        };
-        for (key, value) in extra.iter() {
-            scan_mls_history_opaque_field(key, value, &format!("/contents/{idx}"))?;
-        }
-    }
-    if let Some(auth_data) = &backup.auth_data {
-        for (key, value) in auth_data.extra.iter() {
-            scan_mls_history_opaque_field(key, value, "/auth_data")?;
-        }
-    }
-    if let Some(retention) = &backup.retention {
-        for (key, value) in &retention.extra {
-            scan_mls_history_opaque_field(key, value, "/retention")?;
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn typed_recovery_policy_ref(backup: &KeyBackup) -> Option<(&str, u64)> {
     let policy_ref = backup.recovery_policy_ref.as_ref()?;
     Some((policy_ref.policy_id.as_str(), policy_ref.policy_version))
@@ -368,14 +257,6 @@ pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Re
         ));
     }
 
-    Ok(())
-}
-
-pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<(), AppError> {
-    backup
-        .auth_data
-        .as_ref()
-        .ok_or_else(|| schema_error("key backup auth_data is required"))?;
     Ok(())
 }
 
