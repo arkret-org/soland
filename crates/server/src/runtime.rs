@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +11,6 @@ use soland_http::state::{
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
-use soland_services::projection::EventSealCommitPort;
 use soland_storage_postgres::{Db, PgPool};
 use tokio::sync::mpsc;
 use tokio_postgres::{AsyncMessage, NoTls};
@@ -29,26 +27,11 @@ pub fn build_app_state(
     service_resolution_commitment: arkret_models_identity::ResolutionCommitment,
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {
-    let cell_registry = soland_services::projection::ProjectionService::try_sdk_cell_registry()
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "canonical shared transition registry failed startup validation: {error}"
-            )
-        })?;
-    let stores =
-        soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
     let serving_identity = service_identity
         .identity()
         .ok_or_else(|| anyhow::anyhow!("runtime requires a serving service identity"))?;
     let service_id = serving_identity.service_id.to_string();
-    let projections = soland_services::projection::ProjectionService::new(
-        stores.control_event_store,
-        stores.seal_store,
-        stores.cell_store,
-        stores.cell_registry,
-        Arc::new(RuntimeEventSealCommitter(stores.event_seal_committer)),
-        &service_id,
-    );
+    let projections = soland_services::projection::ProjectionService::new(&service_id);
     let realm_directory = soland_http::state::build_realm_directory(
         &config,
         &serving_identity.did,
@@ -86,59 +69,6 @@ struct RuntimeSettingsPersistence {
 }
 
 struct RuntimeDatabaseHealth(Db);
-struct RuntimeEventSealCommitter(Arc<dyn soland_storage_postgres::EventSealCommitStore>);
-
-#[async_trait::async_trait]
-impl EventSealCommitPort for RuntimeEventSealCommitter {
-    async fn commit_if_head(
-        &self,
-        seal: &arkret_wire::Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        expected_store_head: Option<&arkret_wire::SealId>,
-        new_ops: &[(
-            arkret_identifiers::CellRef,
-            arkret_state::state_model::ordered_log::IssuedOp,
-        )],
-        covered: &BTreeSet<arkret_wire::Hash>,
-        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> arkret_state::state::StoreResult<bool> {
-        self.0
-            .commit_if_head(
-                seal,
-                digest_suite,
-                expected_store_head,
-                new_ops,
-                covered,
-                governance_dependencies,
-                confirmed_device_control,
-            )
-            .await
-    }
-
-    async fn effective_state_checkpoint(
-        &self,
-        seal_id: &arkret_wire::SealId,
-    ) -> arkret_state::state::StoreResult<
-        Option<soland_services::projection::SealEffectiveStateCheckpoint>,
-    > {
-        self.0
-            .effective_state_checkpoint(seal_id)
-            .await
-            .map(|checkpoint| {
-                checkpoint.map(|checkpoint| {
-                    soland_services::projection::SealEffectiveStateCheckpoint {
-                        realm_id: checkpoint.realm_id,
-                        seal_id: checkpoint.seal_id,
-                        covered_event_digests: checkpoint.covered_event_digests,
-                        covered_seal_ids: checkpoint.covered_seal_ids,
-                        state: checkpoint.state,
-                    }
-                })
-            })
-    }
-}
-
 #[async_trait::async_trait]
 impl RuntimeSettingsPort for RuntimeSettingsPersistence {
     async fn load_overrides(&self) -> soland_services::ServiceResult<Vec<(String, Value)>> {

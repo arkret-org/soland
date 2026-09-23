@@ -1756,7 +1756,8 @@ impl RecoverySessionService {
 }
 
 pub use soland_storage::{
-    BackupSeriesEraseProgressRecord as BackupSeriesEraseProgressState, SecurityTransactionRecord,
+    BackupSeriesEraseProgressRecord as BackupSeriesEraseProgressState, RecoveryUnitCommitWrite,
+    SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord as SecurityTransactionStepAttemptState,
     SecurityTransactionStepOutcomeRecord as SecurityTransactionStepOutcomeState,
 };
@@ -1790,6 +1791,10 @@ pub trait SecurityTransactionPort: Send + Sync {
         &self,
         transaction: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeState,
+    ) -> ServiceResult<SecurityTransactionStepOutcomeState>;
+    async fn commit_recovery_unit(
+        &self,
+        write: RecoveryUnitCommitWrite,
     ) -> ServiceResult<SecurityTransactionStepOutcomeState>;
     async fn backup_erase_progress(
         &self,
@@ -1862,6 +1867,13 @@ impl SecurityTransactionService {
         outcome: SecurityTransactionStepOutcomeState,
     ) -> ServiceResult<SecurityTransactionStepOutcomeState> {
         self.transactions.accept_step(transaction, outcome).await
+    }
+
+    pub async fn commit_recovery_unit(
+        &self,
+        write: RecoveryUnitCommitWrite,
+    ) -> ServiceResult<SecurityTransactionStepOutcomeState> {
+        self.transactions.commit_recovery_unit(write).await
     }
 
     pub async fn backup_erase_progress(

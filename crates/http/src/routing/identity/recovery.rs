@@ -17,20 +17,20 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{Hash, PolicyId, RealmId, RecoverySessionId, TrustDomainId};
 use arkret_models_crypto::{
-    Challenge, DeviceGenerationStatus, DidRootTranscript, GenericRecoveryProofBody,
-    GenericRecoveryTranscript, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
+    AuthoritySetAuthorizationIssuer, AuthoritySetAuthorizationRule, AuthoritySetIssuerRole,
+    AuthoritySetPolicy, DeviceGenerationStatus, DidRootRecoveryTranscript,
+    GenericRecoveryTranscript, PublicationAuthorityContext, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest,
-    RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind, RecoveryPublicationAction,
-    RecoveryPublicationAuthorityContext, RecoverySessionCreateRequestBody,
-    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
-    SecurityTransactionContinueRequest, SessionState, TrustedRecoveryServiceProofBody,
-    TrustedRecoveryServiceSessionProof,
+    RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind,
+    RecoverySession as RecoverySessionState, RecoverySessionCreateRequestBody,
+    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody,
+    RecoverySessionProofSummary as ProofSummary, RecoveryTranscriptProofBody, SecurityTransaction,
+    SecurityTransactionContinueRequest, SecurityTransactionCreateRequest,
+    TrustedRecoveryServiceProofBody, TrustedRecoveryServiceProofBodyWithSignature,
 };
 use arkret_wire::{
-    AccountId, AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
-    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, DeviceId, DidUrl,
-    LeaseBasisRef, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, RequestId, SchemaId,
-    SecurityTransaction, SecurityTransactionCreateRequest, SessionGrantId, TransactionId,
+    AccountId, AuthoritySetId, AuthoritySetPolicyKind, Base64UrlString as Challenge, DeviceId,
+    DidUrl, RequestId, SchemaId, SessionGrantId, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -46,6 +46,7 @@ use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
     RecoveryPolicyState, SecurityTransactionRecord, SessionIdentityState as SessionRecord,
 };
+use soland_storage::RecoverySessionLifecycle as SessionState;
 
 use super::{AuthArgs, append_audit_log};
 use crate::state::AppState;
@@ -74,10 +75,13 @@ pub(super) fn recovery_session_proof_kind_and_digest(
     record: &soland_services::identity::RecoverySessionState,
 ) -> Option<(String, String)> {
     let summary = recovery_proof_summary(record)?;
-    Some((
-        summary.kind.as_wire_str().to_owned(),
-        summary.proof_digest.to_string(),
-    ))
+    let kind = match summary.kind {
+        RecoveryProofKind::DidRoot => "did_root",
+        RecoveryProofKind::RecoveryUnlock => "recovery_unlock",
+        RecoveryProofKind::DeviceQuorum => "device_quorum",
+        RecoveryProofKind::TrustedRecoveryService => "trusted_recovery_service",
+    };
+    Some((kind.to_owned(), summary.proof_digest.to_string()))
 }
 
 /// Resolve the recovery-policy key that authenticated this recovery session.

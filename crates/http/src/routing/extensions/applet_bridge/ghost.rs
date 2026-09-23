@@ -153,7 +153,7 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
     let expected_authorization_ref = ghost_provision_authorization_ref(record)?;
     if package.service_id != basis.service_id
         || record.applet_id != basis.applet_id
-        || record.registration_event.event_id != basis.registration_event_ref
+        || record.install_response.registration_event_ref.event_id != basis.registration_event_ref
         || package.package_digest.as_ref() != Some(&basis.package_digest)
         || expected_evidence != basis.registration_epoch_evidence
         || expected_authorization_ref != basis.authorization_ref.as_str()
@@ -421,7 +421,7 @@ async fn validate_ghost_managed_actor_unit(
         || payload.actor_id.signing_principal_id() == &record.package.controller_principal_id
         || payload.actor_id == record.package.bot_actor_id
         || payload.actor_id.route_service_id().as_str() != state.service_id()
-        || record.registration_event.event_id != payload.registration_ref
+        || record.install_response.registration_event_ref.event_id != payload.registration_ref
         || payload.applet_authority_ref.as_str() != authorization_ref
         || payload.external_ref.as_ref() != Some(&basis.external_ref)
     {
@@ -461,16 +461,9 @@ async fn validate_ghost_managed_actor_unit(
             AppError::param_invalid(format!("Ghost PCR genesis object is invalid: {error}"))
                 .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
-    let expected_host_notary = arkret_wire::NotaryValue::new(
-        state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?,
-        0,
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    super::install::validate_hosted_applet_pcr_notary(
-        &genesis_object.notary,
-        &expected_host_notary,
+    super::install::validate_hosted_applet_pcr_governance_station(
+        &genesis_object.governance_station_id,
+        &state.service_core_id(),
     )?;
     let provision_ref_count = genesis
         .semantic_refs

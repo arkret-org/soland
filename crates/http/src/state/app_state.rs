@@ -120,7 +120,6 @@ pub struct AppState {
     consents: ConsentService,
     contacts: ContactService,
     agent_pairings: AgentPairingService,
-    pub(crate) agent_evidence_cache: Arc<super::agent_evidence_cache::AgentEvidenceCache>,
     device_pairings: DevicePairingService,
     account_authority_device_pairing: Arc<dyn AccountAuthorityDevicePairingPort>,
     agent_participations: AgentParticipationService,
@@ -154,7 +153,10 @@ pub struct AppState {
     projections: ProjectionService,
     pub(crate) device_history_cache: Arc<
         tokio::sync::Mutex<
-            BTreeMap<arkret_wire::AccountId, Arc<arkret::DeviceAuthorizationHistory>>,
+            BTreeMap<
+                arkret_wire::AccountId,
+                Arc<crate::routing::identity::device_generation::ConfirmedDeviceHistory>,
+            >,
         >,
     >,
     authorization: AuthorizationService,
@@ -280,64 +282,45 @@ const DEVELOPMENT_DEMO_GENESIS_CREATED_AT: &str = "2026-01-01T00:00:00Z";
 #[must_use]
 pub fn realm_genesis_payload(
     _subject: &str,
-    notary_signer: &arkret_wire::NotarySignerDescriptor,
+    governance_station_id: &DidCoreId,
     trust_domain: &str,
 ) -> Value {
-    let notary = arkret_wire::NotaryValue::new(notary_signer.clone(), 0)
-        .expect("Realm genesis notary descriptor must be canonical");
     serde_json::json!({
         "object": {
             "schema": "ak.schema.realm_genesis.v1",
             "purpose": "collaboration",
             "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
             "trust_domain": trust_domain,
-            "schema_refs": ["ak.schema.realm.v1"],
-            "encryption_profile": "none",
             "security_class": "standard",
-            "digest_algorithm": "sha256",
-            "notary": notary
+            "governance_station_id": governance_station_id,
+            "initial_join_rule": "invite",
+            "initial_history_access": "all_history_for_current_members",
+            "initial_discoverability": "listed"
         }
     })
-}
-
-fn demo_notary_signer_descriptor(
-    service_did: &Did,
-    service_id: &DidCoreId,
-    signing_seed: [u8; 32],
-) -> arkret_wire::NotarySignerDescriptor {
-    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed).verifying_key();
-    soland_services::identity::ed25519_notary_signer_descriptor(
-        service_id.clone(),
-        arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
-            .expect("development notary verification method"),
-        verifying_key.as_bytes(),
-    )
-    .expect("development notary signer descriptor")
 }
 
 /// The development demo Realm's canonical genesis Event.
 ///
 /// Every input except the deployment identity is a development constant, so the
 /// Event — and therefore the Realm id it derives — is fully determined by this
-/// deployment's own service identity, its notary key and the current
-/// `arkret-spec` artifacts. There is no parameterless variant: a demo Realm id
+/// deployment's own service identity and the current `arkret-spec` artifacts.
+/// There is no parameterless variant: a demo Realm id
 /// derived from a copied service DID is a Realm no running deployment can
 /// re-derive.
 #[must_use]
 pub fn development_demo_genesis_event(
-    service_did: &Did,
+    _service_did: &Did,
     service_id: &DidCoreId,
-    signing_seed: [u8; 32],
+    _signing_seed: [u8; 32],
 ) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339(DEVELOPMENT_DEMO_GENESIS_CREATED_AT)
         .expect("development demo genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let notary_signer = demo_notary_signer_descriptor(service_did, service_id, signing_seed);
     let payload: arkret_models_collaboration::events_payloads::RealmCreatePayload =
         serde_json::from_value(realm_genesis_payload(
             DEVELOPMENT_DEMO_SUBJECT_DID,
-            &notary_signer,
+            service_id,
             DEVELOPMENT_DEMO_TRUST_DOMAIN,
         ))
         .expect("development demo genesis payload");
@@ -362,8 +345,8 @@ pub fn development_demo_genesis_event(
 ///
 /// This is content-derived (`retype(genesis_event.event_id)`), so it moves
 /// whenever anything inside the genesis Event's canonical bytes moves — the
-/// deployment's own service identity and notary key included, because the
-/// genesis payload freezes the notary signer descriptor. It is therefore
+/// deployment's own service identity included, because the genesis payload
+/// freezes the generation-0 governance Station. It is therefore
 /// **derived**, never copied: a hard-coded literal went stale four times, most
 /// recently as a service DID copied from one deployment into another.
 #[must_use]
@@ -461,17 +444,15 @@ mod test_construction {
     use std::ops::Range;
     use std::path::Path;
 
-    use arkret_identifiers::SealId;
     use async_trait::async_trait;
     use bytes::Bytes;
     use futures_util::stream::{self, BoxStream, StreamExt};
     use parking_lot::Mutex;
     use soland_services::governance::RuntimeSettingsPort;
     use soland_services::jobs::RuntimeHealthPort;
-    use soland_services::projection::EventSealCommitPort;
     use soland_storage::PersistenceStore;
     use soland_storage_postgres::test_database::{TestDatabase, block_on_lease_runtime};
-    use soland_storage_postgres::{Db, EventSealCommitStore, PgPersistenceStore};
+    use soland_storage_postgres::{Db, PgPersistenceStore};
 
     use super::*;
 
@@ -531,33 +512,13 @@ mod test_construction {
             service_resolution_commitment: ResolutionCommitment,
             resolved_signing_seed: [u8; 32],
         ) -> Self {
-            let cell_registry = ProjectionService::sdk_cell_registry();
-            let stores = soland_storage_postgres::build_state_resolution_stores(
-                db.pool.clone(),
-                cell_registry,
-            );
-            // Mirror production bootstrap: the memory device-revocation
-            // adapter derives seal-settled state from this Control Event
-            // store; durable adapters ignore the bind.
-            persistence
-                .device_revocations()
-                .bind_control_event_store(stores.control_event_store.clone());
-            let event_seal_committer =
-                Arc::new(TestEventSealCommitter(stores.event_seal_committer));
             let storage_mode = db.mode();
             let service_id = service_identity
                 .identity()
                 .expect("fixture has a serving identity")
                 .service_id
                 .to_string();
-            let projections = ProjectionService::new(
-                stores.control_event_store,
-                stores.seal_store,
-                stores.cell_store,
-                stores.cell_registry,
-                event_seal_committer,
-                &service_id,
-            );
+            let projections = ProjectionService::new(&service_id);
             let identity = service_identity
                 .identity()
                 .expect("fixture has a serving identity");
@@ -659,37 +620,6 @@ mod test_construction {
             );
             hasher.finalize().into()
         })
-    }
-
-    struct TestEventSealCommitter(Arc<dyn EventSealCommitStore>);
-
-    #[async_trait::async_trait]
-    impl EventSealCommitPort for TestEventSealCommitter {
-        async fn commit_if_head(
-            &self,
-            seal: &arkret_wire::Seal,
-            digest_suite: arkret_canonical::DigestSuite,
-            expected_store_head: Option<&SealId>,
-            new_ops: &[(
-                arkret_identifiers::CellRef,
-                arkret_state::state_model::ordered_log::IssuedOp,
-            )],
-            covered: &BTreeSet<arkret_identifiers::Hash>,
-            governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-            confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-        ) -> arkret_state::state::StoreResult<bool> {
-            self.0
-                .commit_if_head(
-                    seal,
-                    digest_suite,
-                    expected_store_head,
-                    new_ops,
-                    covered,
-                    governance_dependencies,
-                    confirmed_device_control,
-                )
-                .await
-        }
     }
 
     #[derive(Default)]
@@ -841,16 +771,6 @@ impl AppState {
             &identity.did,
             &identity.service_id,
             self.notary_signing_key().to_bytes(),
-        )
-    }
-
-    pub fn service_notary_signer_descriptor(
-        &self,
-    ) -> Result<arkret_wire::NotarySignerDescriptor, String> {
-        soland_services::identity::ed25519_notary_signer_descriptor(
-            DidCoreId::new(self.service_id().clone()).map_err(|error| error.to_string())?,
-            self.service_verification_method("notary-key")?,
-            self.notary_verifying_key().as_bytes(),
         )
     }
 
@@ -1086,7 +1006,6 @@ impl AppState {
             event_broadcast,
             storage_mode,
         } = runtime;
-        persistence.bind_history_authority_view_cas(Arc::new(projections.clone()));
         let now = chrono::Utc::now();
         let applet_transaction_inflight_capacity = config.applet_transaction_inflight_capacity;
 
@@ -1156,7 +1075,8 @@ impl AppState {
         ));
 
         let authorization = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
-        let authority_commits = AuthorityCommitApplication::new(persistence.clone());
+        let authority_commits =
+            AuthorityCommitApplication::new(persistence.clone(), config.to_device_queue_capacity);
         let PersistenceEventServices {
             events,
             queries: event_queries,
@@ -1233,9 +1153,6 @@ impl AppState {
             consents,
             contacts,
             agent_pairings,
-            agent_evidence_cache: Arc::new(
-                super::agent_evidence_cache::AgentEvidenceCache::default(),
-            ),
             device_pairings,
             account_authority_device_pairing: Arc::new(PrivateAccountAuthorityDevicePairing),
             agent_participations,
@@ -1301,6 +1218,12 @@ impl AppState {
 
     pub(crate) fn authority_commits(&self) -> &AuthorityCommitApplication {
         &self.authority_commits
+    }
+
+    pub(crate) fn authority(
+        &self,
+    ) -> &dyn soland_services::authority_commit::AuthorityProtocolPort {
+        self
     }
 
     pub(crate) fn event_queries(&self) -> &EventQueryService {
@@ -1599,19 +1522,6 @@ impl AppState {
         &self.device_pairings
     }
 
-    pub(crate) async fn recover_confirmed_metadata_projection(
-        &self,
-        realm: &RealmId,
-    ) -> Result<std::collections::BTreeSet<arkret_wire::Hash>, String> {
-        self.persistence
-            .recover_confirmed_metadata(
-                &self.projections,
-                realm,
-                &RuntimeHydrationProjectionAdapter,
-            )
-            .await
-    }
-
     pub(crate) fn persistence(&self) -> &PersistenceHandle {
         &self.persistence
     }
@@ -1691,22 +1601,9 @@ impl AppState {
             .hydrate_projection(
                 &self.projections,
                 &RuntimeHydrationProjectionAdapter,
-                hydrated_realm_ids.clone(),
+                hydrated_realm_ids,
             )
             .await?;
-        for realm_id in &hydrated_realm_ids {
-            crate::routing::events::event_log::publish_confirmed_realm_bootstrap(self, realm_id)
-                .await
-                .map_err(soland_services::ServiceError::Internal)?;
-        }
-        {
-            let _publication = self.projections.confirmed_projection_guard().await;
-            for realm_id in &hydrated_realm_ids {
-                self.recover_confirmed_metadata_projection(realm_id)
-                    .await
-                    .map_err(soland_services::ServiceError::Internal)?;
-            }
-        }
         let mut reconciled_realms = self.realm_directory.snapshot();
         soland_services::hydration::reconcile_hydrated_agent_memberships(
             &mut reconciled_realms,
@@ -1762,21 +1659,8 @@ impl AppState {
             }
         }
 
-        // Direct binding is an ordered safety set. Rebuild only confirmed
-        // command effects; an admitted pending endorsement grants no binding.
-        let mut confirmed_bindings = std::collections::BTreeSet::new();
-        for realm_id in &hydrated_realm_ids {
-            for event in self
-                .projections
-                .confirmed_command_events(realm_id)
-                .await
-                .map_err(|error| soland_services::ServiceError::Internal(error.to_string()))?
-            {
-                if event.kind == arkret_wire::EventKind::DirectConversationBound {
-                    confirmed_bindings.insert(event.event_id.to_string());
-                }
-            }
-        }
+        // The canonical Event store exposes committed rows only. Keep direct
+        // bindings behind that durable acceptance boundary during restart.
         let direct_binding_records = self
             .event_queries()
             .canonical_events()
@@ -1784,7 +1668,6 @@ impl AppState {
             .into_iter()
             .filter(|record| {
                 record.kind == arkret_wire::EventKind::DirectConversationBound.as_str()
-                    && confirmed_bindings.contains(&record.event_id)
             })
             .collect::<Vec<_>>();
         for record in direct_binding_records {
@@ -2122,22 +2005,6 @@ impl AppState {
             .expect("the object this Station persisted is readable")
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub async fn test_effective_state_at(
-        &self,
-        leaves: &[arkret_identifiers::SealId],
-        realm_id: &arkret_identifiers::RealmId,
-    ) -> Result<
-        std::collections::BTreeMap<
-            arkret_identifiers::CellRef,
-            arkret_state::state_model::ResolvedCellState,
-        >,
-        arkret_state::state::SealReject,
-    > {
-        self.projections.effective_state_at(leaves, realm_id).await
-    }
-
     pub(crate) fn hlc(&self) -> &ServiceClock {
         self.projections.clock()
     }
@@ -2261,34 +2128,8 @@ impl AppState {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_install_consent_cell(&self, cell: soland_services::identity::ConsentCellRecord) {
-        self.consents.install_committed_cell(cell);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
     pub fn test_direct_conversation_binding_count(&self) -> usize {
         self.contacts.runtime_direct_binding_count()
-    }
-
-    /// Refresh one test fixture grant from the durable sealed-cell projection
-    /// into the runtime authorization index.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub async fn test_refresh_grant_from_sealed_cells(
-        &self,
-        realm_id: &arkret_identifiers::RealmId,
-        grant_id: &str,
-    ) {
-        self.projections
-            .reload_cells_from_store(realm_id)
-            .await
-            .expect("test fixture sealed cells reload");
-        let grant = self
-            .projections
-            .effective_engine_grant(grant_id)
-            .expect("test fixture sealed grant is effective");
-        self.authorization.upsert_projected_grant(grant);
     }
 }
 
@@ -2384,1494 +2225,68 @@ pub fn getrandom_seed(out: &mut [u8; 32]) {
 }
 
 #[cfg(test)]
-mod membership_hydration_tests {
-    use arkret_identifiers::RealmId;
-    use soland_services::hydration::{
-        hydrate_projections_from_persistence, hydrate_realm_member_state_event,
-        hydrate_realms_from_canonical_events,
-    };
-    use soland_storage::{
-        CanonicalEventRecord, EventProjectionStoreRegistry, IdentityStoreRegistry,
-        MlsAgentStoreRegistry, PersistenceStore, RealmMetaRecord,
-    };
+mod committed_event_hydration_tests {
+    use soland_storage::{EventProjectionStoreRegistry, PersistenceStore, QueuedEventStatus};
+    use soland_storage_postgres::PgPersistenceStore;
     use soland_storage_postgres::test_database::TestDatabase;
-    use soland_storage_postgres::{Db, PgPersistenceStore};
 
     use super::*;
 
-    struct ReadOnlyHydrationCommitter;
-
-    #[async_trait::async_trait]
-    impl soland_services::projection::EventSealCommitPort for ReadOnlyHydrationCommitter {
-        async fn commit_if_head(
-            &self,
-            _seal: &arkret_wire::Seal,
-            _suite: arkret_canonical::DigestSuite,
-            _head: Option<&arkret_wire::SealId>,
-            _ops: &[(
-                arkret_wire::CellRef,
-                arkret_state::state_model::ordered_log::IssuedOp,
-            )],
-            _covered: &BTreeSet<arkret_wire::Hash>,
-            _dependencies: &[soland_storage::GovernanceDependencyWrite],
-            _confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-        ) -> arkret_state::state::StoreResult<bool> {
-            panic!("hydration is read-only")
-        }
-    }
-
-    /// A consumer fixture for an already verified local command store. This
-    /// exercises exact result membership and replay, not notary admission or
-    /// cryptographic verification. Fixture order is explicitly assigned here;
-    /// production hydration must read the signed command order instead.
-    async fn hydration_command_view(
-        store: &dyn PersistenceStore,
-        outcome: Option<arkret_wire::CommandOutcome>,
-    ) -> ProjectionService {
-        hydration_command_view_with_successor(store, outcome, false).await
-    }
-
-    async fn hydration_command_view_with_successor(
-        store: &dyn PersistenceStore,
-        outcome: Option<arkret_wire::CommandOutcome>,
-        successor: bool,
-    ) -> ProjectionService {
-        use arkret_state::state::{ControlEventStore, SealStore};
-
-        let controls = Arc::new(arkret_state::state::MemoryControlEventStore::default());
-        let seals = Arc::new(arkret_state::state::MemorySealStore::default());
-        let suite = arkret_canonical::DigestSuite::Sha256;
+    #[tokio::test]
+    async fn queued_event_is_not_a_restart_projection_source() {
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
         let signer = arkret_test_kit::proof::StructuralOnlyPayloadSigner::new(
-            arkret_wire::Did::new("did:web:hydration.example").unwrap(),
-            arkret_wire::DidUrl::new("did:web:hydration.example#notary").unwrap(),
+            Did::new(DEVELOPMENT_DEMO_SUBJECT_DID).unwrap(),
+            arkret_wire::DidUrl::new("did:web:alice.example#key-1").unwrap(),
         );
-        let mut by_realm = BTreeMap::<RealmId, Vec<CanonicalEventRecord>>::new();
-        for record in store.events().snapshot_all().await.unwrap() {
-            let event: arkret_wire::Event =
-                serde_json::from_value(record.envelope.clone()).unwrap();
-            by_realm.entry(event.realm_id).or_default().push(record);
-        }
-        for (realm, mut records) in by_realm {
-            records.sort_by(|a, b| {
-                a.received_at
-                    .cmp(&b.received_at)
-                    .then(a.actor_seq.cmp(&b.actor_seq))
-                    .then(a.event_id.cmp(&b.event_id))
-            });
-            let mut members = Vec::new();
-            for record in &records {
-                let event: arkret_wire::Event =
-                    serde_json::from_value(record.envelope.clone()).unwrap();
-                let ack = arkret_wire::ControlProposalAck::issue_with_signer(
-                    realm.clone(),
-                    event.event_id.event_digest(),
-                    arkret_wire::Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap(),
-                    record.received_at,
-                    arkret_wire::ControlProposalDecisionPolicy::protocol_maximum(),
-                    &signer,
-                )
-                .unwrap();
-                members.push(arkret_state::state::ControlUnitIngressMember {
-                    event,
-                    digest_suite: suite,
-                    ingress: arkret_state::state::ControlProposalIngress::AckRequired(ack),
-                });
-            }
-            let groups = if successor && members.len() > 1 {
-                vec![&members[..1], &members[1..]]
-            } else {
-                vec![members.as_slice()]
-            };
-            let mut predecessor = None;
-            for (sequence, group) in groups.into_iter().enumerate() {
-                let outcome = if successor && sequence == 0 {
-                    Some(arkret_wire::CommandOutcome::Committed)
-                } else {
-                    outcome
-                };
-                let digests = controls.put_pending_unit_with_ingress(group).await.unwrap();
-                let Some(outcome) = outcome else {
-                    continue;
-                };
-                let result = match outcome {
-                    arkret_wire::CommandOutcome::Committed => {
-                        arkret_wire::SealCommandOutcome::committed(
-                            digests[0].clone(),
-                            digests.clone(),
-                            Vec::new(),
-                            suite,
-                        )
-                    }
-                    arkret_wire::CommandOutcome::Rejected => {
-                        arkret_wire::SealCommandOutcome::rejected(
-                            digests[0].clone(),
-                            digests.clone(),
-                            arkret_wire::ReasonCode::ActorSignatureRevoked,
-                            suite,
-                        )
-                    }
-                }
-                .unwrap();
-                let mut delta = if outcome == arkret_wire::CommandOutcome::Committed {
-                    digests.clone()
-                } else {
-                    Vec::new()
-                };
-                delta.sort();
-                let unsigned = arkret_wire::UnsignedSeal {
-                    realm_id: realm.clone(),
-                    predecessor_ref: predecessor.clone(),
-                    delta,
-                    data_delta: Vec::new(),
-                    data_event_set_root: arkret_wire::empty_data_event_set_root(suite).unwrap(),
-                    control_event_set_root: arkret_state::control_event_set_root(
-                        &digests.into_iter().collect(),
-                        suite,
-                    )
-                    .unwrap(),
-                    state_root: arkret_state::compute_state_root(
-                        arkret_state::GovernanceView::new(&BTreeMap::new()),
-                        suite,
-                    )
-                    .unwrap(),
-                    notary_seq: sequence as u64,
-                    availability_receipt_digests: Vec::new(),
-                    covered_event_digests: Vec::new(),
-                    previous_state_root: None,
-                    previous_digest_algorithm: None,
-                    sealed_at: records.last().unwrap().received_at,
-                    hlc: arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
-                    configuration_ref: members[0].event.event_id.clone(),
-                    command_results: vec![result],
-                    authorization_closures: Vec::new(),
-                    data_closure_announcements: Vec::new(),
-                    data_closures: Vec::new(),
-                    existence_anchors: Vec::new(),
-                };
-                let seal = arkret_wire::Seal::sign_with_signer(unsigned, suite, &signer).unwrap();
-                controls.record_seal_command_results(&seal).await.unwrap();
-                assert!(
-                    seals
-                        .put_if_head(&seal, predecessor.as_ref(), suite)
-                        .await
-                        .unwrap()
-                );
-                predecessor = Some(seal.id.clone());
-            }
-        }
-        ProjectionService::new(
-            controls,
-            seals,
-            Arc::new(arkret_state::state::MemoryCellStore::default()),
-            ProjectionService::sdk_cell_registry(),
-            Arc::new(ReadOnlyHydrationCommitter),
-            "hydration-consumer",
+        let authored = development_demo_genesis_event(
+            &Did::new("did:web:server.example").unwrap(),
+            &DidCoreId::new("ak:did_core:web:server.example").unwrap(),
+            [7; 32],
+        );
+        let event = arkret_test_kit::sign_structural_only_event(
+            authored.into_event(),
+            &signer,
+            arkret_canonical::DigestSuite::Sha256,
         )
-    }
+        .unwrap()
+        .expect_structural_only();
 
-    #[test]
-    fn app_state_uses_the_bootstrap_resolved_signing_seed() {
-        let config = AppConfig::test_default();
-        let identity = development_fixture_service_identity(&config);
-        let commitment = development_fixture_resolution_commitment(&identity);
-        let persistence: Arc<dyn PersistenceStore> = Arc::new(PgPersistenceStore::leased(
-            Arc::new(TestDatabase::lease_blocking()),
-        ));
-        let resolved_seed = [0xa5; 32];
-
-        let state = AppState::new_with_service_identity(
-            config,
-            Db { pool: None },
-            persistence,
-            identity,
-            commitment,
-            resolved_seed,
-        );
-
-        assert_eq!(state.notary_signing_key().to_bytes(), resolved_seed);
-    }
-
-    #[tokio::test]
-    async fn bootstrap_hydration_requires_the_exact_committed_unit() {
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        let service_did = arkret_wire::Did::new("did:web:hydration.example").unwrap();
-        let service_id = arkret_wire::project_did_to_core_id(&service_did).unwrap();
-        let create = development_demo_genesis_event(&service_did, &service_id, [7; 32]);
-        let realm = create.realm_id.clone();
-        let actor = create.actor_id.clone();
-        let received_at = create.created_at;
-        let mut events = vec![create.event().clone()];
-        let followups = [
-            (
-                arkret_wire::EventKind::RealmProfile,
-                serde_json::json!({"schema": "ak.schema.realm_profile.v1", "title": "Confirmed bootstrap"}),
-            ),
-            (
-                arkret_wire::EventKind::RealmPolicyBundle,
-                serde_json::json!({"policy_revision": 1, "content_encryption_floor": "allow_plaintext"}),
-            ),
-            (
-                arkret_wire::EventKind::RealmJoinRule,
-                serde_json::json!({"value": "invite"}),
-            ),
-            (
-                arkret_wire::EventKind::RealmHistoryAccess,
-                serde_json::json!({"from": null, "to": "since_join"}),
-            ),
-            (
-                arkret_wire::EventKind::RealmDiscovery,
-                serde_json::json!({"value": "listed"}),
-            ),
-            (
-                arkret_wire::EventKind::MemberState,
-                serde_json::json!({"realm_id": realm, "member_id": actor, "membership": "join"}),
-            ),
-        ];
-        for (index, (kind, payload)) in followups.into_iter().enumerate() {
-            let mut event = arkret_wire::test_support::raw_event_at(
-                kind.as_str(),
-                arkret_wire::ScopeRef::Realm {
-                    realm_id: realm.clone(),
-                },
-                actor.signing_principal_id().clone(),
-                actor.route_service_id().clone(),
-                (index + 1) as u64,
-                arkret_wire::Hlc::new(format!("019041000000-{:04x}-aabbccdd", index + 1)).unwrap(),
-                payload,
-                received_at,
-            )
+        store
+            .authority_commits()
+            .queue_event(&event, chrono::Utc::now())
+            .await
             .unwrap();
-            event.prev_refs = vec![events.last().unwrap().event_id.clone()];
-            if kind == arkret_wire::EventKind::MemberState {
-                let subject =
-                    arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap();
-                event.preconditions = vec![
-                    serde_json::from_value(serde_json::json!({
-                        "cell_id": format!("ak:cell:ak.component.member.state.v1:{subject}"),
-                        "predicate": {"op": "head_eq", "value": null}
-                    }))
-                    .unwrap(),
-                ];
-            }
-            event
-                .refresh_content_bound_identity_with_digest_suite(
-                    arkret_canonical::DigestSuite::Sha256,
-                )
-                .unwrap();
-            events.push(event);
-        }
-        for event in &mut events {
-            crate::test_event::attach_structural_only_producer_proof(
-                event,
-                arkret_wire::DidUrl::new("did:web:alice.example#device").unwrap(),
-            );
-        }
-        arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events).unwrap();
-        for event in &events {
-            let bytes =
-                arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        assert!(matches!(
+            store
+                .authority_commits()
+                .queued_event(&event.event_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            QueuedEventStatus::Queued
+        ));
+        assert!(
             store
                 .events()
-                .put(CanonicalEventRecord {
-                    event_id: event.event_id.to_string(),
-                    actor_id: event.actor_id.to_string(),
-                    actor_seq: event.actor_seq,
-                    realm_id: Some(realm.to_string()),
-                    kind: event.kind.to_string(),
-                    schema_id: "ak.schema.event.v1".to_owned(),
-                    digest_suite: arkret_canonical::DigestSuite::Sha256,
-                    canonical_digest: arkret_canonical::sha256_digest(&bytes),
-                    canonical_bytes: bytes,
-                    envelope: serde_json::to_value(event).unwrap(),
-                    received_at,
-                })
+                .get(event.event_id.as_str())
                 .await
-                .unwrap();
-        }
-        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
-            let view = hydration_command_view(&store, outcome).await;
-            let mut restored = ProjectionState::new();
-            hydrate_projections_from_persistence(
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.events().snapshot_all().await.unwrap().is_empty());
+
+        let projection = ProjectionService::new("queued-event-hydration-test");
+        projection
+            .hydrate_from_persistence(
                 &store,
-                &mut restored,
                 &RuntimeHydrationProjectionAdapter,
-                &view,
+                [RealmId::from_event_id(&event.event_id)],
             )
             .await
             .unwrap();
-            assert!(!restored.realm_states.contains_key(realm.as_str()));
-            assert!(restored.realm_create_log(realm.as_str()).is_none());
-            assert!(
-                restored
-                    .member(realm.as_str(), &actor.to_string())
-                    .is_none()
-            );
-            let mut directory = RealmDirectoryIndex::new();
-            hydrate_realms_from_canonical_events(&store, &mut directory, &view)
-                .await
-                .unwrap();
-            assert!(directory.get(&realm).is_none());
-        }
-        let view =
-            hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await;
-        let mut restored = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut restored,
-            &RuntimeHydrationProjectionAdapter,
-            &view,
-        )
-        .await
-        .unwrap();
-        assert!(restored.realm_create_log(realm.as_str()).is_some());
-        assert_eq!(
-            restored
-                .member(realm.as_str(), &actor.to_string())
-                .unwrap()
-                .state,
-            "join"
-        );
-    }
-
-    fn canonical_projection_source_event(
-        realm_id: &str,
-        actor_id: &str,
-        actor_seq: u64,
-        kind: impl AsRef<str>,
-        payload: serde_json::Value,
-        received_at: chrono::DateTime<chrono::Utc>,
-    ) -> CanonicalEventRecord {
-        let kind = kind.as_ref();
-        let actor_id = arkret_wire::DidCoreId::new(actor_id.to_owned())
-            .unwrap_or_else(|_| crate::test_actor_id_str(actor_id));
-        let event = crate::test_event::raw_event_at(
-            kind,
-            arkret_wire::ScopeRef::Realm {
-                realm_id: RealmId::new(realm_id).unwrap(),
-            },
-            actor_id.clone(),
-            actor_seq,
-            arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
-            payload,
-            received_at,
-        )
-        .unwrap();
-        let canonical_bytes = arkret_canonical::canonical_json_bytes(
-            &event.digest_payload().expect("membership digest payload"),
-        )
-        .expect("membership canonical bytes");
-        let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
-        let event_id = event.event_id.to_string();
-        let canonical_actor = event.actor_id.to_string();
-        let envelope = serde_json::to_value(event).unwrap();
-        CanonicalEventRecord {
-            event_id,
-            actor_id: canonical_actor,
-            actor_seq,
-            realm_id: Some(realm_id.to_owned()),
-            kind: kind.to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest,
-            canonical_bytes,
-            envelope,
-            received_at,
-        }
-    }
-
-    fn member_state_event(realm_id: &str, member: &str, membership: &str) -> CanonicalEventRecord {
-        let received_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        canonical_projection_source_event(
-            realm_id,
-            member,
-            1,
-            arkret_wire::EventKind::MemberState,
-            serde_json::json!({
-                "membership": membership,
-                "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    DidCoreId::new(member).unwrap(), crate::test_event::station_id(),
-                ))
-            }),
-            received_at,
-        )
-    }
-
-    fn directory_with_creator(realm_id: &RealmId, creator: &DidCoreId) -> RealmDirectoryIndex {
-        let mut realms = RealmDirectoryIndex::new();
-        let mut entry = RealmDirectoryEntry::new(
-            realm_id.clone(),
-            "Hydration Test Realm",
-            soland_services::events::DirectoryProvenance::LocalOnly,
-        );
-        entry.members.insert(creator.clone());
-        realms.upsert(entry);
-        realms
-    }
-
-    // Regression: a joined invitee_id's `ak.member.state{join}` MUST be replayed
-    // into the realm directory on boot. Without it the admin's synced roster
-    // shows only the creator, admin-side MLS admission never fires, and the
-    // invitee_id is stuck "waiting for a Welcome" after every restart.
-    #[test]
-    fn joined_member_survives_directory_hydration() {
-        let realm_id =
-            RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
-                .expect("realm id");
-        let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let invitee_id = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
-
-        let mut realms = directory_with_creator(&realm_id, &creator);
-        // Before replay: only the creator is present (the realm.create seed).
-        assert_eq!(realms.get(&realm_id).unwrap().members.len(), 1);
-
-        hydrate_realm_member_state_event(
-            &mut realms,
-            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "join"),
-        );
-
-        let members = &realms.get(&realm_id).unwrap().members;
-        assert!(
-            members.contains(&invitee_id),
-            "joined invitee_id must survive directory hydration"
-        );
-        assert!(members.contains(&creator));
-        assert_eq!(members.len(), 2);
-    }
-
-    #[test]
-    fn left_member_is_dropped_on_directory_hydration() {
-        let realm_id =
-            RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
-                .expect("realm id");
-        let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let invitee_id = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
-
-        let mut realms = directory_with_creator(&realm_id, &creator);
-        hydrate_realm_member_state_event(
-            &mut realms,
-            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "join"),
-        );
-        hydrate_realm_member_state_event(
-            &mut realms,
-            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "leave"),
-        );
-
-        let members = &realms.get(&realm_id).unwrap().members;
-        assert!(
-            !members.contains(&invitee_id),
-            "left member must be removed"
-        );
-        assert!(members.contains(&creator));
-    }
-
-    // `invite`/`knock` are not directory member-set transitions (they live in
-    // the structured membership projection), so they must not add a directory
-    // member during hydration.
-    #[test]
-    fn invite_state_does_not_add_directory_member() {
-        let realm_id =
-            RealmId::new("ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C".to_owned())
-                .expect("realm id");
-        let creator = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-        let invitee_id = DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap();
-
-        let mut realms = directory_with_creator(&realm_id, &creator);
-        hydrate_realm_member_state_event(
-            &mut realms,
-            &member_state_event(realm_id.as_str(), invitee_id.as_str(), "invite"),
-        );
-
-        let members = &realms.get(&realm_id).unwrap().members;
-        assert!(!members.contains(&invitee_id));
-        assert_eq!(members.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn accepted_invite_membership_survives_restart_and_later_leave() {
-        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let creator = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
-        let principal = DidCoreId::new("ak:did_core:web:bob.example").unwrap();
-        let account =
-            arkret_wire::AccountId::new(principal.clone(), crate::test_event::station_id());
-        let actor = arkret_wire::ActorId::account(account.clone());
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:00.000Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let create = canonical_projection_source_event(
-            realm_id,
-            creator.as_str(),
-            1,
-            arkret_wire::EventKind::InviteCreate,
-            serde_json::json!({
-                "invitee_account_id": account,
-                "introduction_evidence_digest": format!("sha256:{}", "11".repeat(32)),
-                "expires_at": "2026-07-21T00:00:00.000Z",
-            }),
-            created_at,
-        );
-        let invite_id = arkret_wire::InviteId::from_event_id(
-            &arkret_wire::EventId::new(create.event_id.clone()).unwrap(),
-        );
-        let accept = canonical_projection_source_event(
-            realm_id,
-            principal.as_str(),
-            1,
-            arkret_wire::EventKind::InviteAccept,
-            serde_json::json!({"invite_id": invite_id, "invitee_account_id": account}),
-            created_at + chrono::Duration::seconds(1),
-        );
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        store.events().put(create).await.unwrap();
-        store.events().put(accept.clone()).await.unwrap();
-        let mut projection = ProjectionState::new();
-        let mut directory = directory_with_creator(&RealmId::new(realm_id).unwrap(), &creator);
-        // Replay after the invite has expired: acceptance is durable truth,
-        // not a new admission to evaluate against today's policy or time.
-        for _ in 0..2 {
-            soland_services::hydration::hydrate_canonical_realm_memberships(
-                &store,
-                &mut projection,
-                &RuntimeHydrationProjectionAdapter,
-                &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-            )
-            .await
-            .unwrap();
-            hydrate_realms_from_canonical_events(
-                &store,
-                &mut directory,
-                &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-            )
-            .await
-            .unwrap();
-            let membership = projection.member(realm_id, &actor.to_string()).unwrap();
-            assert_eq!(membership.state, "join");
-            assert_eq!(
-                membership.membership_event_ref.as_deref(),
-                Some(accept.event_id.as_str())
-            );
-            assert_eq!(membership.invited_at, Some(created_at));
-            assert_eq!(
-                membership.joined_at,
-                created_at + chrono::Duration::seconds(1)
-            );
-            assert!(
-                directory
-                    .get(&RealmId::new(realm_id).unwrap())
-                    .unwrap()
-                    .members
-                    .contains(&principal)
-            );
-            let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                principal.clone(),
-                DidCoreId::new("ak:did_core:web:other.example").unwrap(),
-            ));
-            assert!(projection.member(realm_id, &foreign.to_string()).is_none());
-        }
-        let leave = canonical_projection_source_event(
-            realm_id,
-            principal.as_str(),
-            2,
-            arkret_wire::EventKind::MemberState,
-            serde_json::json!({"member_id": actor, "membership": "leave"}),
-            created_at + chrono::Duration::seconds(2),
-        );
-        store.events().put(leave).await.unwrap();
-        let mut restarted = ProjectionState::new();
-        soland_services::hydration::hydrate_canonical_realm_memberships(
-            &store,
-            &mut restarted,
-            &RuntimeHydrationProjectionAdapter,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .unwrap();
-        hydrate_realms_from_canonical_events(
-            &store,
-            &mut directory,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            restarted
-                .member(realm_id, &actor.to_string())
-                .unwrap()
-                .state,
-            "leave"
-        );
-        assert!(
-            !directory
-                .get(&RealmId::new(realm_id).unwrap())
-                .unwrap()
-                .members
-                .contains(&principal)
-        );
-    }
-
-    // Regression for sidecar creation after restart: the Realm directory was
-    // already replaying member Events, but the reducer cache was not. That
-    // made an agent visible as a Realm member in Inkson while
-    // `ak.circle.member.state` rejected the same agent as a non-member.
-    #[tokio::test]
-    async fn joined_member_survives_reducer_projection_hydration() {
-        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let member = "ak:did_core:web:bob.example";
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        store
-            .events()
-            .put(member_state_event(realm_id, member, "join"))
-            .await
-            .expect("persist member Event");
-
-        let mut projection = ProjectionState::new();
-        projection.realm_states.insert(
-            realm_id.to_owned(),
-            soland_domain::reducer::SolandRealmState {
-                realm_id: realm_id.to_owned(),
-                owner: Some("ak:did_core:web:alice.example".to_owned()),
-                title: Some("Hydration Test Realm".to_owned()),
-                deleted: false,
-
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                trust_domain: None,
-                terminal_state: None,
-                successor_realm_id: None,
-                default_strand_id: None,
-            },
-        );
-        soland_services::hydration::hydrate_canonical_realm_memberships(
-            &store,
-            &mut projection,
-            &RuntimeHydrationProjectionAdapter,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .expect("hydrate reducer memberships");
-
-        let hydrated = projection
-            .member(
-                realm_id,
-                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    DidCoreId::new(member).unwrap(),
-                    crate::test_event::station_id(),
-                ))
-                .to_string(),
-            )
-            .expect("joined member restored to reducer projection");
-        assert_eq!(hydrated.state, "join");
-    }
-
-    // Regression: the MLS KeyPackage + commit-epoch projections — which the
-    // claim selector and the commit-epoch CAS read ONLY from memory — MUST be
-    // rebuilt from their durable tables on boot, or a restart strands every
-    // pending admission (admin can't claim the invitee_id's KeyPackage; add-member
-    // commit is rejected for "no genesis").
-    #[tokio::test]
-    async fn mls_projections_rehydrate_from_durable_stores() {
-        use soland_storage::MlsKeyPackageRow;
-
-        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let group_id = "mls-group-019f0dd3-aaaa";
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        // `mls_key_packages.owner_account_pk` references `accounts`, so the
-        // owner has to exist before its KeyPackages can.
-        let owner_account_pk = store
-            .accounts()
-            .put(&soland_storage::AccountRecord {
-                pk: soland_storage::AccountPk(0),
-                principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:bob.example".to_owned())
-                    .expect("fixture principal id is canonical"),
-                station_id: arkret_wire::DidCoreId::new(
-                    "ak:did_core:web:server.example".to_owned(),
-                )
-                .expect("fixture Station id is canonical"),
-                localpart: "bob".to_owned(),
-                display_name: None,
-                bio: None,
-                avatar_blob_ref: None,
-                created_at: chrono::Utc::now(),
-            })
-            .await
-            .expect("seed the KeyPackage owner account");
-
-        store
-            .mls_key_packages()
-            .put(&MlsKeyPackageRow {
-                id: "keypackage-01".to_owned(),
-                keypackage_ref: "sha256:ref".to_owned(),
-                keypackage_digest: "sha256:digest".to_owned(),
-                owner_account_pk,
-                actor_id: "ak:did_core:web:bob.example".to_owned(),
-                device_id: Some("ak:device:bob-1".to_owned()),
-                endpoint_verification_method: None,
-                intended_realm_id: None,
-                key_package_bytes: vec![1, 2, 3],
-                capabilities: vec!["ak.content.v1".to_owned()],
-                capabilities_digest: "sha256:caps".to_owned(),
-                last_resort: true,
-                last_resort_realm_id: Some(realm_id.to_owned()),
-                lifetime_not_before: 0,
-                lifetime_not_after: i64::MAX,
-                claimed_by_mls_group_id: None,
-                device_authorize_event_id: Some(
-                    "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
-                ),
-                agent_key_authorize_event_id: None,
-                claimed_at: None,
-                claim_expires_at_unix_ms: None,
-                consumed_at: None,
-                created_at: 1,
-            })
-            .await
-            .expect("put keypackage");
-        store
-            .mls_key_packages()
-            .put(&MlsKeyPackageRow {
-                id: "keypackage-retired".to_owned(),
-                keypackage_ref: "sha256:retired-ref".to_owned(),
-                keypackage_digest: "sha256:retired-digest".to_owned(),
-                owner_account_pk,
-                actor_id: "ak:did_core:web:bob.example".to_owned(),
-                device_id: Some("ak:device:bob-1".to_owned()),
-                endpoint_verification_method: None,
-                intended_realm_id: None,
-                key_package_bytes: vec![4, 5, 6],
-                capabilities: vec!["ak.content.v1".to_owned()],
-                capabilities_digest: "sha256:retired-caps".to_owned(),
-                last_resort: false,
-                last_resort_realm_id: None,
-                lifetime_not_before: 0,
-                lifetime_not_after: i64::MAX,
-                claimed_by_mls_group_id: Some("retired".to_owned()),
-                device_authorize_event_id: Some(
-                    "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
-                ),
-                agent_key_authorize_event_id: None,
-                claimed_at: None,
-                claim_expires_at_unix_ms: None,
-                consumed_at: None,
-                created_at: 2,
-            })
-            .await
-            .expect("put retired keypackage");
-
-        let effective_scope = serde_json::json!({ "kind": "realm", "realm_id": realm_id });
-        let governance_binding = serde_json::json!({
-            "security_frontier_digest": format!("sha256:{}", "1".repeat(64))
-        });
-        store
-            .mls_commits()
-            .initialize_genesis(soland_storage::MlsCommitGenesis {
-                effective_scope: &effective_scope,
-                group_id,
-                leader_actor_id: "ak:did_core:web:alice.example",
-                creator_device_id: "ak:device:alice-1",
-                genesis_event_ref: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn",
-                governance_binding: &governance_binding,
-                committed_at: 1,
-            })
-            .await
-            .expect("init genesis");
-
-        let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &RuntimeHydrationProjectionAdapter,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .expect("hydrate projections");
-
-        // KeyPackage projection is rebuilt → the claim selector can find it.
-        let kp = proj
-            .mls_key_packages
-            .get("keypackage-01")
-            .expect("keypackage rehydrated");
-        assert_eq!(kp.actor_id, "ak:did_core:web:bob.example");
-        assert!(kp.last_resort);
-        assert!(kp.claimed_by.is_none());
-        let retired = proj
-            .mls_key_packages
-            .get("keypackage-retired")
-            .expect("retired keypackage rehydrated");
-        assert_eq!(retired.claimed_by.as_deref(), Some("retired"));
-        assert!(retired.claimed_at.is_none());
-        assert!(retired.claim_expires_at_unix_ms.is_none());
-        assert!(retired.consumed_at.is_none());
-
-        // Commit-epoch projection is rebuilt with the durable governance binding.
-        let key = soland_domain::reducer::MlsCommitEpochKey::new(
-            soland_domain::reducer::mls::effective_scope_key(&effective_scope).unwrap(),
-            group_id.to_owned(),
-        );
-        let epoch = proj
-            .mls_commit_epochs
-            .get(&key)
-            .expect("commit epoch rehydrated");
-        assert_eq!(epoch.epoch, 0);
-        assert_eq!(epoch.creator_device_id, "ak:device:alice-1");
-        assert_eq!(
-            epoch.genesis_event_ref,
-            "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn"
-        );
-        assert_eq!(epoch.governance_binding, governance_binding);
-    }
-
-    #[test]
-    fn child_scope_policy_hydration_uses_the_sdk_wire_type_and_fails_closed() {
-        let circle_id = "ak:circle:AV624IkuHj3HmxAYE6uyYmBa4Est3gGGdnOsjn71z5L2";
-        assert_eq!(
-            soland_services::hydration::parse_child_scope_policy(None, None).unwrap(),
-            None
-        );
-        assert_eq!(
-            soland_services::hydration::parse_child_scope_policy(
-                Some("require_scope_circle_id"),
-                Some(circle_id),
-            )
-            .unwrap(),
-            Some(arkret_models_collaboration::objects::space::ChildScopePolicy::RequireScopeCircleId {
-                scope_circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
-            })
-        );
-        assert!(
-            soland_services::hydration::parse_child_scope_policy(
-                Some("allow_any"),
-                Some(circle_id)
-            )
-            .is_err()
-        );
-        assert!(
-            soland_services::hydration::parse_child_scope_policy(
-                Some("require_scope_circle_id"),
-                None
-            )
-            .is_err()
-        );
-        assert!(
-            soland_services::hydration::parse_child_scope_policy(Some("unknown_policy"), None)
-                .is_err()
-        );
-        assert!(
-            soland_services::hydration::parse_child_scope_policy(None, Some(circle_id)).is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn key_backup_active_series_rehydrates_without_timeline_after_confirmation() {
-        use soland_storage::ProjectionEventRecord;
-
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        let actor = "ak:did_core:web:alice.example";
-        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let series_id = "ak:backup_series:019f0dd3-081c-7f03-b388-e0399e775901";
-        let now = chrono::Utc::now();
-        let first_payload = serde_json::json!({
-            "schema": "ak.schema.key_backup_active_series.v1",
-            "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                DidCoreId::new(actor).unwrap(), crate::test_event::station_id(),
-            )),
-            "backup_kind": "mls_history",
-            "active_series_id": series_id,
-            "series_pointer_version": 1,
-            "previous_series_ids": [],
-            "frontier_ref": {
-                "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "seal_ref": "ak:seal:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                "device_generation_ref": 1
-            },
-            "issued_at": "2026-07-18T00:00:00.000Z",
-            "auth_data": {
-                "verification_method": "did:web:alice.example#device-key",
-                "signature_algorithm": "Ed25519",
-                "signature": "AA",
-                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
-            }
-        });
-        let first_source = canonical_projection_source_event(
-            realm_id,
-            actor,
-            1,
-            arkret_wire::EventKind::KeyBackupActiveSeries,
-            first_payload.clone(),
-            now,
-        );
-        store
-            .events()
-            .put(first_source)
-            .await
-            .expect("persist active-series canonical Event");
-        assert!(
-            store
-                .projection_events()
-                .snapshot_all()
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
-            let mut unconfirmed = ProjectionState::new();
-            hydrate_projections_from_persistence(
-                &store,
-                &mut unconfirmed,
-                &RuntimeHydrationProjectionAdapter,
-                &hydration_command_view(&store, outcome).await,
-            )
-            .await
-            .expect("unconfirmed source remains invisible");
-            assert!(unconfirmed.key_backup_active_series.is_empty());
-        }
-
-        let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &RuntimeHydrationProjectionAdapter,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .expect("hydrate active-series projection");
-
-        let pointer = proj
-            .key_backup_active_series(
-                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    DidCoreId::new(actor).unwrap(),
-                    crate::test_event::station_id(),
-                ))
-                .to_string(),
-                "mls_history",
-            )
-            .expect("active-series pointer rehydrated");
-        assert_eq!(pointer.active_series_id, series_id);
-        assert_eq!(pointer.series_pointer_version, 1);
-
-        let gap_payload = serde_json::json!({
-            "schema": "ak.schema.key_backup_active_series.v1",
-            "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                DidCoreId::new(actor).unwrap(), crate::test_event::station_id(),
-            )),
-            "backup_kind": "mls_history",
-            "active_series_id": series_id,
-            "series_pointer_version": 3,
-            "previous_series_ids": [],
-            "frontier_ref": {
-                "frontier_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "device_generation_ref": 1
-            },
-            "issued_at": "2026-07-18T00:01:00.000Z",
-            "auth_data": {
-                "verification_method": "did:web:alice.example#device-key",
-                "signature_algorithm": "Ed25519",
-                "signature": "AA",
-                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
-            }
-        });
-        let gap_source = canonical_projection_source_event(
-            realm_id,
-            actor,
-            2,
-            arkret_wire::EventKind::KeyBackupActiveSeries,
-            gap_payload.clone(),
-            now,
-        );
-        let gap_event_id = gap_source.event_id.clone();
-        store
-            .events()
-            .put(gap_source)
-            .await
-            .expect("persist gap active-series canonical Event");
-        store
-            .projection_events()
-            .append(ProjectionEventRecord {
-                event_id: gap_event_id,
-                realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::KeyBackupActiveSeries
-                    .as_str()
-                    .to_owned(),
-                operation_kind: "event".to_owned(),
-                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned()),
-                sender: Some(actor.to_owned()),
-                payload: gap_payload,
-                created_at: now,
-                received_at: now,
-            })
-            .await
-            .expect("append invalid gap projection event");
-        let mut poisoned = ProjectionState::new();
-        assert!(
-            hydrate_projections_from_persistence(
-                &store,
-                &mut poisoned,
-                &RuntimeHydrationProjectionAdapter,
-                &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await
-            )
-            .await
-            .is_err(),
-            "hydration must fail closed on a durable active-series gap"
-        );
-    }
-
-    #[tokio::test]
-    async fn agent_key_authorization_rehydrates_with_partial_timeline() {
-        use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
-
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        let agent_id =
-            "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
-        let realm_id = "ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP";
-        let key_id = format!("{agent_id}#runtime-1");
-        let replacement_key_id = format!("{agent_id}#runtime-2");
-        let now = chrono::Utc::now();
-        let authorize_source = canonical_projection_source_event(
-            realm_id,
-            agent_id,
-            1,
-            arkret_wire::EventKind::AgentKeyAuthorize,
-            serde_json::json!({
-                "agent_id": agent_id,
-                "key_id": key_id
-            }),
-            now,
-        );
-        let event_id = authorize_source.event_id.clone();
-        store
-            .events()
-            .put(authorize_source)
-            .await
-            .expect("persist agent-key authorization canonical Event");
-        let appended = store
-            .projection_events()
-            .append(ProjectionEventRecord {
-                event_id: event_id.clone(),
-                realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::AgentKeyAuthorize
-                    .as_str()
-                    .to_owned(),
-                operation_kind: "event".to_owned(),
-                operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775904".to_owned()),
-                sender: Some(agent_id.to_owned()),
-                payload: serde_json::json!({
-                    "agent_id": agent_id,
-                    "key_id": key_id,
-                    "accepted_event_id": event_id
-                }),
-                created_at: now,
-                received_at: now,
-            })
-            .await
-            .expect("append agent-key authorization projection event");
-        assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
-        let revoke_source = canonical_projection_source_event(
-            realm_id,
-            agent_id,
-            2,
-            arkret_wire::EventKind::AgentKeyRevoke,
-            serde_json::json!({
-                "agent_id": agent_id,
-                "key_id": key_id
-            }),
-            now,
-        );
-        store
-            .events()
-            .put(revoke_source)
-            .await
-            .expect("persist agent-key revocation canonical Event");
-        let replacement_source = canonical_projection_source_event(
-            realm_id,
-            agent_id,
-            3,
-            arkret_wire::EventKind::AgentKeyAuthorize,
-            serde_json::json!({
-                "agent_id": agent_id,
-                "key_id": replacement_key_id
-            }),
-            now,
-        );
-        let replacement_event_id = replacement_source.event_id.clone();
-        store
-            .events()
-            .put(replacement_source)
-            .await
-            .expect("persist replacement agent-key authorization canonical Event");
-        // Crash after the first timeline row must not discard later members
-        // of the same exact committed unit, including the revocation.
-        assert_eq!(
-            store
-                .projection_events()
-                .snapshot_all()
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
-            let mut unconfirmed = ProjectionState::new();
-            hydrate_projections_from_persistence(
-                &store,
-                &mut unconfirmed,
-                &RuntimeHydrationProjectionAdapter,
-                &hydration_command_view(&store, outcome).await,
-            )
-            .await
-            .expect("a timeline row cannot grant command eligibility");
-            assert!(!unconfirmed.agent_has_authorized_key(agent_id));
-        }
-
-        let mut proj = ProjectionState::new();
-        assert!(!proj.agent_has_authorized_key(agent_id));
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &RuntimeHydrationProjectionAdapter,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .expect("hydrate agent-key authorization");
-
-        assert!(proj.agent_has_authorized_key(agent_id));
-        assert_eq!(
-            proj.active_agent_key_authorizations(agent_id),
-            vec![(replacement_key_id, replacement_event_id.to_owned())]
-        );
-    }
-
-    #[tokio::test]
-    async fn confirmed_metadata_recovery_rebuilds_after_install_and_restart() {
-        let database = TestDatabase::lease().await;
-        let store = Arc::new(PgPersistenceStore::new(database.pool()));
-        let realm = RealmId::new("ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP").unwrap();
-        let agent =
-            "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
-        let key = format!("{agent}#runtime-1");
-        let replacement = format!("{agent}#runtime-2");
-        for (index, (kind, key_id)) in [
-            (arkret_wire::EventKind::AgentKeyAuthorize, &key),
-            (arkret_wire::EventKind::AgentKeyRevoke, &key),
-            (arkret_wire::EventKind::AgentKeyAuthorize, &replacement),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            store
-                .events()
-                .put(canonical_projection_source_event(
-                    realm.as_str(),
-                    agent,
-                    index as u64 + 1,
-                    kind,
-                    serde_json::json!({"agent_id": agent, "key_id": key_id}),
-                    chrono::Utc::now(),
-                ))
-                .await
-                .unwrap();
-        }
-        let persistence = soland_services::persistence::PersistenceHandle::new(store.clone());
-        for outcome in [None, Some(arkret_wire::CommandOutcome::Rejected)] {
-            let projection =
-                hydration_command_view_with_successor(store.as_ref(), outcome, true).await;
-            let _guard = projection.confirmed_projection_guard().await;
-            assert!(
-                persistence
-                    .recover_confirmed_metadata(
-                        &projection,
-                        &realm,
-                        &RuntimeHydrationProjectionAdapter
-                    )
-                    .await
-                    .unwrap()
-                    .is_empty()
-            );
-            assert!(
-                store
-                    .projection_events()
-                    .snapshot_all()
-                    .await
-                    .unwrap()
-                    .is_empty()
-            );
-        }
-        for _restart in 0..2 {
-            let projection = hydration_command_view_with_successor(
-                store.as_ref(),
-                Some(arkret_wire::CommandOutcome::Committed),
-                true,
-            )
-            .await;
-            let _guard = projection.confirmed_projection_guard().await;
-            for _retry_after_install in 0..2 {
-                let members = persistence
-                    .recover_confirmed_metadata(
-                        &projection,
-                        &realm,
-                        &RuntimeHydrationProjectionAdapter,
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(members.len(), 2);
-                let snapshot = projection.snapshot();
-                let keys = snapshot.active_agent_key_authorizations(agent);
-                assert_eq!(keys.len(), 1);
-                assert_eq!(keys[0].0, replacement);
-                assert_eq!(
-                    store
-                        .projection_events()
-                        .snapshot_all()
-                        .await
-                        .unwrap()
-                        .len(),
-                    2
-                );
-            }
-        }
-        // A registered D member of the same committed unit must not be
-        // detached merely because its sibling is replayable metadata.
-        store
-            .events()
-            .put(canonical_projection_source_event(
-                realm.as_str(),
-                agent,
-                4,
-                arkret_wire::EventKind::AccountDataSet,
-                serde_json::json!({"schema_id":"ak.schema.account_data.v1"}),
-                chrono::Utc::now(),
-            ))
-            .await
-            .unwrap();
-        let mixed = hydration_command_view_with_successor(
-            store.as_ref(),
-            Some(arkret_wire::CommandOutcome::Committed),
-            true,
-        )
-        .await;
-        let _guard = mixed.confirmed_projection_guard().await;
-        assert!(
-            persistence
-                .recover_confirmed_metadata(&mixed, &realm, &RuntimeHydrationProjectionAdapter)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            mixed
-                .snapshot()
-                .active_agent_key_authorizations(agent)
-                .is_empty()
-        );
-        assert_eq!(
-            store
-                .projection_events()
-                .snapshot_all()
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[tokio::test]
-    async fn projection_timeline_batch_conflict_rolls_back_every_new_member() {
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        let realm = "ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP";
-        let actor = "did:web:alice.example";
-        let mut timeline = Vec::new();
-        for sequence in 1..=2 {
-            let record = canonical_projection_source_event(
-                realm,
-                actor,
-                sequence,
-                arkret_wire::EventKind::AgentKeyAuthorize,
-                serde_json::json!({"agent_id":actor,"key_id":format!("{actor}#key-{sequence}")}),
-                chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
-                    .unwrap(),
-            );
-            let event: arkret_wire::Event =
-                serde_json::from_value(record.envelope.clone()).unwrap();
-            timeline.push(soland_storage::ProjectionEventRecord {
-                event_id: record.event_id.clone(),
-                realm_id: realm.to_owned(),
-                event_kind: event.kind.to_string(),
-                operation_kind: "create".to_owned(),
-                operation_id: None,
-                sender: Some(event.actor_id.to_string()),
-                payload: serde_json::to_value(event.payload).unwrap(),
-                created_at: event.created_at,
-                received_at: record.received_at,
-            });
-            store.events().put(record).await.unwrap();
-        }
-        let mut poisoned = timeline[1].clone();
-        poisoned.payload = serde_json::json!({"different":"immutable output"});
-        store
-            .projection_events()
-            .append(poisoned.clone())
-            .await
-            .unwrap();
-        assert!(
-            store
-                .projection_events()
-                .append_batch(timeline.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            store
-                .projection_events()
-                .get(&timeline[0].event_id)
-                .await
-                .unwrap()
-                .is_none(),
-            "failure after first insertion must roll it back"
-        );
-        let outcomes = store
-            .projection_events()
-            .append_batch(vec![timeline[0].clone(), poisoned.clone()])
-            .await
-            .unwrap();
-        assert_eq!(
-            outcomes,
-            vec![
-                soland_storage::ProjectionEventAppendOutcome::Inserted,
-                soland_storage::ProjectionEventAppendOutcome::AlreadyExists
-            ]
-        );
-        assert_eq!(
-            store
-                .projection_events()
-                .append_batch(vec![timeline[0].clone(), poisoned])
-                .await
-                .unwrap(),
-            vec![soland_storage::ProjectionEventAppendOutcome::AlreadyExists; 2]
-        );
-    }
-
-    #[tokio::test]
-    async fn realm_owner_metadata_rehydrates_without_implying_capability() {
-        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let owner = "did:webvh:z6mkfixture:example.test:users:alice";
-        let now = chrono::Utc::now();
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        store
-            .realm_meta()
-            .put(
-                realm_id,
-                &RealmMetaRecord {
-                    owner: owner.to_owned(),
-                    deleted: false,
-                    discoverability: "invite_only".to_owned(),
-                    history_access: "all_history_for_current_members".to_owned(),
-                    preview_policy: None,
-                    preview_policy_digest: None,
-                    asset_privacy_policy: None,
-                    asset_privacy_policy_digest: None,
-                    encryption_profile: None,
-                    plaintext_visible_services: BTreeSet::new(),
-                    plaintext_visible_service_classes: BTreeMap::new(),
-                    minimal_metadata_realm: false,
-                    created_at: now,
-                    updated_at: now,
-                },
-            )
-            .await
-            .expect("put realm metadata");
-
-        let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &RuntimeHydrationProjectionAdapter,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .expect("hydrate projections");
-
-        let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
-        assert_eq!(hydrated.owner.as_deref(), Some(owner));
-        assert!(!proj.issuer_has_projected_capability(
-            &crate::test_account_actor(&arkret_wire::Did::new(owner).unwrap()),
-            realm_id,
-            "ak.message.create",
-            realm_id,
-            chrono::Utc::now(),
-        ));
-    }
-
-    #[tokio::test]
-    async fn plaintext_visible_services_rehydrate_from_bootstrap_policy_event() {
-        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let actor_id = "ak:did_core:web:alice.example";
-        let service_id = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
-        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let database = TestDatabase::lease().await;
-        let store = PgPersistenceStore::new(database.pool());
-        store
-            .events()
-            .put(canonical_projection_source_event(
-                realm_id,
-                actor_id,
-                0,
-                arkret_wire::EventKind::RealmCreate,
-                serde_json::json!({
-                    "object": {
-                        "purpose": "collaboration",
-                        "default_discoverability": "invite_only",
-                        "history_access": "since_join",
-                        "encryption_profile": "none"
-                    }
-                }),
-                created_at,
-            ))
-            .await
-            .unwrap();
-        store
-            .events()
-            .put(canonical_projection_source_event(
-                realm_id,
-                actor_id,
-                1,
-                arkret_wire::EventKind::RealmPlaintextVisibleServices,
-                serde_json::json!({
-                    "services": [{
-                        "service_id": service_id,
-                        "service_kind": "station",
-                        "purposes": ["message_index"],
-                        "data_classes": ["message_content"],
-                        "visibility": "private_plaintext"
-                    }]
-                }),
-                created_at + chrono::Duration::milliseconds(1),
-            ))
-            .await
-            .unwrap();
-
-        let mut realms = RealmDirectoryIndex::new();
-        hydrate_realms_from_canonical_events(
-            &store,
-            &mut realms,
-            &hydration_command_view(&store, Some(arkret_wire::CommandOutcome::Committed)).await,
-        )
-        .await
-        .unwrap();
-
-        let meta = store.realm_meta().get(realm_id).await.unwrap().unwrap();
-        assert!(meta.plaintext_visible_services.contains(service_id));
-        assert!(
-            meta.plaintext_visible_service_classes[service_id]
-                .contains(&arkret_wire::PlaintextDataClassKind::MessageContent)
-        );
+        assert!(projection.snapshot().realm_states.is_empty());
     }
 }

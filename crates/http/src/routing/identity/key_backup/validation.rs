@@ -57,8 +57,11 @@ pub(super) fn validate_key_backup_body_typed(
     validate_key_backup_encryption_typed(backup)?;
     validate_key_backup_domain_separation_typed(backup)?;
     validate_recovery_policy_ref_shape_typed(backup)?;
-    // The SDK's closed SecretStorageContentIndex and KeyBackup::validate above
-    // require a nonempty index containing only item_kind and secret_id.
+    validate_key_backup_auth_data_typed(backup)?;
+    if backup.contents.is_empty() {
+        return Err(schema_error("key backup contents must not be empty"));
+    }
+    // KeyBackup::validate checks every closed secret_storage content entry.
     Ok(())
 }
 
@@ -257,6 +260,13 @@ pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Re
         ));
     }
 
+    Ok(())
+}
+
+pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<(), AppError> {
+    if backup.auth_data.signature.as_str().is_empty() {
+        return Err(schema_error("key backup signature is required"));
+    }
     Ok(())
 }
 

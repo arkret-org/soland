@@ -12,7 +12,6 @@ pub mod content_encoding;
 pub mod deactivation_push_fanout;
 pub mod error;
 pub mod failpoints;
-pub mod gc;
 pub mod http_signature;
 pub mod ids;
 mod invite_claim_proofs;
@@ -47,30 +46,6 @@ pub use routing::{
     router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
 };
 
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub use crate::routing::events::projection::project_accepted_operations;
-
-/// Derive the exact confirmed device-Control projection for a fixture Seal
-/// through the same verified-history loader used by production commits.
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub async fn test_candidate_device_control_projection_fixture(
-    state: &crate::state::AppState,
-    seal: &arkret_wire::Seal,
-    digest_suite: arkret_canonical::DigestSuite,
-) -> Result<Option<soland_storage::ConfirmedDeviceControlProjection>, String> {
-    crate::routing::identity::device_generation::candidate_device_control_projection(
-        state,
-        seal,
-        digest_suite,
-    )
-    .await
-    .map_err(|error| error.to_string())
-}
-
 pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {
     arkret_canonical::canonical_sha256(value).ok()
 }
@@ -94,19 +69,6 @@ pub(crate) fn test_account_actor(did: &arkret_identifiers::Did) -> arkret_wire::
         test_actor_id(did),
         test_event::station_id(),
     ))
-}
-
-#[cfg(test)]
-pub(crate) fn test_notary(did: &str, seed: u8) -> arkret_wire::NotaryValue {
-    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key();
-    let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
-        test_actor_id_str(did),
-        arkret_wire::DidUrl::new(format!("{did}#notary-key"))
-            .expect("test notary verification method"),
-        verifying_key.as_bytes(),
-    )
-    .expect("test notary descriptor");
-    arkret_wire::NotaryValue::new(descriptor, 0).expect("test single-authority notary")
 }
 
 use salvo::catcher::Catcher;
@@ -171,19 +133,11 @@ pub(crate) mod test_event {
         kind: impl Into<String>,
         scope_ref: ScopeRef,
         actor_id: DidCoreId,
-        actor_seq: u64,
-        hlc: Hlc,
+        _actor_seq: u64,
+        _hlc: Hlc,
         payload: Value,
     ) -> Result<Event> {
-        arkret_wire::test_support::raw_event(
-            kind,
-            scope_ref,
-            actor_id,
-            station_id(),
-            actor_seq,
-            hlc,
-            payload,
-        )
+        arkret_wire::test_support::raw_event(kind, scope_ref, actor_id, station_id(), payload)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -191,8 +145,8 @@ pub(crate) mod test_event {
         kind: impl Into<String>,
         scope_ref: ScopeRef,
         actor_id: DidCoreId,
-        actor_seq: u64,
-        hlc: Hlc,
+        _actor_seq: u64,
+        _hlc: Hlc,
         payload: Value,
         created_at: DateTime<Utc>,
     ) -> Result<Event> {
@@ -201,8 +155,6 @@ pub(crate) mod test_event {
             scope_ref,
             actor_id,
             station_id(),
-            actor_seq,
-            hlc,
             payload,
             created_at,
         )

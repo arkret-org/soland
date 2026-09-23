@@ -27,9 +27,6 @@ pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::time::Duration;
 
 pub(crate) use arkret_identifiers::{Cursor, RealmId};
-pub(crate) use arkret_models_collaboration::http_bodies::{
-    EventsQueryOutcome, EventsSubscribeFrame,
-};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
@@ -44,7 +41,6 @@ pub(crate) use soland_services::identity::SessionIdentityState;
 pub(crate) use soland_services::sync::CursorState;
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
-use super::super::identity::device_messages::prune_device_messages_for_limits;
 #[cfg(test)]
 pub(crate) use super::strand::strand_id_from_realm_id;
 use super::{
@@ -55,7 +51,7 @@ use super::{
 };
 pub(crate) use crate::ids;
 pub(crate) use crate::state::AppState;
-pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncRequestBody};
+pub(crate) use crate::wire::SyncRequestBody;
 
 /// Default reconnect guard advertised on subscribe terminal control frames.
 /// Shared by `account_subscribe` (subscribe.rs) and `events_subscribe`
@@ -107,7 +103,6 @@ mod subscribe;
 pub(crate) use subscribe::*;
 mod events_query;
 pub(crate) use events_query::*;
-pub(crate) mod websocket;
 
 pub(super) fn protocol_router() -> Router {
     Router::new()

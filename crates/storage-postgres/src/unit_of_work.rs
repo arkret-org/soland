@@ -2242,6 +2242,16 @@ async fn commit_one_in_connection(
     }
     let event = &request.authority_commit.event;
 
+    if let Some(guard) = request.self_producer_guard.as_ref() {
+        crate::authority_commit::check_self_producer_guard_in_connection(
+            conn,
+            event,
+            guard,
+            request.authority_commit.commit.committed_at,
+        )
+        .await?;
+    }
+
     prepare_parent_membership_transaction(conn, &request).await?;
 
     if let Some(commit) = request.device_pairing_authorization.as_ref() {

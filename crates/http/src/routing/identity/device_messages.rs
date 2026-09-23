@@ -11,14 +11,10 @@
 
 use std::collections::BTreeMap;
 
-#[cfg(test)]
-use arkret_models_collaboration::sync_frames::account_sync::{
-    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate,
+use arkret_models_collaboration::device_messages::{
+    DeviceMessageDeliveredRow, DeviceMessageDeliveredStatus, DeviceMessageTarget,
+    DeviceMessageUnknownRow, DeviceMessageUnknownStatus,
 };
-use arkret_models_collaboration::sync_frames::account_sync::{
-    ActorPrivateDeviceUpdate, DeviceMessageContent,
-};
-use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -27,26 +23,134 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageState,
+    RecipientQueueSelector,
 };
-use soland_services::identity::DeviceIdentity;
+use soland_services::identity::{DeviceIdentity, SessionIdentityState};
 
 use super::{SyncCursorError, now};
 use crate::routing::events::sync::{device_messages_cursor, parse_device_messages_cursor};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
+pub(crate) use crate::wire::DeviceMessageSender;
 use crate::wire::{
-    DeviceMessageEnvelope, DeviceMessageSender, DeviceMessagesAckOutcome,
-    DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome, DeviceMessagesSendOutcome,
-    DeviceMessagesSendRequestBody,
+    DeviceMessageEnvelope, DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody,
+    DeviceMessagesGetOutcome, DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody,
 };
 
-pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
+pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 100;
+const TO_DEVICE_DEFAULT_PAGE_LIMIT: usize = 20;
+
+pub(crate) fn recipient_queue_selector(
+    session: &SessionIdentityState,
+) -> Result<RecipientQueueSelector, AppError> {
+    if session.agent_session.is_some() {
+        let Some(grant) = session.session_grant.as_ref() else {
+            return Err(AppError::capability_denied(
+                "Agent recipient queue requires an authenticated Agent grant",
+            ));
+        };
+        let arkret_models_identity::session_credential::SessionGrantHolderBinding::AgentRuntime {
+            agent_id,
+            agent_key_authorization_ref,
+            verification_method,
+            ..
+        } = &grant.holder_binding
+        else {
+            return Err(AppError::capability_denied(
+                "Agent recipient queue grant binding is invalid",
+            ));
+        };
+        if session.actor != agent_id.as_str() {
+            return Err(AppError::capability_denied(
+                "Agent recipient queue actor differs from the grant",
+            ));
+        }
+        return Ok(RecipientQueueSelector::AgentRuntime {
+            agent_id: agent_id.to_string(),
+            verification_method: verification_method.to_string(),
+            authorization_event_ref: agent_key_authorization_ref.to_string(),
+        });
+    }
+    Ok(RecipientQueueSelector::HumanDevice {
+        recipient: session.actor.clone(),
+        device_id: session.device_id.clone(),
+    })
+}
+
+/// Internal actor-private queue materialization. These values are built only
+/// from an accepted local current result, then serialized as the closed
+/// `content` object of a regular DeviceMessageEnvelope.
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ActorPrivateAccountDataOperation {
+    Put,
+    Delete,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct ActorPrivateAccountDataUpdate {
+    pub operation: ActorPrivateAccountDataOperation,
+    pub account_data_key: String,
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+    #[serde(with = "arkret_wire::serde_helpers::canonical_timestamp")]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct ActorPrivateReadCursorUpdate {
+    pub schema: String,
+    pub actor_id: arkret_wire::ActorId,
+    pub device_id: arkret_wire::DeviceId,
+    pub realm_id: arkret_wire::RealmId,
+    pub read_scope: arkret_wire::ReadCursorScope,
+    pub position: arkret_models_collaboration::objects::read_receipts::ReadCursorPosition,
+    #[serde(with = "arkret_wire::serde_helpers::canonical_timestamp")]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub(crate) enum ActorPrivateDeviceUpdate {
+    AccountData {
+        sender: DeviceMessageSender,
+        content: ActorPrivateAccountDataUpdate,
+        created_at: chrono::DateTime<chrono::Utc>,
+    },
+    Blocklist {
+        sender: DeviceMessageSender,
+        content: ActorPrivateAccountDataUpdate,
+        created_at: chrono::DateTime<chrono::Utc>,
+    },
+    ReadCursor {
+        sender: DeviceMessageSender,
+        content: ActorPrivateReadCursorUpdate,
+        created_at: chrono::DateTime<chrono::Utc>,
+    },
+}
+
+impl ActorPrivateDeviceUpdate {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::AccountData { .. } => "ak.account_data.update",
+            Self::Blocklist { .. } => "ak.account.blocklist.update",
+            Self::ReadCursor { .. } => "ak.read_cursor.update",
+        }
+    }
+
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            Self::AccountData { created_at, .. }
+            | Self::Blocklist { created_at, .. }
+            | Self::ReadCursor { created_at, .. } => *created_at,
+        }
+    }
+}
 
 /// Build the only service sender accepted by the internal actor-private
 /// materializer. Keeping this constructor beside the fanout prevents CAS
 /// producers from accepting or copying a caller-supplied service identity.
 pub(crate) fn station_device_message_sender(state: &AppState) -> DeviceMessageSender {
-    DeviceMessageSender::Service {
+    DeviceMessageSender::Station {
         sender_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
             .expect("the loaded Station identity is a core DID"),
     }
@@ -55,7 +159,7 @@ pub(crate) fn station_device_message_sender(state: &AppState) -> DeviceMessageSe
 struct PreparedDeviceMessageTarget {
     recipient: String,
     device_id: String,
-    target: arkret_models_collaboration::sync_frames::account_sync::DeviceMessageTarget,
+    target: DeviceMessageTarget,
     message_key: String,
     intent_digest: String,
 }
@@ -77,15 +181,6 @@ struct DeviceMessageIntentPreimage<'a> {
     content: &'a BTreeMap<String, Value>,
 }
 
-pub(crate) async fn prune_device_messages_for_limits(
-    state: &AppState,
-) -> soland_services::ServiceResult<()> {
-    state
-        .deliveries()
-        .prune_device_messages(state.config().to_device_queue_capacity, now())
-        .await
-}
-
 pub(super) fn protocol_router() -> Router {
     Router::new()
         .push(
@@ -96,11 +191,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("device_messages/ack").post(ack_device_messages))
 }
 
-#[endpoint(
-    operation_id = "ak.self.device_messages.command.send",
-    summary = "Send device-to-device messages",
-    tags("device_messages")
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send.v1"))]
 async fn send_device_messages(
     aa: AuthArgs,
@@ -154,6 +245,11 @@ async fn send_device_messages(
     let mut idempotency_expires_at = now();
     for (recipient, devices) in body.messages {
         for (device_id, target) in devices {
+            if matches!(target.kind.as_str(), "ak.secret.request" | "ak.secret.send") {
+                return Err(AppError::param_invalid(
+                    "ak.secret.request and ak.secret.send are not admitted in v1",
+                ));
+            }
             idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
             let message_key = arkret_canonical::canonical_sha256(&json!({
                 "sender_account_id": sender_account_id,
@@ -272,7 +368,8 @@ async fn send_device_messages(
                     recipient_device_authorization: recipient_authorization(
                         state,
                         target_record.as_ref().expect("verified target exists"),
-                    )?,
+                    )
+                    .await?,
                     position: state.next_to_device_position(),
                     content,
                     created_at,
@@ -294,6 +391,7 @@ async fn send_device_messages(
             request_key,
             request_digest,
             idempotency_expires_at: idempotency_expires_at + chrono::Duration::hours(1),
+            per_device_queue_capacity: state.config().to_device_queue_capacity,
             device_revocation_gate: sender_revocation_gate,
             target_snapshot_guard: None,
             items: batch_items,
@@ -321,11 +419,14 @@ async fn send_device_messages(
                 AppError::conflict("device generation is revoked").with_wire_code("device_revoked")
             );
         }
+        DeviceMessageBatchCommitOutcome::QueueAtCapacity => {
+            return Err(
+                crate::app_error!(QuotaExceeded, "recipient queue is at capacity")
+                    .with_wire_code("quota_exceeded"),
+            );
+        }
     };
     let outcome = device_message_send_outcome(&prepared_targets, &message_outcomes)?;
-    if let Err(error) = prune_device_messages_for_limits(state).await {
-        tracing::error!(%error, "failed to prune to-device messages after send");
-    }
     json_ok(outcome)
 }
 
@@ -333,26 +434,42 @@ fn device_message_send_outcome(
     targets: &[PreparedDeviceMessageTarget],
     outcomes: &BTreeMap<String, bool>,
 ) -> Result<DeviceMessagesSendOutcome, AppError> {
-    let mut delivered_by_recipient: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut delivered = BTreeMap::new();
     let mut unknown_devices = BTreeMap::new();
     for target in targets {
-        let delivered = outcomes
+        let is_delivered = outcomes
             .get(&target.message_key)
             .copied()
             .ok_or_else(|| AppError::internal("stored device-message outcome omitted a target"))?;
-        if delivered {
-            delivered_by_recipient
-                .entry(target.recipient.clone())
-                .or_default()
-                .push(target.device_id.clone());
+        let recipient = arkret_wire::DidCoreId::new(target.recipient.clone())
+            .map_err(|error| AppError::internal(format!("stored recipient id: {error}")))?;
+        let device_id = arkret_wire::DeviceId::new(target.device_id.clone())
+            .map_err(|error| AppError::internal(format!("stored device id: {error}")))?;
+        if is_delivered {
+            delivered
+                .entry(recipient)
+                .or_insert_with(BTreeMap::new)
+                .insert(
+                    device_id,
+                    DeviceMessageDeliveredRow {
+                        device_message_id: target.target.device_message_id.clone(),
+                        status: DeviceMessageDeliveredStatus::Delivered,
+                    },
+                );
         } else {
-            note_unknown_device(&mut unknown_devices, &target.recipient, &target.device_id);
+            unknown_devices
+                .entry(recipient)
+                .or_insert_with(BTreeMap::new)
+                .insert(
+                    device_id,
+                    DeviceMessageUnknownRow {
+                        device_message_id: target.target.device_message_id.clone(),
+                        status: DeviceMessageUnknownStatus::Unknown,
+                        reason_code: "device_unknown".to_owned(),
+                    },
+                );
         }
     }
-    let delivered = delivered_by_recipient
-        .into_iter()
-        .map(|(recipient, devices)| (recipient, json!(devices)))
-        .collect();
     Ok(DeviceMessagesSendOutcome {
         delivered,
         unknown_devices,
@@ -407,7 +524,7 @@ pub(crate) async fn fanout_actor_private_update(
         | ActorPrivateDeviceUpdate::ReadCursor { sender, .. } => sender,
     };
     let (origin_device_id, sender_endpoint_id, sender_revocation_gate) = match sender {
-        DeviceMessageSender::Device {
+        DeviceMessageSender::Account {
             sender_account_id,
             sender_device_id,
         } => {
@@ -429,7 +546,6 @@ pub(crate) async fn fanout_actor_private_update(
                 .await
                 {
                     Ok(selector) => Some(selector),
-                    Err(_) if state.config().development_mode => None,
                     Err(error) => {
                         tracing::warn!(
                             %error,
@@ -446,7 +562,7 @@ pub(crate) async fn fanout_actor_private_update(
                 sender_revocation_gate,
             )
         }
-        DeviceMessageSender::Service { sender_id } => {
+        DeviceMessageSender::Station { sender_id } => {
             if sender_id.as_str() != state.service_id() {
                 tracing::warn!(
                     actor,
@@ -472,16 +588,18 @@ pub(crate) async fn fanout_actor_private_update(
         }
     };
     let content = match &update {
-        ActorPrivateDeviceUpdate::AccountData { content, .. } => {
-            DeviceMessageContent::AccountDataUpdate(content.clone())
-        }
-        ActorPrivateDeviceUpdate::Blocklist { content, .. } => {
-            DeviceMessageContent::BlocklistUpdate(content.clone())
-        }
-        ActorPrivateDeviceUpdate::ReadCursor { content, .. } => {
-            DeviceMessageContent::ReadCursorUpdate(content.clone())
-        }
+        ActorPrivateDeviceUpdate::AccountData { content, .. }
+        | ActorPrivateDeviceUpdate::Blocklist { content, .. } => serde_json::to_value(content),
+        ActorPrivateDeviceUpdate::ReadCursor { content, .. } => serde_json::to_value(content),
     };
+    let Ok(Value::Object(content)) = content else {
+        tracing::error!(
+            actor,
+            "failed to serialize actor-private DeviceMessage content"
+        );
+        return 0;
+    };
+    let content: BTreeMap<String, Value> = content.into_iter().collect();
     let devices = state
         .identities()
         .devices_for_actor(actor)
@@ -494,7 +612,7 @@ pub(crate) async fn fanout_actor_private_update(
         {
             continue;
         }
-        let recipient_device_authorization = match recipient_authorization(state, &device) {
+        let recipient_device_authorization = match recipient_authorization(state, &device).await {
             Ok(source) => source,
             Err(error) => {
                 tracing::error!(%error, "actor-private target lacks its original device authorization");
@@ -544,15 +662,13 @@ pub(crate) async fn fanout_actor_private_update(
                     content: envelope.clone(),
                     created_at,
                 },
+                state.config().to_device_queue_capacity,
             )
             .await
         {
             Ok(()) => delivered += 1,
             Err(error) => tracing::error!(%error, actor, "failed to fan out actor-private update"),
         }
-    }
-    if let Err(error) = prune_device_messages_for_limits(state).await {
-        tracing::error!(%error, actor, "failed to prune to-device messages after actor-private fanout");
     }
     if delivered > 0 {
         let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
@@ -589,11 +705,7 @@ pub(crate) async fn fanout_actor_private_update(
     delivered
 }
 
-#[endpoint(
-    operation_id = "ak.self.device_messages.read.list",
-    summary = "List pending device messages",
-    tags("device_messages")
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.read.list.v1"))]
 async fn get_device_messages(
     aa: AuthArgs,
@@ -639,30 +751,27 @@ async fn get_device_messages(
     let page_limit = match limit.into_inner() {
         Some(0) => return Err(AppError::param_invalid("limit must be greater than zero")),
         Some(limit) => (limit as usize).min(TO_DEVICE_PAGE_LIMIT),
-        None => TO_DEVICE_PAGE_LIMIT,
+        None => TO_DEVICE_DEFAULT_PAGE_LIMIT,
     };
-    prune_device_messages_for_limits(state)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let lost_watermark = state
-        .deliveries()
-        .device_message_lost_watermark(&session.actor, &session.device_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    let selector = recipient_queue_selector(&session)?;
+    let lost_watermark = if matches!(&selector, RecipientQueueSelector::HumanDevice { .. }) {
+        state
+            .deliveries()
+            .device_message_lost_watermark(&session.actor, &session.device_id)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+    } else {
+        None
+    };
     let lost = lost_watermark.is_some_and(|position| position > cursor_position);
     let queued = state
         .deliveries()
-        .device_messages_after(
-            &session.actor,
-            &session.device_id,
-            cursor_position,
-            page_limit + 1,
-        )
+        .recipient_deliveries_after(&selector, cursor_position, page_limit + 1)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let has_more = queued.len() > page_limit;
     let page = queued.into_iter().take(page_limit).collect::<Vec<_>>();
-    let messages = device_message_envelopes_after(state, &page);
+    let deliveries = page.iter().map(|record| record.delivery.clone()).collect();
     let delivered_position = page
         .iter()
         .map(|message| message.position)
@@ -675,11 +784,19 @@ async fn get_device_messages(
     let ack_token = if page.is_empty() {
         None
     } else {
-        state
-            .deliveries()
-            .issue_device_message_ack_token(&session.actor, &session.device_id, delivered_position)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
+        Some(
+            state
+                .deliveries()
+                .issue_recipient_ack_token(&selector, delivered_position)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(|| {
+                    crate::app_error!(
+                        ServiceUnavailable,
+                        "recipient delivery ACK token unavailable"
+                    )
+                })?,
+        )
     };
     let next_cursor = if page.is_empty() && !lost {
         None
@@ -691,20 +808,16 @@ async fn get_device_messages(
         )
     };
     json_ok(DeviceMessagesGetOutcome {
-        messages,
+        deliveries,
         ack_token,
         next_cursor,
         has_more,
-        limited: has_more,
-        lost,
+        limited: Some(has_more),
+        lost: Some(lost),
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.device_messages.command.ack",
-    summary = "Acknowledge received device messages",
-    tags("device_messages")
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.ack.v1"))]
 async fn ack_device_messages(
     aa: AuthArgs,
@@ -715,6 +828,7 @@ async fn ack_device_messages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
+    let selector = recipient_queue_selector(&session)?;
     let ack_token = body.ack_token.as_str();
     if ack_token.is_empty() || ack_token.len() > 1024 {
         return Err(AppError::param_invalid("invalid ack token")
@@ -722,7 +836,7 @@ async fn ack_device_messages(
     }
     let Some(pruned_count) = state
         .deliveries()
-        .acknowledge_device_messages(&session.actor, &session.device_id, ack_token)
+        .acknowledge_recipient_deliveries(&selector, ack_token)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -750,105 +864,58 @@ fn device_is_active_verified(record: Option<&DeviceIdentity>) -> bool {
     })
 }
 
-fn recipient_authorization(
+async fn recipient_authorization(
     state: &AppState,
     record: &DeviceIdentity,
 ) -> Result<soland_storage::DeviceRevocationGateSelector, AppError> {
-    let (event, generation) =
-        super::device_generation::verified_device_authorization_binding(record)
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| {
-                AppError::capability_denied("recipient device authorization is unavailable")
-            })?;
-    Ok(soland_storage::DeviceRevocationGateSelector {
-        principal_id: record
-            .actor_id
-            .parse()
-            .map_err(|error| AppError::internal(format!("recipient account: {error}")))?,
-        station_id: state.service_core_id().clone(),
-        device_id: record.device_id.clone(),
-        target_device_authorize_event_id: event.to_string(),
-        target_device_generation_ref: generation,
-    })
-}
-
-fn note_unknown_device(
-    unknown_devices: &mut BTreeMap<String, Value>,
-    recipient: &str,
-    device_id: &str,
-) {
-    let entry = unknown_devices
-        .entry(recipient.to_owned())
-        .or_insert_with(|| json!([]));
-    if let Some(devices) = entry.as_array_mut() {
-        devices.push(json!(device_id));
-    } else {
-        *entry = json!([device_id]);
+    if !device_is_active_verified(Some(record)) {
+        return Err(AppError::capability_denied(
+            "recipient device authorization is unavailable",
+        ));
     }
+    super::device_generation::active_device_revocation_gate_selector(
+        state,
+        &record.actor_id,
+        &record.device_id,
+    )
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "recipient device has no accepted current authorization");
+        AppError::capability_denied("recipient device authorization is unavailable")
+    })
 }
 
 fn device_message_envelope_from_record(
     state: &AppState,
     message: &DeviceMessageState,
 ) -> Option<DeviceMessageEnvelope> {
-    let kind = arkret_wire::wire_strings::ProtocolKind::new(
-        message.content.get("kind").and_then(Value::as_str)?,
-    )
-    .ok()?;
-    let content_value = message
-        .content
-        .get("content")
-        .and_then(Value::as_object)?
-        .clone();
-    let content =
-        arkret_models_collaboration::sync_frames::account_sync::decode_device_message_content(
-            &kind,
-            Value::Object(content_value),
-        )
-        .ok()?;
-    let expires_at = message
-        .content
-        .get("expires_at")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
-    let unsigned = match message.content.get("unsigned") {
-        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
-        Some(_) => return None,
-        None => None,
-    };
-    // `contact-and-direct-conversation.md` §8.2.1 — the queued body carries the
-    // closed sender endpoint XOR verbatim. A body that does not resolve to
-    // exactly one complete branch is dropped rather than repaired: repairing it
-    // would mean choosing a sender identity the producer never wrote down.
-    let sender = <DeviceMessageSender as serde::Deserialize>::deserialize(&message.content).ok()?;
-    if let DeviceMessageSender::Service { sender_id } = &sender
-        && sender_id.as_str() != state.service_id()
+    // Queue rows carry a complete closed envelope. Never repair missing
+    // sender, recipient, or expiry fields while serving authenticated reads.
+    let envelope: DeviceMessageEnvelope = serde_json::from_value(message.content.clone()).ok()?;
+    if envelope.recipient_account_id.principal_id.as_str() != message.recipient
+        || envelope.recipient_account_id.station_id != state.service_core_id()
+        || envelope.recipient_device_id.as_str() != message.device_id
+        || envelope.sent_at != message.created_at
     {
-        // Fail closed on persisted rows that do not carry the exact local
-        // service/holder binding the internal materializer wrote.
         return None;
     }
-    Some(DeviceMessageEnvelope {
-        device_message_id: arkret_identifiers::DeviceMessageId::new(
-            message
-                .content
-                .get("device_message_id")?
-                .as_str()?
-                .to_owned(),
-        )
-        .ok()?,
-        kind,
-        sender,
-        recipient_account_id: arkret_wire::AccountId::new(
-            arkret_identifiers::DidCoreId::new(message.recipient.clone()).ok()?,
-            state.service_core_id().clone(),
-        ),
-        recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,
-        sent_at: message.created_at,
-        expires_at,
-        content,
-        unsigned,
-    })
+    if matches!(
+        envelope.kind.as_str(),
+        "ak.secret.request" | "ak.secret.send"
+    ) {
+        return None;
+    }
+    if let DeviceMessageSender::Station { sender_id } = &envelope.sender {
+        if *sender_id != state.service_core_id()
+            || !matches!(
+                envelope.kind.as_str(),
+                "ak.account_data.update" | "ak.account.blocklist.update" | "ak.read_cursor.update"
+            )
+        {
+            return None;
+        }
+    }
+    Some(envelope)
 }
 
 #[cfg(test)]
@@ -930,7 +997,7 @@ mod tests {
             &state,
             controller,
             ActorPrivateDeviceUpdate::AccountData {
-                sender: DeviceMessageSender::Device {
+                sender: DeviceMessageSender::Account {
                     sender_account_id: arkret_wire::AccountId::new(
                         arkret_wire::DidCoreId::new(controller.to_owned()).unwrap(),
                         state.service_core_id(),
@@ -1062,7 +1129,7 @@ mod tests {
             assert_eq!(envelope.recipient_device_id.as_str(), device_id);
             assert!(matches!(
                 &envelope.sender,
-                DeviceMessageSender::Service { sender_id }
+                DeviceMessageSender::Station { sender_id }
                     if sender_id.as_str() == state.service_id()
             ));
             let content = serde_json::to_value(&envelope.content).unwrap();

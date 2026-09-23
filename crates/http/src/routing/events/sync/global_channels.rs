@@ -470,10 +470,7 @@ mod tests {
             realm_list: None,
             realm_list_changes: None,
             baseline: Some(AccountBaselineSegment {
-                snapshot_cursor: arkret_wire::Cursor::new(
-                    "ak:cursor:01964137000070008000000000000001",
-                )
-                .unwrap(),
+                snapshot_cursor: "ak:cursor:01964137000070008000000000000001".to_owned(),
                 channels: vec![channel],
                 completed_channels: vec![channel],
             }),

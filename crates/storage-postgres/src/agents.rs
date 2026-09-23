@@ -460,7 +460,7 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let authorized_key_event = (activation.outcome.status
+        let authorized_key_event = (activation.status
             == arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
             .then(|| {
                 crate::agent_principal_row::pack_authorized_key_material(
@@ -490,7 +490,7 @@ impl AgentStore for PgAgentStore {
             .transpose()
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            if activation.outcome.status
+            if activation.status
                 != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
             {
                 return Err(PersistenceError::SchemaViolation(

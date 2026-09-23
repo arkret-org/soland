@@ -22,7 +22,6 @@ fn test_state() -> AppState {
             // are years in the past relative to wall-clock; disable
             // replay-window enforcement so they pass.
             jws_replay_window_seconds: 0,
-            jws_replay_window_per_family: std::collections::BTreeMap::new(),
             seed_demo_data: true,
             ..AppConfig::test_default()
         },

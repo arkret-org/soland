@@ -188,6 +188,7 @@ fn transaction(
         event: event.clone(),
         mls_state: None,
         welcomes: Vec::new(),
+        recipient_queue_capacity: 0,
     }
 }
 
@@ -270,6 +271,42 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
         now,
     );
     let create_tx = transaction(&authority, &create, 0, None, now);
+    let stale_agent_guard = soland_storage::SelfProducerCommitGuard::Agent {
+        pcr_realm_id: realm_id.clone(),
+        agent_id: actor_id.clone(),
+        authorization_ref: arkret_wire::CommittedEventRef {
+            event_id: create.event_id.clone(),
+            commit_id: create_tx.commit.commit_id.clone(),
+            stream_ref: create_tx.commit.stream_ref.clone(),
+            stream_position: 0,
+        },
+        verification_method: create
+            .producer_proof
+            .as_ref()
+            .unwrap()
+            .verification_method
+            .clone(),
+    };
+    assert!(
+        authority_store
+            .admit_self_event_transaction(&create_tx, &stale_agent_guard, now)
+            .await
+            .is_err()
+    );
+    assert!(
+        authority_store
+            .queued_event(&create.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        authority_store
+            .stream_head(&create_tx.commit.stream_ref)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         authority_store
             .admit_event_transaction(&create_tx, now)

@@ -1,20 +1,6 @@
 use sha2::{Digest, Sha256};
 
 use super::*;
-/// The registry projection evaluator for a bootstrap unit.
-///
-/// A genesis unit has no accepted Realm yet, so there is no
-/// `ak.component.realm.digest_suite.v1` cell to read and the protocol baseline
-/// suite is the only defined one (`conformance/encoding.md` §4). Post-genesis
-/// callers MUST use `ProjectionService::project_cell_writes`, which reads the
-/// Realm's effective suite.
-pub(in crate::routing) fn genesis_cell_write_projector(
-    event: &arkret_wire::Event,
-) -> Result<Vec<arkret_wire::cbs::ProjectedCellWrite>, String> {
-    arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
-        .map_err(|error| error.to_string())
-}
-
 pub(in crate::routing) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     max_len: usize,
@@ -127,34 +113,6 @@ pub(in crate::routing) fn event_canonical_bytes(
 
 pub(crate) fn is_valid_event_id(value: &str) -> bool {
     EventId::new(value.to_owned()).is_ok()
-}
-
-pub(in crate::routing) async fn event_submit_response(
-    state: &AppState,
-    session: &SessionRecord,
-    status: EventsSubmitStatus,
-    event_id: String,
-    realm_actor_frontier: RealmActorFrontierView,
-) -> SubmittedEventOutcome {
-    let duplicate = matches!(status, EventsSubmitStatus::Duplicate);
-    let mut outcome = events_submit_outcome(
-        status,
-        vec![event_id.clone()],
-        if duplicate {
-            vec![event_id.clone()]
-        } else {
-            Vec::new()
-        },
-        Vec::new(),
-        Vec::new(),
-        Some(super::super::sync::sync_barrier_token_for_event(state, session, &event_id).await),
-    );
-    outcome.frontiers = vec![realm_actor_frontier];
-    SubmittedEventOutcome {
-        event_id: event_id.clone(),
-        duplicate,
-        outcome,
-    }
 }
 
 pub(in crate::routing) fn projection_operation_from_event(
@@ -334,7 +292,6 @@ pub(crate) fn canonical_event_for_read(record: &AcceptedEvent) -> Result<Event, 
             != event.event_id
         || event.kind.as_str() != record.kind
         || event.actor_id.to_string() != record.actor_id
-        || event.actor_seq != record.actor_seq
         || record
             .realm_id
             .as_deref()
@@ -450,7 +407,6 @@ fn event_visibility_metadata(
     let mut metadata = json!({
         "event_id": record.event_id.clone(),
         "actor_id": record.actor_id.clone(),
-        "actor_seq": record.actor_seq,
         "realm_id": canonical_realm_id_for_record(record),
         "kind": record.kind.clone(),
         "schema_id": record.schema_id.clone(),
@@ -541,68 +497,10 @@ fn session_actor_id(state: &AppState, session: &SessionRecord) -> Option<arkret_
 }
 
 fn is_governance_replay_input(record: &AcceptedEvent) -> bool {
-    let is_anchor_unit = matches!(
+    matches!(
         record.kind.as_str(),
         arkret_wire::event_kind_str::REALM_CREATE | arkret_wire::event_kind_str::DEVICE_REANCHOR
-    );
-    is_anchor_unit
-        || (record.envelope.get("seal_basis").is_some()
-            && record.envelope.get("auth_context").is_none())
-}
-
-async fn is_validated_realm_bootstrap_member(state: &AppState, record: &AcceptedEvent) -> bool {
-    if record.actor_seq > 9
-        || !matches!(
-            record.kind.as_str(),
-            arkret_wire::event_kind_str::REALM_CREATE
-                | arkret_wire::event_kind_str::REALM_PROFILE
-                | arkret_wire::event_kind_str::REALM_POLICY_BUNDLE
-                | arkret_wire::event_kind_str::REALM_JOIN_RULE
-                | arkret_wire::event_kind_str::REALM_HISTORY_ACCESS
-                | arkret_wire::event_kind_str::REALM_DISCOVERY
-                | arkret_wire::event_kind_str::REALM_ALIAS
-                | arkret_wire::event_kind_str::REALM_PLAINTEXT_VISIBLE_SERVICES
-                | arkret_wire::event_kind_str::MEMBER_STATE
-        )
-    {
-        return false;
-    }
-    let Ok(event_digest) = Hash::new(record.canonical_digest.clone()) else {
-        return false;
-    };
-    let Ok(covering_seals) = state
-        .projections()
-        .seals_covering_event(&event_digest)
-        .await
-    else {
-        return false;
-    };
-    let genesis_seals = covering_seals
-        .into_iter()
-        .filter(|seal| seal.predecessor_ref.is_none())
-        .collect::<Vec<_>>();
-    if genesis_seals.is_empty() {
-        return false;
-    }
-    let Ok(records) = state.event_queries().canonical_events().await else {
-        return false;
-    };
-    genesis_seals.into_iter().any(|seal| {
-        let delta = seal.delta.iter().map(Hash::as_str).collect::<BTreeSet<_>>();
-        let mut events = records
-            .iter()
-            .filter(|candidate| delta.contains(candidate.canonical_digest.as_str()))
-            .filter_map(|candidate| canonical_event_for_read(candidate).ok())
-            .collect::<Vec<_>>();
-        if events.len() != delta.len() {
-            return false;
-        }
-        events.sort_by_key(|event| event.actor_seq);
-        events
-            .iter()
-            .any(|event| event.event_id.as_str() == record.event_id)
-            && arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events).is_ok()
-    })
+    )
 }
 
 pub(crate) async fn event_visible_to_session(
@@ -660,14 +558,10 @@ pub(crate) async fn event_visible_to_session(
             {
                 return circle_event_visible_to_session(state, record, session);
             }
-            // Governance verification is not content-history backfill. A
-            // current member must be able to resolve every accepted Control
-            // Move named by the Realm Seal closure so a new member can perform
-            // the T1/T3 replay required by encryption-and-audit.md §2.5.4.
-            // `since_join` continues to crop ordinary Events below.
-            let realm_visible = if is_governance_replay_input(record)
-                || is_validated_realm_bootstrap_member(state, record).await
-            {
+            // The genesis and reanchor anchors remain visible to current
+            // members. Other history follows the signed scope and join cut;
+            // no legacy Seal closure may widen it.
+            let realm_visible = if is_governance_replay_input(record) {
                 crate::routing::realm_has_member(state, &realm_id, &session_actor.to_string()).await
             } else {
                 realm_event_visible_to_session(
@@ -784,7 +678,6 @@ mod refs_limit_tests {
         AcceptedEvent {
             event_id: "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM".to_owned(),
             actor_id: "ak:did_core:web:alice.example".to_owned(),
-            actor_seq: 0,
             realm_id: None,
             kind: kind.to_owned(),
             schema_id: "ak.schema.test.v1".to_owned(),
@@ -876,14 +769,11 @@ mod refs_limit_tests {
             arkret_wire::event_kind_str::MESSAGE_CREATE,
             json!({"auth_context": {}}),
         );
-        let control = visibility_record(
-            arkret_wire::event_kind_str::MEMBER_STATE,
-            json!({"seal_basis": {"leaves": []}}),
-        );
+        let control = visibility_record(arkret_wire::event_kind_str::MEMBER_STATE, json!({}));
         let genesis = visibility_record(arkret_wire::event_kind_str::REALM_CREATE, json!({}));
 
         assert!(!is_governance_replay_input(&message));
-        assert!(is_governance_replay_input(&control));
+        assert!(!is_governance_replay_input(&control));
         assert!(is_governance_replay_input(&genesis));
     }
 

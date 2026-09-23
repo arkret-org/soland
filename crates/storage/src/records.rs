@@ -198,6 +198,8 @@ pub struct RecoverySessionRecord {
     /// Immutable publication authority derived from the policy's accepted
     /// basis and the identity model at session creation.
     pub authority_context: RecoveryAuthorityContext,
+    /// Exact policy-derived publication authority frozen at session creation.
+    pub publication_authority_context: arkret_models_crypto::PublicationAuthorityContext,
     pub publication_authority_context_digest: Hash,
     /// Server-issued anti-replay challenge the proof transcript MUST bind.
     pub challenge: String,
@@ -468,6 +470,28 @@ pub struct DeviceMessageRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// The two closed recipient-delivery objects share one ordered cursor and
+/// cumulative ACK boundary. The endpoint selector is derived from the
+/// authenticated session, never from a request query or payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecipientQueueSelector {
+    HumanDevice {
+        recipient: String,
+        device_id: String,
+    },
+    AgentRuntime {
+        agent_id: String,
+        verification_method: String,
+        authorization_event_ref: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct RecipientDeliveryRecord {
+    pub position: i64,
+    pub delivery: arkret_models_collaboration::device_messages::RecipientDelivery,
+}
+
 #[derive(Clone, Debug)]
 pub struct DeviceMessageIntentRecord {
     pub message_key: String,
@@ -487,6 +511,9 @@ pub struct DeviceMessageBatchRecord {
     pub request_key: String,
     pub request_digest: String,
     pub idempotency_expires_at: chrono::DateTime<chrono::Utc>,
+    /// Maximum outstanding recipient deliveries per human device. Zero means
+    /// unbounded. Checked under the same queue lock as insertion.
+    pub per_device_queue_capacity: usize,
     pub target_snapshot_guard: Option<DeviceMessageTargetSnapshotGuard>,
     /// Sender device generation rechecked while holding the same persistence
     /// boundary as request/message idempotency and queue insertion.
@@ -524,6 +551,7 @@ pub enum DeviceMessageBatchCommitOutcome {
     SnapshotConflict,
     DeviceRevocationPending,
     DeviceRevoked,
+    QueueAtCapacity,
 }
 
 #[derive(Clone, Debug)]

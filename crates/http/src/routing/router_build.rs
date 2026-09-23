@@ -266,21 +266,15 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
         // matters only where paths overlap:
         //   1. `server_ops_router` — soland-local admin endpoints
         //      (server/status, accounts, devices, moderation/queue).
-        //   2. `admin_router`  — operator surface (notary /
-        //      bottom / seal-chain / gc-candidates /
-        //      moderation sub-actions). Registered BEFORE the collection so
-        //      the concrete `/_soland/admin/bottom` wins over `{resource}`.
+        //   2. `admin_router`  — operator surface (moderation sub-actions,
+        //      Realm and account administration).
         //   3. `router`        — collection (`/_soland/admin/{resource}`),
         //      cells, control-frames, retention.
-        //   4. `admin_seal_sign_router` — `POST /_soland/admin/seals/sign`
-        //      operator seal-signing trigger, detached from the
-        //      peer federation router so it sits in the admin namespace.
         .push(
             Router::with_path("_soland")
                 .push(admin::server_ops_router())
                 .push(admin::admin_router())
                 .push(admin::router())
-        .push(federation::admin_seal_sign_router())
                 .push(soland_local_router()),
         )
         .push(arkret_protocol_router(conformance_harness_enabled))
@@ -391,10 +385,6 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
         )
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
-        // `ws` — the optional `ak.profile.binding.websocket.v1` endpoint. It
-        // multiplexes the three covered stream operations and is served, but
-        // NOT advertised, until the binding conformance suite is green (§10).
-        .push(events::websocket_router())
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
         // self/moderation/*, open/mimi/* — `interop::router()` declares its
         // own trust segments.

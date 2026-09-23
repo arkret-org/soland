@@ -401,21 +401,6 @@ pub struct AppConfig {
     /// using fixed-time fixtures rely on this; production deployments
     /// MUST keep this > 0).
     pub jws_replay_window_seconds: u64,
-    /// Per-cell-family replay-window overrides.
-    /// Some cell families have different freshness requirements than the
-    /// global default — e.g. `ak.component.notary.v1` (Realm-wide
-    /// authority cell) needs a much tighter window than chat messages.
-    /// When a Move's `effects[]` touch any cell whose family appears in
-    /// this map, the **minimum** override across touched families wins
-    /// (most-restrictive). Falls back to `jws_replay_window_seconds` for
-    /// families without an override.
-    ///
-    /// Production default (built by [`AppConfig::default_replay_overrides`]):
-    /// - `ak.component.notary.v1` → 60s (very fresh — Realm-wide pause risk)
-    /// - `ak.component.mls.epoch.v1` → 60s (E2EE fork risk)
-    /// - `ak.component.consent.grant.v1` → 120s (capability-equivalent)
-    /// - `ak.component.capability.grant.v1` → 120s
-    pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
     /// Base64-encoded 32-byte ed25519 seed for the NotaryWorker
     /// signing identity (env `SOLAND_NOTARY_SIGNING_KEY`). When `Some(_)`
     /// the worker uses a deterministic ed25519-dalek signing key derived
@@ -902,23 +887,9 @@ pub enum NotarySigningKeyOrigin {
     /// persistent identity).
     Configured,
     /// In-process random seed — fine for tests, **never** for production:
-    /// every restart issues Seals under a brand-new DID, breaking
-    /// signature-chain trust.
+    /// every restart changes the Station signer DID and breaks authority
+    /// commit verification.
     Ephemeral,
-}
-
-impl AppConfig {
-    /// Spec-recommended per-cell-family replay-window overrides.
-    /// Tighter windows for safety-critical / authority cells; the global
-    /// default still applies to everything else.
-    pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
-        let mut m = std::collections::BTreeMap::new();
-        m.insert(arkret_wire::CellFamilyId::NOTARY_V1, 60);
-        m.insert(arkret_wire::CellFamilyId::MLS_EPOCH_V1, 60);
-        m.insert(arkret_wire::CellFamilyId::CONSENT_GRANT_V1, 120);
-        m.insert(arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1, 120);
-        m
-    }
 }
 
 impl AppConfig {
@@ -973,7 +944,6 @@ impl AppConfig {
             external_webvh_provider_active: false,
             default_webvh_provider_id: None,
             jws_replay_window_seconds: 300,
-            jws_replay_window_per_family: Self::default_replay_overrides(),
             notary_signing_key_seed: None,
             key_store: KeyStoreConfig::Disabled,
             federation_fanout_topology: FederationFanoutTopology::Mesh,
@@ -1466,7 +1436,6 @@ impl AppConfig {
             external_webvh_provider_active: false,
             default_webvh_provider_id,
             jws_replay_window_seconds,
-            jws_replay_window_per_family: Self::default_replay_overrides(),
             notary_signing_key_seed,
             key_store,
             federation_fanout_topology,

@@ -71,6 +71,7 @@ pub struct AppletTransactionReplayRecord {
     pub applet_id: arkret_wire::AppletId,
     pub source_id: String,
     pub idempotency_key: String,
+    pub delivery_authentication_record: Value,
     pub delivery_authentication_record_digest: String,
     pub request_digest: String,
     pub outcome: Option<Value>,
@@ -88,7 +89,8 @@ pub fn applet_registration_select_sql(suffix: &str) -> String {
 }
 #[doc(hidden)]
 pub fn applet_transaction_replay_select_sql() -> &'static str {
-    "SELECT applet_id, source_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
+    "SELECT applet_id, source_id, idempotency_key, delivery_authentication_record, \
+     delivery_authentication_record_digest, request_digest, \
      outcome, received_at, completed_at \
      FROM applet_transactions \
      WHERE applet_id = $1 AND source_id = $2 AND idempotency_key = $3"

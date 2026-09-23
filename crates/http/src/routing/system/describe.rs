@@ -352,7 +352,6 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
         state.jobs().storage_mode(),
         state.config(),
     );
-    crate::routing::events::sync::websocket::advertise_websocket_binding(state, &mut description);
     description.receive_policy_constraints = state.config().receive_policy_constraints.clone();
     // Advertise the LIVE rate-limit ceilings (from the runtime overlay, which
     // the middleware also enforces) rather than the boot-config defaults, so

@@ -15,8 +15,8 @@ use arkret_models_integration::{
     AppletManagedActorRole, AppletPackage, GhostExternalTuple,
 };
 use arkret_wire::{
-    ActorId, ActorKind, AppletId, DidCoreId, Event, EventId, EventSubmitContext, GrantId, Hash,
-    RealmId, ResourceMatchScope, ScopeRef, WireResourceSelector,
+    ActorId, ActorKind, AppletId, DidCoreId, Event, EventId, GrantId, Hash, RealmId,
+    ResourceMatchScope, ScopeRef, WireResourceSelector,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -221,18 +221,14 @@ impl GhostActorRecord {
     }
 }
 
-fn validate_stored_event(
-    event: &Event,
-    context: EventSubmitContext,
-    label: &str,
-) -> Result<(), String> {
+fn validate_stored_event(event: &Event, label: &str) -> Result<(), String> {
     let digest_suite = event
         .event_id
         .event_digest()
         .digest_suite()
         .map_err(|error| format!("stored {label} Event digest suite is invalid: {error}"))?;
     event
-        .validate_for_submit_structural_in_context(context)
+        .validate_for_submit_structural()
         .map_err(|error| format!("stored {label} Event envelope is invalid: {error}"))?;
     event
         .verify_event_id_matches_content_with_digest_suite(digest_suite)
@@ -299,38 +295,22 @@ fn validate_managed_actor_unit(
             AppletManagedActorRole::Bot => (
                 &record.identity.initial_package,
                 &record.identity.initial_effective_scope,
-                &record.identity.initial_registration_event.event_id,
+                &record.identity.initial_registration_event,
                 record.identity.initial_capability_grant_refs.as_slice(),
             ),
             AppletManagedActorRole::Ghost => (
                 &record.package,
                 &record.effective_scope,
-                &record.registration_event.event_id,
+                &record.registration_event,
                 record.install_response.capability_grant_refs.as_slice(),
             ),
         };
     let authority_realm_id = authority_scope.realm_id();
     let service_actor_id = arkret_wire::ActorId::service(authority_package.service_id.clone());
-    validate_stored_event(
-        provision_event,
-        EventSubmitContext::Standard,
-        "managed provision",
-    )?;
-    validate_stored_event(
-        pcr_event,
-        EventSubmitContext::RealmBootstrap,
-        "managed PCR genesis",
-    )?;
-    validate_stored_event(
-        accountability_event,
-        EventSubmitContext::Standard,
-        "managed accountability",
-    )?;
-    validate_stored_event(
-        profile_event,
-        EventSubmitContext::Standard,
-        "managed profile",
-    )?;
+    validate_stored_event(provision_event, "managed provision")?;
+    validate_stored_event(pcr_event, "managed PCR genesis")?;
+    validate_stored_event(accountability_event, "managed accountability")?;
+    validate_stored_event(profile_event, "managed profile")?;
 
     let provision: AppletManagedActorProvisionPayload =
         serde_json::from_value(event_payload_value(provision_event))
@@ -344,7 +324,7 @@ fn validate_managed_actor_unit(
         || &provision.actor_id != actor_id
         || !matches!(&provision.actor_id, ActorId::Account { .. })
         || provision.actor_id.route_service_id() != station_id
-        || &provision.registration_ref != authority_registration_ref
+        || provision.registration_ref != authority_registration_ref.event_id
         || !authority_grant_refs.contains(&provision.applet_authority_ref)
         || provision.external_ref.as_ref() != external_ref
         || provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
@@ -488,7 +468,8 @@ impl AppletRecord {
             || self.package.bot_actor_id != self.identity.initial_package.bot_actor_id
             || self.bot_actor_id != self.package.bot_actor_id
             || self.bot_actor_id != self.install_response.bot_actor_id
-            || self.bot_actor_provision_ref != self.install_response.bot_actor_provision_ref
+            || self.bot_actor_provision_ref
+                != self.install_response.bot_actor_provision_ref.event_id
             || self.bot_principal_control_realm_id
                 != self.install_response.bot_principal_control_realm_id
             || &self.portal_realm_id != self.effective_scope.realm_id()
@@ -508,7 +489,6 @@ impl AppletRecord {
         }
         validate_stored_event(
             &self.identity.initial_registration_event,
-            EventSubmitContext::Standard,
             "initial registration",
         )?;
         let initial_registration: arkret_models_integration::AppletRegistrationPayload =
@@ -543,11 +523,7 @@ impl AppletRecord {
         {
             return Err("stored Applet identity bootstrap registration is invalid".to_owned());
         }
-        validate_stored_event(
-            &self.registration_event,
-            EventSubmitContext::Standard,
-            "registration",
-        )?;
+        validate_stored_event(&self.registration_event, "registration")?;
         let registration: arkret_models_integration::AppletRegistrationPayload =
             serde_json::from_value(event_payload_value(&self.registration_event)).map_err(
                 |error| format!("stored registration Event payload is invalid: {error}"),
@@ -564,7 +540,8 @@ impl AppletRecord {
             || self.registration_event.realm_id != self.portal_realm_id
             || self.registration_event.scope_ref != self.effective_scope
             || registration != expected_registration
-            || self.install_response.registration_event_ref != self.registration_event.event_id
+            || self.install_response.registration_event_ref.event_id
+                != self.registration_event.event_id
         {
             return Err(
                 "stored registration Event is not the exact accepted Applet package projection"
@@ -626,7 +603,7 @@ impl AppletRecord {
             return Err("stored Applet has no accepted capability grant Event".to_owned());
         }
         for event in &self.capability_grant_events {
-            validate_stored_event(event, EventSubmitContext::Standard, "capability grant")?;
+            validate_stored_event(event, "capability grant")?;
             if event.kind != arkret_wire::EventKind::CapabilityGrant
                 || event.actor_id != self.owner_actor_id
                 || event.realm_id != self.portal_realm_id
@@ -775,7 +752,7 @@ pub struct AppletRevokeRecordOutcome {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{DidUrl, Hlc, ProducerEventProof};
+    use arkret_wire::{DidUrl, ProducerEventProof};
     use serde_json::json;
 
     use super::*;
@@ -790,8 +767,6 @@ mod tests {
             ScopeRef::Realm { realm_id },
             DidCoreId::new("ak:did_core:webvh:z6mkstoredactor").unwrap(),
             DidCoreId::new("ak:did_core:webvh:z6mkstoredserver").unwrap(),
-            1,
-            Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             json!({"content": {"kind": "ak.content.text", "body": "stored"}}),
         )
         .unwrap();
@@ -809,7 +784,6 @@ mod tests {
                 )
                 .unwrap(),
                 event_digest: event_digest.clone(),
-                signer_resolution_evidence_ref: None,
                 created_at: event.created_at,
                 domain: None,
                 audience: None,
@@ -824,11 +798,11 @@ mod tests {
     #[test]
     fn stored_event_validation_rejects_canonical_content_tampering() {
         let event = structural_only_fixture_event();
-        validate_stored_event(&event, EventSubmitContext::Standard, "fixture").unwrap();
+        validate_stored_event(&event, "fixture").unwrap();
 
         let mut tampered = event;
         tampered.payload.insert("tampered".to_owned(), json!(true));
-        let error = validate_stored_event(&tampered, EventSubmitContext::Standard, "fixture")
+        let error = validate_stored_event(&tampered, "fixture")
             .expect_err("stored canonical Event content must be immutable");
         assert!(error.contains("identity") || error.contains("proof binding"));
     }

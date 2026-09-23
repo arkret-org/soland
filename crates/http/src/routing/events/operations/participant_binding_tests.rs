@@ -1,7 +1,5 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::CellRef;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
-use arkret_state::state_model::ResolvedCellState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -33,38 +31,30 @@ fn test_config() -> crate::config::AppConfig {
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
         jws_replay_window_seconds: 0,
-        jws_replay_window_per_family: std::collections::BTreeMap::new(),
         notary_signing_key_seed: Some([7u8; 32]),
         ..crate::config::AppConfig::test_default()
     }
 }
 
-/// Install a current-epoch media_service cell anchoring `issuer_kid` under
+/// Install the current media-service facet anchoring `issuer_kid` under
 /// `service_id`.
 fn install_media_service_with_service_id(state: &AppState, service_id: &str, _issuer_kid: &str) {
-    let cell_id = CellRef::new(arkret_wire::null_subject_cell(
-        arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
-    ))
-    .unwrap();
-    state
-        .test_projection()
-        .lock()
-        .realm_null_subject_cells
-        .insert(
-            (REALM_ID.to_owned(), cell_id.as_str().to_owned()),
-            ResolvedCellState::Value(json!({
-                "service_id": service_id,
-                "foci": [{
-                    "focus_id": FOCUS_ID,
-                    "focus_kind": "arkret_native",
-                    "token_endpoint": "https://media.soland.local/_arkret/self/rtc/token",
-                    "connect_url": "wss://media.soland.local/native"
-                }]
-            })),
-        );
+    state.test_projection().lock().set_realm_facet(
+        REALM_ID,
+        soland_domain::reducer::facet::REALM_MEDIA_SERVICE,
+        json!({
+            "service_id": service_id,
+            "foci": [{
+                "focus_id": FOCUS_ID,
+                "focus_kind": "arkret_native",
+                "token_endpoint": "https://media.soland.local/_arkret/self/rtc/token",
+                "connect_url": "wss://media.soland.local/native"
+            }]
+        }),
+    );
 }
 
-/// Install a current-epoch media_service cell anchoring `issuer_kid` under
+/// Install the current media-service facet anchoring `issuer_kid` under
 /// the soland self service_id (the arkret_native self-signed deployment).
 fn install_media_service(state: &AppState, issuer_kid: &str) {
     install_media_service_with_service_id(

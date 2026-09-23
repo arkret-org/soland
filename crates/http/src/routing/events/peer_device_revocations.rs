@@ -132,6 +132,7 @@ pub(super) struct CurrentDeviceCheckOutcome {
     accepted_commit_id: Option<RealmCommitId>,
 }
 
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "soland.account_authority.current_device.check"))]
 pub(super) async fn check_private_current_device(
     depot: &mut Depot,

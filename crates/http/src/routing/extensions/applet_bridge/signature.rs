@@ -19,6 +19,7 @@ use crate::state::AppState;
 pub(super) struct VerifiedAppletServiceSignature {
     pub(super) install: AppletRecord,
     pub(super) request_digest: String,
+    pub(super) delivery_authentication_record: serde_json::Value,
     pub(super) delivery_authentication_record_digest: String,
 }
 
@@ -285,23 +286,21 @@ async fn verify_inbound_applet_service_signature(
     // `Source-Service-ID` MUST also hit an active effective install whose
     // registration service DID equals it (§4b.1). fail closed otherwise.
     let package = &install.package;
-    let signature_header = applet_required_header(req, "signature")?;
-    let delivery_authentication_record_digest = applet_delivery_authentication_record_digest(
-        &source_id,
-        &destination_id,
-        idempotency_key,
-        content_digest,
-        &request_digest,
-        &verification_method,
-        serde_json::to_value(&package.registration_epoch).unwrap_or(serde_json::Value::Null),
-        serde_json::to_value(&package.webhook_auth).unwrap_or(serde_json::Value::Null),
-        &verified.signature_input.algorithm,
-        &verified.signature_input.params_value,
-        &signature_header,
-    );
+    let (delivery_authentication_record, delivery_authentication_record_digest) =
+        applet_delivery_authentication_record_digest(
+            &source_id,
+            &destination_id,
+            idempotency_key,
+            content_digest,
+            &verification_method,
+            package.registration_epoch.as_str(),
+            &verifying_key,
+            &verified.signature_input,
+        )?;
     Ok(VerifiedAppletServiceSignature {
         install,
         request_digest,
+        delivery_authentication_record,
         delivery_authentication_record_digest,
     })
 }
@@ -476,34 +475,36 @@ pub(super) fn applet_delivery_authentication_record_digest(
     destination_id: &str,
     idempotency_key: &str,
     content_digest: &str,
-    request_digest: &str,
     verification_method: &str,
-    registration_epoch: serde_json::Value,
-    webhook_auth: serde_json::Value,
-    signature_algorithm: &str,
-    signature_params: &str,
-    signature_header: &str,
-) -> String {
-    let anchor = serde_json::json!({
-        "profile": arkret_wire::DomainSeparationId::APPLET_DELIVERY_AUTHENTICATION_RECORD_DIGEST_V1,
+    registration_epoch: &str,
+    verifying_key: &ed25519_dalek::VerifyingKey,
+    signature_input: &SignatureInput,
+) -> Result<(serde_json::Value, String), AppError> {
+    let record = serde_json::json!({
         "operation_id": arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION_V1,
         "direction": "applet_to_arkret_inbound",
         "source_id": source_id,
         "destination_id": destination_id,
+        "signature_label": signature_input.label,
+        "verification_method": verification_method,
+        "verification_key_digest": canonical::sha256_digest(verifying_key.to_bytes()),
+        "signature_algorithm": signature_input.algorithm,
+        "registration_epoch": registration_epoch,
         "idempotency_key": idempotency_key,
         "content_digest": content_digest,
-        "request_digest": request_digest,
-        "verification_method": verification_method,
-        "signature_algorithm": signature_algorithm,
-        "registration_epoch": registration_epoch,
-        "webhook_auth": webhook_auth,
-        "signature_input": signature_params,
-        "signature": signature_header,
+        "covered_components": signature_input.covered_components.iter()
+            .map(|component| component.canonical_name()).collect::<Vec<_>>(),
+        "created": signature_input.created,
+        "expires": signature_input.expires,
     });
-    canonical::canonical_sha256(&anchor).unwrap_or_else(|_| {
-        let bytes = serde_json::to_vec(&anchor).unwrap_or_default();
-        canonical::sha256_digest(&bytes)
-    })
+    let bytes = canonical::canonical_json_bytes(&record).map_err(|error| {
+        applet_signature_error_invalid(format!("invalid delivery authentication record: {error}"))
+    })?;
+    let digest = canonical::sha256_digest_from_slices(&[
+        b"ak.applet.delivery_authentication_record.v1\n",
+        &bytes,
+    ]);
+    Ok((record, digest))
 }
 
 pub(super) fn applet_required_header(req: &Request, name: &str) -> Result<String, AppError> {

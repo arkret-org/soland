@@ -6,38 +6,17 @@
 //! sibling submodules resolve through plain `mod` declarations (the directory
 //! layout matches Rust's default module resolution — no `#[path]` needed).
 
+#[path = "current_common.rs"]
 mod common;
 
-mod account_data;
-mod account_workflow;
 mod admin_b_track;
 mod admin_production_queries;
-mod agent_pairing_ceremony;
-mod agents;
-mod auth;
-mod backup_listing;
 mod blob_resumable;
-mod calendar_rsvp;
-mod cors_config;
 mod deactivation_push_fanout;
-mod devices_webrtc;
-mod direct_conversations;
-mod directory_index;
-mod events;
-mod federation;
 mod health;
 mod history_authority;
-mod identity;
-mod invites;
-mod lifecycle;
-mod mimi;
 mod openapi;
 mod organization_registration;
-mod projection;
-mod push_keys;
-mod read_receipts;
-mod recovery;
 mod retired_seal_mls_routes;
 mod retired_seal_pending_control;
 mod seal_frontier;
-mod stage_axis;

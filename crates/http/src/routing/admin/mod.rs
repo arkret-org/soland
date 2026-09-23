@@ -90,8 +90,7 @@ pub(super) fn require_admin_principal(
 }
 
 /// Deployment-local admin branch served at the bare `/admin/*`
-/// namespace (collection snapshot, cell inspection, control-frame
-/// triggers, retention), per arkret-spec `service-http-binding.md`
+/// namespace (collection snapshot and retention), per arkret-spec `service-http-binding.md`
 /// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
 /// `/_arkret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
@@ -99,9 +98,7 @@ pub fn router() -> Router {
         .hoop(RequireAdmin::scope(
             arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
         ))
-        .push(cells::router())
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
-        .push(control::router())
         .push(retention::router())
         .push(settings::router())
 }
@@ -114,14 +111,13 @@ pub fn server_ops_router() -> Router {
 
 pub fn admin_router() -> Router {
     // Deployment-local operator surface served at the bare `/admin/*`
-    // namespace (notary / seal-DAG / bottom repair /
-    // gc-candidates / moderation). Realm-scoped
+    // namespace (Realm and account administration, moderation). Realm-scoped
     // operations use `/admin/realms/{realm_id}`; Space containers are
     // reserved for `/admin/spaces/*`. Per arkret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is
     // deployment-local and MUST NOT carry the `/_arkret/...` protocol prefix.
     // Registered ahead of `router()` (the `{resource}` collection
-    // wildcard) at the root so the concrete `bottom` segment wins.
+    // wildcard) at the root so concrete admin resources take precedence.
     Router::with_path("admin")
         .hoop(RequireAdmin::scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
@@ -141,14 +137,6 @@ pub fn admin_router() -> Router {
                 .get(crate::routing::identity::account::admin_account_viewer),
         )
         .push(crate::routing::identity::key_backup::admin_router())
-        .push(Router::with_path("realms/{realm_id}/notary").get(seal::admin_get_notary))
-        .push(Router::with_path("realms/{realm_id}/bottom").get(seal::admin_list_realm_bottom))
-        .push(Router::with_path("bottom").get(seal::admin_list_bottom_global))
-        .push(Router::with_path("realms/{realm_id}/seal-chain").get(seal::admin_get_seal_chain))
-        .push(
-            Router::with_path("realms/{realm_id}/gc-candidates")
-                .get(seal::admin_list_gc_candidates),
-        )
         // B2 — operator handle cluster (list / get / audit / revoke / reassign).
         .push(handles::router())
         .push(actors::router())

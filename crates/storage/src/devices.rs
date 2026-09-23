@@ -4,7 +4,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use super::{
     DeviceInventoryRecord, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord,
-    DeviceRevocationGateSelector, PersistenceResult, Utc, Uuid, Value, async_trait,
+    DeviceRevocationGateSelector, PersistenceResult, RecipientDeliveryRecord,
+    RecipientQueueSelector, Utc, Uuid, Value, async_trait,
 };
 /// Local presentation/activity fields. Protocol authorization is deliberately
 /// absent: only authenticated history may install it.
@@ -55,6 +56,7 @@ pub trait DeviceMessageStore: Send + Sync {
         &self,
         device_revocation_gate: Option<&DeviceRevocationGateSelector>,
         message: DeviceMessageRecord,
+        per_device_queue_capacity: usize,
     ) -> PersistenceResult<()>;
     /// Read current request/message idempotency state before dynamic device-policy checks. The
     /// subsequent commit rechecks the same records atomically to close inspection races.
@@ -93,22 +95,29 @@ pub trait DeviceMessageStore: Send + Sync {
         queue_position: i64,
         limit: usize,
     ) -> PersistenceResult<Vec<DeviceMessageRecord>>;
-    /// Prune expired unacked messages and record the highest lost queue position per device.
-    async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize>;
-    /// Prune older unacked messages beyond a per-device capacity, recording lost positions.
-    async fn prune_over_capacity(
+    async fn list_recipient_deliveries(
         &self,
-        per_device_capacity: usize,
-        now: chrono::DateTime<Utc>,
-    ) -> PersistenceResult<usize>;
-    /// Highest queue position known lost for this device due to TTL/capacity eviction.
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<RecipientDeliveryRecord>>;
+    async fn issue_recipient_ack_token(
+        &self,
+        selector: &RecipientQueueSelector,
+        queue_position: i64,
+    ) -> PersistenceResult<Option<String>>;
+    async fn ack_recipient_with_token(
+        &self,
+        selector: &RecipientQueueSelector,
+        ack_token: &str,
+    ) -> PersistenceResult<Option<usize>>;
+    /// Historical verified loss watermark, if any. Current v1 writers retain
+    /// unacknowledged deliveries until explicit ACK.
     async fn lost_watermark(
         &self,
         recipient: &str,
         device_id: &str,
     ) -> PersistenceResult<Option<i64>>;
-    /// Drop everything queued for the recipient+device (used on session revoke).
-    async fn purge(&self, recipient: &str, device_id: &str) -> PersistenceResult<usize>;
 }
 /// Long-term device key bundles (one per `(actor, device_id)`).
 #[async_trait]

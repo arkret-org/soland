@@ -1116,7 +1116,7 @@ pub(super) async fn lifecycle_transition(
     new_state: AgentLifecycleState,
     event_kind: &str,
     reason: Option<String>,
-    lifecycle_event: Option<arkret_wire::EventInitialSubmission>,
+    lifecycle_event: Option<arkret_wire::EventAdmissionSubmission>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     // Authentication is deliberately completed by the endpoint before this
     // helper is entered. A DPoP proof is single-use, so passing `AuthArgs` and
@@ -1155,7 +1155,7 @@ pub(super) async fn lifecycle_transition(
     // lifecycle Event, without auxiliary key/grant revocation Events.
     let realm = record.principal_control_realm_id.clone();
     let authorization_ref = record.controller_authorization_ref.clone();
-    submit_durable_agent_lifecycle(
+    let lifecycle_event_id = submit_durable_agent_lifecycle(
         state,
         session,
         &realm,
@@ -1167,6 +1167,25 @@ pub(super) async fn lifecycle_transition(
         lifecycle_event,
     )
     .await?;
+    let event_id = arkret_wire::EventId::new(lifecycle_event_id)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let committed = state
+        .authority_commits()
+        .committed_event(&event_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("accepted Agent lifecycle Event has no RealmCommit"))?;
+    if committed.commit.event_ref != event_id {
+        return Err(AppError::internal(
+            "Agent lifecycle Event/Commit reference mismatch",
+        ));
+    }
+    let lifecycle_ref = arkret_wire::CommittedEventRef {
+        event_id,
+        commit_id: committed.commit.commit_id,
+        stream_ref: committed.commit.stream_ref,
+        stream_position: committed.commit.stream_position,
+    };
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
     // transition; this row is the read-side projection consumed by the HTTP API).
@@ -1201,7 +1220,10 @@ pub(super) async fn lifecycle_transition(
     }
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
     // `{status}` (status is the post-transition `agent_status`).
-    Ok(AgentLifecycleOutcome { status: new_state })
+    Ok(AgentLifecycleOutcome {
+        status: new_state,
+        lifecycle_ref,
+    })
 }
 
 #[endpoint(

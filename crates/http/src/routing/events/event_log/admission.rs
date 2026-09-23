@@ -1,34 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════
-// events.submit discriminated request + admission gates
-// (spec B1.6 / T02 / T07 / T08 / T09 / T12 / T23).
+// Active Event admission lifecycle and policy gates.
 // ════════════════════════════════════════════════════════════════════════
-pub use arkret_models_collaboration::event_sync::EventsSubmitRequestBody;
-
 use super::*;
-
-pub(super) fn validate_federation_service_binding(
-    binding: &FederationServiceBindingRef,
-) -> Result<(), (&'static str, String)> {
-    let mut seen = std::collections::BTreeSet::new();
-    for entry in &binding.membership_frontier {
-        if !seen.insert(entry.as_str()) {
-            return Err((
-                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                format!(
-                    "membership_frontier contains duplicate entry {:?}",
-                    entry.as_str()
-                ),
-            ));
-        }
-    }
-    if binding.destination_kind.trim().is_empty() {
-        return Err((
-            arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-            "service_binding_ref.destination_kind MUST be a non-empty string".to_owned(),
-        ));
-    }
-    Ok(())
-}
 
 /// Reject any non-audit-class write on a Realm whose lifecycle state is
 /// terminal (`ak.realm.tombstone` or `ak.realm.destroy` applied). Spec T07.
@@ -71,17 +44,13 @@ pub(super) fn policy_bundle_value_from_state_payload(payload: &Value) -> &Value 
     payload.get("value").unwrap_or(payload)
 }
 
-/// Validate a `ak.realm.policy_bundle` payload. Spec T09 + T12.
+/// Validate a `ak.realm.policy_bundle` payload against the current media
+/// plaintext authorization dependency.
 ///
-/// Checks (in order):
-/// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
-/// 2. advisory MLS pause is not active with an Audit Applet Binding (T09 mutex)
-/// 3. When `media_service_decrypts=true`, the service is explicitly authorized for the
-///    `media_plaintext` data class (T12). The MLS security-frontier projector binds this accepted
-///    policy state into the next Commit.
+/// When `media_service_decrypts=true`, the service must be explicitly
+/// authorized for the `media_plaintext` data class.
 pub fn realm_policy_bundle_check(
     payload: &Value,
-    audit_binding_active: bool,
     media_plaintext_service_present: bool,
 ) -> Result<(), (ErrorCode, String)> {
     if let Some(join_policy) = payload.get("join_policy") {
@@ -95,34 +64,7 @@ pub fn realm_policy_bundle_check(
         )?;
     }
 
-    // (1) T09 — relaxed_window_max_ms ceiling.
-    if let Some(window) = payload.get("relaxed_window_max_ms").and_then(Value::as_u64) {
-        let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
-        if arkret_models_collaboration::governance::audit::validate_relaxed_window_ms(window_u32)
-            .is_err()
-        {
-            return Err((
-                ErrorCode::FailedPrecondition,
-                format!(
-                    "relaxed_window_max_ms={window} exceeds absolute \
-                     hard ceiling of {}ms",
-                    arkret_models_collaboration::governance::audit::ABSOLUTE_HARD_CEILING_MS
-                ),
-            ));
-        }
-    }
-
-    // (2) T09 — policy-derived relaxed mode and active audit binding are mutually exclusive.
-    let relaxed_active = payload.get("mls_send_pause").and_then(Value::as_str) == Some("advisory");
-    if relaxed_active && audit_binding_active {
-        return Err((
-            ErrorCode::FailedPrecondition,
-            "mls_send_pause=advisory is mutually exclusive with an active Audit Applet Binding"
-                .to_owned(),
-        ));
-    }
-
-    // (3) T12 — media_service_decrypts triple binding.
+    // Media plaintext access requires a separately accepted service binding.
     if payload
         .get("media_service_decrypts")
         .and_then(Value::as_bool)

@@ -212,14 +212,6 @@ async fn run() -> anyhow::Result<()> {
         );
     }
 
-    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
-    tracing::info!(
-        worker = "control_seal_coordinator",
-        enabled = true,
-        service_id = %state.service_id(),
-        "background worker configured"
-    );
-
     let _account_erasure_worker = soland_http::account_erasure_worker::spawn(state.clone());
     tracing::info!(
         worker = "account_erasure",
@@ -284,21 +276,6 @@ async fn run() -> anyhow::Result<()> {
         enabled = state.config().federation_outbound_enabled,
         "background worker configured"
     );
-    let _federation_frontier_exchange =
-        soland_http::routing::federation::frontier_exchange::spawn(state.clone());
-    tracing::info!(
-        worker = "federation_frontier_exchange",
-        enabled = state.config().federation_outbound_enabled,
-        "background worker configured"
-    );
-    let _rhrk_acquisition =
-        soland_http::routing::federation::rhrk_acquisition::spawn(state.clone());
-    tracing::info!(
-        worker = "rhrk_acquisition",
-        enabled = _rhrk_acquisition.is_some(),
-        "background worker configured"
-    );
-
     let _metrics_server =
         soland_http::metrics::spawn_metrics_server(state.clone(), config.metrics_bind).await?;
     tracing::info!(

@@ -2,6 +2,7 @@
 
 pub mod device_authorization_history;
 pub mod fault_injection;
+pub mod pcr_genesis;
 pub mod signed_event;
 
 pub fn fixture_signer_evidence_ref() -> arkret_wire::SignerEvidenceRef {
@@ -16,7 +17,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, OnceLock, Weak};
 
-use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
+use arkret_identifiers::{Did, Hash};
 use arkret_identity::service_identity::{
     DidCoreIdentityKeyRef, DidCoreIdentityState, LocalDidCoreIdentity, StoredDidCoreIdentity,
 };
@@ -24,13 +25,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceDidDocument, ServiceDidEndpoint, ServiceDidVerificationMethod,
     ServiceRegistrationKey, ServiceRegistrationReceipt,
 };
-use arkret_state::state::{
-    CellStateRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
-    MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
-};
-use arkret_state::state_model::ResolvedCellState;
-use arkret_state::state_model::ordered_log::IssuedOp;
-use arkret_wire::{DidCoreId, Seal, ServiceKind, project_did_to_core_id};
+use arkret_wire::{DidCoreId, ServiceKind, project_did_to_core_id};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -46,7 +41,7 @@ use soland_services::events::RealmDirectoryIndex;
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
-use soland_services::projection::{EventSealCommitPort, ProjectionService};
+use soland_services::projection::ProjectionService;
 use soland_storage::PersistenceStore;
 use soland_storage_postgres::PgPersistenceStore;
 use soland_storage_postgres::test_database::{TestDatabase, block_on_lease_runtime};
@@ -164,21 +159,10 @@ pub fn app_state(config: AppConfig) -> AppState {
     app_state_with_identity(config, persistence, identity, signing_seed)
 }
 
-/// Build the same PostgreSQL governance stores used by production over the
-/// exact database lease that owns the identity, Agent and command rows.
-/// Ceremony tests use this when a commit gate must see an accepted Seal in SQL.
+/// Construct a test state over the same PostgreSQL authority store as production.
 pub fn app_state_with_postgres_governance(config: AppConfig) -> AppState {
-    let identity = fixture_service_identity(&config);
-    let signing_seed = fixture_signing_seed(&config, &identity);
-    let (persistence, pool) =
-        leased_fixture_persistence_with_pool(&config, &identity, signing_seed, true);
-    let stores = soland_storage_postgres::build_state_resolution_stores(
-        Some(pool),
-        ProjectionService::sdk_cell_registry(),
-    );
-    app_state_with_identity_and_stores(config, persistence, identity, signing_seed, Some(stores))
+    app_state(config)
 }
-
 pub fn app_state_with_service_did(config: AppConfig, did: Did) -> AppState {
     let identity = fixture_service_identity_for_did(&config, did);
     let signing_seed = fixture_signing_seed(&config, &identity);
@@ -326,13 +310,7 @@ pub fn app_state_with_identity(
     service_identity: DidCoreIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> AppState {
-    app_state_with_identity_and_stores(
-        config,
-        persistence,
-        service_identity,
-        resolved_signing_seed,
-        None,
-    )
+    app_state_with_identity_and_stores(config, persistence, service_identity, resolved_signing_seed)
 }
 
 fn app_state_with_identity_and_stores(
@@ -340,82 +318,26 @@ fn app_state_with_identity_and_stores(
     persistence: Arc<dyn PersistenceStore>,
     service_identity: DidCoreIdentityState,
     resolved_signing_seed: [u8; 32],
-    postgres_stores: Option<soland_storage_postgres::StateResolutionStores>,
 ) -> AppState {
-    let storage_mode = if postgres_stores.is_some() {
-        "postgres"
-    } else {
-        "memory"
-    };
-    let (control_event_store, seal_store, cell_store, cell_registry, event_seal_committer): (
-        Arc<dyn ControlEventStore>,
-        Arc<dyn SealStore>,
-        Arc<dyn CellStore>,
-        Arc<dyn CellStateRegistry>,
-        Arc<dyn EventSealCommitPort>,
-    ) = if let Some(stores) = postgres_stores {
-        (
-            stores.control_event_store,
-            stores.seal_store,
-            stores.cell_store,
-            stores.cell_registry,
-            Arc::new(PostgresFixtureEventSealCommitter(
-                stores.event_seal_committer,
-            )),
-        )
-    } else {
-        let cell_registry = ProjectionService::sdk_cell_registry();
-        let control_event_store: Arc<dyn ControlEventStore> =
-            Arc::new(MemoryControlEventStore::default());
-        let seal_store = Arc::new(MemorySealStore::default());
-        let cell_store = Arc::new(MemoryCellStore::default());
-        let event_seal_committer = Arc::new(MemoryEventSealCommitter {
-            lock: Mutex::new(()),
-            seal_store: seal_store.clone(),
-            cell_store: cell_store.clone(),
-            cell_registry: cell_registry.clone(),
-            control_event_store: control_event_store.clone(),
-        });
-        (
-            control_event_store,
-            seal_store,
-            cell_store,
-            cell_registry,
-            event_seal_committer,
-        )
-    };
-    persistence
-        .device_revocations()
-        .bind_control_event_store(control_event_store.clone());
     let serving_identity = service_identity
         .identity()
         .expect("fixture has a serving identity");
     let service_id = serving_identity.service_id.to_string();
     let service_resolution_commitment = {
-        let identity = service_identity
-            .identity()
-            .expect("fixture has a serving identity");
         let prepared = fixture_prepared_service_inception(&config, resolved_signing_seed);
-        let method_history_head = if prepared.did == identity.did.as_str() {
+        let method_history_head = if prepared.did == serving_identity.did.as_str() {
             arkret_canonical::canonical_sha256(&prepared.log_entry)
                 .expect("fixture service WebVH history digest")
         } else {
             format!("sha256:{}", "0".repeat(64))
         };
         arkret_models_identity::ResolutionCommitment {
-            did: identity.did.clone(),
+            did: serving_identity.did.clone(),
             method_history_head,
-            version_id: identity.version_id.clone(),
+            version_id: serving_identity.version_id.clone(),
         }
     };
-    let projections = ProjectionService::new(
-        control_event_store.clone(),
-        seal_store.clone(),
-        cell_store.clone(),
-        cell_registry,
-        event_seal_committer.clone(),
-        &service_id,
-    );
+    let projections = ProjectionService::new(&service_id);
     let projection = Box::leak(Box::new(projections.test_state().clone()));
     let realm_directory = soland_http::state::build_realm_directory(
         &config,
@@ -434,7 +356,7 @@ fn app_state_with_identity_and_stores(
             settings_persistence: Arc::new(NoRuntimeSettings),
             runtime_health: Arc::new(MemoryRuntimeHealth),
             event_broadcast: EventBroadcast::new(1024),
-            storage_mode,
+            storage_mode: "postgres",
         },
         service_identity,
         service_resolution_commitment,
@@ -446,108 +368,20 @@ fn app_state_with_identity_and_stores(
             persistence: Arc::downgrade(&persistence),
             projection: Some(projection),
             realms: Some(realms),
-            control_event_store: Some(control_event_store),
-            seal_store: Some(seal_store),
-            cell_store: Some(cell_store),
-            event_seal_committer: Some(event_seal_committer),
         },
     );
     state
 }
-
-struct PostgresFixtureEventSealCommitter(Arc<dyn soland_storage_postgres::EventSealCommitStore>);
-
-#[async_trait]
-impl EventSealCommitPort for PostgresFixtureEventSealCommitter {
-    async fn commit_if_head(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        expected_store_head: Option<&SealId>,
-        new_ops: &[(CellRef, IssuedOp)],
-        covered: &BTreeSet<Hash>,
-        governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<bool> {
-        self.0
-            .commit_if_head(
-                seal,
-                digest_suite,
-                expected_store_head,
-                new_ops,
-                covered,
-                governance_dependencies,
-                confirmed_device_control,
-            )
-            .await
-    }
-    async fn effective_state_checkpoint(
-        &self,
-        seal_id: &SealId,
-    ) -> StoreResult<Option<soland_services::projection::SealEffectiveStateCheckpoint>> {
-        self.0
-            .effective_state_checkpoint(seal_id)
-            .await
-            .map(|checkpoint| {
-                checkpoint.map(|checkpoint| {
-                    soland_services::projection::SealEffectiveStateCheckpoint {
-                        realm_id: checkpoint.realm_id,
-                        seal_id: checkpoint.seal_id,
-                        covered_event_digests: checkpoint.covered_event_digests,
-                        covered_seal_ids: checkpoint.covered_seal_ids,
-                        state: checkpoint.state,
-                    }
-                })
-            })
-    }
-}
-
-/// Record one fixture's resources, dropping entries whose `AppState` is gone.
-///
-/// Keys are `Arc` addresses, so a freed `AppState` can hand its key to the
-/// next one; purging dead entries keeps a stale key from answering for a live
-/// state and keeps the map from growing for the life of the process.
 fn register_state_resources(key: usize, resources: StateTestResources) {
     let mut registry = state_test_registry().lock();
     registry.retain(|_, entry| entry.persistence.strong_count() > 0);
     registry.insert(key, resources);
 }
 
-#[async_trait::async_trait]
 pub trait AppStateTestExt {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore>;
     fn test_projection(&self) -> &'static Arc<Mutex<ProjectionState>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
-    async fn test_put_seal(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()>;
-    async fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
-    async fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
-    /// Append sealed cell effects the way `apply_seal` commits them.
-    ///
-    /// `arkret_state::effective_state_at` resolves a Seal's governance view
-    /// from the cell log filtered by that Seal's covered Control-Move digests,
-    /// so a fixture that only puts a Seal object leaves the view empty. A
-    /// fixture that needs the Seal to actually *carry* state — for example a
-    /// capability grant — has to write the ops the sealed Control Moves
-    /// projected, which is what this does.
-    async fn test_append_confirmed_effects(
-        &self,
-        realm_id: &RealmId,
-        seal_id: &SealId,
-        ops: &[(CellRef, IssuedOp)],
-    ) -> StoreResult<()>;
-    /// Commit a signed, validated genesis unit through the real atomic store,
-    /// including its effective-state checkpoint and sealed Control Event markers.
-    async fn test_commit_bootstrap_seal(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        ops: &[(CellRef, IssuedOp)],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<()>;
 }
 
 pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceStore>) {
@@ -557,139 +391,10 @@ pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceS
             persistence: Arc::downgrade(persistence),
             projection: None,
             realms: None,
-            control_event_store: None,
-            seal_store: None,
-            cell_store: None,
-            event_seal_committer: None,
         },
     );
 }
 
-/// Recompute the cumulative Control Event set root for fixture signing.
-pub async fn test_control_event_set_root(
-    state: &AppState,
-    predecessor_ref: Option<&SealId>,
-    delta_events: &[(arkret_wire::Event, arkret_canonical::DigestSuite)],
-    root_digest_suite: arkret_canonical::DigestSuite,
-) -> StoreResult<Hash> {
-    let seal_store = state_test_registry()
-        .lock()
-        .get(&app_state_key(state))
-        .and_then(|resources| resources.seal_store.clone())
-        .expect("AppState was not constructed by soland-test-support");
-    let mut covered = BTreeSet::new();
-    let mut cursor = predecessor_ref.cloned();
-    let mut visited = BTreeSet::new();
-    while let Some(seal_id) = cursor {
-        if !visited.insert(seal_id.clone()) {
-            return Err(StoreError::Conflict(
-                "fixture Seal predecessor chain contains a cycle".to_owned(),
-            ));
-        }
-        let seal = seal_store
-            .get(&seal_id)
-            .await?
-            .ok_or_else(|| StoreError::NotFound(format!("fixture predecessor {seal_id}")))?;
-        covered.extend(seal.covered_event_digests);
-        covered.extend(seal.delta);
-        cursor = seal.predecessor_ref;
-    }
-    for (event, digest_suite) in delta_events {
-        let digest = Hash::new(
-            event
-                .event_digest_with_digest_suite(*digest_suite)
-                .map_err(|error| StoreError::Backend(error.to_string()))?,
-        )
-        .map_err(|error| StoreError::Backend(error.to_string()))?;
-        covered.insert(digest.clone());
-    }
-    arkret_state::control_event_set_root(&covered, root_digest_suite)
-        .map_err(|error| StoreError::Backend(error.to_string()))
-}
-
-pub async fn sign_test_seal(
-    state: &AppState,
-    realm_id: RealmId,
-    predecessor_ref: Option<SealId>,
-    delta: Vec<Hash>,
-    control_event_set_root: Hash,
-    state_root: Hash,
-    hlc: arkret_wire::Hlc,
-    digest_suite: arkret_canonical::DigestSuite,
-    signer: &dyn arkret_wire::PayloadSigner,
-) -> arkret_wire::Seal {
-    let (notary_seq, configuration_ref) = match predecessor_ref.as_ref() {
-        None => (
-            0,
-            arkret_wire::EventId::from_event_digest(&delta[0])
-                .expect("fixture genesis command forms a configuration Event id"),
-        ),
-        Some(predecessor_ref) => {
-            let predecessor = state
-                .test_projections()
-                .seal_by_id(predecessor_ref)
-                .await
-                .expect("fixture predecessor lookup")
-                .expect("fixture predecessor Seal");
-            (predecessor.notary_seq + 1, predecessor.configuration_ref)
-        }
-    };
-    let command_results = if predecessor_ref.is_none() {
-        vec![
-            arkret_wire::SealCommandOutcome::committed(
-                delta[0].clone(),
-                delta.clone(),
-                Vec::new(),
-                digest_suite,
-            )
-            .expect("fixture genesis command result"),
-        ]
-    } else {
-        delta
-            .iter()
-            .cloned()
-            .map(|digest| {
-                arkret_wire::SealCommandOutcome::committed(
-                    digest.clone(),
-                    vec![digest],
-                    Vec::new(),
-                    digest_suite,
-                )
-                .expect("fixture command result")
-            })
-            .collect()
-    };
-    arkret_wire::Seal::sign_with_signer(
-        arkret_wire::UnsignedSeal {
-            realm_id,
-            predecessor_ref,
-            delta,
-            data_delta: Vec::new(),
-            data_event_set_root: arkret_wire::empty_data_event_set_root(digest_suite)
-                .expect("empty data root"),
-            control_event_set_root,
-            state_root,
-            notary_seq,
-            availability_receipt_digests: Vec::new(),
-            covered_event_digests: Vec::new(),
-            previous_state_root: None,
-            previous_digest_algorithm: None,
-            sealed_at: chrono::Utc::now(),
-            hlc,
-            configuration_ref,
-            command_results,
-            authorization_closures: Vec::new(),
-            data_closure_announcements: Vec::new(),
-            data_closures: Vec::new(),
-            existence_anchors: Vec::new(),
-        },
-        digest_suite,
-        signer,
-    )
-    .expect("sign fixture Seal")
-}
-
-#[async_trait::async_trait]
 impl AppStateTestExt for AppState {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore> {
         state_test_registry()
@@ -714,110 +419,16 @@ impl AppStateTestExt for AppState {
             .and_then(|resources| resources.realms)
             .expect("test Realm directory is unavailable for this AppState")
     }
-
-    async fn test_put_seal(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-    ) -> StoreResult<()> {
-        let store = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.seal_store.clone())
-            .expect("test Seal store is unavailable for this AppState");
-        store
-            .put_if_head(seal, seal.predecessor_ref.as_ref(), digest_suite)
-            .await?
-            .then_some(())
-            .ok_or_else(|| StoreError::Conflict("Realm confirmed Seal head changed".to_owned()))
-    }
-
-    async fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
-        let store = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.seal_store.clone())
-            .expect("test Seal store is unavailable for this AppState");
-        store.get(seal_id).await
-    }
-
-    async fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
-        let store = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.seal_store.clone())
-            .expect("test Seal store is unavailable for this AppState");
-        Ok(store.confirmed_head(realm_id).await?.into_iter().collect())
-    }
-
-    async fn test_append_confirmed_effects(
-        &self,
-        realm_id: &RealmId,
-        seal_id: &SealId,
-        ops: &[(CellRef, IssuedOp)],
-    ) -> StoreResult<()> {
-        let store = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.cell_store.clone())
-            .expect("test cell store is unavailable for this AppState");
-        store.append_confirmed_effects(realm_id, seal_id, ops).await
-    }
-    async fn test_commit_bootstrap_seal(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        ops: &[(CellRef, IssuedOp)],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<()> {
-        if !seal.predecessor_ref.is_none() {
-            return Err(StoreError::Conflict(
-                "bootstrap fixture must have no predecessors".to_owned(),
-            ));
-        }
-        let committer = state_test_registry()
-            .lock()
-            .get(&app_state_key(self))
-            .and_then(|resources| resources.event_seal_committer.clone())
-            .expect("test atomic Seal committer unavailable");
-        let covered = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
-        if !committer
-            .commit_if_head(
-                seal,
-                digest_suite,
-                None,
-                ops,
-                &covered,
-                &[],
-                confirmed_device_control,
-            )
-            .await?
-        {
-            return Err(StoreError::Conflict(
-                "bootstrap fixture frontier changed".to_owned(),
-            ));
-        }
-        Ok(())
-    }
 }
-
 fn app_state_key(state: &AppState) -> usize {
     state.test_registry_key()
 }
 
 struct StateTestResources {
-    /// Weak on purpose. The store owns its database lease, so a strong
-    /// reference here would hold every fixture's slot and its session for the
-    /// life of the process and exhaust the server's connection budget.
     persistence: Weak<dyn PersistenceStore>,
     projection: Option<&'static Arc<Mutex<ProjectionState>>>,
     realms: Option<&'static Arc<Mutex<RealmDirectoryIndex>>>,
-    control_event_store: Option<Arc<dyn ControlEventStore>>,
-    seal_store: Option<Arc<dyn SealStore>>,
-    cell_store: Option<Arc<dyn CellStore>>,
-    event_seal_committer: Option<Arc<dyn EventSealCommitPort>>,
 }
-
 fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> {
     static REGISTRY: OnceLock<Mutex<BTreeMap<usize, StateTestResources>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -1075,313 +686,6 @@ impl RuntimeHealthPort for MemoryRuntimeHealth {
     fn database_pool_in_use(&self) -> u32 {
         0
     }
-}
-
-struct MemoryEventSealCommitter {
-    lock: Mutex<()>,
-    seal_store: Arc<MemorySealStore>,
-    cell_store: Arc<MemoryCellStore>,
-    cell_registry: Arc<dyn CellStateRegistry>,
-    control_event_store: Arc<dyn ControlEventStore>,
-}
-
-#[async_trait::async_trait]
-impl EventSealCommitPort for MemoryEventSealCommitter {
-    #[allow(
-        clippy::await_holding_lock,
-        reason = "the test-only memory adapter serializes the complete multi-store frontier commit to model production transaction visibility"
-    )]
-    async fn commit_if_head(
-        &self,
-        seal: &Seal,
-        digest_suite: arkret_canonical::DigestSuite,
-        expected_store_head: Option<&SealId>,
-        new_ops: &[(CellRef, IssuedOp)],
-        covered: &BTreeSet<Hash>,
-        _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
-        confirmed_device_control: Option<&soland_storage::ConfirmedDeviceControlProjection>,
-    ) -> StoreResult<bool> {
-        if confirmed_device_control.is_some() {
-            return Err(StoreError::Backend(
-                "confirmed device Control projection requires atomic durable storage".to_owned(),
-            ));
-        }
-        let _guard = self.lock.lock();
-        if let Some(existing) = self.seal_store.get(&seal.id).await? {
-            let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
-                .map_err(|error| StoreError::Backend(error.to_string()))?;
-            let retry_bytes = arkret_canonical::canonical_json_bytes(seal)
-                .map_err(|error| StoreError::Backend(error.to_string()))?;
-            if existing_bytes != retry_bytes {
-                return Err(StoreError::Conflict(
-                    "duplicate_conflict: exact Seal id replay has different accepted bytes"
-                        .to_owned(),
-                ));
-            }
-            return Ok(true);
-        }
-        let actual = self.seal_store.confirmed_head(&seal.realm_id).await?;
-        if actual.as_ref() != expected_store_head {
-            return Ok(false);
-        }
-        let post_state = effective_state_with_new_ops(
-            self.cell_store.as_ref(),
-            self.cell_registry.as_ref(),
-            &seal.realm_id,
-            covered,
-            new_ops,
-        )
-        .await?;
-        let state_root =
-            compute_state_root(arkret_state::GovernanceView::new(&post_state), digest_suite)
-                .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
-        if state_root != seal.state_root {
-            return Err(StoreError::Conflict(format!(
-                "Event Seal state_root mismatch: declared {}, recomputed {}",
-                seal.state_root, state_root
-            )));
-        }
-        self.cell_store
-            .append_confirmed_effects(&seal.realm_id, &seal.id, new_ops)
-            .await?;
-        match self
-            .seal_store
-            .put_if_head(seal, expected_store_head, digest_suite)
-            .await
-        {
-            Ok(true) => {
-                self.control_event_store
-                    .record_seal_command_results(seal)
-                    .await?;
-                Ok(true)
-            }
-            Ok(false) => {
-                self.cell_store
-                    .rollback_seal(&seal.realm_id, &seal.id)
-                    .await?;
-                Ok(false)
-            }
-            Err(error) => {
-                let _ = self
-                    .cell_store
-                    .rollback_seal(&seal.realm_id, &seal.id)
-                    .await;
-                Err(error)
-            }
-        }
-    }
-}
-
-async fn effective_state_with_new_ops(
-    cells: &dyn CellStore,
-    registry: &dyn CellStateRegistry,
-    realm_id: &arkret_identifiers::RealmId,
-    covered: &BTreeSet<Hash>,
-    new_ops: &[(CellRef, IssuedOp)],
-) -> StoreResult<BTreeMap<CellRef, ResolvedCellState>> {
-    let mut cell_refs = cells
-        .list_cells(realm_id)
-        .await?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    cell_refs.extend(new_ops.iter().map(|(cell, _)| cell.clone()));
-    let mut joined = BTreeMap::new();
-    for cell in cell_refs {
-        let mut batches = cells
-            .confirmed_write_batches_for_cell(realm_id, &cell)
-            .await?
-            .into_iter()
-            .filter_map(|(_, ops)| {
-                let ops = ops
-                    .into_iter()
-                    .filter(|issued| covered.contains(&issued.op.event_id.event_digest()))
-                    .collect::<Vec<_>>();
-                (!ops.is_empty()).then_some(ops)
-            })
-            .collect::<Vec<_>>();
-        let new_batch = new_ops
-            .iter()
-            .filter(|(candidate, issued)| {
-                candidate == &cell && covered.contains(&issued.op.event_id.event_digest())
-            })
-            .map(|(_, operation)| operation.clone())
-            .collect::<Vec<_>>();
-        if !new_batch.is_empty() {
-            batches.push(new_batch);
-        }
-        if batches.is_empty() {
-            continue;
-        }
-        // Match production CellStore semantics: persisted and new writes retain
-        // the same confirmed batch boundaries.
-        let binding = registry.resolve(realm_id, &cell)?;
-        let resolved =
-            arkret_state::join_cell_seal_batches(binding.model.as_ref(), &cell, &batches)
-                .map_err(|error| arkret_state::StoreError::Backend(error.to_string()))?;
-        joined.insert(cell.clone(), resolved);
-    }
-    Ok(joined)
-}
-
-pub use soland_http::project_accepted_operations;
-
-/// Stable event-derived PCR address for fixtures that do not exercise the
-/// full signed genesis builder. Production code must resolve accepted PCRs.
-pub fn fixture_principal_control_realm(principal_did: &str) -> String {
-    cbs_basis::fixture_principal_control_realm_create(principal_did)
-        .realm_id
-        .to_string()
-}
-
-/// Project one accepted principal device together with the exact local account
-/// authority/PCR coordinate required by strict principal-device proof gates.
-pub async fn project_authorized_principal_device(
-    state: &AppState,
-    principal_did: &str,
-    device_id: &str,
-    signing_key: &ed25519_dalek::SigningKey,
-) -> String {
-    let principal_did = Did::new(principal_did.to_owned()).unwrap();
-    let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
-    let pcr_create = cbs_basis::fixture_principal_control_realm_create_for_server(
-        principal_did.as_str(),
-        arkret_identifiers::DidCoreId::new(state.service_id().clone())
-            .expect("fixture service core DID"),
-    );
-    let pcr_realm_id = pcr_create.realm_id.clone();
-    cbs_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_did.as_str()).await;
-    let genesis_record = state
-        .test_persistence()
-        .events()
-        .realm_events_newest_first(pcr_realm_id.as_str())
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
-        .expect("PCR genesis Event");
-    let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
-    let station_id = genesis.actor_id.route_service_id().clone();
-    let now = chrono::Utc::now();
-    let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-        signing_key.verifying_key().as_bytes(),
-    );
-    let mut authorize = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::DeviceAuthorize.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: pcr_realm_id.clone(),
-        },
-        principal_id.clone(),
-        station_id.clone(),
-        1,
-        arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
-        serde_json::json!({
-            "device_id": device_id,
-            "device_public_key_did": device_public_key,
-            "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
-            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-            "authorized_by": principal_id,
-            "not_before": "2026-05-25T00:00:00.000Z",
-            "authorization_binding_kind": "registration_anchor",
-            "device_signature": "c2ln"
-        }),
-        now,
-    )
-    .unwrap();
-    authorize.prev_refs = vec![genesis.event_id.clone()];
-    authorize
-        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-        .unwrap();
-    let authorize = signed_event::sign_fixture_event(
-        authorize,
-        principal_did.as_str(),
-        device_id,
-        signing_key.to_bytes(),
-    );
-    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-        arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
-            "ak:operation:",
-        ))
-        .unwrap(),
-        arkret_wire::OperationKind::Create,
-        None,
-        &authorize,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
-    operation
-        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
-        .expect("fixture DeviceAuthorize payload is canonical");
-    assert_eq!(
-        soland_domain::kinds::canonical_kind_for_operation(&operation),
-        Some(arkret_wire::EventKind::DeviceAuthorize),
-        "fixture DeviceAuthorize participates in local projection"
-    );
-    let authorize_event_id = authorize.event_id.to_string();
-    state
-        .test_persistence()
-        .events()
-        .put(signed_event::canonical_event_record(
-            &authorize,
-            Some(pcr_realm_id.as_str()),
-            now,
-        ))
-        .await
-        .unwrap();
-    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), station_id);
-    if state
-        .test_persistence()
-        .principal_resolutions()
-        .by_account_id(&authority_key)
-        .await
-        .unwrap()
-        .is_none()
-    {
-        let applied = state
-            .test_persistence()
-            .principal_resolutions()
-            .compare_and_set(
-                None,
-                soland_storage::PrincipalResolutionRecord {
-                    account_id: authority_key,
-                    pcr_realm_id: pcr_realm_id.clone(),
-                    genesis_event: genesis.clone(),
-                    current_event: genesis.clone(),
-                    projection: arkret_models_identity::PrincipalResolutionProjection {
-                        did: principal_did,
-                        method_history_head: format!("sha256:{}", "1".repeat(64)),
-                        version_id: "1-QmTestAuthority".to_owned(),
-                        resolution_event_ref: genesis.event_id.to_string(),
-                        updated_at: genesis.created_at,
-                    },
-                },
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            applied,
-            soland_storage::PrincipalResolutionCasResult::Applied(_)
-        ));
-    }
-    soland_http::project_accepted_operations(state, principal_id.as_str(), &[operation]).await;
-    let mut projected_device = state
-        .test_persistence()
-        .devices()
-        .get(principal_id.as_str(), device_id)
-        .await
-        .unwrap()
-        .expect("projected authorized device");
-    projected_device
-        .payload
-        .as_object_mut()
-        .expect("projected authorized device payload")
-        .insert("authorized_generation_ref".to_owned(), serde_json::json!(1));
-    state
-        .test_persistence()
-        .devices()
-        .seed_test_record(&projected_device)
-        .await
-        .unwrap();
-    authorize_event_id
 }
 
 /// Read the service-derived `push_target_id` for one registered device.

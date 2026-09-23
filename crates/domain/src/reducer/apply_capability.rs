@@ -1263,10 +1263,21 @@ impl ProjectionState {
             );
             map.insert(
                 "authority_root_refs".to_owned(),
-                Value::Array(authority_root_refs),
+                Value::Array(authority_root_refs.clone()),
             );
         }
-        self.set_facet(&realm_id, target, grant_body(&value).clone());
+        let mut settled_body = grant_body(&value).clone();
+        if let Value::Object(body) = &mut settled_body {
+            body.insert(
+                "authority_depth".to_owned(),
+                Value::Number(authority_depth.into()),
+            );
+            body.insert(
+                "authority_root_refs".to_owned(),
+                Value::Array(authority_root_refs.clone()),
+            );
+        }
+        self.set_facet(&realm_id, target, settled_body);
         let mut metadata = grant_metadata_value(operation, &grant_id);
         if let Some(object) = metadata.as_object_mut() {
             object.insert(

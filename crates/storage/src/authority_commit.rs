@@ -39,6 +39,14 @@ pub struct CommittedEventRecord {
     pub event: Event,
 }
 
+/// Durable MIMI room binding winner at one accepted RealmCommit revision.
+#[derive(Clone, Debug)]
+pub struct MimiRoomBindingCurrentRecord {
+    pub current: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingCurrentResult,
+    pub source_event_id: arkret_wire::EventId,
+    pub realm_id: arkret_wire::RealmId,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CurrentRealmAuthority {
     pub realm_id: arkret_wire::RealmId,
@@ -67,6 +75,158 @@ pub struct AuthorityCommitTransaction {
     pub commit: RealmCommit,
     pub mls_state: Option<MlsStateInstallation>,
     pub welcomes: Vec<MlsWelcomeDelivery>,
+    /// Service-configured maximum outstanding deliveries for each exact
+    /// recipient endpoint. A transaction carrying Welcome must provide a
+    /// positive bound; zero is permitted only when no Welcome is present.
+    pub recipient_queue_capacity: usize,
+}
+
+/// Current producer authorization pinned by the self submit preflight and
+/// rechecked inside the same transaction that commits the Event. This is an
+/// internal persistence guard, never a caller-supplied protocol claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelfProducerCommitGuard {
+    HumanDevice(crate::DeviceRevocationGateSelector),
+    Agent {
+        pcr_realm_id: arkret_wire::RealmId,
+        agent_id: arkret_wire::DidCoreId,
+        authorization_ref: arkret_wire::CommittedEventRef,
+        verification_method: arkret_wire::DidUrl,
+    },
+}
+
+/// A complete ordinary Realm bootstrap, including the exact HTTP request
+/// bytes used for durable idempotency comparison. Every proposed Commit is
+/// prepared and verified by the service before this storage boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OrdinaryRealmBootstrapCommitUnit {
+    pub submission:
+        arkret_models_collaboration::authority_commit::OrdinaryRealmBootstrapUnitSubmission,
+    pub exact_request_body: Vec<u8>,
+    pub transactions: Vec<AuthorityCommitTransaction>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrdinaryRealmBootstrapCommitOutcome {
+    Committed(Vec<RealmCommit>),
+    Duplicate(Vec<RealmCommit>),
+}
+
+/// Complete PCR genesis admission prepared by the governance Station after
+/// authenticating the Account Authority relay and both producer proofs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PcrGenesisCommitUnit {
+    pub submission: arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
+    pub exact_request_body: Vec<u8>,
+    pub transactions: [AuthorityCommitTransaction; 2],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PcrGenesisCommitOutcome {
+    Committed(arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult),
+    Duplicate(arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult),
+}
+
+impl PcrGenesisCommitUnit {
+    pub fn validate(&self) -> arkret_wire::Result<()> {
+        self.submission.validate()?;
+        if self.exact_request_body.is_empty()
+            || serde_json::from_slice::<
+                arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
+            >(&self.exact_request_body)
+            .ok()
+            .as_ref()
+                != Some(&self.submission)
+        {
+            return Err(arkret_wire::WireError::Protocol(
+                "PCR genesis exact request bytes differ from the admitted input".to_owned(),
+            ));
+        }
+        let first = &self.transactions[0];
+        let second = &self.transactions[1];
+        let authority = &first.expected_authority;
+        let expected_stream = CommitStreamRef::Realm {
+            realm_id: self.submission.pcr_realm_id.clone(),
+        };
+        if authority.realm_id != self.submission.pcr_realm_id
+            || authority.service_id != self.submission.account_authority_id
+            || authority.generation != 0
+            || authority.last_handoff_ref.is_some()
+            || authority.authority_ref
+                != arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    self.submission.genesis_unit.create().event_id.clone(),
+                )
+            || second.expected_authority != *authority
+            || first.event != *self.submission.genesis_unit.create()
+            || second.event != *self.submission.genesis_unit.founding_authorize()
+            || first.commit.stream_ref != expected_stream
+            || second.commit.stream_ref != expected_stream
+            || first.commit.stream_position != 0
+            || first.commit.previous_commit_ref.is_some()
+            || second.commit.stream_position != 1
+            || second.commit.previous_commit_ref.as_ref() != Some(&first.commit.commit_id)
+            || self.transactions.iter().any(|transaction| {
+                transaction.mls_state.is_some() || !transaction.welcomes.is_empty()
+            })
+        {
+            return Err(arkret_wire::WireError::Protocol(
+                "PCR genesis transaction does not bind its ordered Event and Commit pair"
+                    .to_owned(),
+            ));
+        }
+        first.validate()?;
+        second.validate()?;
+        Ok(())
+    }
+}
+
+impl OrdinaryRealmBootstrapCommitUnit {
+    pub fn validate(&self) -> arkret_wire::Result<()> {
+        self.submission.validate()?;
+        if self.exact_request_body.is_empty()
+            || self.transactions.len() != self.submission.events.len()
+        {
+            return Err(arkret_wire::WireError::Protocol(
+                "ordinary Realm bootstrap body/transaction cardinality is invalid".to_owned(),
+            ));
+        }
+        match serde_json::from_slice::<
+            arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest,
+        >(&self.exact_request_body)
+        {
+            Ok(arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(parsed))
+                if parsed == self.submission => {}
+            _ => return Err(arkret_wire::WireError::Protocol(
+                "ordinary Realm bootstrap exact body does not match the submitted unit".to_owned(),
+            )),
+        }
+        let first = &self.transactions[0];
+        for (submitted, transaction) in self.submission.events.iter().zip(&self.transactions) {
+            transaction.validate()?;
+            if submitted.event != transaction.event
+                || transaction.expected_authority != first.expected_authority
+                || transaction.mls_state.is_some()
+                || !transaction.welcomes.is_empty()
+            {
+                return Err(arkret_wire::WireError::Protocol(
+                    "ordinary Realm bootstrap transaction diverges from its submitted Event or authority"
+                        .to_owned(),
+                ));
+            }
+        }
+        arkret_models_collaboration::authority_commit::OrdinaryRealmBootstrapAcceptanceOutcome {
+            unit_kind: self.submission.unit_kind,
+            status:
+                arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus::Committed,
+            commits: self
+                .transactions
+                .iter()
+                .map(|transaction| transaction.commit.clone())
+                .collect(),
+        }
+        .validate()?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +239,11 @@ pub struct MlsStateInstallation {
 
 impl AuthorityCommitTransaction {
     pub fn validate(&self) -> arkret_wire::Result<()> {
+        if !self.welcomes.is_empty() && self.recipient_queue_capacity == 0 {
+            return Err(arkret_wire::WireError::Protocol(
+                "MLS Welcome transaction omitted its recipient queue capacity".to_owned(),
+            ));
+        }
         self.event.validate_for_submit_structural()?;
         self.commit.validate_shape()?;
         let expected_stream =
@@ -94,20 +259,32 @@ impl AuthorityCommitTransaction {
                 "authority commit transaction bindings disagree".to_owned(),
             ));
         }
-        match (
-            &self.mls_state,
-            self.event.kind == arkret_wire::EventKind::MlsCommit,
-        ) {
-            (Some(state), true)
-                if state.effective_scope == self.event.scope_ref
-                    && !state.group_id.is_empty()
-                    && !state.state_bytes.is_empty() => {}
-            (None, false) => {}
+        match (&self.mls_state, &self.event.kind) {
+            (Some(state), &arkret_wire::EventKind::MlsCommit) => {
+                let payload_value = serde_json::to_value(&self.event.payload).map_err(|error| {
+                    arkret_wire::WireError::Protocol(format!(
+                        "MLS Commit Event payload cannot be encoded: {error}"
+                    ))
+                })?;
+                let payload: arkret_models_crypto::MlsCommitPayload =
+                    serde_json::from_value(payload_value).map_err(|error| {
+                        arkret_wire::WireError::Protocol(format!(
+                            "MLS Commit Event has no valid governance binding: {error}"
+                        ))
+                    })?;
+                validate_mls_installation(&payload, &self.event.scope_ref, state)?;
+            }
+            (None, kind) if *kind != arkret_wire::EventKind::MlsCommit => {}
             _ => {
                 return Err(arkret_wire::WireError::Protocol(
                     "MLS Commit acceptance requires exactly one installed group state".to_owned(),
                 ));
             }
+        }
+        if !self.welcomes.is_empty() && self.event.kind != arkret_wire::EventKind::MlsCommit {
+            return Err(arkret_wire::WireError::Protocol(
+                "MLS Welcome delivery requires an MLS Commit Event".to_owned(),
+            ));
         }
         for welcome in &self.welcomes {
             welcome.validate_shape()?;
@@ -122,6 +299,27 @@ impl AuthorityCommitTransaction {
         }
         Ok(())
     }
+}
+
+fn validate_mls_installation(
+    payload: &arkret_models_crypto::MlsCommitPayload,
+    event_scope: &arkret_wire::ScopeRef,
+    state: &MlsStateInstallation,
+) -> arkret_wire::Result<()> {
+    let binding = payload.governance_binding();
+    let expected_group_id = binding.mls_group_id()?;
+    if binding.effective_scope() != event_scope
+        || state.effective_scope != *event_scope
+        || state.group_id != expected_group_id.as_str()
+        || state.epoch != payload.next_epoch()
+        || state.state_bytes.is_empty()
+        || payload.covers_key_access_revision() != binding.key_access_revision()
+    {
+        return Err(arkret_wire::WireError::Protocol(
+            "installed MLS state differs from the signed Commit governance binding".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +371,44 @@ pub trait AuthorityCommitStore: Send + Sync {
         queued_at: DateTime<Utc>,
     ) -> PersistenceResult<AuthorityCommitWriteOutcome>;
 
+    /// Commit a self Event only while its producer's current authorization is
+    /// still the same. Implementations must perform this guard and the
+    /// authority/stream CAS within one database transaction.
+    async fn admit_self_event_transaction(
+        &self,
+        transaction: &AuthorityCommitTransaction,
+        guard: &SelfProducerCommitGuard,
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<AuthorityCommitWriteOutcome>;
+
+    /// Install the entire registered ordinary Realm bootstrap in one DB
+    /// transaction, including genesis authority, every Event/Commit and all
+    /// current projections. Failed units leave no queued or committed Event.
+    async fn admit_ordinary_realm_bootstrap_unit(
+        &self,
+        unit: &OrdinaryRealmBootstrapCommitUnit,
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome>;
+
+    /// Install the complete PCR genesis, founding device current, and exact
+    /// idempotency receipt in one durable transaction.
+    async fn admit_pcr_genesis_unit(
+        &self,
+        unit: &PcrGenesisCommitUnit,
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<PcrGenesisCommitOutcome>;
+
+    /// Read the first durable PCR genesis receipt before freshness checks on an
+    /// exact retry. Reusing either the Realm or idempotency key with different
+    /// request bytes is a conflict, never a duplicate acceptance.
+    async fn pcr_genesis_replay(
+        &self,
+        submission: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
+        exact_request_body: &[u8],
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult>,
+    >;
+
     /// Atomically checks current authority, appends the per-stream commit,
     /// changes the Event from queued to committed, and enqueues every Welcome.
     async fn commit_transaction(
@@ -193,6 +429,24 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         event_id: &arkret_wire::EventId,
     ) -> PersistenceResult<Option<CommittedEventRecord>>;
+
+    async fn committed_event_by_commit_id(
+        &self,
+        commit_id: &arkret_wire::RealmCommitId,
+    ) -> PersistenceResult<Option<CommittedEventRecord>>;
+
+    async fn current_mimi_room_binding(
+        &self,
+        room_uri: &arkret_wire::MimiRoomUri,
+    ) -> PersistenceResult<Option<MimiRoomBindingCurrentRecord>>;
+
+    /// Read one accepted Agent typed current row at its durable revision.
+    /// Only the closed AgentKey and AgentStatus selectors are admitted.
+    async fn current_agent_result(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_wire::CurrentSelector,
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>>;
 
     /// Current heads for every independent Realm, Circle, and Sidecar stream
     /// belonging to one Realm, sorted by `stream_ref`.
@@ -239,4 +493,53 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Option<RealmStateSnapshot>>;
+}
+
+#[cfg(test)]
+mod mls_installation_tests {
+    use arkret_models_crypto::{MlsCommitEnvelope, MlsCommitPayload, MlsGovernanceBindingPayload};
+    use arkret_wire::{EventId, Hash, RealmId, ScopeRef};
+
+    use super::{MlsStateInstallation, validate_mls_installation};
+
+    #[test]
+    fn installed_state_must_match_signed_mls_binding() {
+        let realm_id =
+            RealmId::new("ak:realm:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-").unwrap();
+        let base =
+            EventId::from_event_digest(&Hash::new(arkret_canonical::sha256_digest([1])).unwrap())
+                .unwrap();
+        let binding =
+            MlsGovernanceBindingPayload::realm(realm_id.clone(), Some(base.clone()), 0, 1, 7)
+                .unwrap();
+        let commit_bytes = b"canonical-commit";
+        let envelope = MlsCommitEnvelope {
+            group_id: binding.mls_group_id().unwrap(),
+            epoch: 1,
+            commit: arkret_wire::base64url::base64url_encode(commit_bytes),
+            commit_digest: Hash::new(arkret_canonical::sha256_digest(commit_bytes)).unwrap(),
+            ratchet_tree: None,
+        };
+        let payload = MlsCommitPayload::new(base, 7, &envelope, binding).unwrap();
+        let scope = ScopeRef::Realm { realm_id };
+        let installed = MlsStateInstallation {
+            group_id: envelope.group_id.as_str().to_owned(),
+            effective_scope: scope.clone(),
+            epoch: 1,
+            state_bytes: vec![1],
+        };
+        assert!(validate_mls_installation(&payload, &scope, &installed).is_ok());
+
+        let mut wrong_group = installed.clone();
+        wrong_group.group_id = "other-group".to_owned();
+        assert!(validate_mls_installation(&payload, &scope, &wrong_group).is_err());
+
+        let mut wrong_epoch = installed.clone();
+        wrong_epoch.epoch = 2;
+        assert!(validate_mls_installation(&payload, &scope, &wrong_epoch).is_err());
+
+        let mut missing_state = installed;
+        missing_state.state_bytes.clear();
+        assert!(validate_mls_installation(&payload, &scope, &missing_state).is_err());
+    }
 }

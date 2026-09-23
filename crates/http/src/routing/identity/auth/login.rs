@@ -217,8 +217,8 @@ pub(super) async fn dev_login(
     json_ok(SessionLoginOutcome {
         session_credential: token,
         token_type: "Bearer".to_owned(),
-        actor: actor.clone(),
-        device_id: device_id.clone(),
+        actor: actor.to_string(),
+        device_id: device_id.to_string(),
         expires_at,
     })
 }

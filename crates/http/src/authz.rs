@@ -293,19 +293,6 @@ impl SolandAuthzEngine {
                 grants: Vec::new(),
             };
         }
-        let has_revoked_upstream_grant = matching_request_has_revoked_upstream_grant(
-            &snapshot, actor, action, resource, realm_id, now,
-        );
-
-        if has_revoked_upstream_grant {
-            return AuthzResult {
-                allowed: false,
-                reason: "capability_denied".to_owned(),
-                reason_detail: None,
-                grants: Vec::new(),
-            };
-        }
-
         AuthzResult {
             allowed: false,
             reason: default_deny_reason(action).to_owned(),
@@ -361,7 +348,7 @@ pub fn projected_grant_fixture(
         revoked: false,
         created_at: chrono::Utc::now(),
         issuer_authority_refs: Vec::new(),
-        authority_depth: None,
+        authority_depth: 1,
         authority_root_refs: Vec::new(),
     }
 }
@@ -434,24 +421,6 @@ pub(crate) fn grant_revoked_upstream(
         );
     }
     false
-}
-
-fn matching_request_has_revoked_upstream_grant(
-    snapshot: &[Grant],
-    actor: &arkret_wire::ActorId,
-    action: &str,
-    resource: &str,
-    realm_id: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    snapshot.iter().any(|grant| {
-        grant.realm_id == realm_id
-            && &grant.subject_id == actor
-            && grant_scope_valid(grant).is_ok()
-            && grant.actions.iter().any(|candidate| candidate == action)
-            && resource_matches(&grant.resource, resource)
-            && grant_revoked_upstream(snapshot, &grant.grant_id, now)
-    })
 }
 
 pub(crate) fn grant_scope_valid(grant: &Grant) -> Result<(), &'static str> {
@@ -1077,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn authority_child_denied_with_upstream_revocation_reason() {
+    fn authority_child_denied_when_upstream_revoked() {
         let engine = SolandAuthzEngine::new();
         let parent = project(
             &engine,
@@ -1112,7 +1081,7 @@ mod tests {
             &[],
         );
         assert!(!result.allowed);
-        assert_eq!(result.reason, "capability_denied");
+        assert_eq!(result.reason, "no_strand_track_message_grant");
         assert!(
             engine
                 .get_grant(&child.grant_id)

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{GrantId, Hash, RealmId};
 use arkret_identity::DidDocument;
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
@@ -90,13 +90,13 @@ pub(super) fn approved_scope_grants(
     }])
 }
 
-pub(super) fn validate_hosted_applet_pcr_notary(
-    actual: &arkret_wire::NotaryValue,
-    expected: &arkret_wire::NotaryValue,
+pub(super) fn validate_hosted_applet_pcr_governance_station(
+    actual: &arkret_wire::DidCoreId,
+    expected: &arkret_wire::DidCoreId,
 ) -> Result<(), AppError> {
     if actual != expected {
         return Err(AppError::param_invalid(
-            "Applet-managed PCR genesis notary must equal the exact hosting Station notary",
+            "Applet-managed PCR genesis governance Station must equal the exact hosting Station",
         )
         .with_reason_code("applet_managed_pcr_genesis_invalid"));
     }
@@ -363,14 +363,10 @@ fn validate_bot_managed_actor_unit(
             AppError::param_invalid(format!("Bot PCR genesis object is invalid: {error}"))
                 .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
-    let expected_host_notary = arkret_wire::NotaryValue::new(
-        state
-            .service_notary_signer_descriptor()
-            .map_err(AppError::internal)?,
-        0,
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    validate_hosted_applet_pcr_notary(&genesis_object.notary, &expected_host_notary)?;
+    validate_hosted_applet_pcr_governance_station(
+        &genesis_object.governance_station_id,
+        &state.service_core_id(),
+    )?;
     let provision_ref_count = genesis
         .semantic_refs
         .iter()
@@ -717,10 +713,10 @@ pub(super) async fn register_package_install(
             )
             .with_wire_code("duplicate_conflict"));
         }
-        return Err(crate::app_error!(
-            AppletAlreadyRegistered,
-            "applet package is already installed in this scope",
-        ));
+        return Err(
+            AppError::conflict("applet package is already installed in this scope")
+                .with_wire_code("failed_precondition"),
+        );
     }
 
     let existing_identity = applet_identity(state, &applet_id, target_station_id.as_str()).await?;
@@ -779,11 +775,12 @@ pub(super) async fn register_package_install(
                 || package.service_id != initial_package.service_id
                 || package.bot_actor_id != initial_package.bot_actor_id
                 || reference.actor_id != existing.bot_actor_id
-                || reference.managed_actor_provision_ref != existing.bot_actor_provision_ref
-                || reference.pcr_genesis_ref != existing.bot_pcr_genesis_event.event_id
-                || reference.accountability_grant_ref
+                || reference.managed_actor_provision_ref.event_id
+                    != existing.bot_actor_provision_ref
+                || reference.pcr_genesis_ref.event_id != existing.bot_pcr_genesis_event.event_id
+                || reference.accountability_grant_ref.event_id
                     != existing.bot_accountability_grant_event.event_id
-                || reference.profile_event_ref != existing.bot_profile_event.event_id
+                || reference.profile_event_ref.event_id != existing.bot_profile_event.event_id
                 || reference.initial_package_bot_actor_id != existing.bot_actor_id
             {
                 return Err(AppError::conflict(
@@ -824,13 +821,20 @@ pub(super) async fn register_package_install(
         AppletInstallEffectiveStatus::PartiallyInstalled => "partially_installed",
     };
     let install_id = ids::generate_install_id();
+    // A draft EventId is not a committed reference. The legacy Applet batch
+    // writer accepts a prebuilt response/record, before it has issued signed
+    // RealmCommits. Until it returns exact Commit coordinates from the same
+    // atomic UoW, a fresh install stops here without writing an Event.
+    let registration_event_ref = committed_install_ref(state, &registration_event).await?;
+    let bot_actor_provision_ref =
+        committed_install_ref(state, &identity.bot_actor_provision_event).await?;
     let response = AppletInstallOutcome {
         install_id,
         applet_id: package.applet_id.clone(),
-        registration_event_ref: registration_event.event_id.clone(),
+        registration_event_ref,
         registration_epoch: package.registration_epoch.clone(),
         bot_actor_id: identity.bot_actor_id.clone(),
-        bot_actor_provision_ref: identity.bot_actor_provision_ref.clone(),
+        bot_actor_provision_ref,
         bot_principal_control_realm_id: identity.bot_principal_control_realm_id.clone(),
         capability_grant_refs,
         e2ee_authorization_refs,
@@ -981,7 +985,7 @@ fn install_produced_event_refs(
         5 + response.capability_grant_refs.len()
             + usize::from(response.widget_policy_ref.is_some()),
     );
-    refs.push(response.registration_event_ref.to_string());
+    refs.push(response.registration_event_ref.event_id.to_string());
     refs.extend(
         record
             .capability_grant_events
@@ -995,7 +999,7 @@ fn install_produced_event_refs(
         refs.push(record.bot_profile_event.event_id.to_string());
     }
     if let Some(widget_policy_ref) = &response.widget_policy_ref {
-        refs.push(widget_policy_ref.to_string());
+        refs.push(widget_policy_ref.event_id.to_string());
     }
     refs
 }
@@ -1347,7 +1351,7 @@ pub(super) async fn build_install_plan(
         "requested_scopes": package.requested_scopes,
         "approved_scopes": approved_scopes,
         "denied_scopes": denied_scopes,
-        "events_to_submit": [{
+        "event_submissions": [{
             "event_kind": arkret_wire::EventKind::AppletRegistration,
             "payload": registration_payload,
         }],
@@ -1378,7 +1382,7 @@ pub(super) async fn build_install_plan(
                 .as_str()
                 .to_owned(),
             payload: event_payload,
-            refs: None,
+            semantic_refs: None,
         }],
         capability_constraints: capability_constraints_for_scope(scope),
         namespace_conflicts: Vec::<NamespaceConflict>::new(),
@@ -1387,7 +1391,7 @@ pub(super) async fn build_install_plan(
         warnings: Vec::new(),
         plan_digest: package_digest.clone(),
     };
-    plan.seal()
+    plan.stamp_plan_digest()
         .map_err(|error| AppError::internal(format!("install plan digest failed: {error}")))?;
     Ok(plan)
 }
@@ -1454,7 +1458,7 @@ fn package_requests_mls_join(package: &AppletPackage) -> bool {
 fn e2ee_authorization_refs_for_install(
     package: &AppletPackage,
     _e2ee_policy: Option<&E2eePolicy>,
-) -> Result<Vec<EventId>, AppError> {
+) -> Result<Vec<arkret_wire::CommittedEventRef>, AppError> {
     if !package_requests_mls_join(package) {
         return Ok(Vec::new());
     }
@@ -1462,6 +1466,39 @@ fn e2ee_authorization_refs_for_install(
         "applet E2EE MLS join has no registered independent authorization artifact",
     )
     .with_wire_code("applet_e2ee_join_unauthorized"))
+}
+
+/// Resolve an exact accepted authority result, without manufacturing a
+/// Commit coordinate from the producer's proposed Event id. A fresh Applet
+/// install cannot pass until the atomic writer owns response construction.
+async fn committed_install_ref(
+    state: &AppState,
+    event: &Event,
+) -> Result<arkret_wire::CommittedEventRef, AppError> {
+    let accepted = state
+        .persistence()
+        .committed_event(&event.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Applet Commit lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::from_rejection(
+                soland_http::error::ErrorCode::ServiceUnavailable,
+                "Applet install atomic Event/Commit result construction is unavailable",
+            )
+            .with_rejection_code("service_unavailable")
+        })?;
+    if accepted.event != *event {
+        return Err(AppError::conflict(
+            "Applet Event id is committed with different canonical content",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
+    Ok(arkret_wire::CommittedEventRef {
+        event_id: event.event_id.clone(),
+        commit_id: accepted.commit.commit_id,
+        stream_ref: accepted.commit.stream_ref,
+        stream_position: accepted.commit.stream_position,
+    })
 }
 
 pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect {
@@ -1644,7 +1681,6 @@ mod tests {
             ),
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
             jws_replay_window_seconds: 0,
-            jws_replay_window_per_family: std::collections::BTreeMap::new(),
             notary_signing_key_seed: Some([9u8; 32]),
             ..crate::config::AppConfig::test_default()
         };
@@ -1652,44 +1688,14 @@ mod tests {
     }
 
     #[test]
-    fn hosted_applet_pcr_notary_rejects_actor_and_self_reported_descriptors() {
+    fn hosted_applet_pcr_governance_station_rejects_other_station() {
         let state = production_test_state();
-        let expected =
-            arkret_wire::NotaryValue::new(state.service_notary_signer_descriptor().unwrap(), 0)
-                .unwrap();
-        validate_hosted_applet_pcr_notary(&expected, &expected).unwrap();
+        let expected = state.service_core_id();
+        validate_hosted_applet_pcr_governance_station(&expected, &expected).unwrap();
 
         let actor_did = Did::new("did:web:actor.example".to_owned()).unwrap();
         let actor_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
-        let actor_descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
-            actor_id,
-            arkret_wire::DidUrl::new("did:web:actor.example#notary-key".to_owned()).unwrap(),
-            &[7_u8; 32],
-        )
-        .unwrap();
-        assert!(
-            validate_hosted_applet_pcr_notary(
-                &arkret_wire::NotaryValue::new(actor_descriptor, 0).unwrap(),
-                &expected,
-            )
-            .is_err()
-        );
-
-        let self_reported_descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
-            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
-            state
-                .service_verification_method("self-reported-key")
-                .unwrap(),
-            &[8_u8; 32],
-        )
-        .unwrap();
-        assert!(
-            validate_hosted_applet_pcr_notary(
-                &arkret_wire::NotaryValue::new(self_reported_descriptor, 0).unwrap(),
-                &expected,
-            )
-            .is_err()
-        );
+        assert!(validate_hosted_applet_pcr_governance_station(&actor_id, &expected).is_err());
     }
 
     /// Derive a `did:key` DID + its `#`-fragment verification method for an
@@ -1758,8 +1764,8 @@ mod tests {
                 },
             ],
         );
-        package.seal_registration_epoch(&evidence).unwrap();
-        package.seal().unwrap();
+        package.stamp_registration_epoch(&evidence).unwrap();
+        package.stamp_package_digest().unwrap();
         let signer = Ed25519PayloadSigner::from_did_key_seed(
             signer_seed,
             controller_did,

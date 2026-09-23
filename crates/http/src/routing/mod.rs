@@ -4,6 +4,7 @@ mod access;
 mod account_data_encryption;
 mod admin;
 pub(crate) mod agent_participation;
+mod authority_commit;
 // AKP-0007 (P2A.3) — `/_arkret/self/circles/*` admin surface.
 pub(crate) mod circles;
 #[cfg(any(test, feature = "conformance-harness"))]

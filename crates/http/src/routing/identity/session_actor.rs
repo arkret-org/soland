@@ -36,12 +36,8 @@ pub(crate) fn session_actor_from_credential(
         .as_ref()
         .map(|grant| &grant.holder_binding)
     {
-        Some(SessionGrantHolderBinding::AgentRuntime {
-            agent_id,
-            device_id,
-            ..
-        }) => {
-            if agent_id != &principal || device_id.as_str() != session.device_id {
+        Some(SessionGrantHolderBinding::AgentRuntime { agent_id, .. }) => {
+            if agent_id != &principal || session.agent_session.is_none() {
                 return Err(AppError::unauthenticated(
                     "AgentRuntime holder does not match the session",
                 ));

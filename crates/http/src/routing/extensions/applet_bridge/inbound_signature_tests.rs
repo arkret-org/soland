@@ -41,56 +41,60 @@ fn keyid_mismatch_is_invalid_signature() {
 }
 
 #[test]
-fn delivery_authentication_record_digest_binds_registration_epoch_and_webhook_auth() {
-    let webhook_auth = json!({
-        "kind": "http_message_signature",
-        "key_ref": "did:web:app#applet-service-key",
-        "accepted_signature_algorithms": ["ed25519"]
-    });
-    let base = applet_delivery_authentication_record_digest(
-        "did:web:app",
-        "did:web:edge",
-        "idem-1",
-        "sha-256=:abc=:",
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "did:web:app#applet-service-key",
-        json!("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
-        webhook_auth.clone(),
-        "ed25519",
-        &params(1, 60),
-        "sig1=:abc:",
+fn delivery_authentication_record_digest_binds_closed_verified_material() {
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+    let rotated_key = ed25519_dalek::SigningKey::from_bytes(&[8; 32]).verifying_key();
+    let input = arkret_signatures::http_signature::parse_signature_input(&format!(
+        "sig1={}",
+        params(1, 60)
+    ))
+    .unwrap();
+    let digest = |epoch: &str, key: &ed25519_dalek::VerifyingKey| {
+        applet_delivery_authentication_record_digest(
+            "did:web:app",
+            "did:web:edge",
+            "idem-1",
+            "sha-256=:abc=:",
+            "did:web:app#applet-service-key",
+            epoch,
+            key,
+            &input,
+        )
+        .unwrap()
+    };
+    let epoch = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let (actual_record, base) = digest(epoch, &key);
+    let epoch_rotated = digest(
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        &key,
     );
-    let epoch_rotated = applet_delivery_authentication_record_digest(
-        "did:web:app",
-        "did:web:edge",
-        "idem-1",
-        "sha-256=:abc=:",
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "did:web:app#applet-service-key",
-        json!("sha256:3333333333333333333333333333333333333333333333333333333333333333"),
-        webhook_auth,
-        "ed25519",
-        &params(1, 60),
-        "sig1=:abc:",
-    );
-    let key_rotated = applet_delivery_authentication_record_digest(
-        "did:web:app",
-        "did:web:edge",
-        "idem-1",
-        "sha-256=:abc=:",
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "did:web:app#rotated",
-        json!("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
-        json!({
-            "kind": "http_message_signature",
-            "key_ref": "did:web:app#rotated",
-            "accepted_signature_algorithms": ["ed25519"]
-        }),
-        "ed25519",
-        &params(1, 60),
-        "sig1=:abc:",
-    );
+    let key_rotated = digest(epoch, &rotated_key);
+    assert_ne!(base, epoch_rotated.1);
+    assert_ne!(base, key_rotated.1);
 
-    assert_ne!(base, epoch_rotated);
-    assert_ne!(base, key_rotated);
+    let record = json!({
+        "operation_id": "ak.edge.applet.command.transaction.v1",
+        "direction": "applet_to_arkret_inbound",
+        "source_id": "did:web:app",
+        "destination_id": "did:web:edge",
+        "signature_label": "sig1",
+        "verification_method": "did:web:app#applet-service-key",
+        "verification_key_digest": arkret_canonical::sha256_digest(key.to_bytes()),
+        "signature_algorithm": "ed25519",
+        "registration_epoch": epoch,
+        "idempotency_key": "idem-1",
+        "content_digest": "sha-256=:abc=:",
+        "covered_components": input.covered_components.iter().map(|component| component.canonical_name()).collect::<Vec<_>>(),
+        "created": 1,
+        "expires": 60,
+    });
+    let bytes = arkret_canonical::canonical_json_bytes(&record).unwrap();
+    assert_eq!(actual_record, record);
+    assert_eq!(
+        base,
+        arkret_canonical::sha256_digest_from_slices(&[
+            b"ak.applet.delivery_authentication_record.v1\n",
+            &bytes,
+        ])
+    );
 }

@@ -302,8 +302,8 @@ pub(crate) async fn embedded_webvh_register(
         expires_at: now,
         updated_at: now,
     };
-    let admitted_document: arkret_identity::DidDocument = serde_json::from_value(did_document)
-        .map_err(|error| {
+    let admitted_document: arkret_identity::DidDocument =
+        serde_json::from_value(did_document.clone()).map_err(|error| {
             crate::app_error!(SchemaViolation, format!("DID document is invalid: {error}"),)
         })?;
     crate::test_material_admission::enforce_did_document_admission(

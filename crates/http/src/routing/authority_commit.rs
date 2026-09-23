@@ -11,25 +11,19 @@ use soland_services::{ServiceError, ServiceResult};
 
 use crate::state::AppState;
 
-pub fn router(state: AppState) -> Router {
-    crate::stateful_router(
-        state,
-        Router::with_path("_arkret")
-            .push(
-                Router::with_path("self")
-                    .push(Router::with_path("events").post(submit_self))
-                    .push(Router::with_path("streams/scan").post(scan_stream)),
-            )
-            .push(
-                Router::with_path("peer")
-                    .push(Router::with_path("events").post(submit_peer))
-                    .push(
-                        Router::with_path("realm-authority/handoff")
-                            .post(install_authority_handoff),
-                    ),
-            )
-            .push(Router::with_path("open/realm-authority/bundle").post(authority_bundle)),
-    )
+pub fn router() -> Router {
+    Router::with_path("_arkret")
+        .push(
+            Router::with_path("self")
+                .push(Router::with_path("events").post(submit_self))
+                .push(Router::with_path("streams/scan").post(scan_stream)),
+        )
+        .push(
+            Router::with_path("peer")
+                .push(Router::with_path("events").post(submit_peer))
+                .push(Router::with_path("realm-authority/handoff").post(install_authority_handoff)),
+        )
+        .push(Router::with_path("open/realm-authority/bundle").post(authority_bundle))
 }
 
 async fn parse_current_json<T: serde::de::DeserializeOwned>(
@@ -76,6 +70,21 @@ fn render_bad_request(res: &mut Response, detail: String) {
 fn render_service_error(res: &mut Response, error: ServiceError) {
     let (status, code) = match &error {
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+        ServiceError::Conflict(_)
+            if error.conflict_code()
+                == Some(soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid) =>
+        {
+            (
+                StatusCode::CONFLICT,
+                "mimi_room_binding_migration_proof_invalid",
+            )
+        }
+        ServiceError::Conflict(_)
+            if error.conflict_code()
+                == Some(soland_storage::ConflictCode::RecipientQueueAtCapacity) =>
+        {
+            (StatusCode::FORBIDDEN, "quota_exceeded")
+        }
         ServiceError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
         ServiceError::SchemaViolation(_) => (StatusCode::BAD_REQUEST, "schema_violation"),
         ServiceError::Database(_) | ServiceError::Internal(_) => {
@@ -97,7 +106,35 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
 }
 
 #[handler]
-async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
+pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
+    let app_state = match state(depot) {
+        Ok(state) => state,
+        Err(error) => return render_bad_request(res, error),
+    };
+    let Some(session) = crate::routing::auth_or_render(app_state, req, res).await else {
+        return;
+    };
+    if let Err(error) =
+        crate::routing::identity::session_actor::validated_session_actor(app_state, &session).await
+    {
+        return crate::routing::render_error(
+            res,
+            error.http_status(),
+            error.wire_code(),
+            &error.message,
+        );
+    }
+    if let Err(error) = crate::routing::events::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+    ) {
+        return crate::routing::render_error(
+            res,
+            error.http_status(),
+            error.wire_code(),
+            &error.message,
+        );
+    }
     let request = match parse_current_json::<SelfAuthoritySubmitRequest>(req).await {
         Ok(request) => request,
         Err(error) => return render_bad_request(res, error),
@@ -105,12 +142,9 @@ async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
     if let Err(error) = request.validate() {
         return render_bad_request(res, validation_error(error));
     }
-    let authority = match state(depot) {
-        Ok(state) => state.authority(),
-        Err(error) => return render_bad_request(res, error),
-    };
+    let authority = app_state.authority();
     let result = authority
-        .submit_self(request.clone())
+        .submit_self(&session, request.clone())
         .await
         .and_then(|outcome| {
             outcome
@@ -123,6 +157,23 @@ async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
 
 #[handler]
 async fn submit_peer(req: &mut Request, depot: &Depot, res: &mut Response) {
+    let app_state = match state(depot) {
+        Ok(state) => state,
+        Err(error) => return render_bad_request(res, error),
+    };
+    let peer = match crate::routing::events::peer::authenticated_peer_context(app_state, req, true)
+        .await
+    {
+        Ok(peer) => peer,
+        Err(error) => {
+            return crate::routing::render_error(
+                res,
+                error.http_status(),
+                error.wire_code(),
+                &error.message,
+            );
+        }
+    };
     let request = match parse_current_json::<PeerAuthoritySubmitRequest>(req).await {
         Ok(request) => request,
         Err(error) => return render_bad_request(res, error),
@@ -130,12 +181,9 @@ async fn submit_peer(req: &mut Request, depot: &Depot, res: &mut Response) {
     if let Err(error) = request.validate() {
         return render_bad_request(res, validation_error(error));
     }
-    let authority = match state(depot) {
-        Ok(state) => state.authority(),
-        Err(error) => return render_bad_request(res, error),
-    };
+    let authority = app_state.authority();
     let result = authority
-        .submit_peer(request.clone())
+        .submit_peer(&peer, request.clone())
         .await
         .and_then(|outcome| {
             outcome
@@ -232,8 +280,8 @@ mod tests {
     use std::sync::Arc;
 
     use arkret_wire::{
-        AuthoritySubmitOutcome, EventCommitSubmission, MlsCommitSubmission, RealmAuthorityBundle,
-        RealmAuthorityHandoff, StreamScanOutcome,
+        AuthoritySubmitOutcome, EventAdmissionSubmission, MlsCommitSubmission,
+        RealmAuthorityBundle, RealmAuthorityHandoff, StreamScanOutcome,
     };
     use async_trait::async_trait;
     use salvo::test::TestClient;
@@ -248,13 +296,15 @@ mod tests {
     impl AuthorityProtocolPort for NeverCalled {
         async fn submit_self_event(
             &self,
-            _request: EventCommitSubmission,
+            _session: &soland_services::identity::SessionIdentityState,
+            _request: EventAdmissionSubmission,
         ) -> ServiceResult<AuthoritySubmitOutcome> {
             panic!("invalid input must not reach the application port")
         }
 
         async fn submit_self_mls(
             &self,
+            _session: &soland_services::identity::SessionIdentityState,
             _request: MlsCommitSubmission,
         ) -> ServiceResult<AuthoritySubmitOutcome> {
             panic!("invalid input must not reach the application port")
@@ -303,7 +353,10 @@ mod tests {
 
     #[tokio::test]
     async fn every_current_route_rejects_an_invalid_sdk_body_before_delegating() {
-        let service = crate::service(AppState::new(Arc::new(NeverCalled)));
+        let service = crate::service(AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        ));
         for path in [
             "/_arkret/self/events",
             "/_arkret/peer/events",

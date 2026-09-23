@@ -5,7 +5,6 @@
 //! must pass before the member transition is updated.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_state::state_model::ResolvedCellState;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
@@ -53,31 +52,9 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
 }
 
 fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
-    // v1 carries no producer `effects[]`: the reducer is handed the writes the
-    // registered `ak.realm.join_rule` contract derives from `kind + payload`
-    // (`event-and-patch.md` section 2.4.2). `realm_join_rule_payload` is
-    // `{"value": <enum>}` and the registered projection sets the whole payload.
     let payload = json!({"value": join_rule});
-    let event = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::RealmJoinRule.as_str(),
-        arkret_wire::ScopeRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),
-        },
-        arkret_identifiers::DidCoreId::new("ak:did_core:web:join-policy-test.example").unwrap(),
-        soland_test_support::fixture_station_id(),
-        0,
-        arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
-        payload.clone(),
-        Utc::now(),
-    )
-    .expect("join-rule Event envelope");
-    let cell_writes = arkret_schema::project_registered_cell_writes(
-        &event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .expect("registered join-rule contract must be evaluable");
     let operation = op(arkret_wire::EventKind::RealmJoinRule, REALM_A, payload);
-    let effect = state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes);
+    let effect = state.apply(&operation, &ServerHlc::new("join-policy-test"));
     assert!(
         matches!(
             effect,
@@ -119,7 +96,7 @@ fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation 
 /// component this join is evaluated against.
 fn policy_digest(state: &ProjectionState) -> String {
     let policy = state
-        .realm_join_policy_cell_value(REALM_A)
+        .realm_join_policy_value(REALM_A)
         .expect("join policy cell must be projected");
     arkret_canonical::canonical_sha256(policy).expect("canonical policy digest")
 }
@@ -175,7 +152,7 @@ fn principal_admission_did_method_fails_closed_without_did_evidence() {
     );
 
     assert!(
-        state.realm_policy_bundle_cell_value(REALM_A).is_some(),
+        state.realm_policy_bundle_value(REALM_A).is_some(),
         "policy_bundle cell must be projected"
     );
 
@@ -197,41 +174,6 @@ fn principal_admission_did_method_fails_closed_without_did_evidence() {
                 &member_actor("ak:did_core:web:users.acme.example:mallory").to_string()
             )
             .is_none()
-    );
-}
-
-#[test]
-fn sealed_policy_payload_wrapper_preserves_join_policy() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    apply_join_rule(&mut state, "public");
-    apply_policy(
-        &mut state,
-        &hlc,
-        json!({
-            "gates": [{
-                "gate_id": "principal-web",
-                "kind": "principal_admission",
-                "auto_resolve": true,
-                "allowed_did_methods": ["did:web"]
-            }],
-            "combinator": "all"
-        }),
-    );
-
-    let live_value = match state.realm_policy_bundle_cells.get(REALM_A) {
-        Some(ResolvedCellState::Value(value)) => value.clone(),
-        other => panic!("expected live policy value, got {other:?}"),
-    };
-    state.realm_policy_bundle_cells.insert(
-        REALM_A.to_owned(),
-        ResolvedCellState::Value(json!({"value": live_value})),
-    );
-
-    assert!(
-        matches!(state.apply(&join_op(BOB), &hlc), ProjectionEffect::Rejected { reason }
-            if reason == "gate_check_failed"),
-        "Seal-reloaded policy must retain the DID evidence requirement"
     );
 }
 
@@ -517,7 +459,7 @@ fn manual_review_gate_is_rejected_as_non_v1_policy() {
         effect,
         ProjectionEffect::Rejected { reason } if reason == "schema_violation"
     ));
-    assert!(state.realm_policy_bundle_cell_value(REALM_A).is_none());
+    assert!(state.realm_policy_bundle_value(REALM_A).is_none());
 }
 
 /// join-policy.md §2: `restricted` and `knock_restricted` promise an entry
@@ -555,7 +497,7 @@ fn restricted_join_rule_rejects_a_policy_without_an_automatic_gate() {
         ),
         "got {effect:?}"
     );
-    assert!(state.realm_policy_bundle_cell_value(REALM_A).is_none());
+    assert!(state.realm_policy_bundle_value(REALM_A).is_none());
 }
 
 #[test]
@@ -583,7 +525,7 @@ fn knock_restricted_accepts_a_policy_that_carries_an_automatic_gate() {
             "combinator": "all"
         }),
     );
-    assert!(state.realm_policy_bundle_cell_value(REALM_A).is_some());
+    assert!(state.realm_policy_bundle_value(REALM_A).is_some());
 }
 
 #[test]
@@ -620,7 +562,7 @@ fn a_claim_gate_without_an_issuer_boundary_is_not_an_admissible_policy() {
         ProjectionEffect::Rejected { reason } => assert_eq!(reason, "schema_violation"),
         other => panic!("expected the policy to be refused, got {other:?}"),
     }
-    assert!(state.realm_join_policy_cell_value(REALM_A).is_none());
+    assert!(state.realm_join_policy_value(REALM_A).is_none());
 
     // The reducer's own check, reached directly.
     assert_eq!(

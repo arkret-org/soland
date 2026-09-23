@@ -25,6 +25,7 @@ pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 
 mod account_status;
 mod accounts;
+mod agent_current_results;
 mod agent_draft_pending_intents;
 mod agent_membership_cascades;
 mod agent_principal_row;

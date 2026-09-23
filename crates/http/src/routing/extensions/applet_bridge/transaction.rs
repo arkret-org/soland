@@ -37,6 +37,7 @@ pub(super) async fn process_verified_transaction(
             applet_id: applet_id.clone(),
             source_id: source_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
+            delivery_authentication_record: verified.delivery_authentication_record.clone(),
             delivery_authentication_record_digest: verified
                 .delivery_authentication_record_digest
                 .clone(),
@@ -182,6 +183,7 @@ fn replayed_transaction_outcome(
     verified: &VerifiedAppletServiceSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
     if existing.request_digest != verified.request_digest
+        || existing.delivery_authentication_record != verified.delivery_authentication_record
         || existing.delivery_authentication_record_digest
             != verified.delivery_authentication_record_digest
     {
@@ -391,7 +393,8 @@ mod backpressure_tests {
                     event
                 })
                 .collect(),
-            signals: None,
+            committed_events: Vec::new(),
+            signals: Vec::new(),
         };
 
         let outcome = queue_full_outcome(&transaction);

@@ -18,6 +18,8 @@ struct AppletTransactionReplayRow {
     source_id: String,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
+    #[diesel(sql_type = Jsonb)]
+    delivery_authentication_record: Value,
     #[diesel(sql_type = Text)]
     delivery_authentication_record_digest: String,
     #[diesel(sql_type = Text)]
@@ -56,6 +58,7 @@ impl From<AppletTransactionReplayRow> for AppletTransactionReplayRecord {
                 .expect("stored applet transaction id must be canonical"),
             source_id: row.source_id,
             idempotency_key: row.idempotency_key,
+            delivery_authentication_record: row.delivery_authentication_record,
             delivery_authentication_record_digest: row.delivery_authentication_record_digest,
             request_digest: row.request_digest,
             outcome: row.outcome,
@@ -282,14 +285,15 @@ impl AppletStore for PgAppletStore {
             .map_err(PersistenceError::database)?;
         let inserted = sql_query(
             "INSERT INTO applet_transactions \
-             (applet_id, source_id, idempotency_key, delivery_authentication_record_digest, request_digest, \
-              outcome, received_at, completed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             (applet_id, source_id, idempotency_key, delivery_authentication_record, \
+              delivery_authentication_record_digest, request_digest, outcome, received_at, completed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (applet_id, source_id, idempotency_key) DO NOTHING",
         )
         .bind::<Text, _>(record.applet_id.as_str())
         .bind::<Text, _>(&record.source_id)
         .bind::<Text, _>(&record.idempotency_key)
+        .bind::<Jsonb, _>(&record.delivery_authentication_record)
         .bind::<Text, _>(&record.delivery_authentication_record_digest)
         .bind::<Text, _>(&record.request_digest)
         .bind::<Nullable<Jsonb>, _>(&record.outcome)
@@ -424,5 +428,82 @@ impl AppletStore for PgAppletStore {
         .optional()
         .map(|row| row.map(AppletAuthoringPreviewRecord::from))
         .map_err(PersistenceError::database)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transaction_replay_retains_verified_delivery_record() {
+        let pool = crate::test_database::contract_pool().await;
+        let store = PgAppletStore { pool };
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let idempotency_key = format!("delivery-record-{nonce}");
+        let delivery_authentication_record = serde_json::json!({
+            "operation_id": "ak.edge.applet.command.transaction.v1",
+            "direction": "applet_to_arkret_inbound",
+            "source_id": "ak:did_core:web:applet.example",
+            "destination_id": "ak:did_core:web:station.example",
+            "signature_label": "sig1",
+            "verification_method": "did:web:applet.example#key-1",
+            "verification_key_digest": format!("sha256:{}", "a".repeat(64)),
+            "signature_algorithm": "ed25519",
+            "registration_epoch": "epoch-1",
+            "idempotency_key": idempotency_key,
+            "content_digest": "sha-256=:Zm94:",
+            "covered_components": [
+                "@method", "@target-uri", "@authority", "content-digest",
+                "arkret-operation", "source-service-id", "destination-service-id",
+                "idempotency-key"
+            ],
+            "created": 1_790_000_000,
+            "expires": 1_790_000_300,
+        });
+        let canonical =
+            arkret_canonical::canonical_json_bytes(&delivery_authentication_record).unwrap();
+        let delivery_authentication_record_digest = arkret_canonical::sha256_digest_from_slices(&[
+            b"ak.applet.delivery_authentication_record.v1\n",
+            &canonical,
+        ]);
+        let record = AppletTransactionReplayRecord {
+            applet_id: arkret_wire::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
+                .unwrap(),
+            source_id: "ak:did_core:web:applet.example".to_owned(),
+            idempotency_key,
+            delivery_authentication_record,
+            delivery_authentication_record_digest,
+            request_digest: format!("sha256:{}", "b".repeat(64)),
+            outcome: None,
+            received_at: chrono::Utc::now(),
+            completed_at: None,
+        };
+        assert!(matches!(
+            store
+                .begin_transaction_replay(record.clone())
+                .await
+                .unwrap(),
+            AppletTransactionReplayBegin::Fresh
+        ));
+        let AppletTransactionReplayBegin::Existing(replay) = store
+            .begin_transaction_replay(record.clone())
+            .await
+            .unwrap()
+        else {
+            panic!("the second delivery must read the durable replay record")
+        };
+        assert_eq!(
+            replay.delivery_authentication_record,
+            record.delivery_authentication_record
+        );
+        assert_eq!(
+            replay.delivery_authentication_record_digest,
+            record.delivery_authentication_record_digest
+        );
+        assert_eq!(replay.request_digest, record.request_digest);
     }
 }

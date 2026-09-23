@@ -1246,14 +1246,45 @@ pub(crate) async fn parse_realm_list_cursor(
 }
 
 /// Queue continuation has its own operation binding and never advances an account stream.
+fn recipient_queue_cursor_binding(
+    state: &AppState,
+    session: &SessionIdentityState,
+) -> Result<(String, Option<String>, Value), SyncCursorError> {
+    let selector = crate::routing::identity::device_messages::recipient_queue_selector(session)
+        .map_err(|_| SyncCursorError::Mismatch("recipient queue selector unavailable"))?;
+    match selector {
+        soland_services::delivery::RecipientQueueSelector::HumanDevice {
+            recipient,
+            device_id,
+        } => {
+            let (account, _) = cursor_account_device(state, Some(session));
+            Ok((
+                cursor_binding_subject(account.as_ref()),
+                Some(device_id.clone()),
+                json!({"kind":"human_device","recipient":recipient,"device_id":device_id}),
+            ))
+        }
+        soland_services::delivery::RecipientQueueSelector::AgentRuntime {
+            agent_id,
+            verification_method,
+            authorization_event_ref,
+        } => Ok((
+            agent_id.clone(),
+            None,
+            json!({"kind":"agent_runtime","agent_id":agent_id,
+                "verification_method":verification_method,
+                "authorization_event_ref":authorization_event_ref}),
+        )),
+    }
+}
+
 pub(crate) async fn device_messages_cursor(
     state: &AppState,
     session: &SessionIdentityState,
     position: i64,
 ) -> Result<String, SyncCursorError> {
-    let (account, device) = cursor_account_device(state, Some(session));
-    let subject = cursor_binding_subject(account.as_ref());
-    let target = json!({"queue_position":position});
+    let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
+    let target = json!({"queue_position":position,"endpoint":endpoint});
     let binding=arkret_canonical::canonical_json_bytes(&json!({"purpose":DEVICE_MESSAGES_CURSOR_PURPOSE,"account":subject,"device":device,"service":state.service_id(),"target":target})).map_err(|_|SyncCursorError::Integrity("invalid queue binding"))?;
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(chrono::Utc::now(), 3_600_000)
@@ -1264,7 +1295,7 @@ pub(crate) async fn device_messages_cursor(
         .upsert_cursor(&CursorState {
             handle,
             binding_subject: Some(subject),
-            device_id: Some(device),
+            device_id: device,
             service_id: state.service_core_id(),
             filter_digest: None,
             purpose: DEVICE_MESSAGES_CURSOR_PURPOSE.to_owned(),
@@ -1292,15 +1323,16 @@ pub(crate) async fn parse_device_messages_cursor(
             "queue cursor outer purpose mismatch",
         ));
     }
-    if cursor_authority_revoked(state, token, Some(session), now_ms) {
+    if session.agent_session.is_none()
+        && cursor_authority_revoked(state, token, Some(session), now_ms)
+    {
         return Err(SyncCursorError::Revoked);
     }
     let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
-    let (account, device) = cursor_account_device(state, Some(session));
+    let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
     if stored.purpose != DEVICE_MESSAGES_CURSOR_PURPOSE
-        || stored.binding_subject.as_deref()
-            != Some(cursor_binding_subject(account.as_ref()).as_str())
-        || stored.device_id.as_deref() != Some(device.as_str())
+        || stored.binding_subject.as_deref() != Some(subject.as_str())
+        || stored.device_id != device
         || stored.service_id != state.service_core_id()
         || stored.filter_digest.is_some()
         || stored.positions.is_some()
@@ -1311,6 +1343,16 @@ pub(crate) async fn parse_device_messages_cursor(
     }
     if stored.expires_at_ms <= now_ms {
         return Err(SyncCursorError::Expired);
+    }
+    if stored
+        .target
+        .as_ref()
+        .and_then(|target| target.get("endpoint"))
+        != Some(&endpoint)
+    {
+        return Err(SyncCursorError::Mismatch(
+            "recipient queue cursor endpoint binding mismatch",
+        ));
     }
     stored
         .target

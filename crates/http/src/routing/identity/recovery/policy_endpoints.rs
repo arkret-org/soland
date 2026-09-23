@@ -94,65 +94,30 @@ fn recovery_policy_publish_outcome(
     })
 }
 
-fn recovery_policy_frontier_unavailable(message: impl Into<String>) -> AppError {
-    crate::app_error!(FrontierUnavailable, message.into())
-    // `frontier_unavailable` has one canonical HTTP binding (503) in the
-    // error-code registry. This publication endpoint is retry-safe while
-    // it waits for Seal coverage, but that does not make the condition a
-    // resource-specific HTTP precondition failure.
-}
-
 pub(super) async fn recovery_policy_acceptance_basis(
     state: &AppState,
     realm_id: &RealmId,
-    event_digest: &Hash,
-) -> Result<LeaseBasisRef, AppError> {
-    let mut leaves = state
-        .projections()
-        .realm_seal_basis_leaves(realm_id)
+    event_id: &arkret_wire::EventId,
+) -> Result<arkret_wire::RealmCommitId, AppError> {
+    let committed = state
+        .authority_commits()
+        .committed_event(event_id)
         .await
-        .map_err(|error| {
-            recovery_policy_frontier_unavailable(format!(
-                "recovery policy Seal frontier is unavailable: {error}"
-            ))
-        })?;
-    leaves.sort();
-    leaves.dedup();
-    if leaves.is_empty() {
-        return Err(recovery_policy_frontier_unavailable(
-            "recovery policy Event is accepted but no control Seal has materialized",
+        .map_err(|error| AppError::internal(format!("recovery policy Commit lookup: {error}")))?
+        .ok_or_else(|| AppError::conflict("accepted recovery policy Event has no RealmCommit"))?;
+    if committed.event.event_id != *event_id
+        || committed.commit.event_ref != *event_id
+        || committed.commit.realm_id != *realm_id
+        || committed.commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            })
+    {
+        return Err(AppError::conflict(
+            "recovery policy acceptance basis is not the exact PCR RealmCommit",
         ));
     }
-    let covered = state
-        .projections()
-        .seal_leaf_union_proof(&leaves)
-        .await
-        .map_err(|error| {
-            recovery_policy_frontier_unavailable(format!(
-                "recovery policy Seal coverage is unavailable: {error}"
-            ))
-        })?
-        .into_iter()
-        .flat_map(|proof| proof.covered_event_digests)
-        .collect::<BTreeSet<_>>();
-    if !covered.contains(event_digest) {
-        return Err(recovery_policy_frontier_unavailable(
-            "recovery policy Event is accepted but is not covered by the current control Seal frontier",
-        ));
-    }
-    if leaves.len() == 1 {
-        return Ok(LeaseBasisRef::Seal(leaves.remove(0)));
-    }
-    state
-        .projections()
-        .effective_seal_view(&leaves, realm_id)
-        .await
-        .map_err(|error| {
-            recovery_policy_frontier_unavailable(format!(
-                "recovery policy joined Seal basis is unavailable: {error}"
-            ))
-        })?;
-    Ok(LeaseBasisRef::Joined(arkret_wire::SealBasis { leaves }))
+    Ok(committed.commit.commit_id)
 }
 
 #[salvo::oapi::endpoint(
@@ -236,14 +201,11 @@ pub(super) async fn recovery_policy_put(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
-    let digest_suite = state
-        .projections()
-        .realm_digest_suite(request.event.realm_id.as_str());
-    request.validate_structural(digest_suite).map_err(|error| {
+    request.validate().map_err(|error| {
         AppError::param_invalid(format!("invalid recovery policy publication: {error}"))
             .with_wire_code("schema_violation")
     })?;
-    let typed_payload = request.policy_payload().map_err(|error| {
+    let typed_payload = request.payload().map_err(|error| {
         AppError::param_invalid(format!("invalid recovery policy payload: {error}"))
             .with_wire_code("schema_violation")
     })?;
@@ -260,7 +222,7 @@ pub(super) async fn recovery_policy_put(
                 "recovery policy requires an account actor",
             )
         })?
-        || request.event.actor_id != session_actor
+        || request.event().actor_id != session_actor
     {
         return Err(crate::app_error!(
             CapabilityDenied,
@@ -268,12 +230,12 @@ pub(super) async fn recovery_policy_put(
         )
         .with_reason_code("recovery_principal_isolation"));
     }
-    let realm_id = request.event.realm_id.clone();
+    let realm_id = request.event().realm_id.clone();
     if !state
         .projections()
         .snapshot()
         .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string())
-        || request.event.scope_ref
+        || request.event().scope_ref
             != (arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             })
@@ -293,134 +255,11 @@ pub(super) async fn recovery_policy_put(
     verify_recovery_policy_auth_signature(state, &payload, &validated, &session, existing.as_ref())
         .await?;
 
-    let event_id = request.event.event_id.to_string();
-    let accepted_before = state
-        .event_queries()
-        .accepted_event(&event_id)
-        .await
-        .map_err(recovery_service_error)?;
-    if accepted_before.is_none() {
-        match existing.as_ref() {
-            Some(current) if validated.version <= current.version => {
-                return Err(AppError::conflict(format!(
-                    "policy_version {} is not strictly greater than current {}",
-                    validated.version, current.version
-                ))
-                .with_wire_code("recovery_policy_conflict")
-                .with_reason_code("recovery_policy_version_not_monotonic"));
-            }
-            Some(current)
-                if validated.supersedes_id.as_deref() != Some(current.policy_id.as_str()) =>
-            {
-                return Err(AppError::conflict(format!(
-                    "supersedes_id {:?} does not match current policy_id `{}`",
-                    validated.supersedes_id, current.policy_id
-                ))
-                .with_wire_code("recovery_policy_conflict")
-                .with_reason_code("recovery_policy_supersedes_invalid"));
-            }
-            None if validated.version != 1 => {
-                return Err(AppError::param_invalid(format!(
-                    "genesis policy MUST have version=1; got {}",
-                    validated.version
-                ))
-                .with_reason_code("recovery_policy_genesis_not_v1"));
-            }
-            _ => {}
-        }
-    }
-
-    let submission: arkret_wire::EventInitialSubmission = request.into();
-    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
-        .await
-        .map_err(|error| {
-            let code = ErrorCode::from_wire(&error.code()).unwrap_or(ErrorCode::ParamInvalid);
-            AppError::from_rejection(code, error.message()).with_rejection_code(error.code())
-        })?;
-    let accepted_event = state
-        .event_queries()
-        .accepted_event(&event_id)
-        .await
-        .map_err(recovery_service_error)?
-        .ok_or_else(|| AppError::internal("accepted recovery policy Event is missing"))?;
-    let event_digest = Hash::new(accepted_event.canonical_digest.clone()).map_err(|error| {
-        AppError::internal(format!("accepted Event digest is invalid: {error}"))
-    })?;
-    let acceptance_basis =
-        recovery_policy_acceptance_basis(state, &realm_id, &event_digest).await?;
-
-    if let Some(current) = existing.as_ref()
-        && current.policy_id == validated.policy_id
-        && current.raw_payload == payload
-    {
-        return json_ok(recovery_policy_publish_outcome(current)?);
-    }
-
-    let accepted_at = chrono::Utc::now();
-    let policy = RecoveryPolicyState {
-        policy_id: validated.policy_id,
-        account_id: validated.account_id,
-        version: validated.version,
-        acceptance_basis,
-        trust_domain: validated.trust_domain.into_string(),
-        supersedes: validated.supersedes_id,
-        expires_at: validated.expires_at,
-        issued_at: validated.issued_at,
-        raw_payload: validated.raw_payload,
-        accepted_at,
-        verification_method: validated.verification_method,
-    };
-    let publish_result = state
-        .recovery_policies()
-        .publish_policy(soland_services::identity::PublishRecoveryPolicyCommand { policy })
-        .await
-        .map_err(recovery_policy_service_error)?;
-    let record = match publish_result {
-        soland_services::identity::PublishRecoveryPolicyResult::Accepted(policy) => *policy,
-        soland_services::identity::PublishRecoveryPolicyResult::GenesisVersionInvalid {
-            actual,
-        } => {
-            return Err(AppError::param_invalid(format!(
-                "genesis policy MUST have version=1; got {actual}"
-            ))
-            .with_reason_code("recovery_policy_genesis_not_v1"));
-        }
-        soland_services::identity::PublishRecoveryPolicyResult::VersionNotMonotonic {
-            actual,
-            current,
-        } => {
-            return Err(AppError::conflict(format!(
-                "policy_version {actual} is not strictly greater than current {current}"
-            ))
-            .with_wire_code("recovery_policy_conflict")
-            .with_reason_code("recovery_policy_version_not_monotonic"));
-        }
-        soland_services::identity::PublishRecoveryPolicyResult::SupersedesInvalid {
-            actual,
-            current_policy_id,
-        } => {
-            return Err(AppError::conflict(format!(
-                "supersedes {actual:?} does not match current policy_id `{current_policy_id}`"
-            ))
-            .with_wire_code("recovery_policy_conflict")
-            .with_reason_code("recovery_policy_supersedes_invalid"));
-        }
-    };
-
-    append_audit_log(
-        state,
-        Some(&session.actor),
-        arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH_V1,
-        json!({
-            "policy_id": record.policy_id.clone(),
-            "account_id": record.account_id.clone(),
-            "version": record.version,
-            "trust_domain": record.trust_domain.clone(),
-        }),
-        "accepted",
-    )
-    .await;
-
-    res.status_code(StatusCode::CREATED);
-    json_ok(recovery_policy_publish_outcome(&record)?)
+    // Publication must use the formal EventAdmissionSubmission ingress. The
+    // legacy initial-submission path cannot commit this signed Event; refuse
+    // before any Event or policy projection is written until that ingress lands.
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
+        "recovery policy publication awaits EventAdmissionSubmission ingress",
+    ))
 }

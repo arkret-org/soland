@@ -205,6 +205,10 @@ pub enum ConflictCode {
     SnapshotCapacityExceeded,
     /// Membership compensation evidence changed, expired, or was consumed.
     MembershipCompensationConflict,
+    /// MIMI migration lineage, selected topology, or current MLS binding fails.
+    MimiRoomBindingMigrationProofInvalid,
+    /// The exact recipient endpoint has no remaining queue capacity.
+    RecipientQueueAtCapacity,
     /// The actor chain exceeded its sibling or predecessor fork cap.
     ForkQuarantine,
     /// A Realm with this id already exists.
@@ -239,7 +243,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 31] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
@@ -254,6 +258,8 @@ impl ConflictCode {
         Self::FailedPrecondition,
         Self::SnapshotCapacityExceeded,
         Self::MembershipCompensationConflict,
+        Self::MimiRoomBindingMigrationProofInvalid,
+        Self::RecipientQueueAtCapacity,
         Self::ForkQuarantine,
         Self::RealmAlreadyExists,
         Self::RecoveryPolicyConflict,
@@ -288,6 +294,10 @@ impl ConflictCode {
             Self::FailedPrecondition => "failed_precondition",
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MembershipCompensationConflict => "membership_compensation_conflict",
+            Self::MimiRoomBindingMigrationProofInvalid => {
+                arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID
+            }
+            Self::RecipientQueueAtCapacity => "quota_exceeded",
             Self::ForkQuarantine => "fork_quarantine",
             Self::RealmAlreadyExists => "realm_already_exists",
             Self::RecoveryPolicyConflict => "recovery_policy_conflict",

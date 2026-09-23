@@ -122,7 +122,10 @@ mod tests {
 
     #[test]
     fn directory_query_requires_unexpired_direct_publication() {
-        let realm_id = crate::state::development_demo_realm_id();
+        let realm_id = arkret_identifiers::RealmId::new(
+            "ak:realm:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
+        )
+        .unwrap();
         let mut entry = RealmDirectoryEntry::new(
             realm_id,
             "private reducer title",

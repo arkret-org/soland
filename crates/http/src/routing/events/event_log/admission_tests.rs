@@ -1,31 +1,16 @@
 use super::*;
 
 #[test]
-fn event_submit_rejects_bare_and_malformed_carriers() {
+fn event_admission_rejects_bare_and_legacy_batch_carriers() {
     for body in [
         json!({"kind": "ak.message.create", "payload": {"text": "bare"}}),
         json!({"event": {}, "unregistered_sidecar": {}}),
         json!({"events": [], "unregistered_sidecar": {}}),
+        json!({"unit_kind": "direct_conversation_founding", "events": []}),
     ] {
-        assert!(serde_json::from_value::<EventsSubmitRequestBody>(body).is_err());
+        assert!(serde_json::from_value::<arkret_wire::EventAdmissionSubmission>(body).is_err());
     }
 }
-
-#[test]
-fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
-    let parsed = serde_json::from_value::<EventsSubmitRequestBody>(json!({
-        "unit_kind": "direct_conversation_founding",
-        "idempotency_key": "ak:idempotency_key:019b5c20-0000-7000-8000-000000000001",
-        "events": [],
-        "founding_authority_evidence": {
-            "kind": "human",
-            "contact_round_evidence": {},
-            "contact_round_continuity_chains": []
-        }
-    }));
-    assert!(parsed.is_err());
-}
-
 #[test]
 fn terminal_realm_blocks_non_audit_kind() {
     let blocked = terminal_realm_check(true, "ak.message.create");
@@ -87,25 +72,11 @@ fn lifecycle_escape_preserves_terminal_and_authority_boundaries() {
 }
 
 #[test]
-fn realm_policy_bundle_relaxed_window_ceiling() {
-    let payload = json!({"relaxed_window_max_ms": 300_001});
-    let err = realm_policy_bundle_check(&payload, false, false).unwrap_err();
-    assert_eq!(err.0, ErrorCode::FailedPrecondition);
-}
-
-#[test]
-fn realm_policy_bundle_e2ee_relaxed_compliance_mutex() {
-    let payload = json!({"mls_send_pause": "advisory"});
-    let err = realm_policy_bundle_check(&payload, true, false).unwrap_err();
-    assert_eq!(err.0, ErrorCode::FailedPrecondition);
-}
-
-#[test]
 fn realm_policy_bundle_media_plaintext_authorization() {
     let payload = json!({"media_service_decrypts": true});
-    let err = realm_policy_bundle_check(&payload, false, false).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, false).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
-    realm_policy_bundle_check(&payload, false, true).unwrap();
+    realm_policy_bundle_check(&payload, true).unwrap();
 }
 
 #[test]
@@ -124,7 +95,7 @@ fn parent_membership_policy_shape_is_admitted_for_durable_transaction_validation
             "combinator": "all"
         }
     });
-    realm_policy_bundle_check(&payload, false, false).unwrap();
+    realm_policy_bundle_check(&payload, false).unwrap();
 }
 
 #[test]
@@ -168,58 +139,4 @@ fn media_plaintext_authority_requires_matching_service_and_data_class() {
             &payload, service_id
         ));
     }
-}
-
-#[test]
-fn federation_binding_rejects_duplicate_frontier_entries() {
-    let req = EventsSubmitFederationBatchRequestBody {
-        service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
-            realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
-                .unwrap(),
-            realm_policy_digest: arkret_identifiers::Hash::new(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            membership_frontier: vec![
-                arkret_identifiers::EventId::new(
-                    "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-                )
-                .unwrap(),
-                arkret_identifiers::EventId::new(
-                    "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-                )
-                .unwrap(),
-            ],
-            destination_kind: "station".to_owned(),
-        },
-        events: Vec::new(),
-        cbs_proof_bundles: Vec::new(),
-    };
-    let err = validate_federation_service_binding(&req.service_binding_ref).unwrap_err();
-    assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-}
-
-#[test]
-fn federation_binding_does_not_carry_a_reducer_profile() {
-    let event_id =
-        arkret_identifiers::EventId::new("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
-            .unwrap();
-    let req = EventsSubmitFederationBatchRequestBody {
-        service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
-            realm_id: RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
-                .unwrap(),
-            realm_policy_digest: arkret_identifiers::Hash::new(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            membership_frontier: vec![event_id.clone()],
-            destination_kind: "station".to_owned(),
-        },
-        events: Vec::new(),
-        cbs_proof_bundles: Vec::new(),
-    };
-
-    validate_federation_service_binding(&req.service_binding_ref).unwrap();
 }

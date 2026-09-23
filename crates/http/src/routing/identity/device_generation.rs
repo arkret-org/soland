@@ -3,9 +3,9 @@ mod confirmed;
 use std::hash::{Hash as _, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{DeviceId, EventId, RealmId, SealId};
+use arkret_identifiers::{DeviceId, EventId, RealmId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
-pub(crate) use confirmed::{candidate_device_control_projection, load_confirmed_device_history};
+pub(crate) use confirmed::{ConfirmedDeviceHistory, load_confirmed_device_history};
 use serde_json::Value;
 use soland_services::ServiceError;
 
@@ -39,7 +39,7 @@ struct AcceptedBootstrapDeviceBinding {
     authorization_event_id: EventId,
 }
 
-/// Resolve the one pre-Seal device authority current-v1 permits.
+/// Resolve the founding device authority from accepted PCR bootstrap commits.
 ///
 /// Human PCR genesis is accepted as a closed two-Event unit and its canonical
 /// receipt, Account/PCR slot and principal-resolution index are committed in
@@ -115,9 +115,7 @@ async fn accepted_bootstrap_device_binding(
             "accepted PCR founding authorization Event id is invalid: {error}"
         ))
     })?;
-    let genesis_event_id = EventId::new(genesis.event_id.clone()).map_err(|error| {
-        ServiceError::Conflict(format!("accepted PCR genesis Event id is invalid: {error}"))
-    })?;
+    let genesis_event_id = genesis.event_id.clone();
     let genesis_commit = state
         .persistence()
         .committed_event(&genesis_event_id)
@@ -165,7 +163,7 @@ pub async fn current_device_generation(
         })?;
     if let Some(history) = history {
         return Ok(Some(DeviceGenerationView {
-            current_ref: history.current_generation().number(),
+            current_ref: history.current_generation(),
             status: DeviceGenerationStatus::Active,
         }));
     }
@@ -183,36 +181,20 @@ pub(crate) async fn recover_confirmed_device_projection(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<(), String> {
-    let Some(events) = state
-        .projections()
-        .confirmed_genesis_unit(realm_id)
+    let Some(binding) = state
+        .persistence()
+        .principal_resolution_for_realm(realm_id)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
     else {
         return Ok(());
     };
-    let Some(genesis) = events.first() else {
-        return Err("confirmed genesis is empty".into());
-    };
-    let create: arkret_models_collaboration::events_payloads::RealmCreatePayload =
-        serde_json::from_value(serde_json::to_value(&genesis.payload).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    if create.object.purpose
-        != arkret_models_collaboration::events_payloads::RealmPurpose::PrincipalControl
-    {
+    if binding.account_id.station_id != state.service_core_id() {
         return Ok(());
     }
-    let account = genesis
-        .actor_id
-        .as_account_id()
-        .ok_or_else(|| "PCR genesis has no Account".to_owned())?;
-    if account.station_id != state.service_core_id() {
-        return Ok(());
-    }
-    let _history = load_confirmed_device_history(state, account)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "confirmed PCR has no authenticated device history".to_owned())?;
+    load_confirmed_device_history(state, &binding.account_id)
+        .await?
+        .ok_or_else(|| "accepted PCR has no committed device history".to_owned())?;
     Ok(())
 }
 
@@ -354,11 +336,11 @@ pub(crate) fn verified_device_authorization_binding(
 
 /// Return the unique confirmed head. Pending competing commands cannot erase
 /// or rewind an already authenticated prefix.
-pub async fn accepted_device_generation_seal_head(
+pub async fn accepted_device_generation_commit_head(
     state: &AppState,
     principal_id: &str,
     realm_id: &RealmId,
-) -> Result<Option<SealId>, ServiceError> {
+) -> Result<Option<arkret_wire::CommitStreamHead>, ServiceError> {
     let principal = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
     let account = arkret_wire::AccountId::new(principal, state.service_core_id().clone());

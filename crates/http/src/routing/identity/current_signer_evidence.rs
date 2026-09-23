@@ -1,25 +1,21 @@
-//! Reusable current signer evidence proxy and peer authority endpoint.
+//! Authenticated signer-key self query over committed authority state.
 
-use std::collections::BTreeMap;
-
-use arkret_models_collaboration::{
-    CompactAgentSignerResolutionEvidence, CurrentSignerEvidence, CurrentSignerEvidenceQueryOutcome,
-    CurrentSignerEvidenceQueryRequestBody, CurrentSignerEvidenceResponseCore,
-    CurrentSignerEvidenceSelector,
-};
+use arkret_canonical::base64url::base64url_decode;
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload;
 use arkret_models_identity::{
-    CurrentSignerKeyOutcome, HistoricalAgentSignerKeyOutcome, SignerEvidenceResolvedStatus,
-    SignerEvidenceUnavailableStatus, SignerKeyQueryOutcome, SignerKeyQuerySelector,
-    SignerKeysQueryOutcome, SignerKeysQueryRequestBody, UnavailableSignerKeyOutcome,
+    CurrentSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryResult, SignerKeyQuerySelector,
+    SignerKeysQueryOutcome, SignerKeysQueryRequestBody,
 };
-use arkret_wire::DidCoreId;
+use arkret_wire::{
+    CommittedEventRef, CurrentSelector, EventId, RealmId, StationSigningKey, TypedCurrentResult,
+};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
-use super::agents::evidence::AgentSignerEvidenceQuerySelector;
 use crate::state::AppState;
 
 pub(crate) fn self_router() -> Router {
@@ -41,9 +37,7 @@ async fn self_query(
     if actor.as_account_id() != Some(&body.recipient_account_id)
         || body.recipient_account_id.station_id != state.service_core_id()
     {
-        return Err(AppError::not_found(
-            "current signer evidence is unavailable",
-        ));
+        return Err(AppError::not_found("signer key unavailable"));
     }
     json_ok(resolve_self_signer_keys(state, &session, &body).await?)
 }
@@ -59,6 +53,7 @@ pub(crate) fn self_request_error(error: arkret_wire::WireError) -> AppError {
         error.to_string(),
     )
 }
+
 pub(crate) fn self_result_error(error: arkret_wire::WireError) -> AppError {
     AppError::from_rejection(
         match error.error_code() {
@@ -89,71 +84,34 @@ pub(crate) async fn resolve_self_signer_keys(
     let mut results = Vec::with_capacity(body.queries.len());
     for selector in &body.queries {
         let visible = ordinary
-            && match selector.event_id() {
-                Some(event_id) => match state
-                    .event_queries()
-                    .canonical_event(event_id.as_str())
+            && if let Some(reference) = selector.committed_event_ref() {
+                exact_visible_committed_event(state, session, &body.realm_id, reference).await
+            } else {
+                requester_is_member
+                    && crate::routing::realm_has_member(
+                        state,
+                        body.realm_id.as_str(),
+                        &selector.actor().to_string(),
+                    )
                     .await
-                    .ok()
-                    .flatten()
-                {
-                    Some(record) if record.realm_id.as_deref() == Some(body.realm_id.as_str()) => {
-                        crate::routing::events::event_log::event_visible_to_session(
-                            state, &record, session,
-                        )
-                        .await
-                    }
-                    _ => false,
-                },
-                None => {
-                    requester_is_member
-                        && crate::routing::realm_has_member(
-                            state,
-                            body.realm_id.as_str(),
-                            &selector.actor().to_string(),
-                        )
-                        .await
-                }
             };
         let resolved = if visible {
             match selector {
-                SignerKeyQuerySelector::CurrentAccountDevice(current) => {
-                    let Some(account_id) = current.actor.as_account_id().cloned() else {
-                        results.push(unavailable_signer_key(selector));
-                        continue;
-                    };
-                    current_key_result(
-                        state,
-                        body,
-                        selector,
-                        CurrentSignerEvidenceSelector::AccountDevice {
-                            account_id,
-                            device_id: current.device_id.clone(),
-                        },
-                    )
-                    .await
-                }
-                SignerKeyQuerySelector::CurrentAgent(current) => {
-                    current_key_result(
-                        state,
-                        body,
-                        selector,
-                        CurrentSignerEvidenceSelector::Agent {
-                            actor: current.actor.clone(),
-                            verification_method: current.verification_method.clone(),
-                        },
-                    )
-                    .await
-                }
-                SignerKeyQuerySelector::HistoricalAgent(historical) => {
-                    historical_agent_key_result(state, historical).await
-                }
-                SignerKeyQuerySelector::HistoricalAccountDevice(_) => None,
+                SignerKeyQuerySelector::CurrentAdmission {
+                    sender: CurrentSignerKeyQuerySender::Agent { .. },
+                } => current_agent_key(state, &body.realm_id, selector).await,
+                // A historical answer needs the authorization state as of the
+                // exact accepted Event, rather than a current-key substitution.
+                _ => None,
             }
         } else {
             None
         };
-        results.push(resolved.unwrap_or_else(|| unavailable_signer_key(selector)));
+        results.push(
+            resolved.unwrap_or_else(|| SignerKeyQueryResult::Unavailable {
+                selector: selector.clone(),
+            }),
+        );
     }
     let outcome = SignerKeysQueryOutcome {
         request_id: body.request_id.clone(),
@@ -167,179 +125,238 @@ pub(crate) async fn resolve_self_signer_keys(
     Ok(outcome)
 }
 
-fn unavailable_signer_key(selector: &SignerKeyQuerySelector) -> SignerKeyQueryOutcome {
-    SignerKeyQueryOutcome::Unavailable(UnavailableSignerKeyOutcome {
+async fn exact_visible_committed_event(
+    state: &AppState,
+    session: &soland_services::identity::SessionIdentityState,
+    realm_id: &RealmId,
+    reference: &CommittedEventRef,
+) -> bool {
+    let Ok(Some(record)) = state
+        .authority_commits()
+        .committed_event(&reference.event_id)
+        .await
+    else {
+        return false;
+    };
+    if record.event.event_id != reference.event_id
+        || record.event.realm_id != *realm_id
+        || record.commit.event_ref != reference.event_id
+        || record.commit.commit_id != reference.commit_id
+        || record.commit.stream_ref != reference.stream_ref
+        || record.commit.stream_position != reference.stream_position
+    {
+        return false;
+    }
+    let Ok(Some(event_record)) = state
+        .event_queries()
+        .canonical_event(reference.event_id.as_str())
+        .await
+    else {
+        return false;
+    };
+    event_record.realm_id.as_deref() == Some(realm_id.as_str())
+        && crate::routing::events::event_log::event_visible_to_session(
+            state,
+            &event_record,
+            session,
+        )
+        .await
+}
+
+async fn current_agent_key(
+    state: &AppState,
+    realm_id: &RealmId,
+    selector: &SignerKeyQuerySelector,
+) -> Option<SignerKeyQueryResult> {
+    let agent_id = &selector.actor().as_account_id()?.principal_id;
+    let agent = state
+        .agent_pairings()
+        .agent(agent_id.as_str())
+        .await
+        .ok()??;
+    if agent.id != agent_id.as_str() {
+        return None;
+    }
+    let pcr_realm_id = RealmId::new(agent.principal_control_realm_id).ok()?;
+    let material = state
+        .authority_commits()
+        .realm_state_snapshot_material(&pcr_realm_id)
+        .await
+        .ok()??;
+    let mut status = None;
+    let mut active = Vec::new();
+    for entry in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector: current,
+            value,
+            revision,
+        } = entry
+        else {
+            continue;
+        };
+        match current {
+            CurrentSelector::AgentStatus { agent_id: subject } if subject == agent_id => {
+                if status
+                    .replace(serde_json::from_value::<AgentLifecycleState>(value.clone()).ok()?)
+                    .is_some()
+                {
+                    return None;
+                }
+            }
+            CurrentSelector::AgentKey {
+                agent_id: subject,
+                agent_key_id,
+            } if subject == agent_id => {
+                for authorization in value.get("authorizations")?.as_array()? {
+                    let entry_value = authorization.get("value")?;
+                    // Keyed-set revoke markers share this family but have no
+                    // verification_method; they are not active authorizations.
+                    if entry_value.get("verification_method").is_none() {
+                        continue;
+                    }
+                    let payload: AgentKeyAuthorizePayload =
+                        serde_json::from_value(entry_value.clone()).ok()?;
+                    if payload.agent_id != *agent_id
+                        || payload.key_id.as_str() != agent_key_id.as_str()
+                    {
+                        return None;
+                    }
+                    if payload
+                        .expires_at
+                        .is_some_and(|expiry| expiry <= chrono::Utc::now())
+                    {
+                        continue;
+                    }
+                    let event_id =
+                        EventId::new(authorization.get("tag_id")?.as_str()?.strip_suffix(":1")?)
+                            .ok()?;
+                    active.push((payload, event_id, revision.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    if status != Some(AgentLifecycleState::Active) || active.len() != 1 {
+        return None;
+    }
+    let (payload, event_id, revision) = active.pop()?;
+    if payload.verification_method != *selector.verification_method() {
+        return None;
+    }
+    let raw_key = arkret_signatures::agent::validate_agent_runtime_public_key(
+        &payload.public_key,
+        &payload.verification_method,
+    )
+    .ok()?
+    .raw_public_key;
+    let record = state
+        .authority_commits()
+        .committed_event(&event_id)
+        .await
+        .ok()??;
+    let revision_record = state
+        .authority_commits()
+        .committed_event_by_commit_id(&revision.commit_id)
+        .await
+        .ok()??;
+    let accepted_payload = AgentKeyAuthorizePayload::try_from(&record.event).ok()?;
+    let accepted_key = arkret_signatures::agent::validate_agent_runtime_public_key(
+        &accepted_payload.public_key,
+        &accepted_payload.verification_method,
+    )
+    .ok()?;
+    if record.event.event_id != event_id
+        || record.event.realm_id != pcr_realm_id
+        || record.commit.event_ref != event_id
+        || accepted_payload.agent_id != *agent_id
+        || accepted_payload.key_id != payload.key_id
+        || accepted_payload.verification_method != payload.verification_method
+        || accepted_key.raw_public_key != raw_key
+        || serde_json::to_value(&accepted_payload).ok()? != serde_json::to_value(&payload).ok()?
+        || revision_record.commit.commit_id != revision.commit_id
+        || revision_record.commit.stream_ref != record.commit.stream_ref
+        || revision_record.commit.stream_position != revision.stream_position
+        || record.commit.stream_position > revision.stream_position
+        || !material.visible_stream_heads.iter().any(|head| {
+            head.stream_ref == record.commit.stream_ref
+                && head.stream_position >= revision.stream_position
+        })
+    {
+        return None;
+    }
+    let authorization_ref = CommittedEventRef {
+        event_id,
+        commit_id: record.commit.commit_id,
+        stream_ref: record.commit.stream_ref,
+        stream_position: record.commit.stream_position,
+    };
+    let key = StationSigningKey {
+        actor: selector.actor().clone(),
+        verification_method: selector.verification_method().clone(),
+        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            raw_key,
+        ))
+        .ok()?,
+        authorization_ref: authorization_ref.event_id.clone(),
+    };
+    let key = ResolvedSignerKey::from_station_key(
+        key,
+        authorization_ref,
+        revision,
+        material.governance_generation,
+        selector,
+        realm_id,
+    )
+    .ok()?;
+    Some(SignerKeyQueryResult::CurrentResolved {
         selector: selector.clone(),
-        status: SignerEvidenceUnavailableStatus::Unavailable,
+        key,
     })
 }
 
-async fn current_key_result(
+/// Resolve the active Agent producer key for an Event being admitted now.
+///
+/// This checks the durable Agent status/key projection and the exact accepted
+/// authorization Commit at one PCR snapshot cut. Callers still verify the
+/// Event producer proof and enforce the Agent's action scope separately. This
+/// must never be used for a historical Event whose key may since have rotated.
+pub(crate) async fn current_agent_producer_binding(
     state: &AppState,
-    body: &SignerKeysQueryRequestBody,
-    selector: &SignerKeyQuerySelector,
-    peer_selector: CurrentSignerEvidenceSelector,
-) -> Option<SignerKeyQueryOutcome> {
-    let target = peer_selector.route_service_id().clone();
-    let peer_request = CurrentSignerEvidenceQueryRequestBody {
-        request_id: body.request_id.clone(),
-        realm_id: body.realm_id.clone(),
-        recipient_account_id: body.recipient_account_id.clone(),
-        queries: vec![peer_selector.clone()],
-        known_agent_state_digests: Vec::new(),
-        known_signer_evidence_refs: Vec::new(),
-    };
-    let outcome = if target == state.service_core_id() {
-        issue_authority_outcome(state, &peer_request, state.service_core_id()).await
-    } else {
-        proxy_peer_query(state, &peer_request, &target).await
-    }
-    .ok()?;
-    outcome.validate_transport_for_request(&peer_request).ok()?;
-    for item in &outcome.response.evidences {
-        if item.selector() == peer_selector {
-            let key = self_key_from_peer_item(state, &peer_request, item)
-                .await
-                .ok()?;
-            return Some(SignerKeyQueryOutcome::Current(CurrentSignerKeyOutcome {
-                selector: selector.clone(),
-                status: SignerEvidenceResolvedStatus::Resolved,
-                key: arkret_models_identity::QuerySigningKey::from_station_key(key, selector)
-                    .ok()?,
-            }));
-        }
-    }
-    None
-}
-
-async fn historical_agent_key_result(
-    state: &AppState,
-    historical: &arkret_models_identity::HistoricalAgentSelector,
-) -> Option<SignerKeyQueryOutcome> {
-    let selector = AgentSignerEvidenceQuerySelector::HistoricalEvent {
-        actor: historical.actor.clone(),
-        verification_method: historical.verification_method.clone(),
-        event_id: historical.event_id.clone(),
-    };
-    let (root, dependencies) =
-        super::agents::evidence::current_authenticated_agent_signer_evidence(state, &selector)
-            .await
-            .ok()?;
-    let key = super::agents::evidence::verified_station_agent_key(
-        state,
-        &selector,
-        &root,
-        &dependencies,
-        chrono::Utc::now(),
-    )
-    .await
-    .ok()?;
-    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
-        agent_signer_evidence,
-        ..
-    } = &root
-    else {
-        return None;
-    };
-    let arkret_models_identity::AgentSignerEvidence::HistoricalEvent {
-        admission_evidence, ..
-    } = agent_signer_evidence.as_ref()
-    else {
-        return None;
-    };
-    Some(SignerKeyQueryOutcome::HistoricalAgent(
-        HistoricalAgentSignerKeyOutcome {
-            selector: historical.clone(),
-            status: SignerEvidenceResolvedStatus::Resolved,
-            key: arkret_models_identity::QuerySigningKey::from_station_key(
-                key,
-                &SignerKeyQuerySelector::HistoricalAgent(historical.clone()),
-            )
-            .ok()?,
-            accepted_at: admission_evidence
-                .agent_authority_state_evidence
-                .state
-                .authorization
-                .accepted_at,
+    event: &arkret_wire::Event,
+) -> Result<([u8; 32], CommittedEventRef), String> {
+    let producer = event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| "Agent Event has no producer proof".to_owned())?;
+    let actor = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+    let agent_id = &actor
+        .as_account_id()
+        .ok_or_else(|| "Agent producer is not an account ActorId".to_owned())?
+        .principal_id;
+    let agent = state
+        .agent_pairings()
+        .agent(agent_id.as_str())
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Agent producer record unavailable".to_owned())?;
+    let realm_id =
+        RealmId::new(agent.principal_control_realm_id).map_err(|error| error.to_string())?;
+    let selector = SignerKeyQuerySelector::CurrentAdmission {
+        sender: CurrentSignerKeyQuerySender::Agent {
+            actor: actor.clone(),
+            verification_method: producer.verification_method.clone(),
         },
-    ))
-}
-
-async fn self_key_from_peer_item(
-    state: &AppState,
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    item: &CurrentSignerEvidence,
-) -> Result<arkret_models_identity::StationSigningKey, AppError> {
-    let invalid = || AppError::not_found("current signer evidence unavailable");
-    match item {
-        CurrentSignerEvidence::Agent {
-            actor,
-            verification_method,
-            ..
-        } => {
-            let (root, dependencies) = item
-                .hydrate_agent(request, &BTreeMap::new(), &[])
-                .map_err(|_| invalid())?;
-            super::agents::evidence::verified_station_agent_key(
-                state,
-                &AgentSignerEvidenceQuerySelector::CurrentAdmission {
-                    actor: actor.clone(),
-                    verification_method: verification_method.clone(),
-                },
-                &root,
-                &dependencies,
-                chrono::Utc::now(),
-            )
-            .await
-        }
-        CurrentSignerEvidence::AccountDevice {
-            account_id,
-            device_id: _,
-            device_projection_attestation,
-            signer_evidence_ref,
-        } => {
-            let document =
-                current_device_projection_document(state, device_projection_attestation).await?;
-            use arkret_models_collaboration::governance_dependencies::{
-                GovernanceDependency, GovernanceDependencySelector,
-                PeerGovernanceDependencyResolveRequestBody,
-            };
-            let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                content_digest: signer_evidence_ref
-                    .content_digest()
-                    .map_err(|_| invalid())?,
-            };
-            let store = state.persistence().governance_dependency_store();
-            let dependency = if let Some(item) = store
-                .get_unscoped_signer_evidence(&selector)
-                .await
-                .map_err(|_| invalid())?
-            {
-                item
-            } else {
-                let query = PeerGovernanceDependencyResolveRequestBody {
-                    realm_id: request.realm_id.clone(),
-                    selectors: vec![selector],
-                    byte_limit: 1024 * 1024,
-                    history_traversal_access: None,
-                };
-                let response = crate::routing::federation::rhrk_acquisition::fetch_peer_governance_dependencies(state, &account_id.station_id, &query).await.map_err(|_| invalid())?;
-                response
-                    .validate_for_peer_request(&query)
-                    .map_err(|_| invalid())?;
-                response.items.into_iter().next().ok_or_else(invalid)?
-            };
-            let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence: root,
-                ..
-            } = dependency
-            else {
-                return Err(invalid());
-            };
-            device_self_result_key(item, &root, &document, chrono::Utc::now())
-                .map_err(|_| invalid())
-        }
-    }
+    };
+    let Some(SignerKeyQueryResult::CurrentResolved { key, .. }) =
+        current_agent_key(state, &realm_id, &selector).await
+    else {
+        return Err("Agent producer has no current accepted signing key".to_owned());
+    };
+    let raw_key = base64url_decode(key.public_key_b64u.as_str())
+        .map_err(|error| error.to_string())?
+        .try_into()
+        .map_err(|_| "Agent producer key must be 32 bytes".to_owned())?;
+    Ok((raw_key, key.authorization_ref))
 }
 
 pub(super) async fn current_device_projection_document(
@@ -361,66 +378,6 @@ pub(super) async fn current_device_projection_document(
         .await
         .map_err(|_| unavailable())?;
     Ok(current.document)
-}
-
-/// The self handler reduces a peer device item only after signature and exact
-/// reference/Account/device bindings have all passed together.
-fn device_self_result_key(
-    item: &CurrentSignerEvidence,
-    root: &arkret_models_identity::AuthenticatedSignerResolutionEvidence,
-    document: &arkret_identity::DidDocument,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_models_identity::StationSigningKey, String> {
-    let CurrentSignerEvidence::AccountDevice {
-        account_id,
-        device_id,
-        device_projection_attestation: attestation,
-        signer_evidence_ref,
-    } = item
-    else {
-        return Err("not a device item".to_owned());
-    };
-    if &attestation.attestation.account_id != account_id
-        || &attestation.attestation.device_id != device_id
-    {
-        return Err("device item identity mismatch".to_owned());
-    }
-    verify_current_device_projection(attestation, document, now)?;
-    root.validate_attester_binding()
-        .map_err(|e| e.to_string())?;
-    if root.evidence_ref().map_err(|e| e.to_string())? != *signer_evidence_ref {
-        return Err("device root reference mismatch".to_owned());
-    }
-    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
-        signer_id,
-        verification_method,
-        device_projection_attestation: projected,
-        ..
-    } = root
-    else {
-        return Err("not a device root".to_owned());
-    };
-    if signer_id != &account_id.principal_id || projected != attestation {
-        return Err("device root identity mismatch".to_owned());
-    }
-    let public = attestation
-        .attestation
-        .device_signing_key_did
-        .as_str()
-        .strip_prefix("did:key:")
-        .ok_or("device public key is not did:key")?;
-    let bytes = arkret_canonical::decode_ed25519_multibase(public).map_err(|e| e.to_string())?;
-    let key = arkret_models_identity::StationSigningKey {
-        actor: arkret_wire::ActorId::account(account_id.clone()),
-        verification_method: verification_method.clone(),
-        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
-            bytes,
-        ))
-        .map_err(|e| e.to_string())?,
-        authorization_ref: attestation.attestation.device_authorize_event_id.clone(),
-    };
-    key.validate().map_err(|e| e.to_string())?;
-    Ok(key)
 }
 
 pub(super) fn verify_current_device_projection(
@@ -452,398 +409,4 @@ pub(super) fn verify_current_device_projection(
         now,
     )
     .map_err(|error| error.to_string())
-}
-
-#[allow(dead_code)]
-async fn peer_query(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<CurrentSignerEvidenceQueryOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    crate::routing::events::peer::validate_peer_request(state, req, true).await?;
-    let source = req
-        .headers()
-        .get("source-service-id")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| DidCoreId::new(value.to_owned()).ok())
-        .ok_or_else(|| AppError::not_found("current signer evidence is unavailable"))?;
-    let body = req
-        .parse_json::<CurrentSignerEvidenceQueryRequestBody>()
-        .await
-        .map_err(|_| AppError::json_invalid("invalid current signer evidence request"))?;
-    body.validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if body.recipient_account_id.station_id != source {
-        return json_ok(query_outcome(&body, Vec::new()));
-    }
-    json_ok(issue_authority_outcome(state, &body, source).await?)
-}
-
-async fn issue_authority_outcome(
-    state: &AppState,
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    verifier_id: DidCoreId,
-) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    let visible = disclosure_context_is_current(state, request, &verifier_id).await;
-    if !visible {
-        tracing::warn!(realm_id = %request.realm_id, "current signer evidence disclosure gate rejected request");
-    }
-    let mut evidence = Vec::new();
-    if visible {
-        for selector in &request.queries {
-            if let Some(item) = issue_selector(state, request, selector).await? {
-                evidence.push(item);
-            }
-        }
-    }
-    Ok(query_outcome(request, evidence))
-}
-
-fn query_outcome(
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    evidences: Vec<CurrentSignerEvidence>,
-) -> CurrentSignerEvidenceQueryOutcome {
-    CurrentSignerEvidenceQueryOutcome {
-        response: CurrentSignerEvidenceResponseCore {
-            request_id: request.request_id.clone(),
-            realm_id: request.realm_id.clone(),
-            recipient_account_id: request.recipient_account_id.clone(),
-            evidences,
-        },
-    }
-}
-
-async fn disclosure_context_is_current(
-    state: &AppState,
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    verifier_id: &DidCoreId,
-) -> bool {
-    if verifier_id != &request.recipient_account_id.station_id
-        || !matches!(
-            request.target_station_id(),
-            Ok(target) if target == &state.service_core_id()
-        )
-    {
-        return false;
-    }
-    if state
-        .realms()
-        .realm_metadata(request.realm_id.as_str())
-        .await
-        .ok()
-        .flatten()
-        .is_none_or(|record| record.minimal_metadata_realm)
-    {
-        return false;
-    }
-    let recipient = arkret_wire::ActorId::account(request.recipient_account_id.clone());
-    if !crate::routing::realm_has_member(state, request.realm_id.as_str(), &recipient.to_string())
-        .await
-    {
-        return false;
-    }
-    for selector in &request.queries {
-        if !crate::routing::realm_has_member(
-            state,
-            request.realm_id.as_str(),
-            &selector.actor_id().to_string(),
-        )
-        .await
-        {
-            return false;
-        }
-    }
-    true
-}
-
-async fn issue_selector(
-    state: &AppState,
-    request: &CurrentSignerEvidenceQueryRequestBody,
-    selector: &CurrentSignerEvidenceSelector,
-) -> Result<Option<CurrentSignerEvidence>, AppError> {
-    match selector {
-        CurrentSignerEvidenceSelector::AccountDevice {
-            account_id,
-            device_id,
-        } => {
-            let facet = super::device_signing::resolve_device_signing_directory_facet(
-                state,
-                account_id.principal_id.as_str(),
-                device_id.as_str(),
-            )
-            .await;
-            let record = super::keys::attested_device_record(
-                state,
-                account_id,
-                device_id,
-                facet,
-                BTreeMap::new(),
-            )
-            .await?;
-            Ok(record.map(|record| CurrentSignerEvidence::AccountDevice {
-                signer_evidence_ref: record.signer_evidence_ref,
-                account_id: account_id.clone(),
-                device_id: device_id.clone(),
-                device_projection_attestation: record.device_projection_attestation,
-            }))
-        }
-        CurrentSignerEvidenceSelector::Agent {
-            actor,
-            verification_method,
-        } => {
-            let selector = AgentSignerEvidenceQuerySelector::CurrentAdmission {
-                actor: actor.clone(),
-                verification_method: verification_method.clone(),
-            };
-            match super::agents::evidence::current_authenticated_agent_signer_evidence(
-                state, &selector,
-            )
-            .await
-            {
-                Ok((root, dependencies)) => {
-                    let compact = CompactAgentSignerResolutionEvidence::from_full(
-                        &root,
-                        &request.known_agent_state_digests,
-                    )
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                    let mut missing = Vec::new();
-                    for dependency in dependencies {
-                        let reference = dependency
-                            .evidence_ref()
-                            .map_err(|error| AppError::internal(error.to_string()))?;
-                        if !request.known_signer_evidence_refs.contains(&reference) {
-                            missing.push(dependency);
-                        }
-                    }
-                    Ok(Some(CurrentSignerEvidence::Agent {
-                        actor: actor.clone(),
-                        verification_method: verification_method.clone(),
-                        authenticated_signer_evidence: compact,
-                        dependencies: missing,
-                    }))
-                }
-                Err(reason) => {
-                    tracing::warn!(
-                        ?reason,
-                        "current Agent Signal evidence unavailable at authority"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-    }
-}
-
-async fn proxy_peer_query(
-    _state: &AppState,
-    _request: &CurrentSignerEvidenceQueryRequestBody,
-    _target_id: &DidCoreId,
-) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    Err(AppError::not_found(
-        "cross-Station signer evidence resolution is unavailable",
-    ))
-}
-
-#[cfg(test)]
-mod tests {
-    fn signed_device_projection() -> (
-        arkret_models_crypto::DeviceProjectionAttestation,
-        arkret_identity::DidDocument,
-        chrono::DateTime<chrono::Utc>,
-        [u8; 32],
-    ) {
-        let station_did = arkret_wire::Did::new("did:web:projection-station.example").unwrap();
-        let method = arkret_wire::DidUrl::new(format!("{station_did}#assertion")).unwrap();
-        let account = arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new("ak:did_core:web:projection-principal.example").unwrap(),
-            arkret_wire::project_did_to_core_id(&station_did).unwrap(),
-        );
-        let device =
-            arkret_wire::DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap();
-        let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[43u8; 32]);
-        let public_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
-            signing_key.verifying_key().as_bytes(),
-        );
-        let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
-            arkret_models_crypto::DeviceProjectionAttestationCore {
-                account_id: account.clone(),
-                device_id: device.clone(),
-                device_signing_key_did: arkret_wire::DidKey::new(format!("did:key:{public_key}"))
-                    .unwrap(),
-                hpke_key: arkret_wire::NonEmptyString::new("hpke-test").unwrap(),
-                device_authorize_event_id: arkret_wire::EventId::new(
-                    "ak:event:AfAnsJqSlM9bHVI7P1QBMOEW3p5P1PNQu7BBMpiSnD_e",
-                )
-                .unwrap(),
-                authorized_generation_ref: 7,
-                authorization_window: arkret_models_crypto::DeviceAuthorizationWindow {
-                    not_before: now - chrono::Duration::days(1),
-                    expires_at: None,
-                },
-                device_status: arkret_models_crypto::DeviceStatus::Active,
-                attested_at: now,
-                expires_at: now + chrono::Duration::minutes(5),
-            },
-            method.clone(),
-            &signing_key,
-        )
-        .unwrap();
-        let document: arkret_identity::DidDocument = serde_json::from_value(serde_json::json!({
-            "id": station_did,
-            "verificationMethod": [{
-                "id": method,
-                "controller": station_did,
-                "type": "Multikey",
-                "publicKeyMultibase": public_key
-            }]
-        }))
-        .unwrap();
-        (
-            attestation,
-            document,
-            now,
-            signing_key.verifying_key().to_bytes(),
-        )
-    }
-
-    fn self_device_fixture() -> (
-        super::CurrentSignerEvidence,
-        arkret_models_identity::AuthenticatedSignerResolutionEvidence,
-        arkret_identity::DidDocument,
-        chrono::DateTime<chrono::Utc>,
-        [u8; 32],
-    ) {
-        let (attestation, mut document, now, bytes) = signed_device_projection();
-        document.raw_properties.insert(
-            "assertionMethod".to_owned(),
-            serde_json::json!(["#assertion"]),
-        );
-        let core = &attestation.attestation;
-        let root = arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
-            signer_id: core.account_id.principal_id.clone(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "did:web:projection-principal.example#{}",
-                core.device_id
-            ))
-            .unwrap(),
-            device_projection_attestation: attestation.clone(),
-            attester_signer_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
-                "ak:signer_evidence:sha256:{}",
-                "a".repeat(64)
-            ))
-            .unwrap(),
-        };
-        let item = super::CurrentSignerEvidence::AccountDevice {
-            account_id: core.account_id.clone(),
-            device_id: core.device_id.clone(),
-            device_projection_attestation: attestation,
-            signer_evidence_ref: root.evidence_ref().unwrap(),
-        };
-        (item, root, document, now, bytes)
-    }
-
-    #[test]
-    fn self_device_result_verifies_real_signature_before_extracting_exact_key() {
-        let (item, root, document, now, expected) = self_device_fixture();
-        let key = super::device_self_result_key(&item, &root, &document, now).unwrap();
-        assert_eq!(
-            arkret_canonical::base64url_decode(key.public_key_b64u.as_str()).unwrap(),
-            expected
-        );
-        assert_eq!(&key.verification_method, root.verification_method());
-        assert!(
-            super::device_self_result_key(
-                &item,
-                &root,
-                &document,
-                now + chrono::Duration::minutes(5)
-            )
-            .is_err()
-        );
-        let mut wrong_document = document.clone();
-        let another_key = ed25519_dalek::SigningKey::from_bytes(&[57u8; 32]);
-        let encoded = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            another_key.verifying_key().as_bytes(),
-        );
-        let mut json = serde_json::to_value(&wrong_document).unwrap();
-        json["verificationMethod"][0]["publicKeyMultibase"] = serde_json::json!(encoded);
-        wrong_document = serde_json::from_value(json).unwrap();
-        assert!(super::device_self_result_key(&item, &root, &wrong_document, now).is_err());
-    }
-
-    #[test]
-    fn self_device_result_rejects_forged_projection_and_cross_station_root() {
-        let (mut item, mut root, document, now, _) = self_device_fixture();
-        if let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
-            device_projection_attestation,
-            ..
-        } = &mut root
-        {
-            device_projection_attestation
-                .attestation
-                .authorized_generation_ref += 1;
-        }
-        if let super::CurrentSignerEvidence::AccountDevice {
-            device_projection_attestation,
-            signer_evidence_ref,
-            ..
-        } = &mut item
-        {
-            device_projection_attestation
-                .attestation
-                .authorized_generation_ref += 1;
-            *signer_evidence_ref = root.evidence_ref().unwrap();
-        }
-        // The modified root reference matches: rejection must still reach the
-        // original real signature instead of treating a hash as authority.
-        assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
-        let (mut item, root, document, now, _) = self_device_fixture();
-        if let super::CurrentSignerEvidence::AccountDevice { account_id, .. } = &mut item {
-            account_id.station_id =
-                arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap();
-        }
-        assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
-        let (item, mut root, document, now, _) = self_device_fixture();
-        if let arkret_models_identity::AuthenticatedSignerResolutionEvidence::AccountDevice {
-            verification_method,
-            ..
-        } = &mut root
-        {
-            *verification_method =
-                arkret_wire::DidUrl::new("did:web:other.example#wrong-device").unwrap();
-        }
-        assert!(super::device_self_result_key(&item, &root, &document, now).is_err());
-    }
-
-    #[test]
-    fn current_device_projection_requires_origin_assertion_key_and_valid_signature() {
-        let (attestation, mut document, now, _) = signed_device_projection();
-        assert!(super::verify_current_device_projection(&attestation, &document, now).is_err());
-        document.raw_properties.insert(
-            "assertionMethod".to_owned(),
-            serde_json::json!(["#another-key"]),
-        );
-        assert!(super::verify_current_device_projection(&attestation, &document, now).is_err());
-        document.raw_properties.insert(
-            "assertionMethod".to_owned(),
-            serde_json::json!(["#assertion"]),
-        );
-        assert!(super::verify_current_device_projection(&attestation, &document, now).is_ok());
-        assert!(
-            super::verify_current_device_projection(
-                &attestation,
-                &document,
-                now + chrono::Duration::minutes(5)
-            )
-            .is_err()
-        );
-        let mut tampered = attestation.clone();
-        tampered.attestation.authorized_generation_ref += 1;
-        assert!(super::verify_current_device_projection(&tampered, &document, now).is_err());
-        let mut foreign = attestation;
-        foreign.attestation.account_id.station_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap();
-        assert!(super::verify_current_device_projection(&foreign, &document, now).is_err());
-    }
 }

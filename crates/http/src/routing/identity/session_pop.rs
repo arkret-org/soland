@@ -404,8 +404,7 @@ mod tests {
     #[test]
     fn generated_policy_has_explicit_public_projection_exceptions() {
         let policy = arkret_schema::UNAUTHENTICATED_PUBLIC_PROJECTION_OPERATIONS;
-        assert!(policy.contains(&arkret_wire::ServiceOperationId::SelfEventsReadDescribeV1));
         assert!(policy.contains(&arkret_wire::ServiceOperationId::SelfAccountReadDescribeV1));
-        assert!(!policy.contains(&arkret_wire::ServiceOperationId::SelfEventsReadScanV1));
+        assert!(!policy.contains(&arkret_wire::ServiceOperationId::SelfCommittedEventReadScanV1));
     }
 }

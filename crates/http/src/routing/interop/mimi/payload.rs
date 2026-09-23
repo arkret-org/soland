@@ -9,154 +9,18 @@ pub(super) fn typed_body_value<T: Serialize>(
 }
 
 pub(super) async fn persist_mimi_canonical_message_event(
-    state: &AppState,
-    realm_id: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
-    payload: Value,
+    _state: &AppState,
+    _realm_id: &str,
+    _created_at: chrono::DateTime<chrono::Utc>,
+    _payload: Value,
 ) -> Result<String, AppError> {
-    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
-    let _service_event_guard = service_event_lock.lock().await;
-    let actor_id = state.service_id().as_str();
-    let scoped_records = state
-        .event_queries()
-        .canonical_events_for_realm_actor(realm_id, actor_id)
-        .await
-        .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?;
-    let max_actor_seq = scoped_records.iter().map(|record| record.actor_seq).max();
-    let mut prev_refs = scoped_records
-        .into_iter()
-        .filter(|record| Some(record.actor_seq) == max_actor_seq)
-        .map(|record| {
-            arkret_identifiers::EventId::new(record.event_id).map_err(|error| {
-                AppError::internal(format!("stored MIMI actor frontier id invalid: {error}"))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    prev_refs.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    prev_refs.dedup();
-    let actor_seq = max_actor_seq
-        .map(|value| {
-            value.checked_add(1).ok_or_else(|| {
-                crate::app_error!(
-                    FrontierSequenceExhausted,
-                    "MIMI service actor sequence is exhausted",
-                )
-            })
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let service_did = state.service_resolution_commitment().did.clone();
-    let service_actor_id = arkret_wire::project_did_to_core_id(&service_did)
-        .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
-    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
-        .map_err(|error| AppError::internal(format!("MIMI HLC invalid: {error}")))?;
-    let typed_payload: arkret_models_collaboration::events_payloads::MessageCreatePayload =
-        serde_json::from_value(payload)
-            .map_err(|error| AppError::internal(format!("MIMI Event payload invalid: {error}")))?;
-    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
-        .map_err(|error| {
-            AppError::internal(format!(
-                "service notary verification method is invalid: {error}"
-            ))
-        })?;
-    let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::internal(format!("MIMI Realm id invalid: {error}")))?;
-    let seal = crate::notary::ensure_realm_seal_head(state, &realm)
-        .await
-        .map_err(|error| AppError::internal(format!("MIMI Realm Seal lookup failed: {error}")))?
-        .ok_or_else(|| {
-            crate::app_error!(
-                FrontierUnavailable,
-                "MIMI target Realm has no accepted Seal",
-            )
-        })?;
-    let digest_suite = state.projections().realm_digest_suite(realm.as_str());
-    // The CBS basis is a producer-signed envelope member, so it belongs on the
-    // draft. Attaching it after authoring only worked while signing silently
-    // re-derived `event_id`, which is exactly the identity hole this closes.
-    let auth_context = arkret_wire::AuthContext {
-        authority_refs: vec![seal.id.clone()],
-    };
-    let mut event =
-        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
-            arkret_wire::ScopeRef::Realm {
-                realm_id: realm.clone(),
-            },
-            arkret_wire::ActorId::service(service_actor_id.clone()),
-            typed_payload,
-        )
-        .and_then(|draft| {
-            draft
-                .with_prev_refs(prev_refs)
-                .with_auth_context(auth_context)
-                .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
-        })
-        .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        service_did,
-        verification_method.clone(),
-    );
-    let canonical_created_at = event.created_at;
-    let signer_evidence_ref =
-        crate::routing::identity::agents::evidence::retain_current_service_signer_evidence_ref(
-            state,
-            canonical_created_at,
-        )
-        .await?;
-    arkret_signatures::sign_event(
-        &mut event,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new(signer_evidence_ref)
-            .with_created_at(canonical_created_at),
-    )
-    .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
-    let event_id = event.event_id().to_string();
-    let now = chrono::Utc::now();
-    let session = soland_services::identity::SessionIdentityState {
-        account_pk: None,
-        token_hash: "mimi-provider-facade".to_owned(),
-        actor: state.service_id().clone(),
-        // Service session: this internal admission authenticates a service
-        // identity, which owns no device (see `envelope_core`).
-        device_id: String::new(),
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        agent_session: None,
-        session_grant: None,
-        expires_at: now + chrono::Duration::minutes(5),
-        created_at: now,
-        revoked_at: None,
-    };
-    // `AuthoredEvent` serializes as a durable authoring record
-    // `{ digest_suite, event }`. Admission consumes the canonical Event
-    // envelope itself, so never feed the record wrapper into this boundary.
-    let envelope = serde_json::to_value(event.event())
-        .map_err(|error| AppError::internal(format!("MIMI Event serialize failed: {error}")))?;
-    let binding_ref = envelope
-        .get("payload")
-        .and_then(|payload| payload.get("mimi_provenance"))
-        .and_then(|provenance| provenance.get("room_binding_ref"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("MIMI room binding ref missing from Event payload"))?
-        .to_owned();
-    crate::routing::events::event_log::submit_mimi_event_value(
-        state,
-        &session,
-        envelope,
-        realm_id,
-        &binding_ref,
-    )
-    .await
-    .map_err(|error| {
-        crate::app_error!(
-            ParamInvalid,
-            format!("MIMI Event admission failed: {}", error.message()),
-        )
-        .with_rejection_code(error.code())
-    })?;
-    Ok(event_id)
+    // Service-owned Event authoring must enter through an authenticated
+    // AuthorityProtocolPort. The old actor-sequence/Seal submit path cannot
+    // produce a valid RealmCommit or prove the service identity.
+    Err(crate::app_error!(
+        ServiceUnavailable,
+        "MIMI message authority admission is not connected",
+    ))
 }
 
 pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, AppError> {

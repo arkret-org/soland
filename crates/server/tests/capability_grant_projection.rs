@@ -83,8 +83,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
                 "issuer_authority_refs": [{
                     "kind": "realm_root",
                     "realm_id": REALM,
-                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                    "controller_epoch_at_issuance": 0,
+                    "authority_event_ref": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
                     "authority_generation": 0
                 }],
                 "subject": actor(SUBJECT),
@@ -118,17 +117,15 @@ fn revoke_op(grant_id: &str) -> Operation {
 /// presentation field and authorizes nothing.
 fn seed_realm_owner(state: &mut ProjectionState) {
     let now = chrono::Utc::now();
-    state.realm_null_subject_cells.insert(
-        (
-            REALM.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-        ),
-        arkret_state::state_model::ResolvedCellState::Value(
-            serde_json::to_value(
-                arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(actor(ISSUER)),
-            )
-            .unwrap(),
-        ),
+    state.set_realm_facet(
+        REALM,
+        soland_domain::reducer::facet::REALM_AUTHORITY_ROOT,
+        json!({
+            "controller_actor_id": actor(ISSUER),
+            "controller_epoch": 0,
+            "governance_station_id": soland_test_support::fixture_station_id(),
+            "authority_generation": 0,
+        }),
     );
     state.realm_states.insert(
         REALM.to_owned(),
@@ -165,14 +162,16 @@ fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resou
 }
 
 fn grant_cell_items(state: &ProjectionState, grant_id: &str) -> Vec<Value> {
-    let cell_ref = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-    ))
-    .unwrap();
-    match state.cell_value(&cell_ref) {
-        Some(Value::Array(items)) => items.clone(),
-        _ => Vec::new(),
-    }
+    let facet_ref = soland_domain::reducer::FacetRef::new(
+        soland_domain::reducer::facet::CAPABILITY_GRANT,
+        grant_id,
+    );
+    state
+        .facet_value(REALM, &facet_ref)
+        .filter(|value| !value.is_null())
+        .cloned()
+        .into_iter()
+        .collect()
 }
 
 fn item_revoked(item: &Value) -> bool {
@@ -219,8 +218,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
+                        "authority_event_ref": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
                         "authority_generation": 0
                     }],
                     "subject": actor(SUBJECT),

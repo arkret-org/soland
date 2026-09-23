@@ -1,9 +1,6 @@
 //! Bounded current-pointer discovery and indexed metadata pages.
-use arkret_models_crypto::{
-    BackupActiveSeriesPointer, BackupActiveSeriesState, KeyBackupsListQuery,
-};
+use arkret_models_crypto::{BackupActiveSeriesState, KeyBackupsListQuery};
 use arkret_server::{CursorAuthority, CursorBindingContext};
-use arkret_state::state_model::ResolvedCellState;
 use soland_services::identity::{KeyBackupListPosition, KeyBackupListQuery as StorageQuery};
 
 use super::*;
@@ -208,73 +205,20 @@ async fn list(
         next_cursor,
         has_more,
     };
-    result.validate_for_query(&query).map_err(internal)?;
     json_ok(result)
 }
 
 pub(super) async fn active_pointers(
-    state: &AppState,
-    account: &arkret_wire::AccountId,
+    _state: &AppState,
+    _account: &arkret_wire::AccountId,
 ) -> Result<BackupActiveSeriesState, AppError> {
-    let owner = state
-        .persistence()
-        .principal_resolution_by_account_id(account)
-        .await
-        .map_err(unavailable)?
-        .ok_or_else(|| unavailable("accepted PCR unavailable"))?;
-    let frontier = crate::routing::events::event_log::endpoints::load_realm_seal_frontier(
-        state,
-        &owner.pcr_realm_id,
-    )
-    .await
-    .map_err(unavailable)?;
-    let accepted = state
-        .projections()
-        .effective_state_at(&frontier.seal_basis.leaves, &owner.pcr_realm_id)
-        .await
-        .map_err(unavailable)?;
-    let actor = arkret_wire::ActorId::account(account.clone());
-    let read = |kind: BackupKind| -> Result<BackupActiveSeriesPointer, AppError> {
-        let subject = arkret_wire::composite_subject(&[actor.to_string().as_str(), kind.as_str()])
-            .map_err(unavailable)?;
-        let cell = arkret_wire::CellRef::new(format!(
-            "ak:cell:{}:{subject}",
-            arkret_wire::CellFamilyId::KEY_BACKUP_ACTIVE_SERIES_V1
-        ))
-        .map_err(unavailable)?;
-        match accepted.get(&cell) {
-            None => Ok(BackupActiveSeriesPointer::Absent {}),
-            Some(ResolvedCellState::Bottom(_)) => Err(unavailable("backup pointer is conflicted")),
-            Some(state) => {
-                let value = state
-                    .settled_value()
-                    .ok_or_else(|| unavailable("backup pointer is conflicted"))?;
-                let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
-                    serde_json::from_value(value.clone()).map_err(unavailable)?;
-                if record.actor_id != actor
-                    || record.backup_kind != kind
-                    || record.series_pointer_version == 0
-                {
-                    return Err(unavailable(
-                        "accepted backup pointer has inconsistent scope",
-                    ));
-                }
-                Ok(BackupActiveSeriesPointer::Active {
-                    active_series_id: record.active_series_id,
-                    series_pointer_version: record.series_pointer_version,
-                })
-            }
-        }
-    };
-    let result = BackupActiveSeriesState {
-        account_id: account.clone(),
-        control_realm_id: owner.pcr_realm_id,
-        seal_basis: frontier.seal_basis,
-        secret_storage: read(BackupKind::SecretStorage)?,
-        mls_history: read(BackupKind::MlsHistory)?,
-    };
-    result.validate().map_err(unavailable)?;
-    Ok(result)
+    // The old Cell/Seal projection cannot establish the confirmed RealmCommit
+    // basis required for this current result. A durable same-cut provider must
+    // return the pointer and authority_commit_id together before listing,
+    // unlocking, or deleting backup data can be served.
+    Err(unavailable(
+        "confirmed key-backup pointer result is unavailable",
+    ))
 }
 
 fn invalid_cursor(error: impl std::fmt::Display) -> AppError {
@@ -282,7 +226,7 @@ fn invalid_cursor(error: impl std::fmt::Display) -> AppError {
 }
 fn unavailable(error: impl std::fmt::Display) -> AppError {
     crate::app_error!(
-        FrontierUnavailable,
+        RevisionUnavailable,
         format!("accepted backup state unavailable: {error}")
     )
 }

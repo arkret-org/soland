@@ -85,6 +85,9 @@ pub struct EventCommitRequest {
     /// Current-authority transaction that orders the producer Event on its
     /// Realm, Circle, or Sidecar stream.
     pub authority_commit: crate::AuthorityCommitTransaction,
+    /// Current producer authorization rechecked under this same Event/Commit,
+    /// projection and CAS transaction for self submissions.
+    pub self_producer_guard: Option<crate::SelfProducerCommitGuard>,
     pub event: CanonicalEventRecord,
     /// Internal result of projection-owned join-gate validation.  It is not
     /// authority: PostgreSQL must lock the exact policy named by the digest

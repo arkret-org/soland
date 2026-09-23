@@ -417,20 +417,25 @@ impl ProjectionState {
             push_route: push_route.to_owned(),
         };
         let expected_revision = payload.expected_server_revision();
-        let incoming_revision = match expected_revision.checked_add(1) {
-            Some(revision) => revision,
-            None => {
+        let current_revision = self.push_routes.get(&subject).map(|value| value.revision);
+        let incoming_revision = match arkret_models_identity::device_push_route::decide_server_revision_cas(
+            current_revision,
+            expected_revision,
+        ) {
+            arkret_models_identity::device_push_route::ServerRevisionCasDecision::Accepted {
+                next_revision,
+            } => next_revision,
+            arkret_models_identity::device_push_route::ServerRevisionCasDecision::Overflow => {
                 return ProjectionEffect::Rejected {
                     reason: "push_route_revision_overflow".to_owned(),
                 };
             }
+            arkret_models_identity::device_push_route::ServerRevisionCasDecision::Conflict => {
+                return ProjectionEffect::Rejected {
+                    reason: "push_route_cas_conflict".to_owned(),
+                };
+            }
         };
-        let current_revision = self.push_routes.get(&subject).map(|value| value.revision);
-        if current_revision.unwrap_or(0) != expected_revision {
-            return ProjectionEffect::Rejected {
-                reason: "push_route_cas_conflict".to_owned(),
-            };
-        }
 
         match payload {
             arkret_models_identity::device_push_route::DevicePushRoutePayload::Revoked(_) => {

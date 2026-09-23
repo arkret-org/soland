@@ -27,7 +27,6 @@ use ed25519_dalek::{Signature, Signer as _};
 use serde::de::DeserializeOwned;
 
 use super::*;
-use crate::routing::events::event_log::VerifiedActorPredecessors;
 
 const CONTACT_RESERVATION_TTL_MINUTES: i64 = 10;
 const CONTACT_OUTCOME_TTL_HOURS: i64 = 24;
@@ -439,10 +438,6 @@ fn contact_scope_strings(scopes: &[ContactScope]) -> Vec<String> {
 fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     holder: &ContactPeer,
     realm_id: RealmId,
-    actor_seq: u64,
-    hlc: arkret_identifiers::Hlc,
-    prev_refs: Vec<EventId>,
-    seal_basis: arkret_wire::SealBasis,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: K::Payload,
     digest_suite: arkret_canonical::DigestSuite,
@@ -452,8 +447,7 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
         holder.contact_actor_id(),
         payload,
     )
-    .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
-    .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
+    .and_then(|draft| draft.author_with_digest_suite(created_at, digest_suite))
     .map_err(|error| AppError::internal(format!("Contact typed Event draft invalid: {error}")))
 }
 
@@ -698,52 +692,10 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     // `(principal_id, station_id)` pair and its local lifetime PCR
     // lineage. Never resolve account state from the principal core alone.
     let realm_id = contact_authority_realm(state, session, &holder).await?;
-    let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
-        state,
-        realm_id.clone(),
-        holder.contact_actor_id(),
-        VerifiedActorPredecessors::none(),
-    )
-    .await?;
-    let accepted_seal = if state.projections().is_conformance_fixture_realm(&realm_id) {
-        crate::notary::ensure_realm_seal_head(state, &realm_id)
-            .await
-            .map_err(|error| {
-                crate::app_error!(
-                    FrontierUnavailable,
-                    format!("conformance fixture Seal head unavailable: {error}"),
-                )
-            })?
-            .ok_or_else(|| {
-                crate::app_error!(
-                    FrontierUnavailable,
-                    "conformance fixture Realm has no accepted Seal head",
-                )
-            })?
-    } else {
-        crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-            state, &realm_id,
-        )
-        .await?
-        .accepted_seal
-    };
-    let seal_basis = arkret_wire::SealBasis {
-        leaves: vec![accepted_seal.id],
-    };
     let created_at = now();
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
-    let event = new_unsigned_contact_event::<K>(
-        &holder,
-        realm_id,
-        frontier.next_actor_seq,
-        arkret_identifiers::Hlc::new(state.hlc().now())
-            .map_err(|error| AppError::internal(format!("Contact Event HLC: {error}")))?,
-        frontier.frontier_event_ids,
-        seal_basis,
-        created_at,
-        payload,
-        digest_suite,
-    )?;
+    let event =
+        new_unsigned_contact_event::<K>(&holder, realm_id, created_at, payload, digest_suite)?;
     let reservation = ContactReservation {
         operation_id,
         idempotency_key: idempotency_key.clone(),
@@ -969,12 +921,21 @@ async fn reservation_for_commit(
 fn sorted_pair(
     left: &arkret_wire::ActorId,
     right: &arkret_wire::ActorId,
-) -> [arkret_wire::ActorId; 2] {
-    if left <= right {
+) -> Result<[arkret_wire::ActorId; 2], AppError> {
+    let left_bytes = arkret_canonical::canonical_json_bytes(left)
+        .map_err(|error| AppError::internal(format!("Contact pair encoding: {error}")))?;
+    let right_bytes = arkret_canonical::canonical_json_bytes(right)
+        .map_err(|error| AppError::internal(format!("Contact pair encoding: {error}")))?;
+    if left_bytes == right_bytes {
+        return Err(AppError::param_invalid(
+            "Contact pair must contain distinct actors",
+        ));
+    }
+    Ok(if left_bytes < right_bytes {
         [left.clone(), right.clone()]
     } else {
         [right.clone(), left.clone()]
-    }
+    })
 }
 
 fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactRound, Hash), AppError> {
@@ -982,13 +943,14 @@ fn normal_basis(receipt: &RequestAcceptanceReceipt) -> Result<(ContactRound, Has
         sorted_pair_member_ids: sorted_pair(
             &receipt.core.holder.contact_actor_id(),
             &receipt.core.peer.contact_actor_id(),
-        ),
+        )?,
         request_event_ref: receipt.core.request_event_ref.clone(),
         request_acceptance_receipt_digest: canonical_contact_digest(receipt)?,
     };
-    let contact_round_id =
-        arkret_models_collaboration::direct_conversation_ops::contact_round_id(&contact_round)
-            .map_err(|error| AppError::internal(format!("Contact round digest: {error}")))?;
+    contact_round
+        .validate_canonical_order()
+        .map_err(|error| AppError::internal(format!("Contact round order: {error}")))?;
+    let contact_round_id = contact_hash("ak.contact.round.v1", &contact_round)?;
     Ok((contact_round, contact_round_id))
 }
 
@@ -1015,6 +977,14 @@ fn next_request_slot_coordinates(
         )
     })?;
     Ok((next_sequence, Some(current.head_digest.clone())))
+}
+
+fn contact_slot_cas_revision_unavailable() -> Result<Vec<EventId>, AppError> {
+    Err(AppError::from_rejection(
+        soland_http::error::ErrorCode::ServiceUnavailable,
+        "Contact request-slot exact CAS revision is unavailable",
+    )
+    .with_rejection_code("service_unavailable"))
 }
 
 fn accept_request_slot_transition(
@@ -1118,10 +1088,7 @@ fn sign_contact_transcript(state: &AppState, bytes: &[u8]) -> Result<ProtocolSig
         )
         .map_err(|error| AppError::internal(error.to_string()))?,
         created_at: now(),
-        jws: Base64UrlString::new(
-            URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(bytes).to_bytes()),
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?,
+        jws: URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(bytes).to_bytes()),
     })
 }
 
@@ -1174,20 +1141,20 @@ pub(crate) async fn local_requester_current_proof(
     contact_round_id: &Hash,
     request_receipt: &RequestAcceptanceReceipt,
 ) -> Result<Option<ContactCurrentProof>, AppError> {
-    let Some(snapshot) = state
-        .projections()
-        .control_proposal_snapshot(&request_receipt.core.request_event_ref.event_digest())
+    let Some(committed) = state
+        .authority_commits()
+        .committed_event(&request_receipt.core.request_event_ref)
         .await
-        .map_err(|error| AppError::internal(format!("Contact request decision lookup: {error}")))?
+        .map_err(|error| AppError::internal(format!("Contact request Commit lookup: {error}")))?
     else {
         return Ok(None);
     };
-    if !matches!(snapshot.command_decisions.as_slice(), [decision]
-        if decision.outcome == arkret_wire::CommandOutcome::Committed)
-    {
-        return Ok(None);
+    let request_event = committed.event;
+    if committed.commit.event_ref != request_event.event_id {
+        return Err(AppError::internal(
+            "Contact request Commit does not bind its Event",
+        ));
     }
-    let request_event = snapshot.event;
     let request_digest_suite = request_receipt
         .core
         .request_digest()
@@ -1349,15 +1316,7 @@ async fn commit(
     crate::routing::events::event_log::submit_initial_event_submission_with_contact_projection(
         state,
         session,
-        arkret_wire::EventInitialSubmission {
-            publication_event: None,
-            mls_frontier_leaves: None,
-            event: body.signed_event.clone(),
-            authorization_lease: None,
-            cbs_proof_bundles: Vec::new(),
-            control_proposal_ack: body.control_proposal_ack.clone(),
-            membership_compensation_evidence: None,
-        },
+        arkret_wire::EventAdmissionSubmission::new(body.signed_event.clone()),
         contact_projection,
         completion_draft,
         Vec::new(),
@@ -1630,10 +1589,11 @@ async fn plan_contact_commit(
                 } => sorted_pair_member_ids.clone(),
                 ContactRound::Glare { .. } => unreachable!("normal basis returned glare"),
             };
-            let mut cas_frontier = event.prev_refs.clone();
-            cas_frontier.push(event.event_id.clone());
-            cas_frontier.sort();
-            cas_frontier.dedup();
+            // The retired Event.prev_refs frontier was not a Contact
+            // request-slot CAS observation. The durable slot currently stores
+            // only its sequence and digest, so it cannot provide the exact
+            // EventId revision required by the signed absence transcript.
+            let cas_revision = contact_slot_cas_revision_unavailable()?;
             let (cas_sequence, slot_predecessor) =
                 next_request_slot_coordinates(&record.request_slot_states, &holder, &peer)?;
             let absence = OutgoingSlotAbsenceTranscript {
@@ -1642,7 +1602,7 @@ async fn plan_contact_commit(
                 contact_round_id: contact_round_id.clone(),
                 slot_predecessor: slot_predecessor.clone(),
                 cas_sequence,
-                cas_frontier,
+                cas_revision,
                 observed_at: accepted_at,
                 outgoing_request_state: OutgoingRequestState::Absent,
             };
@@ -2206,7 +2166,9 @@ fn validate_lineage_head(
             proof.contact_round_id != bundle.contact_round_id
                 || proof.terminal
                 || proof.complete_through == 0
-                || !proof.accepted_frontier.contains(&proof.head_event_ref)
+                || !proof
+                    .accepted_commit_event_ids
+                    .contains(&proof.head_event_ref)
         })
         || arkret_models_collaboration::contact_operations::validate_recontact_continuity(
             bundle,
@@ -2693,10 +2655,7 @@ mod device_authorization_account_tests {
                     ))
                     .unwrap(),
                     created_at: accepted_at,
-                    jws: Base64UrlString::new(arkret_canonical::base64url_encode(
-                        source_key.sign(bytes).to_bytes(),
-                    ))
-                    .unwrap(),
+                    jws: arkret_canonical::base64url_encode(source_key.sign(bytes).to_bytes()),
                 })
             })
             .unwrap();
@@ -2795,8 +2754,7 @@ mod device_authorization_account_tests {
             assert!(validate_normal_response_slot(&glare, responder, &receipt).is_err());
 
             let mut changed = record.clone();
-            changed.request_receipts[0].signature.jws =
-                super::Base64UrlString::new("ZGVm").unwrap();
+            changed.request_receipts[0].signature.jws = "ZGVm".to_owned();
             assert!(validate_normal_response_slot(&changed, responder, &receipt).is_err());
             changed.request_receipts.clear();
             assert!(validate_normal_response_slot(&changed, responder, &receipt).is_err());

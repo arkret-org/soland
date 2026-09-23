@@ -460,62 +460,86 @@ fn peer_event_application_failure(
     if endpoint != "/_arkret/peer/events" {
         return None;
     }
-    let Some(requested) = peer_event_ids(request_body) else {
+    use arkret_models_collaboration::authority_commit::{
+        PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationRecord,
+        PeerRegisteredAtomicUnitOutcomeValue,
+    };
+    use arkret_wire::AuthoritySubmitOutcome;
+
+    let Ok(request) = serde_json::from_str::<PeerAuthoritySubmitRequest>(request_body) else {
         return Some("invalid_peer_event_request");
     };
-    let Ok(outcome) = serde_json::from_str::<
-        arkret_models_collaboration::http_bodies::EventsSubmitOutcome,
-    >(response_body) else {
+    let Ok(outcome) = serde_json::from_str::<PeerAuthoritySubmitOutcome>(response_body) else {
         return Some("invalid_peer_event_outcome");
     };
-    if outcome.validate_delivery_invariants().is_err() {
+    if outcome.validate_for_request(&request).is_err() {
         return Some("invalid_peer_event_outcome");
     }
-    match outcome.status {
-        arkret_models_collaboration::http_bodies::EventsSubmitStatus::Accepted
-        | arkret_models_collaboration::http_bodies::EventsSubmitStatus::Duplicate => {
-            let confirmed = outcome
-                .accepted
-                .iter()
-                .chain(&outcome.duplicate)
-                .map(ToString::to_string)
-                .collect::<std::collections::BTreeSet<_>>();
-            if confirmed == requested
-                && confirmed.len() == outcome.accepted.len() + outcome.duplicate.len()
-                && outcome.rejections.is_empty()
-                && outcome.quarantine.is_empty()
+    // The SDK peer union checks the response branch but does not bind an
+    // authority-forward acceptance to the exact Event carried by this request.
+    if let PeerAuthoritySubmitOutcome::AuthorityForward(value) = &outcome {
+        let event = match &request {
+            PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
+                &request.event_submission.event
+            }
+            PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
+                &request.mls_submission.commit_event
+            }
+            _ => return Some("invalid_peer_event_outcome"),
+        };
+        if let AuthoritySubmitOutcome::Accepted { commit, .. } = &value.outcome {
+            let Ok(stream_ref) = arkret_wire::CommitStreamRef::from_scope(
+                &event.scope_ref,
+                Some(event.realm_id.clone()),
+            ) else {
+                return Some("invalid_peer_event_outcome");
+            };
+            if commit.event_ref != event.event_id
+                || commit.realm_id != event.realm_id
+                || commit.stream_ref != stream_ref
             {
-                None
-            } else {
-                Some("incomplete_peer_event_outcome")
+                return Some("invalid_peer_event_outcome");
             }
         }
-        arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial => {
-            Some("partial_peer_event_outcome")
-        }
-        arkret_models_collaboration::http_bodies::EventsSubmitStatus::HistoricalOnly => {
-            Some("historical_only_peer_event_outcome")
-        }
     }
-}
-
-fn peer_event_ids(request_body: &str) -> Option<std::collections::BTreeSet<String>> {
-    let request = serde_json::from_str::<serde_json::Value>(request_body).ok()?;
-    let events = request.get("events")?.as_array()?;
-    if events.is_empty() {
-        return None;
+    match outcome {
+        PeerAuthoritySubmitOutcome::AuthorityForward(value) => match value.outcome {
+            AuthoritySubmitOutcome::Accepted { .. } => None,
+            AuthoritySubmitOutcome::Rejected { reason_code, .. }
+                if reason_code == error_code::DEPENDENCY_MISSING =>
+            {
+                Some(error_code::DEPENDENCY_MISSING)
+            }
+            AuthoritySubmitOutcome::Rejected { .. } => Some("peer_event_rejected"),
+        },
+        PeerAuthoritySubmitOutcome::CommittedReplication(value) => {
+            if value.results.iter().all(|result| {
+                matches!(
+                    result,
+                    PeerCommittedReplicationRecord::Stored { .. }
+                        | PeerCommittedReplicationRecord::Duplicate { .. }
+                )
+            }) {
+                None
+            } else if value.results.iter().all(|result| {
+                !matches!(result, PeerCommittedReplicationRecord::Rejected { reason_code, .. }
+                    if reason_code != error_code::DEPENDENCY_MISSING)
+            }) {
+                Some(error_code::DEPENDENCY_MISSING)
+            } else {
+                Some("peer_replication_rejected")
+            }
+        }
+        PeerAuthoritySubmitOutcome::RegisteredAtomicUnit(value) => match value.outcome {
+            PeerRegisteredAtomicUnitOutcomeValue::Rejected(rejection)
+                if rejection.reason_code == error_code::DEPENDENCY_MISSING =>
+            {
+                Some(error_code::DEPENDENCY_MISSING)
+            }
+            PeerRegisteredAtomicUnitOutcomeValue::Rejected(_) => Some("peer_atomic_unit_rejected"),
+            _ => None,
+        },
     }
-    let ids = events
-        .iter()
-        .map(|submission| {
-            submission
-                .get("event")?
-                .get("event_id")?
-                .as_str()
-                .map(str::to_owned)
-        })
-        .collect::<Option<std::collections::BTreeSet<_>>>()?;
-    (ids.len() == events.len()).then_some(ids)
 }
 
 /// A rebuilt request that replaces a finished transport identity.
@@ -564,9 +588,8 @@ fn dependency_resubmission(
     }
 }
 
-/// Mechanically diff a `partial` outcome down to the Events the receiver has
-/// not confirmed, per `operations-sync.md` §5 ("subtract `accepted ∪
-/// duplicate`, then reassemble"), and mint a fresh key for the remainder.
+/// Resubmit only dependency-missing replication records with a fresh transport
+/// identity. The typed peer carrier has no generic partial Event batch.
 fn peer_event_partial_retry(
     endpoint: &str,
     request_body: &str,
@@ -577,55 +600,46 @@ fn peer_event_partial_retry(
     if endpoint != "/_arkret/peer/events" {
         return None;
     }
-    let outcome: arkret_models_collaboration::http_bodies::EventsSubmitOutcome =
-        serde_json::from_str(response_body).ok()?;
-    if outcome.status != arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial
-        || outcome.rejections.is_empty()
-        || !outcome.quarantine.is_empty()
-        || outcome
-            .rejections
-            .iter()
-            .any(|item| item.reason_code != arkret_wire::ReasonCode::DependencyMissing)
+    use arkret_models_collaboration::authority_commit::{
+        PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationRecord,
+    };
+    let mut request: PeerAuthoritySubmitRequest = serde_json::from_str(request_body).ok()?;
+    let outcome: PeerAuthoritySubmitOutcome = serde_json::from_str(response_body).ok()?;
+    outcome.validate_for_request(&request).ok()?;
+    let (
+        PeerAuthoritySubmitRequest::CommittedReplication(request),
+        PeerAuthoritySubmitOutcome::CommittedReplication(outcome),
+    ) = (&mut request, outcome)
+    else {
+        return None;
+    };
+    let retry_indices = outcome
+        .results
+        .iter()
+        .filter_map(|result| match result {
+            PeerCommittedReplicationRecord::Rejected {
+                index, reason_code, ..
+            } if reason_code == error_code::DEPENDENCY_MISSING => Some(usize::from(*index)),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if retry_indices.is_empty()
+        || outcome.results.iter().any(|result| {
+            matches!(result, PeerCommittedReplicationRecord::Rejected { reason_code, .. }
+            if reason_code != error_code::DEPENDENCY_MISSING)
+        })
     {
         return None;
     }
-
-    let pending_ids = outcome
-        .rejections
-        .iter()
-        .map(|item| item.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut request: arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody =
-        serde_json::from_str(request_body).ok()?;
-    request
-        .events
-        .retain(|submission| pending_ids.contains(submission.event.event_id.as_str()));
-    if request.events.is_empty() {
+    let mut index = 0usize;
+    request.submissions.retain(|_| {
+        let keep = retry_indices.contains(&index);
+        index += 1;
+        keep
+    });
+    if request.submissions.is_empty() {
         return None;
     }
-    let retained_events: Vec<arkret_wire::Event> =
-        request.transported_events().cloned().collect::<Vec<_>>();
-    let required_targets = retained_events
-        .iter()
-        .flat_map(|event| {
-            event
-                .auth_context
-                .iter()
-                .flat_map(|context| context.authority_refs.iter())
-                .chain(
-                    event
-                        .seal_basis
-                        .iter()
-                        .flat_map(|basis| basis.leaves.iter()),
-                )
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    request
-        .cbs_proof_bundles
-        .retain(|bundle| required_targets.contains(&bundle.target_seal_ref));
-    let digest_suites =
-        crate::routing::events::event_log::accepted_event_digest_suites(&retained_events).ok()?;
-    request.validate_federation_transport(&digest_suites).ok()?;
     let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
     let payload_json = String::from_utf8(bytes).ok()?;
     let idempotency_key = semantic_resubmission_key(previous_key, semantic_attempts, &payload_json);
@@ -2268,339 +2282,30 @@ mod tests {
     }
 
     #[test]
-    fn peer_event_partial_outcome_is_not_transport_success() {
-        let event_id = "ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ";
-        let request = format!(r#"{{"events":[{{"event":{{"event_id":"{event_id}"}}}}]}}"#);
+    fn peer_event_response_requires_current_typed_carrier() {
         assert_eq!(
-            peer_event_application_failure(
-                "/_arkret/peer/events",
-                &request,
-                r#"{"status":"partial","accepted":[],"pending_delivery_count":0,"rejections":[{"id":"ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ","reason_code":"dependency_missing","missing_event_refs":[],"missing_seal_refs":[],"missing_auth_refs":[],"missing_policy_refs":[]}]}"#
-            ),
-            Some("partial_peer_event_outcome")
+            peer_event_application_failure("/_arkret/peer/events", "{}", "{}"),
+            Some("invalid_peer_event_request")
         );
         assert_eq!(
-            peer_event_application_failure(
-                "/_arkret/peer/events",
-                &request,
-                r#"{"status":"accepted","accepted":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0}"#
-            ),
+            peer_event_application_failure("/_arkret/peer/contacts", "{}", "{}"),
             None
-        );
-        assert_eq!(
-            peer_event_application_failure(
-                "/_arkret/peer/contacts",
-                "{}",
-                r#"{"status":"partial"}"#,
-            ),
-            None
-        );
-        assert_eq!(
-            peer_event_application_failure(
-                "/_soland/peer/federation/operations",
-                "{}",
-                r#"{"accepted":[],"rejected":[{"id":"ak:operation:test","reason_code":"capability_denied"}]}"#
-            ),
-            Some("partial_peer_operation_outcome")
-        );
-        assert_eq!(
-            peer_event_application_failure(
-                "/_soland/peer/federation/operations",
-                "{}",
-                r#"{"accepted":["ak:operation:test"],"rejected":[]}"#
-            ),
-            None
-        );
-        assert_eq!(
-            peer_event_application_failure(
-                "/_arkret/peer/events",
-                &request,
-                r#"{"status":"accepted","accepted":[],"pending_delivery_count":0}"#,
-            ),
-            Some("incomplete_peer_event_outcome")
-        );
-        assert_eq!(
-            peer_event_application_failure(
-                "/_arkret/peer/events",
-                &request,
-                r#"{"status":"historical_only","accepted":[],"pending_delivery_count":0,"original_outcome":{"status":"accepted","accepted":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0}}"#,
-            ),
-            Some("historical_only_peer_event_outcome")
         );
     }
 
     #[test]
-    fn all_pending_peer_event_partial_requires_a_parseable_request_for_a_fresh_key() {
-        let response = r#"{
-            "status":"partial",
-            "accepted":[],
-            "rejected":[{
-                "id":"ak:event:AR-4MwpAcHt7pmjO-Cab9s-33ymPZefvcpl666_jGxiY",
-                "reason_code":"dependency_missing",
-                "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-            }]
-        }"#;
+    fn replication_retry_rejects_untyped_legacy_batch() {
         assert!(
             peer_event_partial_retry(
                 "/_arkret/peer/events",
-                "not-read",
-                response,
-                "ak:outbox:event:sha256:aa",
+                r#"{"events":[]}"#,
+                r#"{"status":"partial"}"#,
+                "old-key",
                 1,
             )
             .is_none()
         );
     }
-
-    #[test]
-    fn partial_success_rebuilds_only_pending_events_with_a_new_header_key() {
-        // offline-publication.md 2.1 -- a federated Event travels inside an
-        // EventFederationSubmission: the Event, the lease it was published
-        // under, and the original ingress receipts. `validate_federation_transport`
-        // binds every one of those digests, so the fixture computes them instead
-        // of asserting placeholders: the retry rebuilder has to carry the whole
-        // submission through, and it must never re-stamp a receipt.
-        let realm_id = arkret_identifiers::RealmId::new(
-            "ak:realm:Ad45OVvW8PvF-UFqAF8ApvgyX0o6xBWwpg8UvABbuY40",
-        )
-        .unwrap();
-        let actor_did = arkret_identifiers::Did::new("did:webvh:z6mkalice:alice.example").unwrap();
-        let scope_ref = arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        };
-        let authority_set_policy = arkret_wire::AuthoritySetPolicy {
-            schema: arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
-            authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
-            policy_kind: arkret_wire::AuthoritySetPolicyKind::RealmAdmission,
-            scope_ref: scope_ref.clone(),
-            source: arkret_wire::AuthoritySetPolicySource {
-                source_kind: arkret_wire::AuthoritySetSourceKind::RealmControl,
-                source_ref: format!("ak:seal:sha256:{}", "d".repeat(64)),
-                source_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "c".repeat(64)))
-                    .unwrap(),
-                generation_ref: "1".to_owned(),
-            },
-            authorization_rules: vec![arkret_wire::AuthoritySetAuthorizationRule {
-                rule_id: "realm_admission".to_owned(),
-                issuer_role: arkret_wire::AuthoritySetIssuerRole::RealmAdmission,
-                allowed_actions: vec!["ak.message.create".to_owned()],
-                issuers: vec![arkret_wire::AuthoritySetIssuer {
-                    verification_method: arkret_wire::DidUrl::new(
-                        "did:web:authority.example#key-1",
-                    )
-                    .unwrap(),
-                }],
-                threshold: 1,
-            }],
-        };
-        let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
-            authority_set_id: authority_set_policy.authority_set_id.clone(),
-            authority_set_digest: authority_set_policy.digest().unwrap(),
-        };
-        let issued_at: chrono::DateTime<chrono::Utc> = "2026-07-26T00:00:00.000Z".parse().unwrap();
-        let received_at: chrono::DateTime<chrono::Utc> =
-            "2026-07-26T00:00:01.000Z".parse().unwrap();
-
-        let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
-            let mut event = crate::test_event::raw_event_at(
-                arkret_wire::EventKind::MessageCreate.as_str(),
-                arkret_wire::ScopeRef::Realm {
-                    realm_id: realm_id.clone(),
-                },
-                crate::test_actor_id(&actor_did),
-                1,
-                arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
-                serde_json::json!({"fixture_suffix": suffix}),
-                issued_at,
-            )
-            .unwrap();
-            let authority_ref =
-                arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
-                    .unwrap();
-            event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
-                authority_refs: vec![authority_ref],
-            });
-            event.event_id = event
-                .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .expect("fixture Event id follows the completed digest payload");
-            let event_digest = arkret_identifiers::Hash::new(
-                event
-                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                    .unwrap(),
-            )
-            .unwrap();
-            event.producer_proof = Some(arkret_wire::ProducerEventProof {
-                kind: "detached_jws".to_owned(),
-                verification_method: arkret_wire::DidUrl::new(
-                    "did:webvh:z6mkalice:alice.example#device-1",
-                )
-                .unwrap(),
-                event_digest: event_digest.clone(),
-                signer_resolution_evidence_ref: Some(
-                    arkret_wire::SignerEvidenceRef::new(format!(
-                        "ak:signer_evidence:sha256:{}",
-                        "11".repeat(32)
-                    ))
-                    .unwrap(),
-                ),
-                created_at: issued_at,
-                domain: None,
-                audience: None,
-                proof_purpose: None,
-                jws: "a..b".to_owned(),
-            });
-            let event_digest = arkret_identifiers::Hash::new(
-                event
-                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                    .unwrap(),
-            )
-            .unwrap();
-
-            let mut lease = arkret_wire::offline_publication::AuthorizationLease {
-                authorization_lease_id: arkret_identifiers::AuthorizationLeaseId::new(format!(
-                    "ak:authorization_lease:019f0000-0000-7000-8000-{lease_suffix}"
-                ))
-                .unwrap(),
-                basis_ref: arkret_wire::offline_publication::LeaseBasisRef::Seal(
-                    arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
-                        .unwrap(),
-                ),
-                actor_id: event.actor_id.clone(),
-                device_id: arkret_identifiers::DeviceId::new(
-                    "ak:device:019f0000-0000-7000-8000-00000000de01",
-                )
-                .unwrap(),
-                scope_ref: scope_ref.clone(),
-                action: "ak.message.create".to_owned(),
-                authorization_rule_id: "realm_admission".to_owned(),
-                risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
-                issued_at,
-                expires_at: issued_at + chrono::Duration::hours(4),
-                authority_set_ref: authority_set_ref.clone(),
-                authority_set_policy: authority_set_policy.clone(),
-                proofs: Vec::new(),
-            };
-            let lease_digest = lease.lease_digest().unwrap();
-            lease.proofs = vec![arkret_wire::primitives::PayloadProof {
-                kind: "detached_jws".to_owned(),
-                verification_method: arkret_wire::DidUrl::new("did:web:authority.example#key-1")
-                    .unwrap(),
-                payload_digest: lease_digest,
-                created_at: issued_at,
-                domain: None,
-                audience: None,
-                proof_purpose: None,
-                jws: "a..b".to_owned(),
-            }];
-
-            let mut receipt = arkret_wire::offline_publication::IngressReceipt {
-                receipt_id: arkret_identifiers::ReceiptId::new(format!(
-                    "ak:receipt:019f0000-0000-7000-8000-{receipt_suffix}"
-                ))
-                .unwrap(),
-                event_digest,
-                qualified_ingress_did: arkret_identifiers::Did::new("did:web:authority.example")
-                    .unwrap(),
-                received_at,
-                ingress_frontier: vec![event.event_id.clone()],
-                proofs: Vec::new(),
-            };
-            let receipt_digest = receipt.receipt_digest().unwrap();
-            receipt.proofs = vec![arkret_wire::primitives::PayloadProof {
-                kind: "detached_jws".to_owned(),
-                verification_method: arkret_wire::DidUrl::new("did:web:authority.example#key-1")
-                    .unwrap(),
-                payload_digest: receipt_digest,
-                created_at: received_at,
-                domain: None,
-                audience: None,
-                proof_purpose: None,
-                jws: "a..b".to_owned(),
-            }];
-
-            arkret_wire::EventFederationSubmission {
-                publication_event: None,
-                mls_frontier_leaves: None,
-                event,
-                authorization_lease: Some(lease),
-                ingress_receipts: vec![receipt],
-                control_proposal_ack: None,
-                ackless_self_principal_admission_evidence: None,
-                membership_compensation_evidence: None,
-            }
-        };
-
-        let request =
-            arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
-                service_binding_ref:
-                    arkret_models_collaboration::event_sync::FederationServiceBindingRef {
-                        realm_id: realm_id.clone(),
-                        realm_policy_digest: arkret_identifiers::Hash::new(format!(
-                            "sha256:{}",
-                            "b".repeat(64)
-                        ))
-                        .unwrap(),
-                        membership_frontier: Vec::new(),
-                        destination_kind: "station".to_owned(),
-                    },
-                events: vec![
-                    submission("000000000001", "00000000ae01", "00000000ce01"),
-                    submission("000000000002", "00000000ae02", "00000000ce02"),
-                ],
-                cbs_proof_bundles: Vec::new(),
-            };
-        let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
-        let original_receipt =
-            serde_json::to_value(&request.events[1].ingress_receipts[0]).unwrap();
-        let digest_suites = crate::routing::events::event_log::accepted_event_digest_suites(
-            &request.transported_events().cloned().collect::<Vec<_>>(),
-        )
-        .unwrap();
-        request
-            .validate_federation_transport(&digest_suites)
-            .expect("fixture must remain a valid federation transport request");
-        let response = format!(
-            r#"{{
-            "status":"partial",
-            "accepted":["{}"],
-            "pending_delivery_count":0,
-            "rejections":[{{
-                "id":"{pending_event_id}",
-                "reason_code":"dependency_missing",
-                "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-            }}]
-        }}"#,
-            request.events[0].event.event_id.as_str()
-        );
-        let previous_key = "ak:outbox:event:sha256:aa";
-        let Some(SemanticResubmission {
-            payload_json,
-            idempotency_key,
-            ..
-        }) = peer_event_partial_retry(
-            "/_arkret/peer/events",
-            &serde_json::to_string(&request).unwrap(),
-            &response,
-            previous_key,
-            1,
-        )
-        else {
-            panic!("expected a rebuilt partial retry");
-        };
-        let rebuilt: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
-        assert_eq!(rebuilt["events"].as_array().unwrap().len(), 1);
-        assert_eq!(rebuilt["events"][0]["event"]["event_id"], pending_event_id);
-        assert_eq!(
-            rebuilt["events"][0]["ingress_receipts"][0], original_receipt,
-            "the retry carries the original ingress receipt byte-identically"
-        );
-        assert!(rebuilt.get("idempotency_key").is_none());
-        // The response was received, so the old transport identity is spent
-        // (`federation.md` §8.5): the remainder travels under a fresh key.
-        assert!(idempotency_key.starts_with("ak:outbox:resubmit:sha256:"));
-        assert_ne!(idempotency_key, previous_key);
-    }
-
     #[test]
     fn excerpt_truncates_at_one_kib_on_char_boundary() {
         let body = "a".repeat(2048);

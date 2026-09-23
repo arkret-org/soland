@@ -24,10 +24,10 @@ use super::{
     AuthorityCommitTransaction, AuthorityCommitWriteOutcome, CanonicalEventRecord, ConsentGrantDot,
     ConsentGrantRecord, ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit,
     ContactRecord, ContactStore, CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore,
-    DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
-    DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
-    DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
-    DeviceRevocationGateSelector, EventBatchCommitRequest, EventCommitRequest,
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit, DevicePairingRecord,
+    DevicePairingStore, DeviceRevocationGateSelector, EventBatchCommitRequest, EventCommitRequest,
     EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
@@ -150,6 +150,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
         request_key: request_key.clone(),
         request_digest: request_digest.clone(),
         idempotency_expires_at: expires_at,
+        per_device_queue_capacity: 10_000,
         target_snapshot_guard: Some(DeviceMessageTargetSnapshotGuard {
             recipient: actor.clone(),
             devices: snapshot,
@@ -174,7 +175,9 @@ pub async fn assert_device_message_snapshot_guard_contract(
                     },
                     position: index as i64 + 1,
                     content: serde_json::json!({"kind":"ak.agent.runtime.command","content":{}}),
-                    created_at: now,
+                    // The queue must retain an unacknowledged delivery even
+                    // after the former one-hour expiry window has elapsed.
+                    created_at: now - Duration::hours(2),
                 }),
             })
             .collect(),
@@ -220,6 +223,37 @@ pub async fn assert_device_message_snapshot_guard_contract(
         .expect("commit guarded batch");
     assert!(matches!(stored, DeviceMessageBatchCommitOutcome::Stored(_)));
 
+    let mut full = batch.clone();
+    full.request_key.push_str(":full");
+    full.request_digest.push_str(":full");
+    full.per_device_queue_capacity = 1;
+    full.items.truncate(1);
+    full.items[0].message_key.push_str(":full");
+    full.items[0].intent_digest.push_str(":full");
+    assert_eq!(
+        messages
+            .commit_batch(full.clone())
+            .await
+            .expect("capacity rejection"),
+        DeviceMessageBatchCommitOutcome::QueueAtCapacity,
+        "full recipient queue must reject a fresh message without evicting the old one"
+    );
+    let full_intent = full
+        .items
+        .iter()
+        .map(|item| DeviceMessageIntentRecord {
+            message_key: item.message_key.clone(),
+            intent_digest: item.intent_digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        messages
+            .inspect_batch(&full.request_key, &full.request_digest, &full_intent)
+            .await
+            .expect("capacity rejection leaves no request/message idempotency record"),
+        DeviceMessageBatchInspection::Fresh { .. }
+    ));
+
     revoked.revoked_at = Some(now + Duration::seconds(2));
     revoked.updated_at = now + Duration::seconds(2);
     inventory
@@ -247,7 +281,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
         messages
             .list_after(&actor, &device_a, 0, 101)
             .await
-            .expect("device A queue")
+            .expect("unacknowledged two-hour-old delivery remains readable")
             .len(),
         1
     );
@@ -1399,6 +1433,7 @@ impl ContractCommitStream {
             event,
             mls_state: None,
             welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
         }
     }
 
@@ -1599,6 +1634,7 @@ fn contract_applet_event_request(
 ) -> EventCommitRequest {
     EventCommitRequest {
         authority_commit: stream.accept(&event),
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -2487,6 +2523,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event_id = event.event_id.clone();
     let request = EventCommitRequest {
         authority_commit: stream.accept(&event),
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -2652,6 +2689,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let pairing_event_id = pairing_event.event_id.clone();
     let pairing_commit = EventCommitRequest {
         authority_commit: stream.accept(&pairing_event),
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
             device_pairing_request_id: pairing_request_id.clone(),
@@ -2819,6 +2857,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     };
     let contact_commit = EventCommitRequest {
         authority_commit: stream.accept(&contact_event),
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
@@ -2913,6 +2952,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .unit_of_work
         .commit_event(EventCommitRequest {
             authority_commit: stream.accept(&failed_contact_event),
+            self_producer_guard: None,
             parent_membership_admission: None,
             device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
@@ -2977,6 +3017,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event_id = rollback_event.event_id.clone();
     let failed = EventCommitRequest {
         authority_commit: stream.order(&rollback_event),
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -5148,6 +5189,7 @@ fn consent_commit_request(
 ) -> EventCommitRequest {
     EventCommitRequest {
         authority_commit,
+        self_producer_guard: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
