@@ -1957,29 +1957,39 @@ async fn account_device_summary(
                 .and_then(Value::as_str),
             generation_fenced,
         );
-    let authorization_ref = if verification_state == DeviceSummaryVerificationState::Unresolved {
+    let authorized_event_ref = if verification_state == DeviceSummaryVerificationState::Unresolved {
         None
     } else {
-        let accepted = accepted.as_ref().ok_or_else(|| {
-            AppError::internal("verified device has no accepted authorization Commit")
-        })?;
-        Some(arkret_wire::CommittedEventRef {
-            event_id: accepted.commit.event_ref.clone(),
-            commit_id: accepted.commit.commit_id.clone(),
-            stream_ref: accepted.commit.stream_ref.clone(),
-            stream_position: accepted.commit.stream_position,
-        })
+        Some(
+            accepted
+                .as_ref()
+                .ok_or_else(|| {
+                    AppError::internal("verified device has no accepted authorization Commit")
+                })?
+                .commit
+                .event_ref
+                .clone(),
+        )
     };
+    // The accepted Event carries a ProducerEventProof, which has no signer
+    // evidence reference. A verified summary therefore fails validation until
+    // the durable account_device_control evidence root is available here.
+    let signer_resolution_evidence_ref = None;
     let summary = AccountDeviceSummary {
         device_id,
         status,
         verification_state,
         verification_source,
         display_name,
-        authorization_ref,
+        authorized_event_ref,
+        signer_resolution_evidence_ref,
         authorized_at: accepted.as_ref().map(|record| record.commit.committed_at),
         last_seen_at: None,
         revoked_at: device.revoked_at,
+        // A revoke target contains only the committed tombstone and cannot
+        // reconstruct the typed pending/revoked current result's acceptance
+        // sequence. `validate` below fails closed for revoked devices.
+        revocation_states: None,
     };
     summary
         .validate()

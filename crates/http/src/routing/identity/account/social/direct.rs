@@ -244,7 +244,7 @@ async fn accepted_direct_founding_events(
             stream_ref: arkret_wire::CommitStreamRef::Realm {
                 realm_id: realm.clone(),
             },
-            after_position: None,
+            direction: arkret_wire::StreamScanDirection::After(None),
             limit: 4,
         })
         .await

@@ -322,7 +322,9 @@ pub(crate) async fn load_confirmed_device_history(
             .scan_stream(&StreamScanRequest {
                 realm_id: realm_id.clone(),
                 stream_ref: stream_ref.clone(),
-                after_position: previous.as_ref().map(|commit| commit.stream_position),
+                direction: arkret_wire::StreamScanDirection::After(
+                    previous.as_ref().map(|commit| commit.stream_position),
+                ),
                 limit: 1000,
             })
             .await

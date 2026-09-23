@@ -15,7 +15,7 @@ use arkret_wire::{
     CommitStreamRef, DetachedSignatureContext, DidCoreId, DidUrl, Event, EventAdmissionSubmission,
     MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityCurrentAssertion,
     RealmAuthorityHandoff, RealmAuthorityTransition, RealmCommit, RealmCommitId,
-    RealmStateSnapshot, StreamScanOutcome, StreamScanRequest,
+    RealmStateSnapshot, StreamScanDirection, StreamScanOutcome, StreamScanRequest,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -859,13 +859,9 @@ impl AuthorityCommitApplication {
 
     /// Keyset page over one independent commit stream.
     ///
-    /// Paging is a `stream_position` keyset inside a single
-    /// [`CommitStreamRef`]: the caller passes the last position it already
-    /// holds as `after_position` (`None` starts at genesis position 0) and the
-    /// store returns at most `limit` consecutive rows. There is no opaque
-    /// page token, no reverse direction and no `has_more` flag; `truncated`
-    /// alone says whether the stream continued past the returned page, and the
-    /// next request resumes from the last returned `commit.stream_position`.
+    /// Paging uses a `stream_position` keyset inside one [`CommitStreamRef`].
+    /// The direction selects either the forward or backward side of a position;
+    /// `truncated` indicates whether another page exists in that direction.
     pub async fn scan_stream(
         &self,
         request: &StreamScanRequest,
@@ -930,7 +926,7 @@ impl AuthorityCommitApplication {
             .scan_stream(&StreamScanRequest {
                 realm_id: request.realm_id.clone(),
                 stream_ref: stream_ref.clone(),
-                after_position: None,
+                direction: StreamScanDirection::After(None),
                 limit: 1,
             })
             .await?;

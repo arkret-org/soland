@@ -468,7 +468,7 @@ async fn device_quorum_methods_at_policy_basis(
             .scan_stream(&arkret_wire::StreamScanRequest {
                 realm_id: basis.commit.realm_id.clone(),
                 stream_ref: basis.commit.stream_ref.clone(),
-                after_position,
+                direction: arkret_wire::StreamScanDirection::After(after_position),
                 limit: 1000,
             })
             .await
