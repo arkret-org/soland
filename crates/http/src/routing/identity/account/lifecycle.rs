@@ -203,6 +203,16 @@ async fn run_account_deactivation_fanout(
     let devices_revoked = revoke_devices_for_actor(state, principal_id)
         .await
         .map_err(AppError::internal)?;
+    let account_id = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal_id.to_owned())
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        state.service_core_id().clone(),
+    );
+    state
+        .persistence()
+        .begin_public_push_account_deactivation(&account_id, now())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let (to_device_messages_dropped, push_routes_revoked) =
         purge_delivery_state_for_actor(state, principal_id).await?;
     let keypackages_retired = retire_owner_account_keypackages(state, owner_account_pk).await?;
@@ -549,17 +559,9 @@ pub(crate) async fn execute_account_status_erasure(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
-    let fanout = run_account_deactivation_fanout(state, actor, account_pk).await?;
-    // `consent-model.md` section 6.1.1.4 -- erasure MUST drop the holder's
-    // whole seen-source ledger. Consent revoke and source list edits must not,
-    // which is why this lives here and not in those paths.
-    state
-        .persistence()
-        .invite_new_source_ledger_store()
-        .delete_for_holder(account_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let memberships_removed = remove_realm_memberships_for_actor(state, actor);
+    // Fence new active handoffs before the fanout. The fanout is retryable
+    // after a crash, but a registration admitted during it could otherwise
+    // escape its terminal tombstone scan.
     let changed_at = now();
     persist_account_lifecycle_record(
         state,
@@ -573,6 +575,17 @@ pub(crate) async fn execute_account_status_erasure(
         },
     )
     .await?;
+    let fanout = run_account_deactivation_fanout(state, actor, account_pk).await?;
+    // `consent-model.md` section 6.1.1.4 -- erasure MUST drop the holder's
+    // whole seen-source ledger. Consent revoke and source list edits must not,
+    // which is why this lives here and not in those paths.
+    state
+        .persistence()
+        .invite_new_source_ledger_store()
+        .delete_for_holder(account_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let memberships_removed = remove_realm_memberships_for_actor(state, actor);
     append_audit_log(
         state,
         Some(actor),

@@ -276,9 +276,54 @@ pub fn spawn_public_push_revoke_retry_worker(
         let mut drain = state.subscribe_connection_drain();
         let mut expiry_cursor = None;
         let mut revoke_cursor = None;
+        // The lifecycle snapshot is durable. Re-run once per terminal
+        // transition on each process start, then let the receipt worker
+        // confirm any tombstones left awaiting a Gateway response.
+        let mut reconciled_deactivations = std::collections::BTreeMap::new();
         loop {
             tokio::select! {
                 _ = ticker.tick() => {}
+                changed = drain.changed() => {
+                    if changed.is_err() || drain.borrow().is_some() {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            let reconcile = async {
+                for (principal_id, lifecycle) in state.identities().account_lifecycles_snapshot() {
+                    if !matches!(lifecycle.state.as_str(), "deactivated" | "erasure_pending")
+                        || reconciled_deactivations.get(&principal_id)
+                            == Some(&lifecycle.changed_at)
+                    {
+                        continue;
+                    }
+                    let principal_id = match arkret_wire::DidCoreId::new(principal_id.clone()) {
+                        Ok(principal_id) => principal_id,
+                        Err(_) => continue,
+                    };
+                    let account_id = AccountId::new(principal_id, state.service_core_id().clone());
+                    match state
+                        .persistence()
+                        .begin_public_push_account_deactivation(&account_id, Utc::now())
+                        .await
+                    {
+                        Ok(_) => {
+                            reconciled_deactivations.insert(
+                                account_id.principal_id.as_str().to_owned(),
+                                lifecycle.changed_at,
+                            );
+                        }
+                        Err(_) => tracing::warn!(
+                            worker = "public_push_revoke_retry",
+                            stage = "reconcile_account_deactivation",
+                            "public Push Gateway account deactivation reconciliation failed"
+                        ),
+                    }
+                }
+            };
+            tokio::select! {
+                _ = reconcile => {}
                 changed = drain.changed() => {
                     if changed.is_err() || drain.borrow().is_some() {
                         break;

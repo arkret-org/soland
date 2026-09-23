@@ -145,6 +145,12 @@ struct AccountLifecycleStateRow {
     state: String,
 }
 
+#[derive(QueryableByName)]
+struct PublicHandoffDeviceRow {
+    #[diesel(sql_type = Text)]
+    device_id: String,
+}
+
 /// Serialize active public handoff writes with account lifecycle changes.
 /// The lifecycle writer locks the same account row before changing its state.
 async fn ensure_active_account_in_transaction(
@@ -1189,6 +1195,75 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn begin_public_push_account_deactivation(
+        &self,
+        account_id: &AccountId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<usize> {
+        account_id
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let account_json = serde_json::to_value(account_id).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let lifecycle = sql_query(
+            "SELECT l.state FROM account_lifecycle l JOIN accounts a ON a.pk = l.account_pk \
+             WHERE a.principal_id = $1 AND a.station_id = $2",
+        )
+        .bind::<Text, _>(&account_id.principal_id)
+        .bind::<Text, _>(&account_id.station_id)
+        .get_result::<AccountLifecycleStateRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if !lifecycle.is_some_and(|lifecycle| {
+            matches!(lifecycle.state.as_str(), "deactivated" | "erasure_pending")
+        }) {
+            return Err(PersistenceError::Conflict(
+                "cas_conflict: public push account deactivation requires a terminal account"
+                    .to_owned(),
+            ));
+        }
+        // Include pending intents even when a device inventory row is gone,
+        // and include public routes with missing intents so the normal UOW
+        // detects the inconsistency instead of silently leaving them live.
+        let devices = sql_query(
+            "SELECT DISTINCT local_device_id AS device_id \
+             FROM push_registration_handoff_intents \
+             WHERE source_station_id = $1 AND local_account_id = $2 \
+               AND desired_state = 'active' \
+             UNION \
+             SELECT DISTINCT device_id FROM push_devices \
+             WHERE payload->'account_id' = $2 AND public_handoff = TRUE \
+             ORDER BY device_id",
+        )
+        .bind::<Text, _>(&account_id.station_id)
+        .bind::<Jsonb, _>(&account_json)
+        .load::<PublicHandoffDeviceRow>(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        drop(conn);
+        let mut revoked = 0usize;
+        let mut first_error = None;
+        for device in devices {
+            let result = match DeviceId::new(device.device_id) {
+                Ok(device_id) => {
+                    self.begin_public_push_unregistration(account_id, &device_id, None, None, now)
+                        .await
+                }
+                Err(error) => Err(PersistenceError::Internal(error.to_string())),
+            };
+            match result {
+                Ok(intents) => revoked = revoked.saturating_add(intents.len()),
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(revoked)
+    }
+
     async fn expire_public_push_registrations(
         &self,
         source_station_id: &DidCoreId,
@@ -1431,10 +1506,9 @@ mod tests {
     use tokio::sync::Barrier;
 
     use super::*;
-    use crate::{PgDeviceInventoryStore, PgDeviceRevocationStore, PgPushDeviceStore};
-
-    #[path = "../../../../test-support/src/device_authorization_history.rs"]
-    mod device_history_fixture;
+    use crate::{
+        PgDeviceInventoryStore, PgDeviceRevocationStore, PgPushDeviceStore, device_history_fixture,
+    };
 
     fn active_request() -> PushRegistrationHandoffRequestBody {
         active_request_with_id("registration_0123456789abcdef", None)
@@ -1805,6 +1879,26 @@ mod tests {
                 .await,
             Err(PersistenceError::Conflict(_))
         ));
+        assert_eq!(
+            store
+                .begin_public_push_account_deactivation(&route.account_id, at)
+                .await
+                .unwrap(),
+            1
+        );
+        let tombstone = store
+            .get_intent(&source, active.registration_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tombstone.desired_state,
+            PushRegistrationHandoffState::Revoked
+        );
+        assert_eq!(
+            tombstone.status,
+            PushRegistrationHandoffIntentStatus::AwaitingReceipt
+        );
     }
 
     #[tokio::test]

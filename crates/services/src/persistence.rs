@@ -378,6 +378,18 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn begin_public_push_account_deactivation(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<usize> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .begin_public_push_account_deactivation(account_id, now)
+            .await?)
+    }
+
     pub async fn awaiting_public_push_revocations(
         &self,
         source_station_id: &arkret_wire::DidCoreId,

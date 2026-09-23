@@ -307,10 +307,7 @@ mod tests {
     use soland_storage::DeviceInventoryStore;
 
     use super::*;
-    use crate::PgDeviceInventoryStore;
-
-    #[path = "../../../../test-support/src/device_authorization_history.rs"]
-    mod device_history_fixture;
+    use crate::{PgDeviceInventoryStore, device_history_fixture};
 
     #[tokio::test]
     async fn postgres_push_registration_atomic_rotation_and_exact_account_removal() {

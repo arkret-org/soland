@@ -470,6 +470,16 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> PersistenceResult<Vec<PushRegistrationHandoffIntentRecord>>;
 
+    /// Reconcile every active public route and pending active handoff for an
+    /// account whose durable lifecycle is terminal. Each device transition
+    /// uses the same exact tombstone UOW as client unregistration. A retry
+    /// may return already-awaiting revokes; the receipt worker confirms them.
+    async fn begin_public_push_account_deactivation(
+        &self,
+        account_id: &AccountId,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<usize>;
+
     /// Turn a bounded stable page of active public handoffs whose registration
     /// validity has ended (`expires_at <= now`) into terminal revoke intents,
     /// removing only each matching public local route. Candidates are isolated

@@ -35,6 +35,9 @@ mod authority_commit;
 mod blobs;
 mod capability_grant_current_results;
 mod contacts;
+#[cfg(test)]
+#[path = "../../test-support/src/device_authorization_history.rs"]
+mod device_history_fixture;
 mod device_pairing_row;
 mod device_pairings;
 mod device_revocations;
