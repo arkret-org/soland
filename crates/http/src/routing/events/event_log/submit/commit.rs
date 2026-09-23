@@ -213,7 +213,7 @@ pub(super) async fn commit_accepted_event_stage(
         }
         if conflict == Some(ConflictCode::SnapshotCapacityExceeded) {
             return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
+                StatusCode::CONFLICT,
                 "failed_precondition",
                 "candidate Realm snapshot exceeds the 8 MiB inline capacity",
             )
