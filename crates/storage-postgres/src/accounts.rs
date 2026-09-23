@@ -332,10 +332,16 @@ impl AccountLifecycleStore for PgAccountLifecycleStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO account_lifecycle \
+        // Active public push handoff transactions hold FOR SHARE on this
+        // account row. Take the conflicting lock before changing lifecycle
+        // state, so an in-flight active intent or receipt cannot straddle a
+        // completed deactivation transition.
+        let written = sql_query(
+            "WITH locked_account AS MATERIALIZED ( \
+                 SELECT pk FROM accounts WHERE pk = $1 FOR UPDATE \
+             ) INSERT INTO account_lifecycle \
              (account_pk, state, reason, changed_by, changed_at) \
-             VALUES ($1, $2, $3, $4, $5) \
+             SELECT pk, $2, $3, $4, $5 FROM locked_account WHERE true \
              ON CONFLICT (account_pk) DO UPDATE SET \
                state = EXCLUDED.state, \
                reason = EXCLUDED.reason, \
@@ -356,8 +362,13 @@ impl AccountLifecycleStore for PgAccountLifecycleStore {
         .bind::<Timestamptz, _>(record.changed_at)
         .execute(&mut *conn)
         .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        if written != 1 {
+            return Err(PersistenceError::NotFound(
+                "account lifecycle account".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     async fn delete(&self, account_pk: AccountPk) -> PersistenceResult<()> {

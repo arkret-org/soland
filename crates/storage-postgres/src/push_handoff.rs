@@ -139,6 +139,53 @@ const HANDOFF_COLUMNS: &str = "source_station_id, local_account_id, local_device
     desired_state, request_digest, client_input_digest, canonical_request, status, receipt, \
     created_at, updated_at";
 
+#[derive(QueryableByName)]
+struct AccountLifecycleStateRow {
+    #[diesel(sql_type = Text)]
+    state: String,
+}
+
+/// Serialize active public handoff writes with account lifecycle changes.
+/// The lifecycle writer locks the same account row before changing its state.
+async fn ensure_active_account_in_transaction(
+    conn: &mut AsyncPgConnection,
+    account_id: &AccountId,
+) -> PersistenceResult<()> {
+    let account = sql_query(
+        "SELECT 'active' AS state FROM accounts a \
+         WHERE a.principal_id = $1 AND a.station_id = $2 FOR SHARE OF a",
+    )
+    .bind::<Text, _>(&account_id.principal_id)
+    .bind::<Text, _>(&account_id.station_id)
+    .get_result::<AccountLifecycleStateRow>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if account.is_none() {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: public push handoff requires an active account".to_owned(),
+        ));
+    }
+    // This separate statement must run after the account row lock is acquired,
+    // so READ COMMITTED observes a lifecycle update that just released it.
+    let lifecycle = sql_query(
+        "SELECT l.state FROM account_lifecycle l JOIN accounts a ON a.pk = l.account_pk \
+         WHERE a.principal_id = $1 AND a.station_id = $2",
+    )
+    .bind::<Text, _>(&account_id.principal_id)
+    .bind::<Text, _>(&account_id.station_id)
+    .get_result::<AccountLifecycleStateRow>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if lifecycle.is_some_and(|lifecycle| lifecycle.state != "active") {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: public push handoff requires an active account".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 async fn load_intent(
     conn: &mut AsyncPgConnection,
     source_station_id: &DidCoreId,
@@ -702,6 +749,12 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                 &candidate.device_authorization,
             )
             .await?;
+            if candidate.desired_state
+                == arkret_models_integration::PushRegistrationHandoffState::Active
+            {
+                ensure_active_account_in_transaction(conn, &candidate.local_route.account_id)
+                    .await?;
+            }
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&account_lock_key)
                 .execute(conn)
@@ -1306,6 +1359,7 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
             )
             .await?;
             crate::ensure_gate_allowed_in_transaction(conn, &authorization).await?;
+            ensure_active_account_in_transaction(conn, &registration.account_id).await?;
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&account_lock_key)
                 .execute(conn)
@@ -1429,6 +1483,19 @@ mod tests {
             push_route_id: "com.example.app".to_owned(),
             destination_gateway_id: destination.clone(),
         }
+    }
+
+    async fn seed_account(pool: &PgPool, account: &AccountId) {
+        let mut conn = pg_conn(pool).await.unwrap();
+        sql_query(
+            "INSERT INTO accounts (principal_id, station_id) VALUES ($1, $2) \
+             ON CONFLICT (station_id, principal_id) DO NOTHING",
+        )
+        .bind::<Text, _>(&account.principal_id)
+        .bind::<Text, _>(&account.station_id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
     }
 
     fn client_input_digest(byte: char) -> Hash {
@@ -1671,6 +1738,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inactive_account_cannot_create_or_install_a_public_handoff() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route(&source, &destination);
+        seed_account(&pool, &route.account_id).await;
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        let active = active_request();
+        let at = chrono::Utc::now();
+        store
+            .ensure_desired_intent(
+                &source,
+                &route,
+                &device_authorization(&route),
+                &client_input_digest('1'),
+                &active,
+                at,
+            )
+            .await
+            .unwrap();
+        let mut conn = pg_conn(&pool).await.unwrap();
+        sql_query(
+            "INSERT INTO account_lifecycle (account_pk, state, changed_at) \
+             SELECT pk, 'deactivated', $3 FROM accounts \
+             WHERE principal_id = $1 AND station_id = $2",
+        )
+        .bind::<Text, _>(&route.account_id.principal_id)
+        .bind::<Text, _>(&route.account_id.station_id)
+        .bind::<Timestamptz, _>(at)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let new_active = active_request_with_id(
+            "registration_bbbbbbbbbbbbbbbb",
+            Some(active.registration_id()),
+        );
+        assert!(matches!(
+            store
+                .ensure_desired_intent(
+                    &source,
+                    &route,
+                    &device_authorization(&route),
+                    &client_input_digest('2'),
+                    &new_active,
+                    at,
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        let receipt = receipt_for(&active, &source, &destination, at);
+        let registration = local_registration(&route.account_id, &active);
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &source,
+                    &route,
+                    active.registration_id(),
+                    &active.request_digest().unwrap(),
+                    &receipt,
+                    &device_authorization(&route),
+                    &registration,
+                    at,
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn concurrent_revoke_wins_over_active_receipt_and_late_receipt_fails_cas() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
@@ -1678,6 +1815,7 @@ mod tests {
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route(&source, &destination);
+        seed_account(&pool, &route.account_id).await;
         let active_client_digest = client_input_digest('1');
         let active = active_request();
         let active_digest = active.request_digest().unwrap();
@@ -1822,6 +1960,7 @@ mod tests {
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route(&source, &destination);
+        seed_account(&pool, &route.account_id).await;
         let same_client_input = client_input_digest('3');
         let first = active_request_with_id("registration_aaaaaaaaaaaaaaaa", None);
         let retry = active_request_with_id("registration_bbbbbbbbbbbbbbbb", None);
@@ -2002,6 +2141,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -2270,6 +2410,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -2624,6 +2765,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -2714,6 +2856,7 @@ mod tests {
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route(&station_id, &destination);
+        seed_account(&pool, &route.account_id).await;
         let authorization = device_authorization(&route);
         let existing = active_request_with_id("registration_cccccccccccccccc", None);
         let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
@@ -2814,6 +2957,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -3013,6 +3157,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -3145,6 +3290,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -3244,6 +3390,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
