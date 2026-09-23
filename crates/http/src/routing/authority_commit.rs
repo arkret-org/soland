@@ -68,6 +68,16 @@ fn render_bad_request(res: &mut Response, detail: String) {
 }
 
 fn render_service_error(res: &mut Response, error: ServiceError) {
+    if error.conflict_code() == Some(soland_storage::ConflictCode::SnapshotCapacityExceeded) {
+        return crate::error::render_error_with_reason_code(
+            res,
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            &error.to_string(),
+            soland_storage::ConflictCode::SnapshotCapacityExceeded.as_str(),
+            None,
+        );
+    }
     let (status, code) = match &error {
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         ServiceError::Conflict(_)
@@ -349,6 +359,27 @@ mod tests {
                 "current operation registry is missing {path}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn snapshot_capacity_overflow_renders_the_registered_precondition_reason() {
+        let mut res = Response::new();
+        render_service_error(
+            &mut res,
+            ServiceError::Conflict(
+                "snapshot_capacity_exceeded: candidate Realm snapshot exceeds 8 MiB".to_owned(),
+            ),
+        );
+        assert_eq!(res.status_code, Some(StatusCode::CONFLICT));
+        let body: serde_json::Value = salvo::test::ResponseExt::take_json(&mut res)
+            .await
+            .expect("problem body");
+        assert_eq!(body["status"], 409);
+        assert_eq!(
+            body["type"],
+            "https://arkret.org/problems/failed_precondition"
+        );
+        assert_eq!(body["reason_code"], "snapshot_capacity_exceeded");
     }
 
     #[tokio::test]
