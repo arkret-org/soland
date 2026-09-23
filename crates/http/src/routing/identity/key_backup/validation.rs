@@ -289,14 +289,15 @@ pub(super) async fn validate_current_recovery_recipient(
     backup: &KeyBackup,
     evaluated_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
+    let account_id = backup.actor_id.as_account_id().ok_or_else(|| {
+        failed_precondition(
+            "recovery_public_key backup requires an account actor",
+            "recovery_policy_mismatch",
+        )
+    })?;
     let policy = state
         .recovery_policies()
-        .active_policy(backup.actor_id.as_account_id().ok_or_else(|| {
-            failed_precondition(
-                "recovery_public_key backup requires an account actor",
-                "recovery_policy_mismatch",
-            )
-        })?)
+        .active_policy(account_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {
@@ -310,7 +311,7 @@ pub(super) async fn validate_current_recovery_recipient(
             "accepted recovery policy failed strong decoding: {error}"
         ))
     })?;
-    policy.validate().map_err(|error| {
+    policy.validate_shape().map_err(|error| {
         AppError::internal(format!(
             "accepted recovery policy failed validation: {error}"
         ))
@@ -325,17 +326,37 @@ pub(super) async fn validate_current_recovery_recipient(
         .hpke_suite
         .as_deref()
         .unwrap_or(arkret_wire::HPKE_SUITE_X25519_CHACHA20POLY1305_V1);
-    let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
-        .map_err(|_| {
+    let suite: arkret_models_crypto::recovery_policy::RecoveryBackupHpkeSuite =
+        serde_json::from_value(Value::String(suite_id.to_owned())).map_err(|_| {
             crate::app_error!(
                 UnsupportedHpkeSuite,
                 format!("key backup HPKE suite is unsupported: {suite_id}"),
             )
         })?;
-    let agreements = policy.active_hpke_recipients(evaluated_at);
-    let matching_recipient = agreements
-        .iter()
-        .find(|entry| current_backup_hpke_agreement(entry, recipient, evaluated_at));
+    let policy_ref = backup.recovery_policy_ref.as_ref().ok_or_else(|| {
+        failed_precondition(
+            "recovery_public_key backup has no recovery policy ref",
+            "recovery_policy_mismatch",
+        )
+    })?;
+    if policy.account_id != *account_id
+        || policy.policy_id != policy_ref.policy_id
+        || policy.version != policy_ref.policy_version
+    {
+        return Err(failed_precondition(
+            "backup recovery_policy_ref does not identify the accepted policy",
+            "recovery_policy_mismatch",
+        ));
+    }
+    let matching_recipient = policy.methods.iter().find_map(|method| {
+        let arkret_models_crypto::recovery_policy::RecoveryMethod::RecoveryUnlock { keys } = method
+        else {
+            return None;
+        };
+        keys.iter()
+            .map(|key| &key.backup_hpke)
+            .find(|entry| current_backup_hpke_agreement(entry, recipient, evaluated_at))
+    });
     let Some(agreement) = matching_recipient else {
         return Err(failed_precondition(
             "recipient_key_ref is not a current non-revoked backup HPKE key agreement in the accepted recovery policy",
@@ -359,7 +380,7 @@ fn current_backup_hpke_agreement(
     evaluated_at: DateTime<Utc>,
 ) -> bool {
     entry.key_agreement_ref.as_str() == recipient
-        && entry.usage == RecoveryKeyAgreementUse::BackupHpke
+        && entry.r#use == RecoveryKeyAgreementUse::BackupHpke
         && entry.revoked_at.is_none()
         && entry.not_before <= evaluated_at
         && entry.expires_at > evaluated_at
@@ -381,13 +402,10 @@ mod tests {
             ))
             .unwrap(),
             key_agreement_algorithm:
-                arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
-            public_key_multibase: arkret_wire::NonEmptyString::new(
-                "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
-            )
-            .unwrap(),
-            hpke_suites: vec![RecoveryHpkeSuite::X25519ChaCha20Poly1305],
-            usage: RecoveryKeyAgreementUse::BackupHpke,
+                arkret_models_crypto::recovery_policy::RecoveryKeyAgreementAlgorithm::X25519,
+            public_key_multibase: "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
+            hpke_suites: vec![arkret_models_crypto::recovery_policy::RecoveryBackupHpkeSuite::X25519AeadChacha20Poly1305V1],
+            r#use: RecoveryKeyAgreementUse::BackupHpke,
             not_before: now - chrono::TimeDelta::minutes(1),
             expires_at: now + chrono::TimeDelta::days(1),
             revoked_at: None,
