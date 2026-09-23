@@ -151,6 +151,28 @@ pub(super) async fn push_register(
             .map_err(|error| {
                 AppError::internal(format!("derived push target is invalid: {error}"))
             })?;
+    let session_revocation_ref = match session.session_grant.as_ref() {
+        Some(grant)
+            if grant.credential_class
+                == arkret_models_identity::SessionGrantCredentialClass::Standard
+                && matches!(
+                    &grant.holder_binding,
+                    arkret_models_identity::SessionGrantHolderBinding::HumanDevice { .. }
+                )
+                && grant
+                    .revocation_ref
+                    .starts_with("org.arkret.coauth.browser_session:")
+                && grant.revocation_ref != "org.arkret.coauth.browser_session:" =>
+        {
+            Some(grant.revocation_ref.as_str())
+        }
+        None if state.config().development_mode => None,
+        _ => {
+            return Err(AppError::unauthenticated(
+                "public push registration requires a browser-bound standard human grant",
+            ));
+        }
+    };
     let outcome = super::push_handoff::register(
         state,
         super::push_handoff::PublicPushRegistration {
@@ -160,6 +182,7 @@ pub(super) async fn push_register(
             push_route_id,
             push_target_id,
             prepared_at,
+            session_revocation_ref,
         },
     )
     .await?;

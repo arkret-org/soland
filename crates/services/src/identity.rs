@@ -2007,6 +2007,7 @@ pub struct AgentSessionState {
 #[derive(Clone, Debug)]
 pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
+    pub revocation_ref: String,
     pub account_id: AccountId,
     pub issuer_id: arkret_identifiers::DidCoreId,
     /// Scopes the Account Authority bound into the presented grant. They are

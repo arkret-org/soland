@@ -46,6 +46,21 @@ pub struct PushRegistrationHandoffExpiryPage {
     pub next_cursor: Option<PushRegistrationHandoffExpiryCursor>,
 }
 
+/// Station-private, grant-bound continuation for the one public hard logout.
+/// The JWT itself is never stored. `revocation_ref` is accepted only for a
+/// standard human grant bound to the trusted Account Authority browser session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PushHardLogoutJournalRecord {
+    pub grant_token_digest: String,
+    pub revocation_ref: String,
+    pub account_id: AccountId,
+    pub device_id: DeviceId,
+    pub cnf_jkt: String,
+    pub auth_side_confirmed: bool,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 impl PushRegistrationHandoffRetryCursor {
     #[must_use]
     pub fn after(record: &PushRegistrationHandoffIntentRecord) -> Self {
@@ -422,6 +437,33 @@ pub fn apply_verified_push_registration_receipt(
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait PushRegistrationHandoffStore: Send + Sync {
+    async fn reserve_hard_logout_journal(
+        &self,
+        record: &PushHardLogoutJournalRecord,
+    ) -> PersistenceResult<PushHardLogoutJournalRecord>;
+
+    async fn hard_logout_journal(
+        &self,
+        grant_token_digest: &str,
+    ) -> PersistenceResult<Option<PushHardLogoutJournalRecord>>;
+
+    async fn pending_confirmed_hard_logouts(
+        &self,
+        after_digest: Option<&str>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<PushHardLogoutJournalRecord>>;
+
+    async fn mark_hard_logout_auth_confirmed(
+        &self,
+        grant_token_digest: &str,
+    ) -> PersistenceResult<()>;
+
+    async fn mark_hard_logout_completed(
+        &self,
+        grant_token_digest: &str,
+        now: DateTime<Utc>,
+    ) -> PersistenceResult<()>;
+
     async fn ensure_desired_intent(
         &self,
         source_station_id: &DidCoreId,
@@ -429,6 +471,7 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         device_authorization: &crate::DeviceRevocationGateSelector,
         client_input_digest: &Hash,
         request: &PushRegistrationHandoffRequestBody,
+        session_revocation_ref: Option<&str>,
         now: DateTime<Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffIntentWrite>;
 
@@ -515,6 +558,7 @@ pub trait PushRegistrationHandoffStore: Send + Sync {
         receipt: &PushRegistrationInstallationReceipt,
         authorization: &crate::DeviceRevocationGateSelector,
         registration: &PushRegistrationRecord,
+        session_revocation_ref: Option<&str>,
         now: DateTime<Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite>;
 }

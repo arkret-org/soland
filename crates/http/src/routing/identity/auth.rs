@@ -46,6 +46,7 @@ use crate::{JsonResult, ids, json_ok};
 mod device_pair;
 mod login;
 mod logout;
+pub(crate) use logout::revoke_sessions_for_actor_device as revoke_sessions_for_hard_logout_device;
 mod revocation;
 mod sessions;
 

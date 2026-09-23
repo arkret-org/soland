@@ -6,7 +6,7 @@ use arkret_wire::{AccountId, DeviceId, DidCoreId, Hash};
 
 use super::{
     AsyncConnection, AsyncPgConnection, BigInt, Binary, Jsonb, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    PersistenceError, PersistenceResult, PgPool, PgTransactionError, PushHardLogoutJournalRecord,
     PushRegistrationHandoffExpiryCursor, PushRegistrationHandoffExpiryPage,
     PushRegistrationHandoffIntentRecord, PushRegistrationHandoffIntentStatus,
     PushRegistrationHandoffIntentWrite, PushRegistrationHandoffReceiptWrite,
@@ -149,6 +149,90 @@ struct AccountLifecycleStateRow {
 struct PublicHandoffDeviceRow {
     #[diesel(sql_type = Text)]
     device_id: String,
+}
+
+#[derive(QueryableByName)]
+struct HardLogoutJournalRow {
+    #[diesel(sql_type = Text)]
+    grant_token_digest: String,
+    #[diesel(sql_type = Text)]
+    revocation_ref: String,
+    #[diesel(sql_type = Jsonb)]
+    account_id: Value,
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = Text)]
+    cnf_jkt: String,
+    #[diesel(sql_type = super::Bool)]
+    auth_side_confirmed: bool,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<HardLogoutJournalRow> for PushHardLogoutJournalRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: HardLogoutJournalRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            grant_token_digest: row.grant_token_digest,
+            revocation_ref: row.revocation_ref,
+            account_id: serde_json::from_value(row.account_id)
+                .map_err(PersistenceError::database)?,
+            device_id: DeviceId::new(row.device_id)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            cnf_jkt: row.cnf_jkt,
+            auth_side_confirmed: row.auth_side_confirmed,
+            completed_at: row.completed_at,
+            created_at: row.created_at,
+        })
+    }
+}
+
+const HARD_LOGOUT_COLUMNS: &str = "grant_token_digest, revocation_ref, account_id, \
+    device_id, cnf_jkt, auth_side_confirmed, completed_at, created_at";
+
+fn logout_family_lock_key(revocation_ref: &str) -> String {
+    format!("push-hard-logout:{revocation_ref}")
+}
+
+async fn lock_logout_family(
+    conn: &mut AsyncPgConnection,
+    revocation_ref: &str,
+) -> PersistenceResult<()> {
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(logout_family_lock_key(revocation_ref))
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
+async fn ensure_logout_family_not_fenced(
+    conn: &mut AsyncPgConnection,
+    revocation_ref: &str,
+) -> PersistenceResult<()> {
+    lock_logout_family(conn, revocation_ref).await?;
+    #[derive(QueryableByName)]
+    struct FenceRow {
+        #[diesel(sql_type = super::Bool)]
+        fenced: bool,
+    }
+    let row = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM push_hard_logout_journal \
+         WHERE revocation_ref = $1) AS fenced",
+    )
+    .bind::<Text, _>(revocation_ref)
+    .get_result::<FenceRow>(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if row.fenced {
+        return Err(PersistenceError::Conflict(
+            "cas_conflict: public push handoff grant family has logged out".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Serialize active public handoff writes with account lifecycle changes.
@@ -721,6 +805,186 @@ pub(crate) async fn revoke_public_push_routes_for_device_in_connection(
 
 #[async_trait]
 impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
+    async fn reserve_hard_logout_journal(
+        &self,
+        record: &PushHardLogoutJournalRecord,
+    ) -> PersistenceResult<PushHardLogoutJournalRecord> {
+        record
+            .account_id
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if !record
+            .revocation_ref
+            .starts_with("org.arkret.coauth.browser_session:")
+            || record.revocation_ref == "org.arkret.coauth.browser_session:"
+            || record.grant_token_digest.is_empty()
+            || record.cnf_jkt.is_empty()
+            || record.auth_side_confirmed
+            || record.completed_at.is_some()
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "invalid standard human hard logout journal reservation".to_owned(),
+            ));
+        }
+        let record = record.clone();
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            lock_logout_family(conn, &record.revocation_ref).await?;
+            let query = format!(
+                "SELECT {HARD_LOGOUT_COLUMNS} FROM push_hard_logout_journal \
+                 WHERE grant_token_digest = $1 FOR UPDATE"
+            );
+            let existing = sql_query(query)
+                .bind::<Text, _>(&record.grant_token_digest)
+                .get_result::<HardLogoutJournalRow>(conn)
+                .await
+                .optional()?;
+            if let Some(existing) = existing {
+                let existing: PushHardLogoutJournalRecord = existing.try_into()?;
+                if existing.revocation_ref != record.revocation_ref
+                    || existing.account_id != record.account_id
+                    || existing.device_id != record.device_id
+                    || existing.cnf_jkt != record.cnf_jkt
+                {
+                    return Err(PersistenceError::Conflict(
+                        "cas_conflict: hard logout journal binding changed".to_owned(),
+                    )
+                    .into());
+                }
+                return Ok(existing);
+            }
+            let account_json =
+                serde_json::to_value(&record.account_id).map_err(PersistenceError::database)?;
+            #[derive(QueryableByName)]
+            struct FamilyBindingRow {
+                #[diesel(sql_type = super::Jsonb)]
+                account_id: serde_json::Value,
+                #[diesel(sql_type = super::Text)]
+                device_id: String,
+            }
+            let existing_family = sql_query(
+                "SELECT account_id, device_id FROM push_hard_logout_journal \
+                 WHERE revocation_ref = $1 LIMIT 1 FOR UPDATE",
+            )
+            .bind::<Text, _>(&record.revocation_ref)
+            .get_result::<FamilyBindingRow>(conn)
+            .await
+            .optional()?;
+            if let Some(existing_family) = existing_family {
+                if existing_family.account_id != account_json
+                    || existing_family.device_id != record.device_id.as_str()
+                {
+                    return Err(PersistenceError::Conflict(
+                        "cas_conflict: hard logout family account or device changed".to_owned(),
+                    )
+                    .into());
+                }
+            }
+            sql_query(
+                "INSERT INTO push_hard_logout_journal \
+                 (grant_token_digest, revocation_ref, account_id, device_id, cnf_jkt, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind::<Text, _>(&record.grant_token_digest)
+            .bind::<Text, _>(&record.revocation_ref)
+            .bind::<Jsonb, _>(account_json)
+            .bind::<Text, _>(record.device_id.as_str())
+            .bind::<Text, _>(&record.cnf_jkt)
+            .bind::<Timestamptz, _>(record.created_at)
+            .execute(conn)
+            .await?;
+            Ok(record)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn hard_logout_journal(
+        &self,
+        grant_token_digest: &str,
+    ) -> PersistenceResult<Option<PushHardLogoutJournalRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let query = format!(
+            "SELECT {HARD_LOGOUT_COLUMNS} FROM push_hard_logout_journal \
+             WHERE grant_token_digest = $1"
+        );
+        sql_query(query)
+            .bind::<Text, _>(grant_token_digest)
+            .get_result::<HardLogoutJournalRow>(&mut conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(TryInto::try_into)
+            .transpose()
+    }
+
+    async fn pending_confirmed_hard_logouts(
+        &self,
+        after_digest: Option<&str>,
+        limit: usize,
+    ) -> PersistenceResult<Vec<PushHardLogoutJournalRecord>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        let limit = i64::try_from(limit.min(1_000)).map_err(PersistenceError::database)?;
+        let query = format!(
+            "SELECT {HARD_LOGOUT_COLUMNS} FROM push_hard_logout_journal \
+             WHERE auth_side_confirmed = TRUE AND completed_at IS NULL \
+               AND grant_token_digest > $1 \
+             ORDER BY grant_token_digest LIMIT $2"
+        );
+        let rows = sql_query(query)
+            .bind::<Text, _>(after_digest.unwrap_or(""))
+            .bind::<BigInt, _>(limit)
+            .load::<HardLogoutJournalRow>(&mut conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn mark_hard_logout_auth_confirmed(
+        &self,
+        grant_token_digest: &str,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let changed = sql_query(
+            "UPDATE push_hard_logout_journal SET auth_side_confirmed = TRUE \
+             WHERE grant_token_digest = $1",
+        )
+        .bind::<Text, _>(grant_token_digest)
+        .execute(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if changed != 1 {
+            return Err(PersistenceError::NotFound("hard logout journal".to_owned()));
+        }
+        Ok(())
+    }
+
+    async fn mark_hard_logout_completed(
+        &self,
+        grant_token_digest: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let changed = sql_query(
+            "UPDATE push_hard_logout_journal SET completed_at = COALESCE(completed_at, $2) \
+             WHERE grant_token_digest = $1 AND auth_side_confirmed = TRUE",
+        )
+        .bind::<Text, _>(grant_token_digest)
+        .bind::<Timestamptz, _>(now)
+        .execute(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if changed != 1 {
+            return Err(PersistenceError::Conflict(
+                "cas_conflict: hard logout Auth-side completion is unconfirmed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn ensure_desired_intent(
         &self,
         source_station_id: &DidCoreId,
@@ -728,6 +992,7 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
         device_authorization: &soland_storage::DeviceRevocationGateSelector,
         client_input_digest: &Hash,
         request: &PushRegistrationHandoffRequestBody,
+        session_revocation_ref: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffIntentWrite> {
         let candidate = PushRegistrationHandoffIntentRecord::prepare(
@@ -743,6 +1008,7 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
             candidate.local_route.device_id.as_str(),
         );
         let route_lock_key = local_route_lock_key(source_station_id, local_route)?;
+        let session_revocation_ref = session_revocation_ref.map(str::to_owned);
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             crate::device_revocations::lock_artifact_devices_in_transaction(
@@ -755,6 +1021,9 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
                 &candidate.device_authorization,
             )
             .await?;
+            if let Some(revocation_ref) = &session_revocation_ref {
+                ensure_logout_family_not_fenced(conn, revocation_ref).await?;
+            }
             if candidate.desired_state
                 == arkret_models_integration::PushRegistrationHandoffState::Active
             {
@@ -1412,6 +1681,7 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
         receipt: &PushRegistrationInstallationReceipt,
         authorization: &soland_storage::DeviceRevocationGateSelector,
         registration: &PushRegistrationRecord,
+        session_revocation_ref: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<PushRegistrationHandoffReceiptWrite> {
         let source_station_id = source_station_id.clone();
@@ -1421,6 +1691,7 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
         let receipt = receipt.clone();
         let authorization = authorization.clone();
         let registration = registration.clone();
+        let session_revocation_ref = session_revocation_ref.map(str::to_owned);
         let account_lock_key =
             push_device_lock_key(&registration.account_id, registration.device_id.as_str());
         let route_lock_key = local_route_lock_key(&source_station_id, &local_route)?;
@@ -1434,6 +1705,9 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
             )
             .await?;
             crate::ensure_gate_allowed_in_transaction(conn, &authorization).await?;
+            if let Some(revocation_ref) = &session_revocation_ref {
+                ensure_logout_family_not_fenced(conn, revocation_ref).await?;
+            }
             ensure_active_account_in_transaction(conn, &registration.account_id).await?;
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&account_lock_key)
@@ -1748,7 +2022,15 @@ mod tests {
         at: chrono::DateTime<chrono::Utc>,
     ) {
         store
-            .ensure_desired_intent(station_id, route, authorization, client_digest, request, at)
+            .ensure_desired_intent(
+                station_id,
+                route,
+                authorization,
+                client_digest,
+                request,
+                None,
+                at,
+            )
             .await
             .unwrap();
         let receipt = receipt_for(
@@ -1768,6 +2050,7 @@ mod tests {
                 &receipt,
                 authorization,
                 &registration,
+                None,
                 at + chrono::Duration::milliseconds(2),
             )
             .await
@@ -1812,6 +2095,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hard_logout_family_fence_survives_retry_and_restart_scan() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route(&source, &destination);
+        seed_account(&pool, &route.account_id).await;
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        let active = active_request();
+        let at = chrono::Utc::now();
+        store
+            .ensure_desired_intent(
+                &source,
+                &route,
+                &device_authorization(&route),
+                &client_input_digest('1'),
+                &active,
+                Some("org.arkret.coauth.browser_session:fixture"),
+                at,
+            )
+            .await
+            .unwrap();
+        let record = PushHardLogoutJournalRecord {
+            grant_token_digest: "grant-digest-one".to_owned(),
+            revocation_ref: "org.arkret.coauth.browser_session:fixture".to_owned(),
+            account_id: route.account_id.clone(),
+            device_id: route.device_id.clone(),
+            cnf_jkt: "fixture-jkt".to_owned(),
+            auth_side_confirmed: false,
+            completed_at: None,
+            created_at: chrono::Utc::now(),
+        };
+        assert_eq!(
+            store.reserve_hard_logout_journal(&record).await.unwrap(),
+            record
+        );
+        assert_eq!(
+            store.reserve_hard_logout_journal(&record).await.unwrap(),
+            record
+        );
+        let mut changed = record.clone();
+        changed.grant_token_digest = "grant-digest-two".to_owned();
+        changed.device_id =
+            DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002").unwrap();
+        assert!(matches!(
+            store.reserve_hard_logout_journal(&changed).await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        changed.device_id = record.device_id.clone();
+        changed.account_id.principal_id = DidCoreId::new("ak:did_core:web:other.example").unwrap();
+        assert!(matches!(
+            store.reserve_hard_logout_journal(&changed).await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        assert!(matches!(
+            store
+                .ensure_desired_intent(
+                    &source,
+                    &route,
+                    &device_authorization(&route),
+                    &client_input_digest('1'),
+                    &active_request(),
+                    Some(&record.revocation_ref),
+                    chrono::Utc::now(),
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        let receipt = receipt_for(&active, &source, &destination, at);
+        let registration = local_registration(&route.account_id, &active);
+        assert!(matches!(
+            store
+                .commit_verified_active_receipt_and_push_route(
+                    &source,
+                    &route,
+                    active.registration_id(),
+                    &active.request_digest().unwrap(),
+                    &receipt,
+                    &device_authorization(&route),
+                    &registration,
+                    Some(&record.revocation_ref),
+                    at,
+                )
+                .await,
+            Err(PersistenceError::Conflict(_))
+        ));
+        store
+            .mark_hard_logout_auth_confirmed(&record.grant_token_digest)
+            .await
+            .unwrap();
+        let restarted_store = PgPushRegistrationHandoffStore { pool };
+        let pending = restarted_store
+            .pending_confirmed_hard_logouts(None, 64)
+            .await
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].grant_token_digest, record.grant_token_digest);
+        restarted_store
+            .mark_hard_logout_completed(&record.grant_token_digest, chrono::Utc::now())
+            .await
+            .unwrap();
+        assert!(
+            restarted_store
+                .pending_confirmed_hard_logouts(None, 64)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn inactive_account_cannot_create_or_install_a_public_handoff() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
@@ -1829,6 +2223,7 @@ mod tests {
                 &device_authorization(&route),
                 &client_input_digest('1'),
                 &active,
+                None,
                 at,
             )
             .await
@@ -1857,6 +2252,7 @@ mod tests {
                     &device_authorization(&route),
                     &client_input_digest('2'),
                     &new_active,
+                    None,
                     at,
                 )
                 .await,
@@ -1874,6 +2270,7 @@ mod tests {
                     &receipt,
                     &device_authorization(&route),
                     &registration,
+                    None,
                     at,
                 )
                 .await,
@@ -1922,6 +2319,7 @@ mod tests {
                     &device_authorization(&route),
                     &active_client_digest,
                     &active,
+                    None,
                     started_at,
                 )
                 .await
@@ -1958,6 +2356,7 @@ mod tests {
                         &device_authorization(&route),
                         &client_input_digest('2'),
                         &revoked,
+                        None,
                         started_at + chrono::Duration::seconds(2),
                     )
                     .await
@@ -2025,6 +2424,7 @@ mod tests {
                     &device_authorization(&route),
                     &client_input_digest('2'),
                     &revoked,
+                    None,
                     started_at + chrono::Duration::seconds(4),
                 )
                 .await
@@ -2039,6 +2439,7 @@ mod tests {
                     &device_authorization(&route),
                     &active_client_digest,
                     &active,
+                    None,
                     started_at + chrono::Duration::seconds(5),
                 )
                 .await,
@@ -2077,6 +2478,7 @@ mod tests {
                         &device_authorization(&route),
                         &digest,
                         &request,
+                        None,
                         started_at,
                     )
                     .await
@@ -2098,6 +2500,7 @@ mod tests {
                         &device_authorization(&route),
                         &digest,
                         &request,
+                        None,
                         started_at,
                     )
                     .await
@@ -2160,6 +2563,7 @@ mod tests {
                     &device_authorization(&route),
                     &successor_input,
                     &successor,
+                    None,
                     started_at + chrono::Duration::seconds(1),
                 )
                 .await,
@@ -2202,6 +2606,7 @@ mod tests {
                     &device_authorization(&route),
                     &successor_input,
                     &successor,
+                    None,
                     started_at + chrono::Duration::seconds(3),
                 )
                 .await
@@ -2293,6 +2698,7 @@ mod tests {
                 &authorization,
                 &client_digest,
                 &request,
+                None,
                 started_at,
             )
             .await
@@ -2315,6 +2721,7 @@ mod tests {
                     &receipt,
                     &authorization,
                     &registration,
+                    None,
                     started_at + chrono::Duration::seconds(2),
                 )
                 .await,
@@ -2337,6 +2744,7 @@ mod tests {
                     &wrong_receipt,
                     &authorization,
                     &registration,
+                    None,
                     started_at + chrono::Duration::seconds(2),
                 )
                 .await
@@ -2357,6 +2765,7 @@ mod tests {
                     &receipt,
                     &authorization,
                     &wrong_local_route,
+                    None,
                     started_at + chrono::Duration::seconds(2),
                 )
                 .await,
@@ -2384,6 +2793,7 @@ mod tests {
                 &receipt,
                 &authorization,
                 &registration,
+                None,
                 started_at + chrono::Duration::seconds(3),
             )
             .await
@@ -2423,6 +2833,7 @@ mod tests {
                 &receipt,
                 &authorization,
                 &registration,
+                None,
                 started_at + chrono::Duration::seconds(4),
             )
             .await
@@ -2449,6 +2860,7 @@ mod tests {
                 &authorization,
                 &client_input_digest('6'),
                 &successor,
+                None,
                 started_at + chrono::Duration::seconds(5),
             )
             .await
@@ -2477,6 +2889,7 @@ mod tests {
                     &successor_receipt,
                     &authorization,
                     &successor_registration,
+                    None,
                     started_at + chrono::Duration::seconds(8),
                 )
                 .await,
@@ -2584,6 +2997,7 @@ mod tests {
                 &authorization,
                 &client_input_digest('d'),
                 &successor,
+                None,
                 started_at + chrono::Duration::seconds(2),
             )
             .await
@@ -2605,6 +3019,7 @@ mod tests {
                 &authorization,
                 &client_input_digest('e'),
                 &other_gateway_pending,
+                None,
                 started_at + chrono::Duration::seconds(3),
             )
             .await
@@ -2713,6 +3128,7 @@ mod tests {
                     &successor_receipt,
                     &authorization,
                     &successor_registration,
+                    None,
                     started_at + chrono::Duration::seconds(7),
                 )
                 .await,
@@ -2736,6 +3152,7 @@ mod tests {
                     &other_gateway_receipt,
                     &authorization,
                     &other_gateway_registration,
+                    None,
                     started_at + chrono::Duration::seconds(7),
                 )
                 .await,
@@ -2964,6 +3381,7 @@ mod tests {
                 &authorization,
                 &client_input_digest('f'),
                 &existing,
+                None,
                 started_at,
             )
             .await
@@ -3008,6 +3426,7 @@ mod tests {
                         &authorization,
                         &client_input_digest('9'),
                         &raced,
+                        None,
                         started_at + chrono::Duration::seconds(1),
                     )
                     .await
@@ -3120,6 +3539,7 @@ mod tests {
                     &receipt,
                     &authorization,
                     &registration,
+                    None,
                     started_at + chrono::Duration::seconds(1),
                 )
                 .await,
@@ -3148,6 +3568,7 @@ mod tests {
                     &receipt,
                     &authorization,
                     &registration,
+                    None,
                     started_at + chrono::Duration::seconds(2),
                 )
                 .await
@@ -3237,6 +3658,7 @@ mod tests {
                     &receipt,
                     &authorization,
                     &registration,
+                    None,
                     started_at + chrono::Duration::seconds(4),
                 )
                 .await,
@@ -3361,6 +3783,7 @@ mod tests {
                     &receipt,
                     &authorization,
                     &registration,
+                    None,
                     expiry + chrono::Duration::milliseconds(1),
                 )
                 .await,
@@ -3430,6 +3853,7 @@ mod tests {
                     &authorization,
                     &client_input_digest('e'),
                     &request,
+                    None,
                     expiry - chrono::Duration::minutes(1),
                 )
                 .await

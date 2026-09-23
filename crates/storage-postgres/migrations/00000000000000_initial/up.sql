@@ -3091,6 +3091,31 @@ CREATE TABLE public.push_registration_handoff_intents (
     )
 );
 
+-- Station-private hard logout journal. The opaque revocation_ref is the
+-- trusted Account Authority browser-session coordinate for a standard human
+-- grant; it is never sent to a Push Gateway.
+CREATE TABLE public.push_hard_logout_journal (
+    grant_token_digest text PRIMARY KEY,
+    revocation_ref text NOT NULL,
+    account_id jsonb NOT NULL,
+    device_id text NOT NULL,
+    cnf_jkt text NOT NULL,
+    auth_side_confirmed boolean NOT NULL DEFAULT FALSE,
+    completed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    CHECK (btrim(grant_token_digest) <> ''),
+    CHECK (revocation_ref LIKE 'org.arkret.coauth.browser_session:%'),
+    CHECK (btrim(device_id) <> ''),
+    CHECK (btrim(cnf_jkt) <> '')
+);
+
+CREATE INDEX push_hard_logout_journal_family_idx
+    ON public.push_hard_logout_journal (revocation_ref);
+
+CREATE INDEX push_hard_logout_journal_pending_idx
+    ON public.push_hard_logout_journal (grant_token_digest)
+    WHERE auth_side_confirmed = TRUE AND completed_at IS NULL;
+
 CREATE INDEX push_registration_handoff_retry_idx
     ON public.push_registration_handoff_intents (source_station_id, updated_at, registration_id)
     WHERE status = 'awaiting_receipt';

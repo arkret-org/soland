@@ -1208,6 +1208,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    push_hard_logout_journal (grant_token_digest) {
+        grant_token_digest -> Text,
+        revocation_ref -> Text,
+        account_id -> Jsonb,
+        device_id -> Text,
+        cnf_jkt -> Text,
+        auth_side_confirmed -> Bool,
+        completed_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     push_registration_handoff_intents (source_station_id, registration_id) {
         source_station_id -> Text,
         local_account_id -> Jsonb,
@@ -2014,6 +2027,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_strand_watches,
     projection_strands,
     push_devices,
+    push_hard_logout_journal,
     push_registration_handoff_intents,
     realm_invites,
     realm_meta,

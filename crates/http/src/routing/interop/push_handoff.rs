@@ -38,6 +38,7 @@ pub(super) struct PublicPushRegistration<'a> {
     pub push_route_id: String,
     pub push_target_id: arkret_identifiers::PushTargetId,
     pub prepared_at: DateTime<Utc>,
+    pub session_revocation_ref: Option<&'a str>,
 }
 
 pub(super) async fn register(
@@ -80,6 +81,7 @@ pub(super) async fn register(
                     &input.account_id,
                     &input.push_route_id,
                     &origin,
+                    input.session_revocation_ref,
                     record,
                 )
                 .await;
@@ -111,6 +113,7 @@ pub(super) async fn register(
                     input.authorization,
                     &client_input_digest,
                     &request,
+                    input.session_revocation_ref,
                     input.prepared_at,
                 )
                 .await
@@ -153,6 +156,7 @@ pub(super) async fn register(
             &receipt,
             input.authorization,
             &registration,
+            input.session_revocation_ref,
             Utc::now(),
         )
         .await
@@ -182,6 +186,15 @@ pub(super) async fn unregister(
         confirm_revoked_intent(state, &source_station_id, intent)
     })
     .await
+}
+
+pub(crate) async fn unregister_for_hard_logout(
+    state: &AppState,
+    account_id: &AccountId,
+    device_id: &arkret_wire::DeviceId,
+) -> Result<(), AppError> {
+    unregister(state, account_id, device_id, None, None).await?;
+    Ok(())
 }
 
 async fn confirm_revoked_intents<F, Fut>(
@@ -261,6 +274,52 @@ async fn retry_awaiting_revocations_once(
     .await
 }
 
+async fn reconcile_confirmed_hard_logouts_once(
+    state: &AppState,
+    cursor: &mut Option<String>,
+) -> Result<(), AppError> {
+    let rows = state
+        .persistence()
+        .pending_confirmed_push_hard_logouts(cursor.as_deref(), REVOKE_RETRY_BATCH_LIMIT)
+        .await
+        .map_err(service_storage_error)?;
+    let full_page = rows.len() == REVOKE_RETRY_BATCH_LIMIT;
+    for row in rows {
+        *cursor = Some(row.grant_token_digest.clone());
+        let actor = row.account_id.principal_id.as_str();
+        let device_id = row.device_id.as_str();
+        let result = async {
+            crate::routing::identity::auth::revoke_sessions_for_hard_logout_device(
+                state, actor, device_id,
+            )
+            .await?;
+            unregister_for_hard_logout(state, &row.account_id, &row.device_id).await?;
+            state
+                .deliveries()
+                .purge_device_delivery(actor, device_id)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            state
+                .persistence()
+                .mark_push_hard_logout_completed(&row.grant_token_digest, Utc::now())
+                .await
+                .map_err(service_storage_error)
+        }
+        .await;
+        if result.is_err() {
+            tracing::warn!(
+                worker = "public_push_revoke_retry",
+                stage = "reconcile_confirmed_hard_logout",
+                "confirmed hard logout local cleanup failed"
+            );
+        }
+    }
+    if !full_page {
+        *cursor = None;
+    }
+    Ok(())
+}
+
 /// Spawn the bounded recovery loop for durable public-Gateway tombstones.
 ///
 /// Each pass selects at most [`REVOKE_RETRY_BATCH_LIMIT`] awaiting revokes.
@@ -276,6 +335,7 @@ pub fn spawn_public_push_revoke_retry_worker(
         let mut drain = state.subscribe_connection_drain();
         let mut expiry_cursor = None;
         let mut revoke_cursor = None;
+        let mut hard_logout_cursor = None;
         // The lifecycle snapshot is durable. Re-run once per terminal
         // transition on each process start, then let the receipt worker
         // confirm any tombstones left awaiting a Gateway response.
@@ -330,6 +390,16 @@ pub fn spawn_public_push_revoke_retry_worker(
                     }
                     continue;
                 }
+            }
+            if reconcile_confirmed_hard_logouts_once(&state, &mut hard_logout_cursor)
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    worker = "public_push_revoke_retry",
+                    stage = "scan_confirmed_hard_logout",
+                    "confirmed hard logout journal scan failed"
+                );
             }
             let pass =
                 retry_awaiting_revocations_once(&state, &mut expiry_cursor, &mut revoke_cursor);
@@ -493,6 +563,7 @@ async fn replay_verified_registration(
     account_id: &AccountId,
     push_route_id: &str,
     origin: &WebOrigin,
+    session_revocation_ref: Option<&str>,
     record: PushRegistrationHandoffIntentRecord,
 ) -> Result<PushRegisterDeviceOutcome, AppError> {
     let request = record.request().map_err(persistence_error)?;
@@ -510,6 +581,7 @@ async fn replay_verified_registration(
             receipt,
             authorization,
             &registration,
+            session_revocation_ref,
             Utc::now(),
         )
         .await

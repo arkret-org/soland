@@ -51,13 +51,6 @@ pub(super) async fn logout(
         .ok_or_else(|| AppError::unauthenticated("missing DPoP session grant"))?;
 
     let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
-    if grant.credential_class
-        != arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard
-    {
-        return Err(AppError::capability_denied(
-            "account logout requires a standard session grant",
-        ));
-    }
     // The public Account Authority base is the sole client-visible origin for
     // every `gate/account` operation. A deployment gateway may route this
     // exact operation to the Principal service for its local cleanup step,
@@ -67,24 +60,86 @@ pub(super) async fn logout(
         .account_authority_url
         .as_deref()
         .unwrap_or(&state.config().public_base_url);
-    super::super::auth_grant_dpop::verify_grant_dpop_request_at_base(
-        req,
-        &grant_jwt,
-        Some(&grant.cnf_jkt),
-        logout_public_base,
-    )
-    .map_err(auth_error_to_app_error)?;
-    let session = super::super::auth_grant_dpop::session_record_from_introspected_grant_for_logout(
-        state, &grant_jwt, &grant,
-    )
-    .map_err(auth_error_to_app_error)?;
-    if session.agent_session.is_some() {
-        return Err(AppError::unauthenticated(
-            "account logout requires a device-bound session grant",
-        ));
+    let digest = session_credential_hash(&grant_jwt, state.service_id());
+    let journal = if let Some(grant) = grant {
+        if grant.credential_class
+            != arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard
+            || !matches!(
+                &grant.holder_binding,
+                arkret_models_identity::SessionGrantHolderBinding::HumanDevice { .. }
+            )
+            || !grant
+                .revocation_ref
+                .starts_with("org.arkret.coauth.browser_session:")
+            || grant.revocation_ref == "org.arkret.coauth.browser_session:"
+        {
+            return Err(AppError::unauthenticated(
+                "account logout requires a browser-bound standard human grant",
+            ));
+        }
+        super::super::auth_grant_dpop::verify_grant_dpop_request_at_base(
+            req,
+            &grant_jwt,
+            Some(&grant.cnf_jkt),
+            logout_public_base,
+        )
+        .map_err(auth_error_to_app_error)?;
+        let session =
+            super::super::auth_grant_dpop::session_record_from_introspected_grant_for_logout(
+                state, &grant_jwt, &grant,
+            )
+            .map_err(auth_error_to_app_error)?;
+        if session.agent_session.is_some() {
+            return Err(AppError::unauthenticated(
+                "account logout requires a device-bound session grant",
+            ));
+        }
+        let record = soland_storage::PushHardLogoutJournalRecord {
+            grant_token_digest: digest.clone(),
+            revocation_ref: grant.revocation_ref,
+            account_id: grant.account_id,
+            device_id: arkret_wire::DeviceId::new(session.device_id)
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            cnf_jkt: grant.cnf_jkt,
+            auth_side_confirmed: false,
+            completed_at: None,
+            created_at: now(),
+        };
+        state
+            .persistence()
+            .reserve_push_hard_logout_journal(&record)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+    } else {
+        let record = state
+            .persistence()
+            .push_hard_logout_journal(&digest)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                AppError::unauthenticated("session grant logout has no verifiable holder metadata")
+            })?;
+        super::super::auth_grant_dpop::verify_grant_dpop_request_at_base(
+            req,
+            &grant_jwt,
+            Some(&record.cnf_jkt),
+            logout_public_base,
+        )
+        .map_err(auth_error_to_app_error)?;
+        record
+    };
+    if journal.completed_at.is_some() {
+        return json_ok(AccountLogoutOutcome { revoked: false });
     }
 
-    trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
+    if !journal.auth_side_confirmed {
+        trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
+        state
+            .persistence()
+            .mark_push_hard_logout_auth_confirmed(&digest)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
 
     // §4.1 step 3 (Principal-side, local): invalidate this grant's cached
     // introspection so the next `/_arkret/self/*` request re-introspects against
@@ -95,24 +150,36 @@ pub(super) async fn logout(
     // Event-signing authorization.
     super::super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
 
-    let revoked_count =
-        revoke_sessions_for_actor_device(state, &session.actor, &session.device_id).await?;
-    let delivery_purge =
-        purge_device_delivery_state(state, &session.actor, &session.device_id).await;
-    // Reaching this branch proves that introspection observed a live grant for
-    // the exact principal/device and the Auth-side step has now terminated its
-    // rotation chain. In the direct session-grant model there is deliberately
-    // no second Principal-local bearer row, so `revoked_count == 0` does not
-    // mean that no live device session was revoked. The typed outcome reports
-    // the logical hard-logout transition; an already-gone/not-found retry is
-    // handled above and remains `revoked: false`.
+    let actor = journal.account_id.principal_id.as_str();
+    let device_id = journal.device_id.as_str();
+    let revoked_count = revoke_sessions_for_actor_device(state, actor, device_id).await?;
+    crate::routing::interop::unregister_public_push_for_hard_logout(
+        state,
+        &journal.account_id,
+        &journal.device_id,
+    )
+    .await?;
+    let delivery_purge = state
+        .deliveries()
+        .purge_device_delivery(actor, device_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .persistence()
+        .mark_push_hard_logout_completed(&digest, now())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    // The durable journal and the verified DPoP holder bind this completion
+    // to the exact principal/device even when introspection now says NotFound.
+    // In the direct session-grant model there is no second Principal-local
+    // bearer row, so `revoked_count == 0` does not undo the logical logout.
     let revoked = true;
     append_audit_log(
         state,
-        Some(&session.actor),
+        Some(actor),
         "auth.logout",
         json!({
-            "device_id": session.device_id,
+            "device_id": device_id,
             "principal_side_sessions_revoked": revoked_count,
             "to_device_messages_dropped": delivery_purge.to_device_messages_dropped,
             "push_registrations_removed": delivery_purge.push_registrations_removed,
@@ -187,7 +254,7 @@ async fn dev_mode_local_logout(
 async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<crate::wire::SessionGrantValidationMetadata, AppError> {
+) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
     let response =
         super::super::account_authority_client::AccountAuthorityClient::from_state(state)?
             .introspect_logout_grant(grant_jwt)
@@ -195,27 +262,25 @@ async fn introspect_session_grant_for_logout(
     classify_logout_introspection(response)
 }
 
-/// A metadata-free `not_found` cannot authenticate the DPoP holder or identify
-/// the Principal-side device to purge. A future durable logout journal may
-/// recover that binding; absent such evidence this route fails closed.
+/// A metadata-free `not_found` may continue only through an exact durable
+/// journal binding whose DPoP holder is still verified by the caller.
 fn classify_logout_introspection(
     outcome: crate::wire::SessionGrantValidationResult,
-) -> Result<crate::wire::SessionGrantValidationMetadata, AppError> {
+) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
     use crate::wire::SessionGrantAdminIntrospectionStatus;
 
     match outcome.status {
         SessionGrantAdminIntrospectionStatus::NotFound
             if !outcome.active && outcome.grant.is_none() =>
         {
-            Err(AppError::unauthenticated(
-                "session grant logout has no verifiable holder metadata",
-            ))
+            Ok(None)
         }
         SessionGrantAdminIntrospectionStatus::AudienceMismatch => Err(AppError::unauthenticated(
             "session grant audience does not match this Account Authority",
         )),
         SessionGrantAdminIntrospectionStatus::Active if outcome.active => outcome
             .grant
+            .map(Some)
             .ok_or_else(|| invalid_logout_introspection(outcome.status)),
         SessionGrantAdminIntrospectionStatus::Active
         | SessionGrantAdminIntrospectionStatus::NotFound => {
@@ -223,6 +288,7 @@ fn classify_logout_introspection(
         }
         status if !outcome.active => outcome
             .grant
+            .map(Some)
             .ok_or_else(|| invalid_logout_introspection(status)),
         status => Err(invalid_logout_introspection(status)),
     }
@@ -267,7 +333,7 @@ fn confirm_auth_side_logout(body: AuthSessionTerminationResult) -> Result<(), Ap
 /// Revoke every active soland bearer session for a specific (actor, device).
 /// Used by the single hard logout so only the logging-out device's local
 /// sessions are terminated (other devices stay logged in).
-async fn revoke_sessions_for_actor_device(
+pub(crate) async fn revoke_sessions_for_actor_device(
     state: &AppState,
     actor: &str,
     device_id: &str,
@@ -306,13 +372,27 @@ mod logout_introspection_tests {
     }
 
     #[test]
-    fn not_found_without_holder_metadata_cannot_return_logout_success() {
-        let error = classify_logout_introspection(outcome(
-            false,
-            SessionGrantAdminIntrospectionStatus::NotFound,
-        ))
-        .expect_err("metadata-free retry cannot verify the logout holder");
-        assert_eq!(error.code, ErrorCode::Unauthenticated);
+    fn not_found_requires_an_exact_journal_before_handler_can_continue() {
+        assert!(matches!(
+            classify_logout_introspection(outcome(
+                false,
+                SessionGrantAdminIntrospectionStatus::NotFound,
+            )),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn not_found_retry_requires_holder_proof_bound_to_saved_jkt() {
+        let request = Request::default();
+        let error = super::super::super::auth_grant_dpop::verify_grant_dpop_request_at_base(
+            &request,
+            "presented-grant",
+            Some("saved-journal-jkt"),
+            "https://account.example",
+        )
+        .expect_err("a metadata-free retry cannot pass without its holder proof");
+        assert_eq!(error.1, "unauthenticated");
     }
 
     #[test]

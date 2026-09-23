@@ -13,6 +13,7 @@ pub(crate) use blob::MAX_BLOB_UPLOAD_BYTES;
 pub use blob_resumable::spawn_resumable_upload_ttl_sweeper;
 pub(crate) use push::push_target_privacy_derivation_claim;
 pub use push_handoff::spawn_public_push_revoke_retry_worker;
+pub(crate) use push_handoff::unregister_for_hard_logout as unregister_public_push_for_hard_logout;
 
 /// HMAC-SHA256 (RFC 2104) over `data` keyed by `key`.
 ///

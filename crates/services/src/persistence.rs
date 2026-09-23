@@ -340,6 +340,63 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn reserve_push_hard_logout_journal(
+        &self,
+        record: &soland_storage::PushHardLogoutJournalRecord,
+    ) -> crate::ServiceResult<soland_storage::PushHardLogoutJournalRecord> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .reserve_hard_logout_journal(record)
+            .await?)
+    }
+
+    pub async fn push_hard_logout_journal(
+        &self,
+        grant_token_digest: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::PushHardLogoutJournalRecord>> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .hard_logout_journal(grant_token_digest)
+            .await?)
+    }
+
+    pub async fn pending_confirmed_push_hard_logouts(
+        &self,
+        after_digest: Option<&str>,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<soland_storage::PushHardLogoutJournalRecord>> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .pending_confirmed_hard_logouts(after_digest, limit)
+            .await?)
+    }
+
+    pub async fn mark_push_hard_logout_auth_confirmed(
+        &self,
+        grant_token_digest: &str,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .mark_hard_logout_auth_confirmed(grant_token_digest)
+            .await?)
+    }
+
+    pub async fn mark_push_hard_logout_completed(
+        &self,
+        grant_token_digest: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .persistence
+            .push_registration_handoffs()
+            .mark_hard_logout_completed(grant_token_digest, now)
+            .await?)
+    }
+
     pub async fn ensure_push_registration_handoff_intent(
         &self,
         source_station_id: &arkret_wire::DidCoreId,
@@ -347,6 +404,7 @@ impl PersistenceHandle {
         device_authorization: &soland_storage::DeviceRevocationGateSelector,
         client_input_digest: &arkret_wire::Hash,
         request: &arkret::PushRegistrationHandoffRequestBody,
+        session_revocation_ref: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> crate::ServiceResult<soland_storage::PushRegistrationHandoffIntentWrite> {
         Ok(self
@@ -358,6 +416,7 @@ impl PersistenceHandle {
                 device_authorization,
                 client_input_digest,
                 request,
+                session_revocation_ref,
                 now,
             )
             .await?)
@@ -448,6 +507,7 @@ impl PersistenceHandle {
         receipt: &arkret::PushRegistrationInstallationReceipt,
         authorization: &soland_storage::DeviceRevocationGateSelector,
         registration: &arkret::PushRegistrationRecord,
+        session_revocation_ref: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> crate::ServiceResult<soland_storage::PushRegistrationHandoffReceiptWrite> {
         Ok(self
@@ -461,6 +521,7 @@ impl PersistenceHandle {
                 receipt,
                 authorization,
                 registration,
+                session_revocation_ref,
                 now,
             )
             .await?)

@@ -691,6 +691,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         agent_session,
         session_grant: Some(SessionGrantAuthorizationState {
             grant_id: grant.id.clone(),
+            revocation_ref: grant.revocation_ref.clone(),
             account_id: grant.account_id.clone(),
             issuer_id: grant.issuer_id.clone(),
             scopes: grant.scopes.clone(),
@@ -835,6 +836,7 @@ pub(crate) fn session_from_verified_grant(
 ) -> SessionRecord {
     let grant_context = SessionGrantAuthorizationState {
         grant_id: grant.id.clone(),
+        revocation_ref: grant.revocation_ref.clone(),
         account_id: grant.account_id.clone(),
         issuer_id: grant.issuer_id.clone(),
         scopes: grant.scopes.clone(),
