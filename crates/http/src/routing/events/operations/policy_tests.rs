@@ -370,15 +370,15 @@ fn shared_view_events_never_carry_a_private_view() {
         arkret_identifiers::RealmId::new("ak:realm:AcRoZR8_hwxZ-nwNkJO-TrgIrOADX-V8ZP_ETuQAFZNc")
             .unwrap();
     let private_view = json!({
-        "id": "ak:view:ARRwG16aeAEr0aq6GflekmZrsscWhvQoyXuccnqbxT44",
-        "schema": "ak.schema.view.v1",
-        "realm_id": realm_id.as_str(),
         "kind": "collection",
         "visibility": "private",
         "title": "personal board",
-        "query": {"realm_id": realm_id.as_str()},
-        "created_by": "ak:did_core:web:alice.example",
-        "created_at": "2026-07-30T00:00:00.000Z"
+        "query": {"realm_ids": [realm_id.as_str()]},
+        "collection": {
+            "item_object_kinds": ["task"],
+            "item_order_by": [{"field": "title", "direction": "asc"}],
+            "grouping": {"mode": "none"}
+        }
     });
     for (seed, kind, payload) in [
         (
