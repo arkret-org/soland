@@ -1860,6 +1860,35 @@ async fn put_account_device_placeholder(
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
+/// The closed read-side inputs of the device lifecycle fold,
+/// `crypto-media/device-lifecycle.md` §5.5.3.
+#[derive(Clone, Copy, Debug)]
+struct DeviceStatusFoldInputs {
+    revoked: bool,
+    conflicted: bool,
+    generation_fenced: bool,
+    revocation_pending: bool,
+    expired: bool,
+}
+
+/// Apply the fixed §5.5.3 precedence: the first holding condition wins, so
+/// two implementations fold the same inputs to the same value.
+fn fold_device_summary_status(inputs: DeviceStatusFoldInputs) -> DeviceSummaryStatus {
+    if inputs.revoked {
+        DeviceSummaryStatus::Revoked
+    } else if inputs.conflicted {
+        DeviceSummaryStatus::Conflicted
+    } else if inputs.generation_fenced {
+        DeviceSummaryStatus::GenerationFenced
+    } else if inputs.revocation_pending {
+        DeviceSummaryStatus::RevocationPending
+    } else if inputs.expired {
+        DeviceSummaryStatus::Expired
+    } else {
+        DeviceSummaryStatus::Active
+    }
+}
+
 async fn account_device_summaries(
     state: &AppState,
     actor: &str,
@@ -1925,12 +1954,11 @@ async fn account_device_summary(
         ));
     }
     let generation_fenced = current_generation.is_some_and(|current| {
-        current.status == super::device_generation::DeviceGenerationStatus::Conflicted
-            || device
-                .payload
-                .get("authorized_generation_ref")
-                .and_then(Value::as_u64)
-                != Some(current.current_ref)
+        device
+            .payload
+            .get("authorized_generation_ref")
+            .and_then(Value::as_u64)
+            != Some(current.current_ref)
     });
     let expired = device
         .payload
@@ -1938,15 +1966,16 @@ async fn account_device_summary(
         .and_then(Value::as_str)
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|value| value.with_timezone(&chrono::Utc) <= now());
-    let status = if device.revoked_at.is_some() {
-        DeviceSummaryStatus::Revoked
-    } else if expired {
-        DeviceSummaryStatus::Expired
-    } else if generation_fenced {
-        DeviceSummaryStatus::GenerationFenced
-    } else {
-        DeviceSummaryStatus::Active
-    };
+    // Soland retains no device-scoped conflict evidence and no
+    // `device_revocation_proposals` keyed set yet, so those two inputs are
+    // false rather than derived from re-anchor candidates or gate rows.
+    let status = fold_device_summary_status(DeviceStatusFoldInputs {
+        revoked: device.revoked_at.is_some(),
+        conflicted: false,
+        generation_fenced,
+        revocation_pending: false,
+        expired,
+    });
     let (verification_state, verification_source) =
         soland_services::identity::fold_device_verification_checkpoint(
             device.verification_state.as_str(),
@@ -2011,6 +2040,48 @@ pub(crate) fn device_revocation_gate_record(
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn device_status_fold_takes_the_first_condition_in_registered_precedence() {
+        for mask in 0u8..32 {
+            let inputs = DeviceStatusFoldInputs {
+                revoked: mask & 1 != 0,
+                conflicted: mask & 2 != 0,
+                generation_fenced: mask & 4 != 0,
+                revocation_pending: mask & 8 != 0,
+                expired: mask & 16 != 0,
+            };
+            let expected = [
+                (inputs.revoked, DeviceSummaryStatus::Revoked),
+                (inputs.conflicted, DeviceSummaryStatus::Conflicted),
+                (
+                    inputs.generation_fenced,
+                    DeviceSummaryStatus::GenerationFenced,
+                ),
+                (
+                    inputs.revocation_pending,
+                    DeviceSummaryStatus::RevocationPending,
+                ),
+                (inputs.expired, DeviceSummaryStatus::Expired),
+            ]
+            .into_iter()
+            .find_map(|(holds, status)| holds.then_some(status))
+            .unwrap_or(DeviceSummaryStatus::Active);
+            assert_eq!(fold_device_summary_status(inputs), expected, "{inputs:?}");
+        }
+    }
+
+    #[test]
+    fn generation_fence_outranks_expiry() {
+        let status = fold_device_summary_status(DeviceStatusFoldInputs {
+            revoked: false,
+            conflicted: false,
+            generation_fenced: true,
+            revocation_pending: false,
+            expired: true,
+        });
+        assert_eq!(status, DeviceSummaryStatus::GenerationFenced);
+    }
 
     fn projection_body_json() -> Value {
         json!({
