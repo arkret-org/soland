@@ -50,20 +50,7 @@ pub(super) async fn logout(
         .map(str::to_owned)
         .ok_or_else(|| AppError::unauthenticated("missing DPoP session grant"))?;
 
-    let Some(grant) = introspect_session_grant_for_logout(state, &grant_jwt).await? else {
-        // A durable client logout journal can outlive the Account Authority process's grant
-        // row. `not_found` proves there is no active chain or Principal-side
-        // metadata left to target, but §4.1 still requires the standard
-        // Auth-side sub-operation to confirm idempotent completion before the
-        // Account Authority returns success. `audience_mismatch` never reaches
-        // this branch; it remains fail-closed in the classifier below.
-        trigger_auth_side_auth_session_logout(state, &grant_jwt).await?;
-        super::super::auth_grant_dpop::invalidate_cached_grant(state, &grant_jwt);
-        // `revoked` reports whether a live Principal-side device session was
-        // revoked. With no metadata there is no safe local target, even though
-        // the Auth-side chain has been durably confirmed terminal.
-        return json_ok(AccountLogoutOutcome { revoked: false });
-    };
+    let grant = introspect_session_grant_for_logout(state, &grant_jwt).await?;
     if grant.credential_class
         != arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard
     {
@@ -200,7 +187,7 @@ async fn dev_mode_local_logout(
 async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
-) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
+) -> Result<crate::wire::SessionGrantValidationMetadata, AppError> {
     let response =
         super::super::account_authority_client::AccountAuthorityClient::from_state(state)?
             .introspect_logout_grant(grant_jwt)
@@ -208,30 +195,27 @@ async fn introspect_session_grant_for_logout(
     classify_logout_introspection(response)
 }
 
-/// Preserve the Account Authority process's closed introspection status instead of
-/// collapsing both metadata-withholding states into the same 401.
-///
-/// `not_found` is the expected durable-journal retry after a grant row has
-/// expired or been pruned. The caller still runs the idempotent Auth-side
-/// logout sub-operation before returning success. `audience_mismatch` is a
-/// routing/authentication error and must never be treated as already gone.
+/// A metadata-free `not_found` cannot authenticate the DPoP holder or identify
+/// the Principal-side device to purge. A future durable logout journal may
+/// recover that binding; absent such evidence this route fails closed.
 fn classify_logout_introspection(
     outcome: crate::wire::SessionGrantValidationResult,
-) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
+) -> Result<crate::wire::SessionGrantValidationMetadata, AppError> {
     use crate::wire::SessionGrantAdminIntrospectionStatus;
 
     match outcome.status {
         SessionGrantAdminIntrospectionStatus::NotFound
             if !outcome.active && outcome.grant.is_none() =>
         {
-            Ok(None)
+            Err(AppError::unauthenticated(
+                "session grant logout has no verifiable holder metadata",
+            ))
         }
         SessionGrantAdminIntrospectionStatus::AudienceMismatch => Err(AppError::unauthenticated(
             "session grant audience does not match this Account Authority",
         )),
         SessionGrantAdminIntrospectionStatus::Active if outcome.active => outcome
             .grant
-            .map(Some)
             .ok_or_else(|| invalid_logout_introspection(outcome.status)),
         SessionGrantAdminIntrospectionStatus::Active
         | SessionGrantAdminIntrospectionStatus::NotFound => {
@@ -239,7 +223,6 @@ fn classify_logout_introspection(
         }
         status if !outcome.active => outcome
             .grant
-            .map(Some)
             .ok_or_else(|| invalid_logout_introspection(status)),
         status => Err(invalid_logout_introspection(status)),
     }
@@ -323,14 +306,13 @@ mod logout_introspection_tests {
     }
 
     #[test]
-    fn not_found_is_an_idempotent_logout_retry_state() {
-        assert!(matches!(
-            classify_logout_introspection(outcome(
-                false,
-                SessionGrantAdminIntrospectionStatus::NotFound,
-            )),
-            Ok(None)
-        ));
+    fn not_found_without_holder_metadata_cannot_return_logout_success() {
+        let error = classify_logout_introspection(outcome(
+            false,
+            SessionGrantAdminIntrospectionStatus::NotFound,
+        ))
+        .expect_err("metadata-free retry cannot verify the logout holder");
+        assert_eq!(error.code, ErrorCode::Unauthenticated);
     }
 
     #[test]
