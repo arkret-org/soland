@@ -758,12 +758,13 @@ async fn verify_peer_bootstrap(
                 .get("invitee_account_id")
                 .cloned()
                 .and_then(|v| serde_json::from_value::<arkret_wire::AccountId>(v).ok());
+            // A directed invite occupies the live-target slot and can only
+            // be accepted from pending; claimed is reserved for 3PID flow.
             let previous_state = match values
                 .get(lifecycle_cell.as_ref().expect("invite lifecycle"))
                 .and_then(serde_json::Value::as_str)
             {
                 Some("pending") => arkret_models_collaboration::governance::membership_invite::InvitePreviousState::Pending,
-                Some("claimed") => arkret_models_collaboration::governance::membership_invite::InvitePreviousState::Claimed,
                 _ => return Err(crate::app_error!(FrontierUnavailable, "invalid directed invite lifecycle")),
             };
             if invitee.as_ref() != Some(&request.applicant_account_id) {
