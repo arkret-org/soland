@@ -1156,7 +1156,7 @@ pub(super) fn validate_applet_package(
     // recompute `payload_digest` over `unsigned` and sign it with an arbitrary
     // key. Anchor the proof's verification_method to `controller_principal_id` and run
     // the same detached-JWS verifier every other soland proof path uses
-    // (dev: shape-only; production: DID-resolved Ed25519). Preview/commit MUST
+    // (DID-resolved Ed25519 in every mode). Preview/commit MUST
     // fail closed (`proof_invalid`) when the controller proof is invalid or its
     // key cannot be resolved.
     validate_controller_proof(state, package, &unsigned_canonical_bytes)?;
@@ -1231,16 +1231,13 @@ fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), 
 /// Cryptographically verify the controller detached proof on an Applet package.
 ///
 /// Reuses the shared soland detached-JWS verifier boundary
-/// (`crate::jws_verify`), dispatching on `development_mode` exactly like
-/// [`crate::routing::federation::move_seal::select_jws_verifier`]: dev mode runs
-/// the RFC 7515 shape-only check (no live DID document required, but the
-/// all-zero sentinel signature is still rejected), production resolves the
-/// controller DID document and runs the Ed25519 verify against the
-/// verification method's public key.
+/// (`crate::jws_verify`) in every mode: the controller DID document is
+/// resolved and the Ed25519 signature is verified against the verification
+/// method's public key.
 ///
 /// `controller_principal_id` is anchored two ways: the proof's `verification_method`
 /// MUST be a DID URL under `controller_principal_id`, and the resolved public key MUST
-/// come from `controller_principal_id`'s DID document (production). A proof signed by any
+/// come from `controller_principal_id`'s DID document. A proof signed by any
 /// other key — even with a correctly recomputed `payload_digest` — fails here.
 fn validate_controller_proof(
     state: &AppState,
@@ -1261,23 +1258,14 @@ fn validate_controller_proof(
             .with_reason_code("proof_invalid")
             .with_reason_detail(reason)
     })?;
-    let verify_result = if state.config().development_mode {
-        crate::jws_verify::verify_jws_shape(
-            unsigned_canonical_bytes,
-            &proof.jws,
-            &proof.verification_method,
-            controller_principal_id,
-        )
-    } else {
-        crate::jws_verify::verify_did_controlled_jws(
-            unsigned_canonical_bytes,
-            &proof.jws,
-            &proof.verification_method,
-            controller_principal_id,
-            state,
-        )
-    };
-    verify_result.map_err(|reason| {
+    crate::jws_verify::verify_did_controlled_jws(
+        unsigned_canonical_bytes,
+        &proof.jws,
+        &proof.verification_method,
+        controller_principal_id,
+        state,
+    )
+    .map_err(|reason| {
         AppError::param_invalid("applet package controller proof signature is invalid")
             .with_reason_code("proof_invalid")
             .with_reason_detail(reason)

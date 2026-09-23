@@ -1415,23 +1415,14 @@ async fn validate_requested_scope_disclosure(
                 continue;
             }
         };
-        let verification = if state.config().development_mode {
-            crate::jws_verify::verify_jws_shape(
-                &binding_bytes,
-                &proof.jws,
-                &proof.verification_method,
-                disclosure.controller_principal_id.as_str(),
-            )
-        } else {
-            crate::jws_verify::verify_did_controlled_jws_async(
-                &binding_bytes,
-                &proof.jws,
-                &proof.verification_method,
-                disclosure.controller_principal_id.as_str(),
-                state,
-            )
-            .await
-        };
+        let verification = crate::jws_verify::verify_did_controlled_jws_async(
+            &binding_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            disclosure.controller_principal_id.as_str(),
+            state,
+        )
+        .await;
         if verification.is_ok() {
             return Ok(());
         }

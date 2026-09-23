@@ -6,21 +6,15 @@
 //! module selects a document or accepted key from [`AppState`], then hands
 //! pinned material to the resolver-free SDK verifier.
 //!
-//! # Two-tier verifier model (unchanged)
-//!
-//! - Dev mode (`config.development_mode == true`): handlers use [`verify_jws_shape`] — RFC 7515
-//!   §3.2 detached shape, alg=Ed25519, no zero-sentinel signature, no actual crypto. Lets test
-//!   fixtures and local dev iterate without managing real keys.
-//! - Production mode (default): handlers use [`verify_did_controlled_jws`] or its async
-//!   counterpart. The selected document, issuer and verification-method DID root must agree before
-//!   the SDK performs Ed25519 verification.
+//! Every mode, including development mode, runs the same verifier: the
+//! selected document, issuer and verification-method DID root must agree
+//! before the SDK performs Ed25519 verification. There is no shape-only path.
 
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{Did, Hash};
 use arkret_identity::{DidDocument, DidResolver as _};
-use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError};
-use ed25519_dalek::{Signature, SigningKey, Verifier as _, VerifyingKey};
+use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::Value;
 use soland_services::identity::{
     DID_DOCUMENT_HIGH_RISK_TTL_SECS, DidDocumentFreshness, evaluate_did_document_freshness,
@@ -52,60 +46,6 @@ pub struct ResolvedVerificationKey {
 pub struct VerifiedPrincipalDeviceSignatureBinding {
     pub authorization_event_id: arkret_wire::EventId,
     pub generation_ref: u64,
-}
-
-/// Shape-only detached-JWS verifier for development mode.
-///
-/// This is intentionally colocated with soland's production SDK verifier
-/// adapter so handlers do not define their own detached-JWS shape semantics.
-/// Production mode still delegates to the SDK's resolver-free verifier.
-pub fn verify_jws_shape(
-    canonical_bytes: &[u8],
-    jws: &str,
-    verification_method: &str,
-    issuer: &str,
-) -> Result<(), String> {
-    if jws.is_empty() {
-        return Err("empty JWS string".to_owned());
-    }
-    if verification_method.is_empty() {
-        return Err("empty verification_method".to_owned());
-    }
-    if issuer.is_empty() {
-        return Err("empty issuer".to_owned());
-    }
-    if canonical_bytes.is_empty() {
-        return Err("empty canonical bytes".to_owned());
-    }
-
-    // §2.2 — even the development-mode shape verifier refuses a DID without a fragment: a
-    // proof key is always a `#fragment` DID URL.
-    arkret_wire::DidUrl::new(verification_method.to_owned())
-        .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
-    let verifier = Ed25519DetachedJwsVerifier::new();
-    let material = dev_shape_only_public_key();
-    match verifier.verify_detached_jws(jws, canonical_bytes, &material) {
-        Ok(()) => reject_zero_signature_sentinel(jws),
-        Err(VerifierError::Backend(error)) if error.contains("Ed25519 verification failed") => {
-            reject_zero_signature_sentinel(jws)
-        }
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-fn reject_zero_signature_sentinel(jws: &str) -> Result<(), String> {
-    let signature_b64u = jws.rsplit('.').next().unwrap_or_default();
-    if !signature_b64u.is_empty() && signature_b64u.bytes().all(|byte| byte == b'A') {
-        return Err("JWS signature is the all-zero sentinel".to_owned());
-    }
-    Ok(())
-}
-
-fn dev_shape_only_public_key() -> PublicKeyMaterial {
-    let public_key = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
-    PublicKeyMaterial::Ed25519Raw {
-        bytes: public_key.to_bytes().to_vec(),
-    }
 }
 
 /// Production detached-JWS verifier for a DID-controlled method.
