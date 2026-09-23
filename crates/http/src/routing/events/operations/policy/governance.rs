@@ -715,7 +715,7 @@ pub(super) fn validate_organization_moderation_policy_authority(
     {
         return Err("organization_policy_executor_unauthorized");
     }
-    Ok(())
+    Err(arkret_wire::ErrorCode::FAILED_PRECONDITION)
 }
 
 /// P2 — capability gate for the moderation control-plane events ingested at
@@ -979,7 +979,7 @@ mod organization_moderation_policy_tests {
         let mut operation = policy_operation();
         assert_eq!(
             validate_organization_moderation_policy_authority(&operation),
-            Ok(())
+            Err(arkret_wire::ErrorCode::FAILED_PRECONDITION)
         );
         operation.context.sender = arkret_wire::ActorId::service(
             arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
@@ -1008,7 +1008,7 @@ mod organization_moderation_policy_tests {
         );
         assert_eq!(
             validate_organization_moderation_policy_authority(&operation),
-            Ok(())
+            Err(arkret_wire::ErrorCode::FAILED_PRECONDITION)
         );
     }
 }

@@ -138,8 +138,8 @@ async fn durable_account_owns_pcr(
 // interop maxima a conformant receiver MUST accept; a stricter local cap would
 // reject another node's valid wire object (spec §1).
 mod admission;
-pub use admission::{frozen_realm_check, realm_policy_bundle_check, terminal_realm_check};
 use admission::policy_bundle_value_from_state_payload;
+pub use admission::{frozen_realm_check, realm_policy_bundle_check, terminal_realm_check};
 
 pub(crate) mod endpoints;
 pub(crate) mod governance_proof;

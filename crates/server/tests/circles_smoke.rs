@@ -418,8 +418,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
     }
     // Only this Circle has accepted its own MLS Genesis. A create payload no
     // longer declares an encryption profile or activates MLS.
-    state.circles.get_mut(CIRCLE_A).unwrap().mls_group_ref =
-        Some("ak:mls:group:circle".to_owned());
+    state.circles.get_mut(CIRCLE_A).unwrap().mls_group_ref = Some("ak:mls:group:circle".to_owned());
 
     let effect = state.apply(
         &op(
@@ -535,19 +534,19 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
     );
 
     let mut message = op(
-            arkret_wire::EventKind::MessageCreate,
-            REALM_A,
-            json!({
-                "event_id": "ak:event:AfaoXo0TmLK2gbcvCoXuTQMlnz-bWxdaHyOiyqXbYfG6",
-                "strand_id": STRAND_X,
-                "sender": member_actor(ALICE),
-                "content": {
-                    "body": "circle-only ciphertext placeholder",
-                    "encrypted": true
-                },
-                "encrypted": true,
-            }),
-        );
+        arkret_wire::EventKind::MessageCreate,
+        REALM_A,
+        json!({
+            "event_id": "ak:event:AfaoXo0TmLK2gbcvCoXuTQMlnz-bWxdaHyOiyqXbYfG6",
+            "strand_id": STRAND_X,
+            "sender": member_actor(ALICE),
+            "content": {
+                "body": "circle-only ciphertext placeholder",
+                "encrypted": true
+            },
+            "encrypted": true,
+        }),
+    );
     message.context.accepted_scope_ref = arkret_wire::ScopeRef::Circle {
         realm_id: RealmId::new(REALM_A).unwrap(),
         circle_id: arkret_wire::CircleId::new(CIRCLE_A).unwrap(),

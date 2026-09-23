@@ -245,6 +245,11 @@ async fn send_device_messages(
     let mut idempotency_expires_at = now();
     for (recipient, devices) in body.messages {
         for (device_id, target) in devices {
+            if matches!(target.kind.as_str(), "ak.secret.request" | "ak.secret.send") {
+                return Err(AppError::param_invalid(
+                    "ak.secret.request and ak.secret.send are not admitted in v1",
+                ));
+            }
             idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
             let message_key = arkret_canonical::canonical_sha256(&json!({
                 "sender_account_id": sender_account_id,
@@ -892,6 +897,12 @@ fn device_message_envelope_from_record(
         || envelope.recipient_device_id.as_str() != message.device_id
         || envelope.sent_at != message.created_at
     {
+        return None;
+    }
+    if matches!(
+        envelope.kind.as_str(),
+        "ak.secret.request" | "ak.secret.send"
+    ) {
         return None;
     }
     if let DeviceMessageSender::Station { sender_id } = &envelope.sender {

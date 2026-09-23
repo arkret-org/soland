@@ -113,9 +113,10 @@ mod possession_tests {
             account_id: transcript.account_id.clone(),
             requesting_device_id: transcript.requesting_device_id.clone(),
             requesting_device_public_key_did: transcript.requesting_device_public_key_did.clone(),
-            requesting_device_signature:
-                arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
-                    .unwrap(),
+            requesting_device_signature: arkret_wire::Base64UrlString::new(
+                URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+            )
+            .unwrap(),
             trust_domain: transcript.trust_domain.clone(),
             expected_recovery_policy_ref: transcript.expected_recovery_policy_ref.clone(),
         };

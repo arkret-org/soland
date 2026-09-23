@@ -497,9 +497,10 @@ pub trait AuthorityCommitStore: Send + Sync {
 
 #[cfg(test)]
 mod mls_installation_tests {
-    use super::{MlsStateInstallation, validate_mls_installation};
     use arkret_models_crypto::{MlsCommitEnvelope, MlsCommitPayload, MlsGovernanceBindingPayload};
     use arkret_wire::{EventId, Hash, RealmId, ScopeRef};
+
+    use super::{MlsStateInstallation, validate_mls_installation};
 
     #[test]
     fn installed_state_must_match_signed_mls_binding() {

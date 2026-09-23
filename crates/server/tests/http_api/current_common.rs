@@ -1,4 +1,5 @@
-// Current HTTP integration helpers. Legacy Seal/Cell fixtures remain in common.rs for migration reference.
+// Current HTTP integration helpers. Legacy Seal/Cell fixtures remain in common.rs for migration
+// reference.
 //! Shared helpers, fixtures, and imports for the soland HTTP-API integration test binary.
 //!
 //! Originally lived inline at the top of the monolithic `http_api` test before the
@@ -244,7 +245,13 @@ pub(crate) fn problem_code(body: &Value) -> &str {
         .expect("response must contain a canonical Arkret problem type URI")
 }
 pub(crate) async fn dev_token(state: AppState) -> String {
-    dev_token_for_device(state, "did:web:alice.example", "ak:device:01904100-0000-7000-8000-a11ce0000001", "Alice Desktop").await
+    dev_token_for_device(
+        state,
+        "did:web:alice.example",
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        "Alice Desktop",
+    )
+    .await
 }
 pub(crate) async fn dev_token_for_device(
     state: AppState,

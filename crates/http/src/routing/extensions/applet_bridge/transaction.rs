@@ -393,6 +393,7 @@ mod backpressure_tests {
                     event
                 })
                 .collect(),
+            committed_events: Vec::new(),
             signals: Vec::new(),
         };
 

@@ -39,22 +39,19 @@ fn test_config() -> crate::config::AppConfig {
 /// Install the current media-service facet anchoring `issuer_kid` under
 /// `service_id`.
 fn install_media_service_with_service_id(state: &AppState, service_id: &str, _issuer_kid: &str) {
-    state
-        .test_projection()
-        .lock()
-        .set_realm_facet(
-            REALM_ID,
-            soland_domain::reducer::facet::REALM_MEDIA_SERVICE,
-            json!({
-                "service_id": service_id,
-                "foci": [{
-                    "focus_id": FOCUS_ID,
-                    "focus_kind": "arkret_native",
-                    "token_endpoint": "https://media.soland.local/_arkret/self/rtc/token",
-                    "connect_url": "wss://media.soland.local/native"
-                }]
-            }),
-        );
+    state.test_projection().lock().set_realm_facet(
+        REALM_ID,
+        soland_domain::reducer::facet::REALM_MEDIA_SERVICE,
+        json!({
+            "service_id": service_id,
+            "foci": [{
+                "focus_id": FOCUS_ID,
+                "focus_kind": "arkret_native",
+                "token_endpoint": "https://media.soland.local/_arkret/self/rtc/token",
+                "connect_url": "wss://media.soland.local/native"
+            }]
+        }),
+    );
 }
 
 /// Install the current media-service facet anchoring `issuer_kid` under

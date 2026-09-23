@@ -128,11 +128,10 @@ pub(super) fn validate_strand_watch_manage_others_levels(
              the audit_pair edge runs audit -> write",
         ));
     }
-    // The prose requires a typed result ID and before/after heads, but the
-    // closed audit payload cannot carry them yet (spec-open 2026-09-23-0900).
-    // No cross-actor watch write can be admitted against an incomplete audit.
+    // The paired audit carrier is closed. The current-state CAS and atomic
+    // write provider still need to be wired before admitting this operation.
     Err(manage_others_audit_error(
-        "cross-actor watch audit carrier is not yet defined by the closed payload schema",
+        "cross-actor watch current-state CAS provider is unavailable",
     ))
 }
 
@@ -210,7 +209,7 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
         match matches {
             1 => {
                 return Err(manage_others_audit_error(
-                    "cross-actor watch audit carrier is not yet defined by the closed payload schema",
+                    "cross-actor watch current-state CAS provider is unavailable",
                 ));
             }
             0 => {

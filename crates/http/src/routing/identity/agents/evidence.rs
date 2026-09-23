@@ -2,10 +2,10 @@
 //! RealmCommit. Current key eligibility is checked against the PCR snapshot.
 
 use arkret_models_collaboration::agent_operations::KeyStateCurrentSignerEvidence;
+use arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey;
+use arkret_models_identity::authenticated_signer_resolution_evidence::build_agent_signer_evidence;
 use arkret_models_identity::{
     AuthenticatedServiceResolution, AuthenticatedSignerKind, AuthenticatedSignerResolutionEvidence,
-    agent_signer_evidence::AgentAuthorizedSigningKey,
-    authenticated_signer_resolution_evidence::build_agent_signer_evidence,
 };
 use arkret_wire::{ActorId, DidUrl, EventId, NonEmptyJsonObject, SignerEvidenceRef};
 

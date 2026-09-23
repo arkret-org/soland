@@ -605,7 +605,6 @@ mod tests {
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX
         );
     }
-
 }
 
 pub(crate) async fn recovery_unlock_manifest(

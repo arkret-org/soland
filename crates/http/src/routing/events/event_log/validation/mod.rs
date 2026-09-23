@@ -6,12 +6,11 @@ mod payload_shape;
 
 pub(crate) use audit::is_encrypted_message;
 pub(in crate::routing) use audit::validate_watch_set_others_audit_pairs;
+pub(crate) use envelope::canonical_json_hash;
 pub(in crate::routing::events::event_log) use envelope::validate_pairwise_session_holder;
 pub(in crate::routing) use envelope::{
-    PrivateInviteEnvelope, validate_join_gate_proof_signatures,
-    validate_private_invite_envelope,
+    PrivateInviteEnvelope, validate_join_gate_proof_signatures, validate_private_invite_envelope,
 };
-pub(crate) use envelope::canonical_json_hash;
 #[cfg(test)]
 pub(super) use envelope::{
     event_requirements_schema_id, validate_event_critical_features, validate_event_proofs,

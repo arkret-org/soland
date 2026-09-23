@@ -165,10 +165,7 @@ fn realm_link_facet_value_projected() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     state.apply(&link_op(REALM_A, REALM_B, "join_gate_from", None), &hlc);
-    let facet = soland_domain::reducer::realm_links::realm_link_facet(
-        REALM_B,
-        "join_gate_from",
-    );
+    let facet = soland_domain::reducer::realm_links::realm_link_facet(REALM_B, "join_gate_from");
     let value = state
         .facet_value(REALM_A, &facet)
         .expect("Realm link facet must be projected");

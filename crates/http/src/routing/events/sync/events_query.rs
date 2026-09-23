@@ -696,9 +696,6 @@ mod tests {
         assert_eq!(error.code, soland_http::error::ErrorCode::InternalError);
         assert!(error.message.contains("has no canonical Event record"));
     }
-
-
-
 }
 
 fn canonical_record_actor_key(

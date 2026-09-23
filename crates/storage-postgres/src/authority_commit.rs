@@ -16,8 +16,10 @@ use crate::agent_current_results::{
     lock_agent_producer_current, project_agent_key_in_connection,
     project_agent_status_in_connection,
 };
-use crate::capability_grant_current_results::commit_capability_grant_current_result_in_connection;
-use crate::capability_grant_current_results::commit_realm_authority_root_current_result_in_connection;
+use crate::capability_grant_current_results::{
+    commit_capability_grant_current_result_in_connection,
+    commit_realm_authority_root_current_result_in_connection,
+};
 
 #[derive(Clone)]
 pub struct PgAuthorityCommitStore {

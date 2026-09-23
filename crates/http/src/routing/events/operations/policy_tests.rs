@@ -48,7 +48,8 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6".to_owned(),
-    ).unwrap();
+    )
+    .unwrap();
     state.contacts().install_direct_binding(
         "sha256:00000000000000000000000000000000000000000000000000000000000006a1".to_owned(),
         "sha256:0000000000000000000000000000000000000000000000000000000000000601",
@@ -271,10 +272,10 @@ fn signed_device_authorize_payload(
     device_signer: &SigningKey,
     signing_key: &SigningKey,
 ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
+    use arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload;
     use arkret_models_collaboration::events_payloads::{
         DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, SignatureMaterial,
     };
-    use arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload;
 
     let device_public_key = format!(
         "did:key:{}",
@@ -286,9 +287,15 @@ fn signed_device_authorize_payload(
     let account_id =
         arkret_wire::AccountId::new(principal_id.clone(), crate::test_event::station_id());
     let mut payload = DeviceAuthorizePayload {
-        device_id: arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6").unwrap(),
+        device_id: arkret_identifiers::DeviceId::new(
+            "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
+        )
+        .unwrap(),
         device_public_key_did: arkret_wire::NonEmptyString::new(device_public_key).unwrap(),
-        hpke_key: arkret_wire::NonEmptyString::new("z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM").unwrap(),
+        hpke_key: arkret_wire::NonEmptyString::new(
+            "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
+        )
+        .unwrap(),
         algorithms: vec![
             arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
             arkret_wire::NonEmptyString::new("ak.mls.v1").unwrap(),
@@ -300,7 +307,9 @@ fn signed_device_authorize_payload(
         expires_at: None,
         authorization_binding_kind: DeviceAuthorizationBindingKind::RegistrationAnchor,
         authorized_generation_ref: 1,
-        device_signature: SignatureMaterial::NonEmptyString(arkret_wire::NonEmptyString::new("pending").unwrap()),
+        device_signature: SignatureMaterial::NonEmptyString(
+            arkret_wire::NonEmptyString::new("pending").unwrap(),
+        ),
         recovery_session_id: None,
         pairing_challenge_transcript_digest: None,
         applet_id: None,
@@ -310,7 +319,8 @@ fn signed_device_authorize_payload(
         .expect("device signature input");
     let signature = signing_key.sign(&input);
     payload.device_signature = SignatureMaterial::NonEmptyString(
-        arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(signature.to_bytes())).unwrap(),
+        arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(signature.to_bytes()))
+            .unwrap(),
     );
     payload
 }

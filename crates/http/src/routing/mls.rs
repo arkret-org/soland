@@ -1670,8 +1670,7 @@ async fn build_peer_claim_outcome(
     request_digest: &str,
     claimed: &MlsKeyPackageRow,
 ) -> Result<PeerKeyPackagesClaimOutcome, AppError> {
-    let claims =
-        vec![keypackage_claim_record(state, claimed, body.claim_request_id.as_str()).await?];
+    let claims = vec![keypackage_claim_record(state, claimed).await?];
     let claims_value = serde_json::to_value(&claims)
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
     let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
@@ -4093,7 +4092,6 @@ fn last_resort_matches_realm(kp: &MlsKeyPackageRow, intended_realm_id: &str) -> 
 async fn keypackage_claim_record(
     state: &AppState,
     record: &MlsKeyPackageRow,
-    claim_request_id: &str,
 ) -> Result<KeyPackageClaimRecord, AppError> {
     if record.device_authorize_event_id.is_none() && record.agent_key_authorize_event_id.is_none() {
         return Err(AppError::capability_denied(
@@ -4165,15 +4163,7 @@ async fn keypackage_claim_record(
         )
     };
     let keypackage = URL_SAFE_NO_PAD.encode(&record.key_package_bytes);
-    let mut claim_id_preimage = b"ak.keypackage.claim_id.v1".to_vec();
-    claim_id_preimage.push(0);
-    claim_id_preimage.extend(record.id.as_bytes());
-    claim_id_preimage.push(0);
-    claim_id_preimage.extend(claim_request_id.as_bytes());
-    let claim_id = format!(
-        "claim-{}",
-        URL_SAFE_NO_PAD.encode(arkret_canonical::sha256_digest(claim_id_preimage))
-    );
+    let claim_id = format!("ak:keypackage_claim:{}", uuid::Uuid::now_v7());
     Ok(KeyPackageClaimRecord {
         claim_id,
         keypackage_ref: record.keypackage_ref.clone(),
