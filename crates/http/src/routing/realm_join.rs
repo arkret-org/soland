@@ -758,18 +758,25 @@ async fn verify_peer_bootstrap(
                 .get("invitee_account_id")
                 .cloned()
                 .and_then(|v| serde_json::from_value::<arkret_wire::AccountId>(v).ok());
-            if invitee.as_ref() != Some(&request.applicant_account_id)
-                || !values
-                    .get(lifecycle_cell.as_ref().expect("invite lifecycle"))
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|s| matches!(s, "pending" | "claimed"))
+            let previous_state = match values
+                .get(lifecycle_cell.as_ref().expect("invite lifecycle"))
+                .and_then(serde_json::Value::as_str)
             {
+                Some("pending") => arkret_models_collaboration::governance::membership_invite::InvitePreviousState::Pending,
+                Some("claimed") => arkret_models_collaboration::governance::membership_invite::InvitePreviousState::Claimed,
+                _ => return Err(crate::app_error!(FrontierUnavailable, "invalid directed invite lifecycle")),
+            };
+            if invitee.as_ref() != Some(&request.applicant_account_id) {
                 return Err(crate::app_error!(
                     FrontierUnavailable,
                     "invalid directed invite target or lifecycle"
                 ));
             }
-            invite_accept_core(invite_id.clone(), request.applicant_account_id.clone())?
+            invite_accept_core(
+                invite_id.clone(),
+                request.applicant_account_id.clone(),
+                previous_state,
+            )?
         }
         RealmJoinIntent::MemberJoin { gate_proofs } => member_state_core_with_expected(
             &request.realm_id,
@@ -891,12 +898,13 @@ fn rule_allows_intent(rule: &str, intent: &RealmJoinIntent) -> bool {
 fn invite_accept_core(
     invite_id: arkret_wire::InviteId,
     account_id: arkret_wire::AccountId,
+    previous_state: arkret_models_collaboration::governance::membership_invite::InvitePreviousState,
 ) -> Result<RealmJoinTransition, AppError> {
     let precondition = InviteLiveTargetSlot::held_by_invite(&invite_id)
         .precondition(&account_id)
         .map_err(|error| AppError::internal(format!("invite live-target cell: {error}")))?;
     Ok(RealmJoinTransition::InviteAccept {
-        payload: InviteAcceptPayload::directed(invite_id, account_id),
+        payload: InviteAcceptPayload::directed(invite_id, account_id, previous_state),
         preconditions: vec![precondition],
     })
 }
@@ -1110,7 +1118,11 @@ async fn prepare(
         }
         let transition = match &body.intent {
             RealmJoinIntent::InviteAccept { invite_id, .. } => {
-                invite_accept_core(invite_id.clone(), authenticated_account.clone())?
+                invite_accept_core(
+                    invite_id.clone(),
+                    authenticated_account.clone(),
+                    arkret_models_collaboration::governance::membership_invite::InvitePreviousState::Pending,
+                )?
             }
             RealmJoinIntent::MemberJoin { gate_proofs } => {
                 member_state_core(
@@ -1262,7 +1274,11 @@ mod tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             arkret_wire::DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
         );
-        let core = invite_accept_core(invite_id.clone(), account_id.clone()).unwrap();
+        let core = invite_accept_core(
+            invite_id.clone(),
+            account_id.clone(),
+            arkret_models_collaboration::governance::membership_invite::InvitePreviousState::Pending,
+        ).unwrap();
         let RealmJoinTransition::InviteAccept {
             payload,
             preconditions,
