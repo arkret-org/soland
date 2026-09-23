@@ -2639,7 +2639,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -2916,7 +2918,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3275,7 +3279,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3469,7 +3475,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3672,7 +3680,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3806,7 +3816,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3907,7 +3919,9 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();

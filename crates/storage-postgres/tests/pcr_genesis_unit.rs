@@ -41,7 +41,10 @@ fn unit(station: DidCoreId) -> PcrGenesisCommitUnit {
         local_id: format!("pcr-{}", uuid::Uuid::now_v7().simple()),
         ..Default::default()
     };
-    let fixture = device_history_fixture::DeviceHistoryFixture::new_with(station.clone(), options);
+    let fixture = device_history_fixture::DeviceHistoryFixture::new_with(
+        device_history_fixture::did_web_station(&station),
+        options,
+    );
     let created_at = fixture.commits[0].committed_at;
     let evidence = arkret_signatures::webvh::sign_registration_did_evidence_draft(
         &fixture.inception,

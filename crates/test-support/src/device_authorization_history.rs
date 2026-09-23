@@ -23,16 +23,16 @@ pub fn device(index: u8) -> DeviceId {
 fn at() -> DateTime<Utc> {
     "2026-09-12T00:00:00Z".parse().unwrap()
 }
-/// Project a stable core id back to the DID it was derived from, so a
-/// verification method names the same controller the core id does.
-fn did_of(core_id: &DidCoreId) -> String {
-    format!(
-        "did:{}",
-        core_id
-            .as_str()
-            .strip_prefix("ak:did_core:")
-            .expect("a core id always carries the projected prefix")
-    )
+/// The `did:web` Station DID a `did:web` core id was projected from.
+///
+/// Only `did:web` projects reversibly; a `did:webvh` core id drops the host,
+/// so callers holding such a Station pass its DID directly.
+pub fn did_web_station(core_id: &DidCoreId) -> Did {
+    let host = core_id
+        .as_str()
+        .strip_prefix("ak:did_core:web:")
+        .expect("only a did:web Station core id projects back to its DID");
+    Did::new(format!("did:web:{host}")).expect("did:web Station DID")
 }
 pub fn possession(
     account: &AccountId,
@@ -189,6 +189,8 @@ pub struct CommittedDeviceAuthorization {
 pub struct DeviceHistoryFixture {
     pub account: AccountId,
     pub did: Did,
+    /// The governance Station DID whose controller signs every fixture commit.
+    pub station_did: Did,
     pub inception: arkret_models_identity::DidOperationSubmitRequestBody,
     pub registration_anchor: PrincipalRegistrationAnchor,
     pub events: Vec<Event>,
@@ -205,11 +207,11 @@ impl DeviceHistoryFixture {
     // Real inception/root/device/producer signatures and a deterministic
     // commit chain. This fixture does not assert HTTP admission, authority
     // signature verification or recovery-session policy.
-    pub fn new(station_id: DidCoreId) -> Self {
-        Self::new_with(station_id, DeviceHistoryFixtureOptions::default())
+    pub fn new(station_did: Did) -> Self {
+        Self::new_with(station_did, DeviceHistoryFixtureOptions::default())
     }
 
-    pub fn new_with(station_id: DidCoreId, options: DeviceHistoryFixtureOptions) -> Self {
+    pub fn new_with(station_did: Did, options: DeviceHistoryFixtureOptions) -> Self {
         let next_root = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             &SigningKey::from_bytes(&options.next_root_seed)
                 .verifying_key()
@@ -231,18 +233,27 @@ impl DeviceHistoryFixture {
         let verified_root =
             arkret_signatures::webvh::validate_principal_inception_operation(&prepared.submit_body)
                 .unwrap();
-        let registration_anchor = PrincipalRegistrationAnchor::WebvhRegistration {
-            registration_did_operation: Box::new(prepared.submit_body.clone()),
-            log_entries: vec![serde_json::from_value(prepared.log_entry.clone()).unwrap()],
-            witness_records: Vec::new(),
-            normalized_did_document: serde_json::from_value::<DidDocument>(
-                prepared.log_entry["state"].clone(),
-            )
+        // The anchor's DID document is normalized on the wire; hold the parsed
+        // wire form so it equals every anchor a Station decodes from bytes.
+        let registration_anchor: PrincipalRegistrationAnchor = serde_json::from_value(
+            serde_json::to_value(PrincipalRegistrationAnchor::WebvhRegistration {
+                registration_did_operation: Box::new(prepared.submit_body.clone()),
+                log_entries: vec![serde_json::from_value(prepared.log_entry.clone()).unwrap()],
+                witness_records: Vec::new(),
+                normalized_did_document: serde_json::from_value::<DidDocument>(
+                    prepared.log_entry["state"].clone(),
+                )
+                .unwrap(),
+            })
             .unwrap(),
-        };
+        )
+        .unwrap();
         arkret_identity::validate_principal_registration_anchor(&registration_anchor).unwrap();
         let did = Did::new(prepared.did.clone()).unwrap();
-        let account = AccountId::new(project_did_to_core_id(&did).unwrap(), station_id);
+        let account = AccountId::new(
+            project_did_to_core_id(&did).unwrap(),
+            project_did_to_core_id(&station_did).unwrap(),
+        );
         let payload = possession_with(
             &account,
             DeviceAuthorizationSpec {
@@ -313,6 +324,7 @@ impl DeviceHistoryFixture {
         let mut fixture = Self {
             account,
             did,
+            station_did,
             inception: prepared.submit_body,
             registration_anchor,
             events: Vec::new(),
@@ -401,11 +413,8 @@ impl DeviceHistoryFixture {
         DetachedObjectSignature {
             context: DetachedSignatureContext::RealmCommit,
             signature_algorithm: DetachedSignatureAlgorithm::Ed25519,
-            verification_method: DidUrl::new(format!(
-                "{}#authority",
-                did_of(&self.account.station_id)
-            ))
-            .expect("a station core id projects to a DID URL"),
+            verification_method: DidUrl::new(format!("{}#authority", self.station_did))
+                .expect("a Station DID names a DID URL"),
             signed_digest: hash("fixture-realm-commit"),
             created_at: self.created_at,
             sig: Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),

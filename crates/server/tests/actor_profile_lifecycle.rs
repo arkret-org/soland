@@ -19,7 +19,7 @@ async fn pcr_cannot_be_used_as_actor_profile_relationship_selector() {
         jws_replay_window_seconds: 0,
         ..soland_test_support::app_config()
     });
-    let fixture = PcrGenesisFixture::new(state.service_core_id());
+    let fixture = PcrGenesisFixture::new(state.service_did());
     fixture.admit(&state).await.expect("durable PCR genesis");
     let app = service(state.clone());
     let did = fixture.history.did.clone();

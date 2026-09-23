@@ -88,9 +88,8 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
     let alice_fixture =
-        soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_core_id());
-    let bob_fixture =
-        soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_core_id());
+        soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
+    let bob_fixture = soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
     let alice_did = alice_fixture.history.did.as_str();
     let bob_did = bob_fixture.history.did.as_str();
     let alice_token = dev_token(&state, &app, &alice_fixture).await;
@@ -145,7 +144,7 @@ async fn invite_receive_policy_get_set_round_trips() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
     let alice_fixture =
-        soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_core_id());
+        soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
     let alice = alice_fixture.history.account.clone();
     let mallory = DidCoreId::new("ak:did_core:web:irp-mallory.example").unwrap();
     let alice_token = dev_token(&state, &app, &alice_fixture).await;

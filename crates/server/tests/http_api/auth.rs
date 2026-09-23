@@ -380,7 +380,7 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
     let state = soland_test_support::app_state_with_postgres_governance(test_config());
     let mut device_history =
         soland_test_support::device_authorization_history::DeviceHistoryFixture::new(
-            state.service_core_id(),
+            state.service_did(),
         );
     let device_b_authorize = device_history.event(
         arkret_wire::EventKind::DeviceAuthorize,

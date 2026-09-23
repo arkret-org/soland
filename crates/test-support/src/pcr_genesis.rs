@@ -11,12 +11,11 @@ use arkret_models_identity::{
     UnsignedIdentityCreationControlProof, UnsignedIdentityCreationControlProofBody,
 };
 use arkret_wire::{
-    DidCoreId, Hash, IdempotencyKey, PcrGenesisUnit, RealmCommitAuthorityRef, TrustDomainId,
-    WebOrigin,
+    Hash, IdempotencyKey, PcrGenesisUnit, RealmCommitAuthorityRef, TrustDomainId, WebOrigin,
 };
 use soland_storage::{
     AuthorityCommitTransaction, CurrentRealmAuthority, PcrGenesisCommitOutcome,
-    PcrGenesisCommitUnit, PersistenceResult,
+    PcrGenesisCommitUnit, PersistenceResult, WebvhLogRecord,
 };
 
 use crate::AppStateTestExt as _;
@@ -35,12 +34,13 @@ pub struct PcrGenesisFixture {
 impl PcrGenesisFixture {
     /// Build unique principal history routed through the supplied governance Station.
     #[must_use]
-    pub fn new(station: DidCoreId) -> Self {
+    pub fn new(station_did: arkret_wire::Did) -> Self {
         let options = DeviceHistoryFixtureOptions {
             local_id: format!("pcr-{}", uuid::Uuid::now_v7().simple()),
             ..Default::default()
         };
-        let history = DeviceHistoryFixture::new_with(station.clone(), options);
+        let history = DeviceHistoryFixture::new_with(station_did, options);
+        let station = history.account.station_id.clone();
         let at = history.commits[0].committed_at;
         let evidence = arkret_signatures::webvh::sign_registration_did_evidence_draft(
             &history.inception,
@@ -146,12 +146,32 @@ impl PcrGenesisFixture {
     }
 
     /// Submit the unit to the same durable AuthorityCommitStore used in production.
+    ///
+    /// The principal's DID inception is registered first, as the WebVH
+    /// registration provider does before any PCR genesis relay reaches the
+    /// Station; account projection re-verifies the genesis against it.
     pub async fn admit(
         &self,
         state: &soland_http::state::AppState,
     ) -> PersistenceResult<PcrGenesisCommitOutcome> {
-        state
-            .test_persistence()
+        let persistence = state.test_persistence();
+        let did = self.history.did.to_string();
+        if persistence.webvh().list_log_events(&did).await?.is_empty() {
+            let operation = serde_json::to_value(&self.history.inception.operation)
+                .expect("fixture DID inception serializes");
+            persistence
+                .webvh()
+                .append_log_event(WebvhLogRecord {
+                    event_digest: arkret_canonical::canonical_sha256(&operation)
+                        .expect("fixture DID inception digest"),
+                    did,
+                    seq: self.history.inception.seq.unwrap_or(1),
+                    operation,
+                    created_at: self.history.events[0].created_at,
+                })
+                .await?;
+        }
+        persistence
             .authority_commits()
             .admit_pcr_genesis_unit(&self.unit, self.unit.transactions[0].commit.committed_at)
             .await

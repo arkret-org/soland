@@ -93,7 +93,7 @@ fn signed_account_data_event(
 #[tokio::test]
 async fn signed_account_data_set_uses_the_accepted_pcr_and_cas_revision() {
     let state = soland_test_support::app_state(test_config());
-    let fixture = PcrGenesisFixture::new(state.service_core_id());
+    let fixture = PcrGenesisFixture::new(state.service_did());
     let token = account_session(&state, &fixture).await;
     let app = service(state.clone());
     let key = arkret_wire::AccountDataKey::PUSH_RULES;
@@ -122,9 +122,9 @@ async fn signed_account_data_set_uses_the_accepted_pcr_and_cas_revision() {
 #[tokio::test]
 async fn account_data_write_rejects_another_actors_signed_event() {
     let state = soland_test_support::app_state(test_config());
-    let holder = PcrGenesisFixture::new(state.service_core_id());
+    let holder = PcrGenesisFixture::new(state.service_did());
     let token = account_session(&state, &holder).await;
-    let other = PcrGenesisFixture::new(state.service_core_id());
+    let other = PcrGenesisFixture::new(state.service_did());
     other.admit(&state).await.expect("second accepted PCR");
     let key = arkret_wire::AccountDataKey::PUSH_RULES;
     let event = signed_account_data_event(&state, &other, key);
@@ -151,7 +151,7 @@ async fn account_data_write_rejects_another_actors_signed_event() {
 #[tokio::test]
 async fn push_registration_returns_only_the_station_pairwise_target() {
     let state = soland_test_support::app_state(test_config());
-    let fixture = PcrGenesisFixture::new(state.service_core_id());
+    let fixture = PcrGenesisFixture::new(state.service_did());
     let token = account_session(&state, &fixture).await;
     let app = service(state.clone());
     let mut response = TestClient::post("http://server/_arkret/edge/push/register-device")

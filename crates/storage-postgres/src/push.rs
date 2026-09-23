@@ -317,7 +317,9 @@ mod tests {
         };
         let station_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:push-registration.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(station_id.clone());
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
         {
             let mut conn = store.pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")

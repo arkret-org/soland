@@ -480,7 +480,7 @@ fn account_viewer_repeatedly_resolves_atomically_installed_control_root() {
 async fn account_viewer_repeatedly_resolves_atomically_installed_control_root_body() {
     let state = soland_test_support::app_state_with_postgres_governance(test_config());
     let fixture = soland_test_support::device_authorization_history::DeviceHistoryFixture::new(
-        state.service_core_id(),
+        state.service_did(),
     );
     let _bootstrap_token = register_account(
         state.clone(),

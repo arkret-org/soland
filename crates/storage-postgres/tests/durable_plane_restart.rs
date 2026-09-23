@@ -47,8 +47,9 @@ async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGate
         .await
         .unwrap();
     drop(conn);
-    let source =
-        device_history_fixture::DeviceHistoryFixture::new(station.station_id.parse().unwrap());
+    let source = device_history_fixture::DeviceHistoryFixture::new(
+        device_history_fixture::did_web_station(&station.station_id.parse().unwrap()),
+    );
     let inventory = soland_storage_postgres::PgDeviceInventoryStore { pool: pool.clone() };
     for device in source.device_inventory_records() {
         inventory.seed_test_record(&device).await.unwrap();

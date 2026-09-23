@@ -77,7 +77,7 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
     // WebVH local id therefore carries this run's namespace, which reaches the
     // SCID and so gives this run its own principal id.
     let mut source = device_history_fixture::DeviceHistoryFixture::new_with(
-        station.station_id.parse().unwrap(),
+        device_history_fixture::did_web_station(&station.station_id.parse().unwrap()),
         device_history_fixture::DeviceHistoryFixtureOptions {
             local_id: namespace.replace('-', ""),
             ..Default::default()

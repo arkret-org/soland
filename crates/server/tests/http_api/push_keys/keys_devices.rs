@@ -58,7 +58,7 @@ async fn install_confirmed_founding_device(
     };
 
     let fixture = DeviceHistoryFixture::new_with(
-        state.service_core_id(),
+        state.service_did(),
         DeviceHistoryFixtureOptions {
             local_id: local_id.to_owned(),
             root_seed: [identity_seed; 32],
@@ -1331,7 +1331,7 @@ async fn keys_query_hides_revoked_device_body() {
     let desktop_key = SigningKey::from_bytes(&[62u8; 32]);
     let mobile_key = SigningKey::from_bytes(&[63u8; 32]);
     let mut fixture = DeviceHistoryFixture::new_with(
-        state.service_core_id(),
+        state.service_did(),
         DeviceHistoryFixtureOptions {
             local_id: "keys-revocation-alice".to_owned(),
             root_seed: [171; 32],
