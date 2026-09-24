@@ -25,6 +25,78 @@ pub struct RevokeProposalCommitWrite {
     pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One immutable worker decision for the exact accepted revoke proposal.
+/// Accepted carries the first durable step outcome; rejected terminates the
+/// transaction without any accepted step.
+#[derive(Clone, Debug)]
+pub struct RevokeCommandTerminalWrite {
+    pub transaction: SecurityTransactionRecord,
+    pub step_outcome: Option<SecurityTransactionStepOutcomeRecord>,
+}
+
+impl RevokeCommandTerminalWrite {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        use arkret_models_crypto::{
+            SecurityRotationRevokeCommandResult, SecurityTransactionStep,
+            SecurityTransactionTerminalOutcome,
+        };
+
+        let resource = &self.transaction.resource;
+        resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let plan = resource.security_rotation_plan().ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "revoke terminal requires SecurityRotation".to_owned(),
+            )
+        })?;
+        let outcome = resource.revoke_command_outcome.as_ref().ok_or_else(|| {
+            PersistenceError::SchemaViolation("revoke command outcome is missing".to_owned())
+        })?;
+        match outcome.result {
+            SecurityRotationRevokeCommandResult::Accepted => {
+                let step = self.step_outcome.as_ref().ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "accepted revoke requires its durable step outcome".to_owned(),
+                    )
+                })?;
+                if step.transaction_id != resource.transaction_id.as_str()
+                    || step.step != SecurityTransactionStep::Revoke
+                    || step.response
+                        != serde_json::to_value(resource)
+                            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                    || resource.accepted_steps.first().is_none_or(|accepted| {
+                        accepted.prepared_material_digest != plan.revoke_unit.request_digest
+                    })
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "accepted revoke step differs from prepared unit or terminal resource"
+                            .to_owned(),
+                    ));
+                }
+            }
+            SecurityRotationRevokeCommandResult::Rejected => {
+                if self.step_outcome.is_some()
+                    || !resource.accepted_steps.is_empty()
+                    || !matches!(
+                        resource.terminal_outcome,
+                        Some(
+                            SecurityTransactionTerminalOutcome::Aborted { .. }
+                                | SecurityTransactionTerminalOutcome::Expired { .. }
+                        )
+                    )
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "rejected revoke must atomically abort or expire without accepted step"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RevokeProposalCommitWrite {
     pub fn validate(&self) -> PersistenceResult<()> {
         let resource = &self.transaction.resource;
@@ -199,6 +271,10 @@ pub trait RecoverySessionStore: Send + Sync {
 
 #[async_trait]
 pub trait SecurityTransactionStore: Send + Sync {
+    async fn commit_revoke_command_terminal(
+        &self,
+        write: RevokeCommandTerminalWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord>;
     /// Commits the exact prepared revoke Event/RealmCommit, immutable proposal
     /// dot and transaction binding in one PCR authority transaction.
     async fn commit_revoke_proposal(

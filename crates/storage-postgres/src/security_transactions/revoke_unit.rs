@@ -7,9 +7,15 @@ use arkret_wire::RealmCommit;
 use diesel::sql_types::{Jsonb, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
-use soland_storage::{AuthorityCommitWriteOutcome, PersistenceError, RevokeProposalCommitWrite};
+use soland_storage::{
+    AuthorityCommitWriteOutcome, PersistenceError, RevokeCommandTerminalWrite,
+    RevokeProposalCommitWrite, SecurityTransactionRecord,
+};
 
-use super::{AsyncPgConnection, PgTransactionError, ids, load_one};
+use super::{
+    AsyncPgConnection, PgTransactionError, StepAttemptSource, accept_step_in_transaction, ids,
+    load_one, load_step_outcome, update_mutable_fields,
+};
 use crate::authority_commit::{
     commit_verified_pcr_revoke_proposal_in_connection, queue_event_in_connection,
 };
@@ -38,6 +44,105 @@ struct ProposalDotRow {
 
 fn rejected(reason: &str) -> PgTransactionError {
     PersistenceError::Conflict(reason.to_owned()).into()
+}
+
+pub(super) async fn commit_revoke_command_terminal_in_connection(
+    conn: &mut AsyncPgConnection,
+    write: RevokeCommandTerminalWrite,
+) -> Result<SecurityTransactionRecord, PgTransactionError> {
+    use arkret_models_crypto::{SecurityRotationRevokeCommandResult, SecurityTransactionStep};
+
+    write.validate()?;
+    let resource = &write.transaction.resource;
+    let proposal = resource.revoke_proposal.as_ref().expect("validated");
+    let outcome = resource.revoke_command_outcome.as_ref().expect("validated");
+    let existing = load_one(conn, resource.transaction_id.as_str(), true)
+        .await?
+        .ok_or_else(|| rejected("rotation transaction is absent"))?;
+    if existing.canonical_request != write.transaction.canonical_request {
+        return Err(rejected(
+            "rotation terminal changed its original canonical request",
+        ));
+    }
+    let accepted = sql_query(
+        "SELECT c.commit_json,e.envelope FROM realm_commits c \
+         JOIN canonical_events e ON e.pk=c.event_pk WHERE c.commit_id=$1",
+    )
+    .bind::<Text, _>(proposal.covering_commit_id.as_str())
+    .get_result::<AcceptedProposalRow>(&mut *conn)
+    .await
+    .optional()?
+    .ok_or_else(|| rejected("rotation terminal has no accepted proposal Event/Commit"))?;
+    let dot = sql_query("SELECT commit_id FROM pcr_device_revocation_proposals WHERE event_id=$1")
+        .bind::<Text, _>(proposal.proposal_event_id.as_str())
+        .get_result::<ProposalDotRow>(&mut *conn)
+        .await
+        .optional()?
+        .ok_or_else(|| rejected("rotation terminal has no immutable proposal dot"))?;
+    let plan = resource.security_rotation_plan().expect("validated");
+    if dot.commit_id != proposal.covering_commit_id.as_str()
+        || accepted.commit_json["commit_id"].as_str() != Some(proposal.covering_commit_id.as_str())
+        || accepted.commit_json["event_ref"].as_str() != Some(proposal.proposal_event_id.as_str())
+        || accepted.envelope
+            != serde_json::to_value(&plan.revoke_unit.request.events[0])
+                .map_err(PersistenceError::database)?
+    {
+        return Err(rejected(
+            "rotation terminal differs from its accepted proposal",
+        ));
+    }
+    if existing.resource == *resource {
+        let durable = load_step_outcome(
+            conn,
+            resource.transaction_id.as_str(),
+            SecurityTransactionStep::Revoke,
+        )
+        .await?;
+        match (
+            outcome.result,
+            write.step_outcome.as_ref(),
+            durable.as_ref(),
+        ) {
+            (SecurityRotationRevokeCommandResult::Accepted, Some(presented), Some(stored))
+                if presented.canonical_request == stored.canonical_request
+                    && presented.response == stored.response
+                    && presented.participant_outcome == stored.participant_outcome => {}
+            (SecurityRotationRevokeCommandResult::Rejected, None, None) => {}
+            _ => {
+                return Err(rejected(
+                    "rotation terminal exact replay changed its outcome",
+                ));
+            }
+        }
+        return Ok(existing);
+    }
+    let mut initial = resource.clone();
+    initial.revoke_command_outcome = None;
+    initial.accepted_steps.clear();
+    initial.terminal_outcome = None;
+    if existing.resource != initial {
+        return Err(rejected(
+            "rotation terminal changed its accepted proposal or first result",
+        ));
+    }
+    match outcome.result {
+        SecurityRotationRevokeCommandResult::Accepted => {
+            accept_step_in_transaction(
+                conn,
+                write.transaction.clone(),
+                write.step_outcome.expect("validated"),
+                StepAttemptSource::CoCommittedWithOutcome,
+            )
+            .await?;
+        }
+        SecurityRotationRevokeCommandResult::Rejected => {
+            soland_storage::validate_security_transaction_update(&existing, &write.transaction)?;
+            update_mutable_fields(conn, &write.transaction).await?;
+        }
+    }
+    load_one(conn, resource.transaction_id.as_str(), false)
+        .await?
+        .ok_or_else(|| rejected("rotation terminal vanished after write"))
 }
 
 pub(super) async fn commit_revoke_proposal_in_connection(

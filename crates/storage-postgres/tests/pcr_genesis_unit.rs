@@ -7,10 +7,12 @@ use arkret_models_collaboration::events_payloads::{
 };
 use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput;
 use arkret_models_crypto::{
-    BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
-    PreparedEventBatchRequest, PreparedEventUnit, SecurityRotationRevokeProposal,
-    SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
-    SecurityTransactionPreparedPlan,
+    AcceptedSecurityTransactionStep, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
+    BackupRotationPlan, PreparedEventBatchRequest, PreparedEventUnit,
+    SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+    SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
+    SecurityTransactionAcceptor, SecurityTransactionCreateRequest, SecurityTransactionPreparedPlan,
+    SecurityTransactionStep,
 };
 use arkret_models_identity::{
     IdentityBindingPurpose, IdentityCreationControlProofKind, PCR_GENESIS_UNIT_KINDS,
@@ -27,8 +29,9 @@ use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority,
-    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError, RevokeProposalCommitWrite,
-    SecurityTransactionRecord, SecurityTransactionStore,
+    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError, RevokeCommandTerminalWrite,
+    RevokeProposalCommitWrite, SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
+    SecurityTransactionStore,
 };
 use soland_storage_postgres::{Db, PgAuthorityCommitStore, PgPool, PgSecurityTransactionStore};
 
@@ -976,4 +979,82 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         stored.resource.revoke_proposal.unwrap().covering_commit_id,
         covering.commit_id
     );
+
+    let mut accepted = transactions
+        .get(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let request_digest = accepted
+        .resource
+        .security_rotation_plan()
+        .unwrap()
+        .revoke_unit
+        .request_digest
+        .clone();
+    accepted
+        .resource
+        .accepted_steps
+        .push(AcceptedSecurityTransactionStep {
+            prepared_material_digest: request_digest,
+            acceptor: SecurityTransactionAcceptor::Principal {
+                principal_id: station,
+            },
+            output_ref: covering.commit_id.to_string(),
+            output_digest: hash("revoke-command-accepted"),
+            accepted_at: at + chrono::TimeDelta::seconds(2),
+        });
+    accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
+        proposal_event_id: revoke.event_id.clone(),
+        covering_commit_id: covering.commit_id.clone(),
+        result: SecurityRotationRevokeCommandResult::Accepted,
+        decided_at: at + chrono::TimeDelta::seconds(2),
+    });
+    let terminal = RevokeCommandTerminalWrite {
+        step_outcome: Some(SecurityTransactionStepOutcomeRecord {
+            transaction_id: transaction_id.to_string(),
+            step: SecurityTransactionStep::Revoke,
+            canonical_request: b"revoke-worker-request".to_vec(),
+            response: serde_json::to_value(&accepted.resource).unwrap(),
+            participant_outcome: None,
+        }),
+        transaction: accepted,
+    };
+    let mut incomplete = terminal.clone();
+    incomplete.step_outcome = None;
+    assert!(
+        transactions
+            .commit_revoke_command_terminal(incomplete)
+            .await
+            .is_err()
+    );
+    let before_terminal = diesel::sql_query("SELECT COUNT(*) AS count FROM security_transaction_step_outcomes WHERE transaction_id=$1 AND step='revoke'")
+        .bind::<Uuid,_>(uuid::Uuid::parse_str(transaction_id.as_str().strip_prefix("ak:transaction:").unwrap()).unwrap())
+        .get_result::<CountRow>(&mut *conn).await.unwrap();
+    assert_eq!(before_terminal.count, 0);
+    let decided = transactions
+        .commit_revoke_command_terminal(terminal.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        decided
+            .resource
+            .revoke_command_outcome
+            .as_ref()
+            .unwrap()
+            .result,
+        SecurityRotationRevokeCommandResult::Accepted
+    );
+    assert_eq!(
+        transactions
+            .commit_revoke_command_terminal(terminal)
+            .await
+            .unwrap()
+            .resource,
+        decided.resource,
+    );
+    let terminal_rows = diesel::sql_query("SELECT COUNT(*) AS count FROM security_transaction_step_outcomes WHERE transaction_id=$1 AND step='revoke'")
+        .bind::<Uuid,_>(uuid::Uuid::parse_str(transaction_id.as_str().strip_prefix("ak:transaction:").unwrap()).unwrap())
+        .get_result::<CountRow>(&mut *conn).await.unwrap();
+    assert_eq!(terminal_rows.count, 1);
 }

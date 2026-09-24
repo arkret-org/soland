@@ -4,10 +4,11 @@ use arkret_wire::{DeviceId, DidCoreId, Hash, TransactionId};
 use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RecoveryUnitCommitWrite, RevokeProposalCommitWrite, RunQueryDsl,
-    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, Text, Timestamptz, Uuid, Value,
-    async_trait, ids, pg_conn, sql_query, sql_types,
+    QueryableByName, RecoveryUnitCommitWrite, RevokeCommandTerminalWrite,
+    RevokeProposalCommitWrite, RunQueryDsl, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
+    SecurityTransactionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    sql_types,
 };
 
 mod recovery_unit;
@@ -589,6 +590,19 @@ async fn insert_step_attempt(
 
 #[async_trait]
 impl SecurityTransactionStore for PgSecurityTransactionStore {
+    async fn commit_revoke_command_terminal(
+        &self,
+        write: RevokeCommandTerminalWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord> {
+        write.validate()?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            revoke_unit::commit_revoke_command_terminal_in_connection(conn, write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn commit_revoke_proposal(
         &self,
         write: RevokeProposalCommitWrite,
@@ -750,6 +764,12 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                     ))
                 })?;
             super::validate_security_transaction_update(&existing, &record)?;
+            if existing.resource.revoke_command_outcome != record.resource.revoke_command_outcome {
+                return Err(PersistenceError::Conflict(
+                    "revoke command result requires its guarded terminal unit".to_owned(),
+                )
+                .into());
+            }
             if record.resource.accepted_steps != existing.resource.accepted_steps {
                 return Err(PersistenceError::Conflict(
                     "security transaction accepted step requires its durable outcome unit"
@@ -831,6 +851,11 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         record: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeRecord,
     ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord> {
+        if outcome.step == SecurityTransactionStep::Revoke {
+            return Err(PersistenceError::Conflict(
+                "revoke accepted step requires its guarded terminal unit".to_owned(),
+            ));
+        }
         record
             .resource
             .validate_structural()
