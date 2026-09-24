@@ -249,6 +249,7 @@ async fn dpop_session_reaches_every_admin_router_once() {
         "/_soland/admin/capabilities",
         "/_soland/admin/key-backups",
         "/_soland/admin/realms",
+        "/_soland/admin/settings",
     ] {
         let headers = session.headers("GET", path);
         let (status, body) = session.get(path, Some(&headers)).await;

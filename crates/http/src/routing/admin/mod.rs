@@ -178,14 +178,19 @@ pub(super) fn require_admin_principal(
 /// namespace (collection snapshot and retention), per arkret-spec `service-http-binding.md`
 /// §2.1: `/admin/*` is deployment-local and MUST NOT carry the
 /// `/_arkret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
+///
+/// Salvo selects the first child whose path and method filters match, so the
+/// single-segment `admin/{resource}` collection wildcard is pushed last: a
+/// concrete sibling such as `GET admin/settings` must win over the wildcard,
+/// which otherwise answers it as an unknown collection (404).
 pub fn router() -> Router {
     Router::new()
         .hoop(RequireAdmin::scope(
             arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
         ))
-        .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(retention::router())
         .push(settings::router())
+        .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
 }
 
 pub fn server_ops_router() -> Router {
@@ -245,7 +250,7 @@ mod gate_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use salvo::affix_state;
-    use salvo::test::TestClient;
+    use salvo::test::{ResponseExt, TestClient};
 
     use super::*;
 
@@ -346,5 +351,68 @@ mod gate_tests {
             AdminAuth::from_depot(&depot).session().unwrap().actor,
             "ak:did_core:web:op.example"
         );
+    }
+
+    /// Stand-in for an outer `RequireAdmin` that already authenticated this
+    /// request, so the gate under test reuses its principal instead of
+    /// reading a credential.
+    struct AuthenticatedPrincipal;
+
+    #[async_trait]
+    impl Handler for AuthenticatedPrincipal {
+        async fn handle(
+            &self,
+            _req: &mut Request,
+            depot: &mut Depot,
+            _res: &mut Response,
+            _ctrl: &mut FlowCtrl,
+        ) {
+            depot.insert_typed(AdminPrincipal {
+                session: SessionRecord {
+                    token_hash: "outer-gate".into(),
+                    account_pk: None,
+                    actor: "ak:did_core:web:op.example".into(),
+                    device_id: "ak:device:0196419b-0000-7000-8000-000000000001".into(),
+                    audience: "ak:did_core:web:server.example".into(),
+                    session_public_key: None,
+                    agent_session: None,
+                    session_grant: None,
+                    expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                    created_at: chrono::Utc::now(),
+                    revoked_at: None,
+                },
+            });
+        }
+    }
+
+    /// The `admin/{resource}` collection wildcard must not shadow a concrete
+    /// sibling route: `GET admin/settings` reaches the settings handler, and
+    /// an unknown collection still reaches the wildcard's own 404.
+    #[tokio::test]
+    async fn concrete_admin_routes_take_precedence_over_the_collection_wildcard() {
+        let mut config = crate::config::AppConfig::test_default();
+        config.development_mode = true;
+        let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+        let expected = serde_json::to_value(&*state.settings()).expect("settings JSON");
+        let service = Service::new(
+            Router::new()
+                .hoop(affix_state::inject(state))
+                .hoop(AuthenticatedPrincipal)
+                .push(router()),
+        );
+
+        let mut response = TestClient::get("http://server/admin/settings")
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        let body: serde_json::Value = response.take_json().await.expect("settings body");
+        assert_eq!(body, expected);
+
+        let mut response = TestClient::get("http://server/admin/no-such-collection")
+            .send(&service)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND));
+        let body = response.take_string().await.expect("collection body");
+        assert!(body.contains("admin resource not found"), "{body}");
     }
 }
