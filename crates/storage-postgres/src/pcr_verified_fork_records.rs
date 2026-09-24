@@ -11,7 +11,7 @@ use arkret_identity::{
 use arkret_models_collaboration::events_payloads::{
     DeviceAuthorizePayload, DeviceReanchorPayload, DeviceRevokePayload,
 };
-use arkret_wire::{CommitStreamRef, CommittedEventFullView, EventKind};
+use arkret_wire::{ActorId, CommitStreamRef, CommittedEventFullView, EventKind, RealmCommitId};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncConnection, RunQueryDsl};
@@ -31,6 +31,15 @@ pub(crate) struct VerifiedPcrForkEvidence {
     second_binding: AcceptedDidBinding,
 }
 
+/// A predecessor-cut acceptance, to be constructed only by a durable
+/// historical-binding resolver. There is intentionally no constructor from a
+/// current `AcceptedDidBinding`; that resolver has not been implemented.
+pub(crate) struct HistoricalPcrAcceptedBinding {
+    predecessor_commit_id: RealmCommitId,
+    actor_id: ActorId,
+    accepted: AcceptedDidBinding,
+}
+
 fn invalid(reason: impl Into<String>) -> PersistenceError {
     PersistenceError::SchemaViolation(reason.into())
 }
@@ -40,8 +49,8 @@ impl VerifiedPcrForkEvidence {
         previous: CommittedEventFullView,
         left: CommittedEventFullView,
         right: CommittedEventFullView,
-        first_binding_at_predecessor: &AcceptedDidBinding,
-        second_binding_at_predecessor: &AcceptedDidBinding,
+        first_binding_at_predecessor: &HistoricalPcrAcceptedBinding,
+        second_binding_at_predecessor: &HistoricalPcrAcceptedBinding,
         authority: &VerifiedRealmAuthority,
         keys: &dyn RealmAuthorityKeyDirectory,
     ) -> PersistenceResult<Self> {
@@ -91,6 +100,13 @@ impl VerifiedPcrForkEvidence {
                 .map_err(|error| invalid(format!("PCR fork predecessor differs: {error}")))?;
         }
         for (branch, binding) in [(&first, first_binding), (&second, second_binding)] {
+            if binding.predecessor_commit_id != previous.commit.commit_id
+                || binding.actor_id != branch.event.actor_id
+            {
+                return Err(invalid(
+                    "PCR fork producer binding belongs to a different predecessor or actor",
+                ));
+            }
             let proof = branch
                 .event
                 .producer_proof
@@ -99,15 +115,20 @@ impl VerifiedPcrForkEvidence {
             let bytes = arkret_signatures::EventProofBuilder::new()
                 .envelope_bytes(&branch.event)
                 .map_err(|error| invalid(format!("PCR fork Event bytes are invalid: {error}")))?;
-            verify_event_proof_with_binding(proof, &bytes, &branch.event.actor_id, binding)
-                .map_err(|error| invalid(format!("PCR fork Event producer is invalid: {error}")))?;
+            verify_event_proof_with_binding(
+                proof,
+                &bytes,
+                &branch.event.actor_id,
+                &binding.accepted,
+            )
+            .map_err(|error| invalid(format!("PCR fork Event producer is invalid: {error}")))?;
         }
         Ok(Self {
             previous,
             first,
-            first_binding: first_binding.clone(),
+            first_binding: first_binding.accepted.clone(),
             second,
-            second_binding: second_binding.clone(),
+            second_binding: second_binding.accepted.clone(),
         })
     }
 }
