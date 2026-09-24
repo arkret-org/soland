@@ -184,19 +184,6 @@ mod tests {
             body["encryption"]["key_commitment"] =
                 json!("sha256:2222222222222222222222222222222222222222222222222222222222222222");
         }
-        if backup_kind == "mls_history" {
-            let scope = arkret_wire::ScopeRef::Realm {
-                realm_id: arkret_wire::RealmId::new(
-                    "ak:realm:Aa1JCF6pnQnSgl8DnT6vNtPcFGPCxLnEY130o2lmyDSh".to_owned(),
-                )
-                .unwrap(),
-            };
-            body["contents"][0] = json!({
-                "item_kind": "history_secret_ranges",
-                "effective_scope": scope,
-                "ranges": [{"from_epoch": 0, "to_epoch": 0}]
-            });
-        }
         if body["encryption"]["recipient_method"].as_str() == Some("recovery_public_key") {
             body["recovery_policy_ref"] = json!({
                 "policy_id": "ak:policy:01964137-0000-7000-8000-000000000001",
@@ -209,10 +196,9 @@ mod tests {
     fn passphrase_encryption() -> Value {
         json!({
             "recipient_method": "passphrase_kdf",
-            "recipient_key_ref": DEVICE_ID,
             "kdf": {
                 "name": "argon2id",
-                "salt": "salt",
+                "salt": "MDAwMDAwMDAwMDAwMDAwMA",
                 "params": {
                     "memory_kib": 65_536,
                     "iterations": 3,
@@ -222,8 +208,8 @@ mod tests {
             "aead": {
                 "name": "xchacha20_poly1305",
                 "aead_profile": "ak.aead.xchacha20_poly1305.v1",
-                "nonce": "nonce",
-                "nonce_salt": "bm9uY2Vfc2FsdF9maXh0dXJl"
+                "nonce": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+                "nonce_salt": "MDAwMDAwMDAwMDAwMDAwMA"
             }
         })
     }
@@ -252,22 +238,6 @@ mod tests {
                 "enc": "ZW5jYXBzdWxhdGVka2V5"
             }
         })
-    }
-
-    #[test]
-    fn mls_history_accepts_secret_storage_key() {
-        let body = key_backup_body("mls_history", secret_storage_key_encryption());
-
-        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect("MLS history secret_storage_key backup should validate");
-    }
-
-    #[test]
-    fn mls_history_accepts_recovery_public_key() {
-        let body = key_backup_body("mls_history", recovery_public_key_encryption());
-
-        validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect("MLS history recovery_public_key (HPKE) backup should validate");
     }
 
     #[test]
@@ -302,7 +272,7 @@ mod tests {
         let body = key_backup_body("secret_storage", enc);
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
             .expect_err("passphrase_kdf without nonce_salt must be rejected");
-        assert!(err.message.contains("nonce_salt"));
+        assert!(err.message.contains("inconsistent encryption fields"));
 
         // Drop key_commitment -> reject.
         let mut body2 = key_backup_body("secret_storage", passphrase_encryption());
@@ -312,7 +282,7 @@ mod tests {
             .remove("key_commitment");
         let err2 = validate_key_backup_body(BACKUP_ID, ACTOR, &body2)
             .expect_err("passphrase_kdf without key_commitment must be rejected");
-        assert!(err2.message.contains("key_commitment"));
+        assert!(err2.message.contains("inconsistent encryption fields"));
     }
 
     #[test]
@@ -342,25 +312,12 @@ mod tests {
     }
 
     #[test]
-    fn mls_history_rejects_passphrase_kdf() {
-        let body = key_backup_body("mls_history", passphrase_encryption());
-
-        let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("MLS history passphrase KDF backups are no longer supported");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
-        assert!(
-            err.message
-                .contains("passphrase_kdf is valid only for secret_storage backups")
-        );
-    }
-
-    #[test]
-    fn mls_history_rejects_plaintext_fields() {
-        let mut body = key_backup_body("mls_history", secret_storage_key_encryption());
+    fn secret_storage_rejects_plaintext_fields() {
+        let mut body = key_backup_body("secret_storage", secret_storage_key_encryption());
         body["plaintext"] = json!("raw group state");
 
         let err = validate_key_backup_body(BACKUP_ID, ACTOR, &body)
-            .expect_err("soland must store only opaque MLS backup ciphertext");
+            .expect_err("soland must store only opaque backup ciphertext");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
     }
 
