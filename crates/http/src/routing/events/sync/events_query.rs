@@ -805,16 +805,22 @@ pub(super) async fn realm_state_snapshot_by_ref(
                 .unwrap_or(soland_http::error::ErrorCode::Unauthenticated);
             soland_http::error::AppError::from_rejection(typed, message)
         })?;
+    // The registered error mapping sends every authorization failure of the
+    // exact read through the universal `capability_denied` surface; absent or
+    // no longer disclosable bytes are `realm_state_snapshot_unavailable`.
+    let denied = || {
+        soland_http::error::AppError::capability_denied(
+            "the Realm snapshot is not readable by this caller",
+        )
+    };
     if is_realm_deleted(state, &realm_id).await
         || !realm_id_accessible(state, &realm_id, Some(&session)).await
     {
-        return Err(soland_http::error::AppError::not_found("not found"));
+        return Err(denied());
     }
     let actor =
         crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
-    let account = actor
-        .as_account_id()
-        .ok_or_else(|| soland_http::error::AppError::not_found("not found"))?;
+    let account = actor.as_account_id().ok_or_else(denied)?;
     let snapshot = crate::routing::realm_state_snapshot::issued_realm_state_snapshot_for_account(
         state,
         &realm_id,
