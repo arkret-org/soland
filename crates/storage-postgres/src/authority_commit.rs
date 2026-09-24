@@ -1474,6 +1474,12 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                         );
                     }
                 }
+                commit_realm_authority_root_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
                 commit_capability_grant_current_result_in_connection(
                     conn,
                     &transaction.event,

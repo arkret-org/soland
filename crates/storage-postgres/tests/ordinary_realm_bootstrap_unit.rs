@@ -2,12 +2,36 @@ mod support;
 
 use arkret_models_collaboration::authority_commit::{
     OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
+    SelfAuthoritySubmitRequest,
 };
+use diesel::sql_types::{BigInt, Text};
+use diesel_async::RunQueryDsl;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority,
     OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
 };
 use soland_storage_postgres::{Db, PgAuthorityCommitStore};
+
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+async fn authority_root_count(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM realm_authority_root_current_results WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .count
+}
 
 fn event(
     kind: arkret_wire::EventKind,
@@ -149,7 +173,10 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
             .map(arkret_wire::EventAdmissionSubmission::new)
             .collect(),
     };
-    let exact_request_body = serde_json::to_vec(&submission).unwrap();
+    let exact_request_body = serde_json::to_vec(
+        &SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(submission.clone()),
+    )
+    .unwrap();
     OrdinaryRealmBootstrapCommitUnit {
         submission,
         exact_request_body,
@@ -167,7 +194,7 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
         .unwrap()
         .pool
         .unwrap();
-    let store = PgAuthorityCommitStore { pool };
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     unit.validate().unwrap();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -184,6 +211,7 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
             .is_err()
     );
     assert!(store.current_authority(&realm_id).await.unwrap().is_none());
+    assert_eq!(authority_root_count(&pool, &realm_id).await, 0);
     assert!(store.queued_event(&first_event_id).await.unwrap().is_none());
     assert!(
         store
@@ -201,6 +229,7 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
         panic!("first unit must commit");
     };
     assert_eq!(commits.len(), 7);
+    assert_eq!(authority_root_count(&pool, &realm_id).await, 1);
     assert!(
         store
             .committed_event(&first_event_id)
