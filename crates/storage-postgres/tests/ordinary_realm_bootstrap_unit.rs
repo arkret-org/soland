@@ -6,11 +6,45 @@ use arkret_models_collaboration::authority_commit::{
 };
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
+use sha2::{Digest as _, Sha256};
+use soland_services::{hydration::HydrationProjectionAdapter, projection::ProjectionService};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority,
     OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit, SelfProducerCommitGuard,
 };
-use soland_storage_postgres::{Db, PgAuthorityCommitStore};
+use soland_storage_postgres::{Db, PgAuthorityCommitStore, test_database::TestDatabase};
+
+struct BootstrapHydrationAdapter;
+
+impl HydrationProjectionAdapter for BootstrapHydrationAdapter {
+    fn operation_from_canonical_record(
+        &self,
+        record: &soland_services::events::AcceptedEvent,
+    ) -> Option<arkret_event_draft::ProjectedEventOperation> {
+        let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).ok()?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"ak:operation:soland-event-projection:v1:");
+        hasher.update(record.event_id.as_bytes());
+        let digest = hasher.finalize();
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x70;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let operation_id = arkret_identifiers::OperationId::new(format!(
+            "ak:operation:{}",
+            uuid::Uuid::from_bytes(bytes)
+        ))
+        .ok()?;
+        arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            operation_id,
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .ok()
+    }
+}
 
 #[derive(diesel::QueryableByName)]
 struct CountRow {
@@ -117,9 +151,8 @@ fn signature(
 }
 
 fn unit() -> OrdinaryRealmBootstrapCommitUnit {
-    let at = chrono::DateTime::parse_from_rfc3339("2026-09-23T00:00:00Z")
-        .unwrap()
-        .to_utc();
+    let at = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
+        .unwrap();
     let actor = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-actor.example").unwrap();
     let station = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap();
     let genesis = event(
@@ -127,7 +160,17 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
         arkret_wire::ScopeRef::RealmGenesis,
         &actor,
         &station,
-        serde_json::json!({"object":{"purpose":"collaboration"},"nonce":uuid::Uuid::now_v7().to_string()}),
+        serde_json::json!({"object":{
+            "schema":"ak.schema.realm_genesis.v1",
+            "purpose":"collaboration",
+            "genesis_salt":"X-kS8-uBvWQ_iuRqO7Rsv0WGBjZG2S2wJ533Tk2SJJ4",
+            "trust_domain":"ak:trust_domain:bootstrap.example",
+            "security_class":"high_assurance",
+            "governance_station_id":station,
+            "initial_join_rule":"invite",
+            "initial_history_access":"since_join",
+            "initial_discoverability":"invite_only"
+        }}),
         at,
     );
     let realm_id = genesis.realm_id.clone();
@@ -145,7 +188,7 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
     {
         let payload = match kind {
             arkret_wire::EventKind::RealmProfile => serde_json::json!({"name":"Test Realm"}),
-            arkret_wire::EventKind::RealmPolicyBundle => serde_json::json!({"policy_revision":1}),
+            arkret_wire::EventKind::RealmPolicyBundle => serde_json::json!({"policy_revision":1,"federation_policy":"closed"}),
             arkret_wire::EventKind::RealmJoinRule => serde_json::json!({"value":"invite"}),
             arkret_wire::EventKind::RealmHistoryAccess => {
                 serde_json::json!({"from":null,"to":"since_join"})
@@ -371,5 +414,86 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
             .admit_ordinary_realm_bootstrap_unit(&changed, at)
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn confirmed_bootstrap_recovers_after_postcommit_projection_install_is_lost() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0].event.actor_id.clone();
+    let at = unit.transactions[0].commit.committed_at;
+
+    // Simulate a process failure in the postcommit window: the authority
+    // transaction is durable, but no process-local projection is installed.
+    assert!(matches!(
+        store
+            .admit_ordinary_realm_bootstrap_unit(&unit, at)
+            .await
+            .unwrap(),
+        OrdinaryRealmBootstrapCommitOutcome::Committed(_)
+    ));
+    let fresh_process = ProjectionService::new("bootstrap-restart-test");
+    assert!(
+        fresh_process
+            .snapshot()
+            .realm_create_log(realm_id.as_str())
+            .is_none()
+    );
+
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    fresh_process
+        .hydrate_from_persistence(&persistence, &BootstrapHydrationAdapter, [realm_id.clone()])
+        .await
+        .unwrap();
+    let restored = fresh_process.snapshot();
+    assert_eq!(
+        restored.realm_create_log(realm_id.as_str()).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        restored.realm_profile_value(realm_id.as_str()),
+        Some(&serde_json::json!({"name":"Test Realm"}))
+    );
+    assert_eq!(
+        restored.realm_policy_bundle_value(realm_id.as_str()),
+        Some(&serde_json::json!({"policy_revision":1,"federation_policy":"closed"}))
+    );
+    assert_eq!(
+        restored.realm_default_join_rule(realm_id.as_str()),
+        "invite"
+    );
+    assert_eq!(
+        restored.realm_history_access(realm_id.as_str()).as_deref(),
+        Some("since_join")
+    );
+    assert!(
+        restored
+            .member(realm_id.as_str(), &creator.to_string())
+            .is_some()
+    );
+    assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
+
+    // Rebuilding a second process from the same Commit prefix must be exact.
+    let second_process = ProjectionService::new("bootstrap-second-restart-test");
+    second_process
+        .hydrate_from_persistence(&persistence, &BootstrapHydrationAdapter, [realm_id.clone()])
+        .await
+        .unwrap();
+    let second = second_process.snapshot();
+    assert_eq!(
+        second.realm_create_log(realm_id.as_str()),
+        restored.realm_create_log(realm_id.as_str())
+    );
+    assert_eq!(
+        second.realm_profile_value(realm_id.as_str()),
+        restored.realm_profile_value(realm_id.as_str())
+    );
+    assert_eq!(
+        second.realm_history_access(realm_id.as_str()),
+        restored.realm_history_access(realm_id.as_str())
     );
 }

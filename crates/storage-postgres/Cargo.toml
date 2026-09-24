@@ -57,6 +57,8 @@ arkret-mls = { workspace = true, features = ["test-utils"] }
 tokio-postgres = { workspace = true }
 arkret-wire = { workspace = true, features = ["diesel", "test-support"] }
 soland-domain = { workspace = true }
+soland-services = { workspace = true }
+sha2.workspace = true
 soland-storage = { workspace = true, features = ["test-support"] }
 # Turning on `soland-storage/test-support` above adds `seed_test_record` to the
 # DeviceInventoryStore trait, but only `cfg(test)` builds of this crate compiled
