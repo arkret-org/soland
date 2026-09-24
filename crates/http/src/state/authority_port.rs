@@ -233,6 +233,9 @@ impl AuthorityProtocolPort for AppState {
         )
         .await
         .map_err(|reason| ServiceError::Conflict(reason.to_owned()))?;
+        if event.kind == arkret_wire::EventKind::MessageCreate {
+            crate::routing::message_authoring::message_create_send_gate(self, event).await?;
+        }
         if let Some(reason) = self
             .projections()
             .preflight_projected_batch_rejection(std::iter::once(&operation))

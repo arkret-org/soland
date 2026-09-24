@@ -78,6 +78,39 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
             None,
         );
     }
+    if let ServiceError::Conflict(detail) = &error {
+        let detail = detail.split_once(": ").map_or("", |(_, detail)| detail);
+        match error.conflict_code() {
+            Some(soland_storage::ConflictCode::EpochMismatch) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::EpochMismatch,
+                    res,
+                    detail,
+                );
+            }
+            Some(soland_storage::ConflictCode::TemporarilyUnavailable) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::TemporarilyUnavailable,
+                    res,
+                    detail,
+                );
+            }
+            Some(
+                code @ (soland_storage::ConflictCode::EpochUpdateRequired
+                | soland_storage::ConflictCode::MlsActivationRequired),
+            ) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    StatusCode::CONFLICT,
+                    arkret_wire::ErrorCode::FAILED_PRECONDITION,
+                    detail,
+                    code.as_str(),
+                    None,
+                );
+            }
+            _ => {}
+        }
+    }
     let (status, code) = match &error {
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         ServiceError::Conflict(_)
@@ -399,6 +432,58 @@ mod tests {
             "https://arkret.org/problems/failed_precondition"
         );
         assert_eq!(body["reason_code"], "snapshot_capacity_exceeded");
+    }
+
+    #[tokio::test]
+    async fn mls_send_gate_refusals_render_their_registered_identities() {
+        use soland_storage::ConflictCode;
+        for (code, status, wire_code, reason_code) in [
+            (
+                ConflictCode::EpochMismatch,
+                StatusCode::CONFLICT,
+                "epoch_mismatch",
+                None,
+            ),
+            (
+                ConflictCode::EpochUpdateRequired,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("epoch_update_required"),
+            ),
+            (
+                ConflictCode::MlsActivationRequired,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("mls_activation_required"),
+            ),
+            (
+                ConflictCode::TemporarilyUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                None,
+            ),
+        ] {
+            let mut res = Response::new();
+            render_service_error(
+                &mut res,
+                ServiceError::Conflict(format!("{code}: gate refused")),
+            );
+            assert_eq!(res.status_code, Some(status), "{code}");
+            let body: serde_json::Value = salvo::test::ResponseExt::take_json(&mut res)
+                .await
+                .expect("problem body");
+            assert_eq!(body["status"], status.as_u16(), "{body}");
+            assert_eq!(
+                body["type"],
+                format!("https://arkret.org/problems/{wire_code}"),
+                "{body}"
+            );
+            assert_eq!(body["detail"], "gate refused", "{body}");
+            match reason_code {
+                Some(reason_code) => assert_eq!(body["reason_code"], reason_code, "{body}"),
+                None => assert!(body.get("reason_code").is_none(), "{body}"),
+            }
+        }
     }
 
     #[tokio::test]

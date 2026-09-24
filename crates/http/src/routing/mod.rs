@@ -23,7 +23,7 @@ pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
 // SOL-ORG-06: realm organization-relationship read surface
-mod message_authoring;
+pub(crate) mod message_authoring;
 mod realm_join;
 pub(crate) mod realm_organization;
 

@@ -3,6 +3,7 @@ use arkret_models_collaboration::message_authoring::{
     MessageAuthoringContent, MessagePrepareOutcome, MessagePrepareRequestBody,
 };
 use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
+use arkret_models_crypto::EncryptedEnvelope;
 use arkret_wire::{ActorId, Base64UrlString, EncryptedPayloadScheme, Event, Hash, ScopeRef};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -101,6 +102,175 @@ async fn visible_target_scope(
     }
 }
 
+/// Why the current MLS send gate refuses one application body.
+///
+/// The gate is shared by message prepare and self Event submit so both
+/// surfaces answer the same state with the same registered identity
+/// (encryption-and-audit §2.5.2, decision 0100).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MlsSendGateRefusal {
+    /// Plaintext into a scope with an accepted `ak.mls.genesis`.
+    ActivationRequired,
+    /// Ciphertext into a scope whose accepted MLS state this Station does not
+    /// hold. Nothing was written; the exact request may be retried.
+    StateUnavailable,
+    /// The scope's membership / policy / key-access checkpoint still awaits a
+    /// covering winning Commit: the sender pauses instead of re-encrypting.
+    EpochUpdateRequired,
+    /// The frozen epoch or `group_state_ref` differs from the ready current
+    /// group: the sender refreshes the group and re-encrypts a new request.
+    EpochMismatch,
+}
+
+/// Failure of the current MLS send gate.
+#[derive(Debug)]
+pub(crate) enum MlsSendGateError {
+    Refused(MlsSendGateRefusal),
+    Internal(String),
+}
+
+/// Evaluate the current MLS send gate for one application body.
+///
+/// `envelopes` is `None` for a plaintext body and otherwise every encrypted
+/// envelope the body carries (content, then optional metadata). The gate only
+/// reads: it never writes or reserves anything, so the same state gives the
+/// same answer. Precedence follows §2.5.2: an uncovered key-access checkpoint
+/// wins over a stale frozen epoch.
+pub(crate) async fn mls_send_gate(
+    state: &AppState,
+    scope: &ScopeRef,
+    envelopes: Option<&[&EncryptedEnvelope]>,
+) -> Result<(), MlsSendGateError> {
+    let group = scope
+        .canonical_mls_group_id()
+        .map_err(|error| MlsSendGateError::Internal(error.to_string()))?;
+    let current = state
+        .mls_commits()
+        .commit(scope, &group)
+        .await
+        .map_err(|error| MlsSendGateError::Internal(error.to_string()))?;
+    let Some(envelopes) = envelopes else {
+        return match current {
+            Some(_) => Err(MlsSendGateError::Refused(
+                MlsSendGateRefusal::ActivationRequired,
+            )),
+            None => Ok(()),
+        };
+    };
+    let current = current.ok_or(MlsSendGateError::Refused(
+        MlsSendGateRefusal::StateUnavailable,
+    ))?;
+    if state
+        .projections()
+        .snapshot()
+        .pending_mls_removals
+        .iter()
+        .any(|removal| {
+            removal.realm_id == scope.realm_id().as_str()
+                && removal.circle_id.as_deref() == scope.circle_id().map(|id| id.as_str())
+        })
+    {
+        return Err(MlsSendGateError::Refused(
+            MlsSendGateRefusal::EpochUpdateRequired,
+        ));
+    }
+    let current_ref = current
+        .accepted_commit_ref
+        .as_deref()
+        .unwrap_or(&current.genesis_event_ref);
+    if current.effective_scope != *scope
+        || current.governance_binding.effective_scope() != scope
+        || envelopes.iter().any(|envelope| {
+            envelope.encryption_context.epoch() != current.epoch
+                || envelope.encryption_context.group_state_ref().as_str() != current_ref
+        })
+    {
+        return Err(MlsSendGateError::Refused(MlsSendGateRefusal::EpochMismatch));
+    }
+    Ok(())
+}
+
+fn send_gate_problem(error: MlsSendGateError) -> AppError {
+    match error {
+        MlsSendGateError::Internal(detail) => AppError::internal(detail),
+        MlsSendGateError::Refused(MlsSendGateRefusal::ActivationRequired) => crate::app_error!(
+            FailedPrecondition,
+            "plaintext is not allowed after MLS activation",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED),
+        MlsSendGateError::Refused(MlsSendGateRefusal::StateUnavailable) => crate::app_error!(
+            RevisionUnavailable,
+            "accepted MLS group state is unavailable",
+        ),
+        MlsSendGateError::Refused(MlsSendGateRefusal::EpochUpdateRequired) => crate::app_error!(
+            FailedPrecondition,
+            "the scope key-access revision is not yet covered by an accepted MLS Commit",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::EPOCH_UPDATE_REQUIRED),
+        MlsSendGateError::Refused(MlsSendGateRefusal::EpochMismatch) => crate::app_error!(
+            EpochMismatch,
+            "frozen message encryption context is no longer applicable",
+        ),
+    }
+}
+
+/// Apply the current MLS send gate to one self-submitted `ak.message.create`.
+///
+/// Runs before the authority transaction is prepared, so every refusal leaves
+/// no Commit, idempotency record or projection behind. The refusal travels as
+/// a typed [`soland_storage::ConflictCode`] so the HTTP layer renders its
+/// registered identity without reading diagnostic text.
+pub(crate) async fn message_create_send_gate(
+    state: &AppState,
+    event: &Event,
+) -> Result<(), soland_services::ServiceError> {
+    use soland_services::ServiceError;
+    use soland_storage::ConflictCode;
+    let envelope = |field: &str| {
+        event
+            .payload
+            .get(field)
+            .map(|value| serde_json::from_value::<EncryptedEnvelope>(value.clone()))
+            .transpose()
+            .map_err(|error| ServiceError::SchemaViolation(format!("message {field}: {error}")))
+    };
+    let content = envelope("encrypted_content")?;
+    let metadata = envelope("encrypted_metadata")?;
+    let envelopes: Option<Vec<&EncryptedEnvelope>> = match (&content, &metadata) {
+        (Some(content), metadata) => Some(std::iter::once(content).chain(metadata).collect()),
+        (None, None) => None,
+        (None, Some(_)) => {
+            return Err(ServiceError::SchemaViolation(
+                "message encrypted_metadata requires encrypted_content".to_owned(),
+            ));
+        }
+    };
+    mls_send_gate(state, &event.scope_ref, envelopes.as_deref())
+        .await
+        .map_err(|error| {
+            let (code, detail) = match error {
+                MlsSendGateError::Internal(detail) => return ServiceError::Internal(detail),
+                MlsSendGateError::Refused(MlsSendGateRefusal::ActivationRequired) => (
+                    ConflictCode::MlsActivationRequired,
+                    "plaintext is not allowed after MLS activation",
+                ),
+                MlsSendGateError::Refused(MlsSendGateRefusal::StateUnavailable) => (
+                    ConflictCode::TemporarilyUnavailable,
+                    "accepted MLS group state is unavailable",
+                ),
+                MlsSendGateError::Refused(MlsSendGateRefusal::EpochUpdateRequired) => (
+                    ConflictCode::EpochUpdateRequired,
+                    "the scope key-access revision is not yet covered by an accepted MLS Commit",
+                ),
+                MlsSendGateError::Refused(MlsSendGateRefusal::EpochMismatch) => (
+                    ConflictCode::EpochMismatch,
+                    "frozen message encryption context is no longer applicable",
+                ),
+            };
+            ServiceError::Conflict(format!("{code}: {detail}"))
+        })
+}
+
 /// Check a message intent against the target scope's accepted MLS state.
 ///
 /// Each branch keeps its registered identity so a client can choose between
@@ -119,34 +289,25 @@ async fn validate_encryption_context(
     scope: &ScopeRef,
     device: &str,
 ) -> Result<(), AppError> {
-    let group = scope.canonical_mls_group_id().map_err(invalid)?;
-    let current = state
-        .mls_commits()
-        .commit(scope, &group)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
     let MessageAuthoringContent::Mls {
         encrypted_content,
         encrypted_metadata,
         encryption_context: frozen,
     } = content
     else {
-        if current.is_some() {
-            return Err(crate::app_error!(
-                FailedPrecondition,
-                "plaintext is not allowed after MLS activation",
-            )
-            .with_reason_code(arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED));
-        }
-        return Ok(());
+        return mls_send_gate(state, scope, None)
+            .await
+            .map_err(send_gate_problem);
     };
     if frozen.scheme != EncryptedPayloadScheme::MlsRfc9420 {
         return Err(invalid(
             "message encryption_context.scheme must be mls_rfc9420",
         ));
     }
-    let envelopes = || std::iter::once(encrypted_content).chain(encrypted_metadata);
-    for envelope in envelopes() {
+    let envelopes: Vec<&EncryptedEnvelope> = std::iter::once(encrypted_content)
+        .chain(encrypted_metadata)
+        .collect();
+    for envelope in &envelopes {
         envelope.validate().map_err(invalid)?;
         if envelope.encryption_context.counter().is_some()
             || envelope.encryption_context.routing_context().is_some()
@@ -168,45 +329,9 @@ async fn validate_encryption_context(
             "message sender domain does not match the authenticated device",
         ));
     }
-    let current = current.ok_or_else(|| {
-        crate::app_error!(
-            RevisionUnavailable,
-            "accepted MLS group state is unavailable",
-        )
-    })?;
-    if state
-        .projections()
-        .snapshot()
-        .pending_mls_removals
-        .iter()
-        .any(|removal| {
-            removal.realm_id == scope.realm_id().as_str()
-                && removal.circle_id.as_deref() == scope.circle_id().map(|id| id.as_str())
-        })
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "the scope key-access revision is not yet covered by an accepted MLS Commit",
-        )
-        .with_reason_code(arkret_wire::ReasonCode::EPOCH_UPDATE_REQUIRED));
-    }
-    let current_ref = current
-        .accepted_commit_ref
-        .as_deref()
-        .unwrap_or(&current.genesis_event_ref);
-    if current.effective_scope != *scope
-        || current.governance_binding.effective_scope() != scope
-        || envelopes().any(|envelope| {
-            envelope.encryption_context.epoch() != current.epoch
-                || envelope.encryption_context.group_state_ref().as_str() != current_ref
-        })
-    {
-        return Err(crate::app_error!(
-            EpochMismatch,
-            "frozen message encryption context is no longer applicable",
-        ));
-    }
-    Ok(())
+    mls_send_gate(state, scope, Some(&envelopes))
+        .await
+        .map_err(send_gate_problem)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.messages.command.prepare", tags("messages"))]
@@ -902,5 +1027,188 @@ mod tests {
         validate_encryption_context(&state, &content, &scope, DEVICE)
             .await
             .unwrap();
+    }
+
+    fn message_create_event(scope: &ScopeRef, payload: serde_json::Value) -> Event {
+        let serde_json::Value::Object(payload) = payload else {
+            unreachable!("message payload is an object")
+        };
+        Event {
+            event_id: event_ref(0x42),
+            kind: arkret_wire::EventKind::MessageCreate,
+            realm_id: scope.realm_id().clone(),
+            scope_ref: scope.clone(),
+            actor_id: ActorId::service(DidCoreId::new(LEADER).unwrap()),
+            executed_by: None,
+            authorization_ref: None,
+            applet_id: None,
+            external_ref: None,
+            created_at: chrono::Utc::now(),
+            semantic_refs: Vec::new(),
+            payload: payload.into_iter().collect(),
+            producer_proof: None,
+        }
+    }
+
+    fn encrypted_message(
+        scope: &ScopeRef,
+        content: EncryptedEnvelope,
+        metadata: Option<EncryptedEnvelope>,
+    ) -> Event {
+        let mut payload = serde_json::json!({
+            "strand_id": STRAND,
+            "track_name": "discussion",
+            "encrypted_content": content,
+        });
+        if let Some(metadata) = metadata {
+            payload["encrypted_metadata"] = serde_json::to_value(metadata).unwrap();
+        }
+        message_create_event(scope, payload)
+    }
+
+    async fn accepted_mls_head(state: &AppState, scope: &ScopeRef) -> (u64, Option<String>) {
+        let group = scope.canonical_mls_group_id().unwrap();
+        let current = state
+            .mls_commits()
+            .commit(scope, &group)
+            .await
+            .unwrap()
+            .expect("accepted MLS state");
+        (current.epoch, current.accepted_commit_ref)
+    }
+
+    fn submit_refusal(
+        result: Result<(), soland_services::ServiceError>,
+    ) -> soland_storage::ConflictCode {
+        let error = result.expect_err("the submit gate must refuse");
+        error
+            .conflict_code()
+            .unwrap_or_else(|| panic!("refusal has no typed conflict code: {error}"))
+    }
+
+    #[tokio::test]
+    async fn message_submit_gate_refuses_plaintext_only_after_activation() {
+        let state = test_state();
+        let scope = realm_scope(REALM);
+        let plaintext = message_create_event(
+            &scope,
+            serde_json::json!({
+                "strand_id": STRAND,
+                "track_name": "discussion",
+                "content": ContentBlock::text("hello"),
+            }),
+        );
+        message_create_send_gate(&state, &plaintext).await.unwrap();
+        accept_genesis(&state, &scope, &event_ref(1)).await;
+        assert_eq!(
+            submit_refusal(message_create_send_gate(&state, &plaintext).await),
+            soland_storage::ConflictCode::MlsActivationRequired
+        );
+    }
+
+    #[tokio::test]
+    async fn message_submit_gate_without_mls_state_is_temporarily_unavailable() {
+        let state = test_state();
+        let scope = realm_scope(REALM);
+        let event = encrypted_message(&scope, standard(0, event_ref(1)), None);
+        assert_eq!(
+            submit_refusal(message_create_send_gate(&state, &event).await),
+            soland_storage::ConflictCode::TemporarilyUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn message_submit_gate_metadata_without_content_is_schema_violation() {
+        let state = test_state();
+        let scope = realm_scope(REALM);
+        let event = message_create_event(
+            &scope,
+            serde_json::json!({
+                "strand_id": STRAND,
+                "track_name": "discussion",
+                "content": ContentBlock::text("hello"),
+                "encrypted_metadata": standard(0, event_ref(1)),
+            }),
+        );
+        let error = message_create_send_gate(&state, &event).await.unwrap_err();
+        assert!(
+            matches!(error, soland_services::ServiceError::SchemaViolation(_)),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn message_submit_gate_uncovered_checkpoint_precedes_stale_epoch() {
+        let state = test_state();
+        let scope = realm_scope(REALM);
+        let (genesis, commit) = (event_ref(1), event_ref(2));
+        accept_genesis(&state, &scope, &genesis).await;
+        state.test_projection().lock().pending_mls_removals.push(
+            soland_domain::reducer::MlsRemoveObligation {
+                realm_id: REALM.to_owned(),
+                circle_id: None,
+                mls_group_ref: Some(scope.canonical_mls_group_id().unwrap().to_string()),
+                actor_id: LEADER.to_owned(),
+                device_id: Some(DEVICE.to_owned()),
+                membership_frontier: Vec::new(),
+                trigger_membership: "leave".to_owned(),
+                triggered_at: chrono::Utc::now(),
+            },
+        );
+        let current = encrypted_message(&scope, standard(0, genesis.clone()), None);
+        assert_eq!(
+            submit_refusal(message_create_send_gate(&state, &current).await),
+            soland_storage::ConflictCode::EpochUpdateRequired
+        );
+        accept_commit(&state, &scope, &genesis, &commit).await;
+        let before = accepted_mls_head(&state, &scope).await;
+        for _ in 0..2 {
+            assert_eq!(
+                submit_refusal(message_create_send_gate(&state, &current).await),
+                soland_storage::ConflictCode::EpochUpdateRequired
+            );
+        }
+        assert_eq!(
+            accepted_mls_head(&state, &scope).await,
+            before,
+            "a refused send must not move accepted MLS state"
+        );
+    }
+
+    #[tokio::test]
+    async fn message_submit_gate_superseded_epoch_is_epoch_mismatch() {
+        let state = test_state();
+        let scope = realm_scope(REALM);
+        let (genesis, commit) = (event_ref(1), event_ref(2));
+        accept_genesis(&state, &scope, &genesis).await;
+        accept_commit(&state, &scope, &genesis, &commit).await;
+        let before = accepted_mls_head(&state, &scope).await;
+        for event in [
+            encrypted_message(&scope, standard(0, genesis.clone()), None),
+            encrypted_message(
+                &scope,
+                standard(1, commit.clone()),
+                Some(standard(0, genesis.clone())),
+            ),
+            encrypted_message(&scope, standard(1, event_ref(3)), None),
+        ] {
+            for _ in 0..2 {
+                assert_eq!(
+                    submit_refusal(message_create_send_gate(&state, &event).await),
+                    soland_storage::ConflictCode::EpochMismatch
+                );
+            }
+        }
+        assert_eq!(
+            accepted_mls_head(&state, &scope).await,
+            before,
+            "a refused send must not move accepted MLS state"
+        );
+        let current = encrypted_message(
+            &scope,
+            standard(1, commit.clone()),
+            Some(standard(1, commit)),
+        );
+        message_create_send_gate(&state, &current).await.unwrap();
     }
 }

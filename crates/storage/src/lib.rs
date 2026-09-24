@@ -193,6 +193,11 @@ pub enum ConflictCode {
     DeviceRevoked,
     /// The same identity already exists with different canonical bytes.
     DuplicateConflict,
+    /// An encrypted application Event freezes an MLS epoch or group state
+    /// other than the ready current group.
+    EpochMismatch,
+    /// The scope's key-access checkpoint awaits a covering winning MLS Commit.
+    EpochUpdateRequired,
     /// Two verified Event variants share one full EventId. Internal name for
     /// what the wire calls `witness_disagreement`.
     EventHashCollision,
@@ -205,6 +210,8 @@ pub enum ConflictCode {
     /// The candidate durable Realm cut cannot be represented by the bounded
     /// inline v1 snapshot.
     SnapshotCapacityExceeded,
+    /// A plaintext application body targets a scope with accepted MLS genesis.
+    MlsActivationRequired,
     /// Membership compensation evidence changed, expired, or was consumed.
     MembershipCompensationConflict,
     /// MIMI migration lineage, selected topology, or current MLS binding fails.
@@ -239,13 +246,16 @@ pub enum ConflictCode {
     SeriesSeqNotMonotonic,
     /// A time-bounded workflow was acted on after its deadline.
     TtlExpired,
+    /// A read dependency is momentarily unavailable; nothing was committed and
+    /// the exact request may be retried.
+    TemporarilyUnavailable,
     /// A structurally valid wire feature has no admissible v1 form.
     UnsupportedFeature,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 35] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
@@ -254,11 +264,14 @@ impl ConflictCode {
         Self::DeviceRevocationPending,
         Self::DeviceRevoked,
         Self::DuplicateConflict,
+        Self::EpochMismatch,
+        Self::EpochUpdateRequired,
         Self::EventHashCollision,
         Self::EventIdDigestMismatch,
         Self::EventNotAccepted,
         Self::FailedPrecondition,
         Self::SnapshotCapacityExceeded,
+        Self::MlsActivationRequired,
         Self::MembershipCompensationConflict,
         Self::MimiRoomBindingMigrationProofInvalid,
         Self::RecipientQueueAtCapacity,
@@ -276,6 +289,7 @@ impl ConflictCode {
         Self::SignatureInvalid,
         Self::SeriesSeqNotMonotonic,
         Self::TtlExpired,
+        Self::TemporarilyUnavailable,
         Self::UnsupportedFeature,
     ];
 
@@ -290,11 +304,14 @@ impl ConflictCode {
             Self::DeviceRevocationPending => "device_revocation_pending",
             Self::DeviceRevoked => "device_revoked",
             Self::DuplicateConflict => "duplicate_conflict",
+            Self::EpochMismatch => arkret_wire::ErrorCode::EPOCH_MISMATCH,
+            Self::EpochUpdateRequired => arkret_wire::ReasonCode::EPOCH_UPDATE_REQUIRED,
             Self::EventHashCollision => "event_hash_collision",
             Self::EventIdDigestMismatch => "event_id_digest_mismatch",
             Self::EventNotAccepted => "event_not_accepted",
             Self::FailedPrecondition => "failed_precondition",
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
+            Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
             Self::MembershipCompensationConflict => "membership_compensation_conflict",
             Self::MimiRoomBindingMigrationProofInvalid => {
                 arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID
@@ -316,6 +333,7 @@ impl ConflictCode {
             Self::SignatureInvalid => "signature_invalid",
             Self::SeriesSeqNotMonotonic => "series_seq_not_monotonic",
             Self::TtlExpired => "ttl_expired",
+            Self::TemporarilyUnavailable => arkret_wire::ErrorCode::TEMPORARILY_UNAVAILABLE,
             Self::UnsupportedFeature => "unsupported_feature",
         }
     }
