@@ -495,7 +495,7 @@ fn to_u64(value: i64, what: &str) -> PersistenceResult<u64> {
         .map_err(|_| PersistenceError::Internal(format!("stored {what} is negative")))
 }
 
-fn stream_key(stream_ref: &arkret_wire::CommitStreamRef) -> PersistenceResult<String> {
+pub(crate) fn stream_key(stream_ref: &arkret_wire::CommitStreamRef) -> PersistenceResult<String> {
     String::from_utf8(
         arkret_canonical::canonical_json_bytes(stream_ref).map_err(PersistenceError::database)?,
     )
@@ -2194,6 +2194,36 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         crate::issued_realm_snapshots::PgIssuedRealmSnapshotArchive::new(self.pool.clone())
             .by_ref(account, realm_id, snapshot_id, issuer)
             .await
+    }
+
+    async fn freeze_account_realm_window(
+        &self,
+        request: &soland_storage::AccountRealmWindowRequest,
+    ) -> PersistenceResult<Option<soland_storage::AccountRealmWindow>> {
+        crate::issued_realm_snapshots::freeze_account_realm_window(&self.pool, request).await
+    }
+
+    async fn account_window_basis(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        window_cursor: &str,
+        stream_ref: &arkret_wire::CommitStreamRef,
+        issuer: &arkret_wire::DidCoreId,
+        now_ms: i64,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis>,
+    > {
+        crate::issued_realm_snapshots::account_window_basis(
+            &self.pool,
+            realm_id,
+            account,
+            window_cursor,
+            stream_ref,
+            issuer,
+            now_ms,
+        )
+        .await
     }
 
     async fn scan_stream(

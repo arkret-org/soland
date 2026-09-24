@@ -1,5 +1,6 @@
 DROP TABLE IF EXISTS mls_welcome_deliveries CASCADE;
 DROP TABLE IF EXISTS mls_group_states CASCADE;
+DROP TABLE IF EXISTS realm_state_snapshot_window_reservations;
 DROP TABLE IF EXISTS realm_state_snapshot_issuances;
 DROP TABLE IF EXISTS account_device_signer_evidence;
 DROP TABLE IF EXISTS realm_state_snapshots CASCADE;

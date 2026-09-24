@@ -16,6 +16,12 @@ fn map_issue_error(
         )
         .with_wire_code("payload_too_large");
     }
+    if error.conflict_code() == Some(soland_storage::ConflictCode::TemporarilyUnavailable) {
+        // A handoff committed while this cut held its share lock: nothing
+        // was signed or archived, and the caller may retry the exact read.
+        tracing::info!(%error, realm_id=%realm_id, "snapshot issuance lost a governing-cut race");
+        return snapshot_unavailable("the governing cut changed during snapshot issuance");
+    }
     match error {
         soland_services::ServiceError::SchemaViolation(_) => {
             tracing::warn!(%error, realm_id=%realm_id, "snapshot disclosure gate rejected material");
@@ -90,4 +96,37 @@ pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee_id:
         "ak:invite-token:{}",
         sha256_hex(format!("{invite_id}:{realm_id}:{invitee_id}").as_bytes())
     )
+}
+
+#[cfg(test)]
+mod issue_error_tests {
+    use super::*;
+
+    fn realm() -> arkret_wire::RealmId {
+        arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x5a; 32],
+        ))
+    }
+
+    #[test]
+    fn concurrent_handoff_race_is_the_registered_snapshot_unavailability() {
+        let raced = map_issue_error(
+            &realm(),
+            soland_services::ServiceError::Conflict(format!(
+                "{}: the governing cut changed concurrently: could not serialize access",
+                soland_storage::ConflictCode::TemporarilyUnavailable.as_str(),
+            )),
+        );
+        assert_eq!(raced.wire_code(), "realm_state_snapshot_unavailable");
+        assert_eq!(raced.http_status().as_u16(), 503);
+
+        // An unclassified storage fault stays internal rather than being
+        // guessed into a caller-facing reason.
+        let fault = map_issue_error(
+            &realm(),
+            soland_services::ServiceError::Database("connection reset".to_owned()),
+        );
+        assert_eq!(fault.http_status().as_u16(), 500);
+    }
 }

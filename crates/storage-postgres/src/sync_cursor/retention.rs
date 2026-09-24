@@ -12,7 +12,7 @@ struct Floors {
     global_floor: i64,
 }
 
-pub(super) async fn lock(
+pub(crate) async fn lock(
     conn: &mut AsyncPgConnection,
     exclusive: bool,
 ) -> Result<(), PgTransactionError> {
@@ -186,6 +186,10 @@ pub(super) async fn prune(pool: &PgPool, now_ms: i64) -> PersistenceResult<usize
             .bind::<BigInt,_>(floors.summary_floor).execute(&mut *conn).await?;
         sql_query("DELETE FROM account_global_versions WHERE ctid IN (SELECT ctid FROM account_global_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT 10000)")
             .bind::<BigInt,_>(floors.global_floor).execute(&mut *conn).await?;
+        // Issued Realm snapshots share this lock: a window reservation is
+        // registered under the shared side, so a reserved basis is never
+        // reclaimed while its window is consumable.
+        crate::issued_realm_snapshots::prune_in_connection(conn, now_ms).await?;
         Ok(pruned)
     }).await.map_err(PgTransactionError::into_persistence)
 }

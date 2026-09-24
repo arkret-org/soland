@@ -987,6 +987,34 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Freeze one Account Realm-stream window at a single proved cut; see
+    /// [`soland_storage::AuthorityCommitStore::freeze_account_realm_window`].
+    pub async fn freeze_account_realm_window(
+        &self,
+        request: &soland_storage::AccountRealmWindowRequest,
+    ) -> ServiceResult<Option<soland_storage::AccountRealmWindow>> {
+        Ok(self.store().freeze_account_realm_window(request).await?)
+    }
+
+    /// The reserved basis of a frozen window, or `None` once the by-ref
+    /// guarantee is lost and the stream must be re-emitted as preview only.
+    pub async fn account_window_basis(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        window_cursor: &str,
+        stream_ref: &arkret_wire::CommitStreamRef,
+        issuer: &DidCoreId,
+        now_ms: i64,
+    ) -> ServiceResult<
+        Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis>,
+    > {
+        Ok(self
+            .store()
+            .account_window_basis(realm_id, account, window_cursor, stream_ref, issuer, now_ms)
+            .await?)
+    }
+
     /// Keyset page over one independent commit stream.
     ///
     /// Paging uses a `stream_position` keyset inside one [`CommitStreamRef`].

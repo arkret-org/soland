@@ -327,7 +327,7 @@ pub async fn issue_single_member_bootstrap_snapshot(
         Ok(Some(snapshot))
     })
     .await
-    .map_err(PgTransactionError::into_persistence)
+    .map_err(crate::issued_realm_snapshots::snapshot_transaction_error)
 }
 
 /// Candidate material plus the closed disclosure proof, on the caller's cut.

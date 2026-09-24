@@ -814,6 +814,30 @@ CREATE TABLE public.realm_state_snapshot_issuances (
     PRIMARY KEY (snapshot_id, account_id)
 );
 
+CREATE INDEX realm_state_snapshot_issuances_age_idx
+    ON public.realm_state_snapshot_issuances (issued_at);
+
+-- A non-preview Account window names one exact issued snapshot as a
+-- stream's window_start_basis. Until the frozen window's consumable deadline
+-- this reservation keeps that issuance, and so its by-ref read, out of
+-- retention GC; RESTRICT makes a reserved issuance undeletable by any path.
+CREATE TABLE public.realm_state_snapshot_window_reservations (
+    window_cursor text NOT NULL,
+    account_id text NOT NULL,
+    stream_key text NOT NULL,
+    snapshot_id text NOT NULL,
+    expires_at_ms bigint NOT NULL CHECK (expires_at_ms > 0),
+    PRIMARY KEY (window_cursor, account_id, stream_key),
+    FOREIGN KEY (snapshot_id, account_id)
+        REFERENCES public.realm_state_snapshot_issuances(snapshot_id, account_id)
+        ON DELETE RESTRICT
+);
+
+CREATE INDEX realm_state_snapshot_window_reservations_issuance_idx
+    ON public.realm_state_snapshot_window_reservations (snapshot_id, account_id);
+CREATE INDEX realm_state_snapshot_window_reservations_expiry_idx
+    ON public.realm_state_snapshot_window_reservations (expires_at_ms);
+
 -- The staged OpenMLS successor is installed in the same transaction that
 -- commits its producer Event and queues every recipient Welcome.
 CREATE TABLE public.mls_group_states (

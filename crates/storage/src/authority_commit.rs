@@ -73,6 +73,48 @@ pub type RealmStateSnapshotSigner<'a> = &'a (
         dyn Fn(&RealmStateSnapshotMaterial) -> PersistenceResult<RealmStateSnapshot> + Send + Sync
     );
 
+/// Freeze of one Account's Realm-stream delivery window
+/// (`client-sync.md` 5.2, decision 0101).
+///
+/// `window_cursor` is the frozen window identity the frame repeats as
+/// `window_snapshot_cursor`; `expires_at_ms` is the window's consumable
+/// deadline, which also bounds the Account cursor that carries it.
+#[derive(Clone, Debug)]
+pub struct AccountRealmWindowRequest {
+    pub realm_id: arkret_wire::RealmId,
+    pub account: arkret_wire::AccountId,
+    pub issuer: arkret_wire::DidCoreId,
+    pub window_limit: u32,
+    pub window_cursor: String,
+    pub expires_at_ms: i64,
+    pub now_ms: i64,
+    /// Canonical bytes the delivered rows may occupy. The window is atomic:
+    /// rows that do not fit fail the freeze instead of being truncated.
+    pub byte_budget: usize,
+}
+
+/// One frozen, fully delivered stream window and its committed rows.
+///
+/// A non-preview `window_start_basis` names an exact snapshot already
+/// issued to the Account, and the freeze reserved it for the window's
+/// consumable period. Without such a reservation a limited window is
+/// `preview_only` and carries no basis.
+#[derive(Clone, Debug)]
+pub struct AccountRealmWindow {
+    pub governance_generation: u64,
+    pub window: arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow,
+    pub committed_events: Vec<arkret_wire::CommittedEventView>,
+}
+
+/// An issued snapshot without any live window reservation stays archived at
+/// least this long after issuance, the same span as an Account sync
+/// snapshot reservation (0441), before retention may reclaim it.
+pub const UNRESERVED_ISSUED_SNAPSHOT_RETENTION_MS: i64 = 3_660_000;
+
+/// Longest consumable period a window reservation may claim: the Account
+/// stream cursor that carries the window never lives longer.
+pub const MAX_ACCOUNT_WINDOW_RESERVATION_MS: i64 = 3_600_000;
+
 /// Decision 0081 / 0068: the complete RFC 8785 canonical signed body is one
 /// inline object of at most 8 MiB. There is no page, chunk, or truncation.
 pub const MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
@@ -542,6 +584,33 @@ pub trait AuthorityCommitStore: Send + Sync {
         snapshot_id: &arkret_wire::RealmSnapshotId,
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<Option<RealmStateSnapshot>>;
+
+    /// Freeze one Account window over the Realm stream at a single durable
+    /// cut that share-locks the governing tenure of `issuer` and re-proves the
+    /// Account's complete disclosure. A limited window carries a
+    /// `window_start_basis` only when an exact snapshot issued to the Account
+    /// matches its anchor and can be reserved for the window's consumable
+    /// period; otherwise the stream is `preview_only`. `None` means the Realm
+    /// has no governed material.
+    async fn freeze_account_realm_window(
+        &self,
+        request: &AccountRealmWindowRequest,
+    ) -> PersistenceResult<Option<AccountRealmWindow>>;
+
+    /// Re-read a frozen window's reserved basis. `None` means the guarantee
+    /// is lost (never reserved, expired, reclaimed, or no longer disclosable)
+    /// and any re-emission of that stream window must be `preview_only`.
+    async fn account_window_basis(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        window_cursor: &str,
+        stream_ref: &CommitStreamRef,
+        issuer: &arkret_wire::DidCoreId,
+        now_ms: i64,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis>,
+    >;
 
     /// Keyset page over one independent commit stream.
     ///

@@ -3,7 +3,7 @@ use super::{
     PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SyncCursorRecord, SyncCursorStore,
     Text, Timestamptz, Utc, Value, async_trait, pg_conn, sql_query, sql_types,
 };
-mod retention;
+pub(crate) mod retention;
 use diesel_async::AsyncConnection;
 use soland_storage::{AuthorityCommitStore, RealmJoinDownload};
 pub struct PgSyncCursorStore {

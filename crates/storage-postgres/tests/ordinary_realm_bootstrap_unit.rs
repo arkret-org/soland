@@ -1529,3 +1529,439 @@ async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_stra
     drop(conn);
     assert!(store.realm_state_snapshot_material(realm_id).await.is_err());
 }
+
+/// Real PostgreSQL: a handoff that rewrites the governing row while `/head`
+/// waits on its share lock aborts the issuance cut with SQLSTATE 40001. It
+/// must surface as the registered retryable `temporarily_unavailable` conflict
+/// with nothing archived, never as an unclassified database fault.
+#[tokio::test]
+async fn snapshot_issuance_racing_a_handoff_is_retryable_unavailability() {
+    use diesel_async::SimpleAsyncConnection as _;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+
+    // The competing handoff holds the governing row before issuance starts.
+    let mut handoff = pool.get().await.unwrap();
+    handoff
+        .batch_execute(&format!(
+            "BEGIN; UPDATE realm_authorities SET service_id='ak:did_core:web:successor.example', \
+             updated_at=now() WHERE realm_id='{}'",
+            realm_id.as_str()
+        ))
+        .await
+        .unwrap();
+
+    let racing = tokio::spawn({
+        let pool = pool.clone();
+        let realm_id = realm_id.clone();
+        let creator = creator.clone();
+        let issuer = issuer.clone();
+        async move {
+            let store = PgAuthorityCommitStore { pool };
+            let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+            let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+            let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+                soland_services::authority_commit::build_signed_realm_state_snapshot(
+                    material,
+                    method.clone(),
+                    &key,
+                    chrono::Utc::now(),
+                )
+                .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+            };
+            store
+                .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+                .await
+        }
+    });
+
+    // Commit the handoff only once issuance is provably parked on the lock.
+    #[derive(diesel::QueryableByName)]
+    struct Waiting {
+        #[diesel(sql_type = BigInt)]
+        waiting: i64,
+    }
+    let mut probe = pool.get().await.unwrap();
+    let mut parked = false;
+    for _ in 0..200 {
+        let waiting = diesel::sql_query(
+            "SELECT count(*) AS waiting FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock' \
+               AND query LIKE '%FROM realm_authorities%FOR SHARE%'",
+        )
+        .get_result::<Waiting>(&mut probe)
+        .await
+        .unwrap()
+        .waiting;
+        if waiting == 1 {
+            parked = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(parked, "issuance never waited on the governing row lock");
+    handoff.batch_execute("COMMIT").await.unwrap();
+
+    let error = racing.await.unwrap().unwrap_err();
+    assert_eq!(
+        error.conflict_code(),
+        Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+        "{error}"
+    );
+    assert_eq!(issuance_count(&pool, &realm_id).await, 0);
+}
+
+async fn reservation_count(pool: &soland_storage_postgres::PgPool) -> i64 {
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT count(*) AS count FROM realm_state_snapshot_window_reservations")
+        .get_result::<Count>(&mut conn)
+        .await
+        .unwrap()
+        .count
+}
+
+/// Real PostgreSQL, decision 0101: an Account window over the Realm stream
+/// names a `window_start_basis` only when an exact snapshot already issued to
+/// that Account sits at its anchor and is reserved for the window's
+/// consumable period; otherwise a limited stream is `preview_only`. The
+/// reservation keeps the by-ref read alive through retention GC, and losing
+/// the guarantee (disclosure or expiry) withdraws the basis.
+#[tokio::test]
+async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only() {
+    use arkret_models_collaboration::sync_frames::account_sync::StreamWindowAnchorKind;
+    use soland_storage::{AccountRealmWindowRequest, SyncCursorStore as _};
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let cursors = soland_storage_postgres::PgSyncCursorStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let stranger = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let stream_ref = arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let window_ttl = 300_000;
+    let request = |account: &arkret_wire::AccountId, limit: u32| AccountRealmWindowRequest {
+        realm_id: realm_id.clone(),
+        account: account.clone(),
+        issuer: issuer.clone(),
+        window_limit: limit,
+        window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+        expires_at_ms: now_ms + window_ttl,
+        now_ms,
+        byte_budget: 7 * 1024 * 1024,
+    };
+    let positions = |window: &soland_storage::AccountRealmWindow| {
+        window
+            .committed_events
+            .iter()
+            .map(|view| match view {
+                arkret_wire::CommittedEventView::Full(full) => full.commit.stream_position,
+                arkret_wire::CommittedEventView::Withheld(_) => panic!("withheld window row"),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Whole readable history fits: not limited, so no basis is needed.
+    let full = store
+        .freeze_account_realm_window(&request(&creator, 10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!full.window.limited && full.window.complete);
+    assert_eq!(full.window.preview_only, None);
+    assert!(full.window.window_start_basis.is_none());
+    assert_eq!(positions(&full), (0..=6).collect::<Vec<_>>());
+    assert_eq!(full.window.next_position, 7);
+    assert_eq!(
+        full.window.head_commit_ref,
+        unit.transactions[6].commit.commit_id
+    );
+
+    // Limited, and no snapshot was ever issued at the anchor.
+    let unbacked = store
+        .freeze_account_realm_window(&request(&creator, 2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(unbacked.window.limited);
+    assert_eq!(unbacked.window.preview_only, Some(true));
+    assert!(unbacked.window.window_start_basis.is_none());
+    assert_eq!(positions(&unbacked), vec![5, 6]);
+
+    // `/head` at position 6, then two more Commits.
+    let at_six = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    let strand = strand_create_request(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    uow.commit_event(set_default_strand_request(&strand, &strand_id, None))
+        .await
+        .unwrap();
+
+    // Another Account can neither freeze nor be handed the creator's object.
+    assert!(
+        store
+            .freeze_account_realm_window(&request(&stranger, 2))
+            .await
+            .is_err()
+    );
+
+    let backed_request = request(&creator, 2);
+    let backed = store
+        .freeze_account_realm_window(&backed_request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(backed.window.limited && backed.window.complete);
+    assert_eq!(backed.window.preview_only, None);
+    assert_eq!(positions(&backed), vec![7, 8]);
+    let basis = backed.window.window_start_basis.clone().unwrap();
+    assert_eq!(
+        basis.anchor_kind,
+        StreamWindowAnchorKind::AfterCommittedPrefix
+    );
+    assert_eq!(basis.anchor_position, Some(6));
+    assert_eq!(
+        basis.anchor_commit_ref.as_ref(),
+        Some(&unit.transactions[6].commit.commit_id)
+    );
+    assert_eq!(basis.snapshot_ref, at_six.snapshot_id);
+    assert_eq!(basis.governance_generation, 0);
+    assert!(basis.accepted_dependency_refs.is_none());
+    assert_eq!(reservation_count(&pool).await, 1);
+
+    // The anchor must be exact: position 7 has no issued snapshot.
+    let off_by_one = store
+        .freeze_account_realm_window(&request(&creator, 1))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(off_by_one.window.preview_only, Some(true));
+    assert!(off_by_one.window.window_start_basis.is_none());
+    assert_eq!(reservation_count(&pool).await, 1);
+
+    // The reserved basis is re-readable for the window only.
+    let reread = |cursor: String, at: i64| {
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let (realm_id, creator, stream_ref, issuer) = (
+            realm_id.clone(),
+            creator.clone(),
+            stream_ref.clone(),
+            issuer.clone(),
+        );
+        async move {
+            store
+                .account_window_basis(&realm_id, &creator, &cursor, &stream_ref, &issuer, at)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        reread(backed_request.window_cursor.clone(), now_ms).await,
+        Some(basis.clone())
+    );
+    assert_eq!(
+        reread(
+            format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+            now_ms
+        )
+        .await,
+        None
+    );
+    assert_eq!(
+        reread(backed_request.window_cursor.clone(), now_ms + window_ttl).await,
+        None
+    );
+
+    // Losing disclosure withdraws the guarantee; restoring it re-admits it.
+    let mut conn = pool.get().await.unwrap();
+    let member = arkret_wire::ActorId::account(creator.clone()).to_string();
+    for membership in ["leave", "join"] {
+        diesel::sql_query(
+            "UPDATE member_state_current_results SET membership=$3, \
+             value=jsonb_build_object('membership', $3::text) WHERE realm_id=$1 AND member_id=$2",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(&member)
+        .bind::<Text, _>(membership)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let expected = (membership == "join").then(|| basis.clone());
+        assert_eq!(
+            reread(backed_request.window_cursor.clone(), now_ms).await,
+            expected
+        );
+    }
+
+    // A private handoff anchor that was never issued to any Account.
+    let handoff_anchor = {
+        let mut material = store
+            .realm_state_snapshot_material(&realm_id)
+            .await
+            .unwrap()
+            .unwrap();
+        material.current_state_entries.clear();
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            &material,
+            method.clone(),
+            &key,
+            chrono::Utc::now() - chrono::Duration::hours(3),
+        )
+        .unwrap()
+    };
+    diesel::sql_query(
+        "INSERT INTO realm_state_snapshots \
+         (snapshot_id, realm_id, governance_generation, snapshot_json, created_at) \
+         VALUES ($1,$2,0,$3,$4)",
+    )
+    .bind::<Text, _>(handoff_anchor.snapshot_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::to_value(&handoff_anchor).unwrap())
+    .bind::<diesel::sql_types::Timestamptz, _>(handoff_anchor.created_at)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    // Age the reserved issuance past the unreserved retention and add an
+    // unreserved, equally old one at head 8.
+    let at_eight = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    diesel::sql_query(
+        "UPDATE realm_state_snapshot_issuances SET issued_at = now() - interval '2 hours'",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    // RESTRICT: nothing may delete a reserved issuance, even outside GC.
+    assert!(
+        diesel::sql_query("DELETE FROM realm_state_snapshot_issuances WHERE snapshot_id=$1")
+            .bind::<Text, _>(at_six.snapshot_id.as_str())
+            .execute(&mut conn)
+            .await
+            .is_err()
+    );
+    let by_ref = |id: arkret_wire::RealmSnapshotId| {
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let (realm_id, creator, issuer) = (realm_id.clone(), creator.clone(), issuer.clone());
+        async move {
+            store
+                .issued_realm_state_snapshot(&realm_id, &creator, &id, &issuer)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Sweep while the window is consumable: the reserved basis survives, the
+    // old unreserved issuance goes, the never-issued anchor is untouched.
+    cursors.prune_expired(now_ms).await.unwrap();
+    assert_eq!(
+        by_ref(at_six.snapshot_id.clone()).await,
+        Some(at_six.clone())
+    );
+    assert_eq!(by_ref(at_eight.snapshot_id.clone()).await, None);
+    assert_eq!(issuance_count(&pool, &realm_id).await, 1);
+    assert_eq!(
+        reread(backed_request.window_cursor.clone(), now_ms).await,
+        Some(basis.clone())
+    );
+
+    // A fresh unreserved issuance is inside its retention and survives.
+    let fresh = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    cursors.prune_expired(now_ms).await.unwrap();
+    assert_eq!(by_ref(fresh.snapshot_id.clone()).await, Some(fresh.clone()));
+
+    // After the consumable deadline the reservation and the aged object are
+    // reclaimed together; the by-ref read and the basis are gone.
+    cursors.prune_expired(now_ms + window_ttl).await.unwrap();
+    assert_eq!(reservation_count(&pool).await, 0);
+    assert_eq!(by_ref(at_six.snapshot_id.clone()).await, None);
+    assert_eq!(
+        reread(backed_request.window_cursor.clone(), now_ms).await,
+        None
+    );
+    assert_eq!(by_ref(fresh.snapshot_id.clone()).await, Some(fresh.clone()));
+    assert_eq!(issuance_count(&pool, &realm_id).await, 1);
+    assert_eq!(
+        store.latest_snapshot(&realm_id).await.unwrap(),
+        Some(handoff_anchor)
+    );
+
+    // A new limited window over the reclaimed anchor is preview only.
+    let reclaimed = store
+        .freeze_account_realm_window(&request(&creator, 2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reclaimed.window.preview_only, Some(true));
+    assert!(reclaimed.window.window_start_basis.is_none());
+}

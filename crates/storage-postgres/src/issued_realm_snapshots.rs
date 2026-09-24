@@ -10,6 +10,32 @@ use super::{
     Value, pg_conn, sql_query,
 };
 
+/// A cut that loses a write race with the governing row (a handoff commits
+/// after this `REPEATABLE READ` snapshot began, surfacing as SQLSTATE 40001)
+/// issued nothing. That is the registered retryable unavailability of the
+/// snapshot reads, never an internal fault.
+pub(crate) fn snapshot_cut_error(error: diesel::result::Error) -> PersistenceError {
+    use diesel::result::{DatabaseErrorKind, Error};
+    match error {
+        Error::DatabaseError(DatabaseErrorKind::SerializationFailure, info) => {
+            PersistenceError::Conflict(format!(
+                "{}: the governing cut changed concurrently: {}",
+                soland_storage::ConflictCode::TemporarilyUnavailable.as_str(),
+                info.message(),
+            ))
+        }
+        other => PersistenceError::database(other),
+    }
+}
+
+/// [`snapshot_cut_error`] for a whole snapshot-cut transaction.
+pub(crate) fn snapshot_transaction_error(error: PgTransactionError) -> PersistenceError {
+    match error {
+        PgTransactionError::Diesel(error) => snapshot_cut_error(error),
+        PgTransactionError::Storage(error) => error,
+    }
+}
+
 #[derive(Clone)]
 pub struct PgIssuedRealmSnapshotArchive {
     pool: PgPool,
@@ -118,7 +144,7 @@ pub(crate) async fn issue_in_connection(
     .bind::<Timestamptz, _>(snapshot.created_at)
     .execute(&mut *conn)
     .await
-    .map_err(PersistenceError::database)?;
+    .map_err(snapshot_cut_error)?;
     let existing = sql_query(
         "SELECT snapshot_json FROM realm_state_snapshots \
          WHERE snapshot_id = $1 AND realm_id = $2 FOR SHARE",
@@ -128,7 +154,7 @@ pub(crate) async fn issue_in_connection(
     .get_result::<SnapshotJsonRow>(&mut *conn)
     .await
     .optional()
-    .map_err(PersistenceError::database)?;
+    .map_err(snapshot_cut_error)?;
     if existing.is_none_or(|row| row.snapshot_json != body) {
         return Err(PersistenceError::Conflict(
             "snapshot_ref_conflicts_with_issued_object".to_owned(),
@@ -142,7 +168,7 @@ pub(crate) async fn issue_in_connection(
     .bind::<Text, _>(&account_key)
     .execute(&mut *conn)
     .await
-    .map_err(PersistenceError::database)?;
+    .map_err(snapshot_cut_error)?;
     Ok(())
 }
 
@@ -326,6 +352,372 @@ fn account_key(account: &arkret_wire::AccountId) -> PersistenceResult<String> {
         arkret_canonical::canonical_json_bytes(account).map_err(PersistenceError::database)?,
     )
     .map_err(PersistenceError::database)
+}
+
+#[derive(QueryableByName)]
+struct WindowCommitRow {
+    #[diesel(sql_type = Jsonb)]
+    commit_json: Value,
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+}
+
+#[derive(QueryableByName)]
+struct ReservedSnapshotRow {
+    #[diesel(sql_type = Jsonb)]
+    snapshot_json: Value,
+    #[diesel(sql_type = super::BigInt)]
+    expires_at_ms: i64,
+}
+
+fn window_rejected(reason: &str) -> PersistenceError {
+    PersistenceError::SchemaViolation(format!("Account window cannot be frozen: {reason}"))
+}
+
+/// The basis an exact issued snapshot gives a window whose first row is the
+/// Commit after `anchor`: the state after this stream's committed prefix
+/// through `anchor`. The snapshot must carry exactly this one stream with
+/// its head at the anchor and the whole readable history from genesis.
+fn basis_from_snapshot(
+    snapshot: &arkret_wire::RealmStateSnapshot,
+    stream_ref: &arkret_wire::CommitStreamRef,
+    anchor: &arkret_wire::CommitStreamHead,
+) -> Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis> {
+    use arkret_models_collaboration::sync_frames::account_sync::{
+        StreamWindowAnchorKind, StreamWindowStartBasis,
+    };
+    let exact_head = snapshot.visible_stream_heads.as_slice() == std::slice::from_ref(anchor);
+    let exact_floor = snapshot
+        .retention_and_history_floor
+        .stream_floors
+        .as_slice()
+        == [arkret_wire::StreamHistoryFloor {
+            stream_ref: stream_ref.clone(),
+            oldest_position: 0,
+        }];
+    (exact_head && exact_floor && &anchor.stream_ref == stream_ref).then(|| {
+        StreamWindowStartBasis {
+            anchor_kind: StreamWindowAnchorKind::AfterCommittedPrefix,
+            anchor_position: Some(anchor.stream_position),
+            anchor_commit_ref: Some(anchor.commit_id.clone()),
+            snapshot_ref: snapshot.snapshot_id.clone(),
+            governance_generation: snapshot.governance_generation,
+            accepted_dependency_refs: None,
+        }
+    })
+}
+
+/// Re-prove an issued object for a basis at the caller's cut. Only a
+/// disclosure failure means "not guaranteed"; any other error is a fault.
+async fn still_disclosable(
+    conn: &mut AsyncPgConnection,
+    account: &arkret_wire::AccountId,
+    issuer: &arkret_wire::DidCoreId,
+    snapshot: &arkret_wire::RealmStateSnapshot,
+) -> PersistenceResult<bool> {
+    match recheck_disclosure_in_connection(conn, account, issuer, snapshot).await {
+        Ok(()) => Ok(true),
+        Err(PersistenceError::SchemaViolation(reason)) => {
+            tracing::debug!(%reason, snapshot_id=%snapshot.snapshot_id, "issued snapshot cannot back a window basis");
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// See [`soland_storage::AuthorityCommitStore::freeze_account_realm_window`].
+///
+/// One `REPEATABLE READ` cut holds, in order: the shared retention lock that
+/// excludes issued-snapshot GC, the share-locked governing tenure, the
+/// complete single-member disclosure proof, the delivered rows, and the
+/// basis reservation. The window's rows are the last `window_limit` Commits
+/// of the Realm stream; `limited` states whether readable history lies below
+/// them.
+pub(crate) async fn freeze_account_realm_window(
+    pool: &PgPool,
+    request: &soland_storage::AccountRealmWindowRequest,
+) -> PersistenceResult<Option<soland_storage::AccountRealmWindow>> {
+    use arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow;
+
+    if request.window_limit > 100 {
+        return Err(window_rejected("window_limit exceeds 100"));
+    }
+    if request.expires_at_ms <= request.now_ms
+        || request.expires_at_ms - request.now_ms
+            > soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS
+    {
+        return Err(window_rejected(
+            "the consumable deadline is outside the cursor lifetime",
+        ));
+    }
+    arkret_wire::Cursor::new(request.window_cursor.clone())
+        .map_err(|_| window_rejected("the window identity is not a cursor value"))?;
+    let account_key = account_key(&request.account)?;
+    let stream_ref = arkret_wire::CommitStreamRef::Realm {
+        realm_id: request.realm_id.clone(),
+    };
+    let stream_key = crate::authority_commit::stream_key(&stream_ref)?;
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *conn)
+            .await?;
+        // Reservations and issued-snapshot GC exclude each other exactly like
+        // Account sync reservations and version GC (0441).
+        crate::sync_cursor::retention::lock(conn, false).await?;
+        let Some(tenure) = sql_query(
+            "SELECT service_id, generation FROM realm_authorities \
+             WHERE realm_id=$1 FOR SHARE",
+        )
+        .bind::<Text, _>(request.realm_id.as_str())
+        .get_result::<ReadTenureRow>(&mut *conn)
+        .await
+        .optional()?
+        else {
+            return Ok(None);
+        };
+        if tenure.service_id != request.issuer.as_str() {
+            return Err(window_rejected("this Station does not hold the governing tenure").into());
+        }
+        let Some(material) =
+            crate::snapshot_disclosure_gate::single_member_bootstrap_material_in_connection(
+                conn,
+                &request.realm_id,
+                &request.account,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let generation = material.governance_generation;
+        if i64::try_from(generation).ok() != Some(tenure.generation) {
+            return Err(
+                window_rejected("material generation differs from the locked tenure").into(),
+            );
+        }
+        let [head] = material.visible_stream_heads.as_slice() else {
+            return Err(window_rejected("the proved cut is not one Realm stream").into());
+        };
+        let rows = sql_query(
+            "SELECT commit_row.commit_json, event_row.envelope \
+             FROM realm_commits commit_row \
+             JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
+             WHERE commit_row.realm_id=$1 AND commit_row.stream_key=$2 \
+             ORDER BY commit_row.stream_position",
+        )
+        .bind::<Text, _>(request.realm_id.as_str())
+        .bind::<Text, _>(&stream_key)
+        .load::<WindowCommitRow>(&mut *conn)
+        .await?;
+        let mut chain = Vec::with_capacity(rows.len());
+        for row in rows {
+            let commit: arkret_wire::RealmCommit =
+                serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
+            let event: arkret_wire::Event =
+                serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
+            chain.push(arkret_wire::CommittedEventFullView { commit, event });
+        }
+        let tip = chain
+            .last()
+            .ok_or_else(|| window_rejected("the proved stream has no Commit"))?;
+        if tip.commit.stream_position != head.stream_position
+            || tip.commit.commit_id != head.commit_id
+            || u64::try_from(chain.len()).ok() != Some(head.stream_position + 1)
+        {
+            return Err(window_rejected("the delivered chain differs from the proved head").into());
+        }
+        let start = (head.stream_position + 1).saturating_sub(u64::from(request.window_limit));
+        let start_index = usize::try_from(start).map_err(|_| window_rejected("window start"))?;
+        let delivered = chain[start_index..]
+            .iter()
+            .cloned()
+            .map(arkret_wire::CommittedEventView::Full)
+            .collect::<Vec<_>>();
+        let encoded = arkret_canonical::canonical_json_bytes(&delivered)
+            .map_err(PersistenceError::database)?;
+        if encoded.len() > request.byte_budget {
+            return Err(window_rejected("the atomic window exceeds its byte budget").into());
+        }
+        // The single-member cut proved a readable floor at genesis.
+        let limited = start > 0;
+        let mut basis = None;
+        if limited {
+            let anchor_view = &chain[start_index - 1];
+            let anchor = arkret_wire::CommitStreamHead {
+                stream_ref: stream_ref.clone(),
+                stream_position: anchor_view.commit.stream_position,
+                commit_id: anchor_view.commit.commit_id.clone(),
+            };
+            let candidates = sql_query(
+                "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
+                 JOIN realm_state_snapshot_issuances issued \
+                   ON issued.snapshot_id = snapshot.snapshot_id \
+                 WHERE snapshot.realm_id=$1 AND snapshot.governance_generation=$2 \
+                   AND issued.account_id=$3 \
+                 ORDER BY snapshot.created_at DESC, snapshot.snapshot_id FOR KEY SHARE OF issued",
+            )
+            .bind::<Text, _>(request.realm_id.as_str())
+            .bind::<super::BigInt, _>(tenure.generation)
+            .bind::<Text, _>(&account_key)
+            .load::<SnapshotJsonRow>(&mut *conn)
+            .await?;
+            for candidate in candidates {
+                let snapshot: arkret_wire::RealmStateSnapshot =
+                    serde_json::from_value(candidate.snapshot_json)
+                        .map_err(PersistenceError::database)?;
+                let Some(candidate_basis) = basis_from_snapshot(&snapshot, &stream_ref, &anchor)
+                else {
+                    continue;
+                };
+                if derived_snapshot_id(&snapshot)? != snapshot.snapshot_id
+                    || !still_disclosable(conn, &request.account, &request.issuer, &snapshot)
+                        .await?
+                {
+                    continue;
+                }
+                sql_query(
+                    "INSERT INTO realm_state_snapshot_window_reservations \
+                     (window_cursor, account_id, stream_key, snapshot_id, expires_at_ms) \
+                     VALUES ($1,$2,$3,$4,$5)",
+                )
+                .bind::<Text, _>(&request.window_cursor)
+                .bind::<Text, _>(&account_key)
+                .bind::<Text, _>(&stream_key)
+                .bind::<Text, _>(snapshot.snapshot_id.as_str())
+                .bind::<super::BigInt, _>(request.expires_at_ms)
+                .execute(&mut *conn)
+                .await?;
+                basis = Some(candidate_basis);
+                break;
+            }
+        }
+        let window = RealmStreamWindow {
+            stream_ref: stream_ref.clone(),
+            head_commit_ref: head.commit_id.clone(),
+            next_position: head.stream_position + 1,
+            limited,
+            window_limit: request.window_limit,
+            complete: true,
+            preview_only: (limited && basis.is_none()).then_some(true),
+            window_start_basis: basis,
+            e2ee_epoch: None,
+        };
+        window.validate().map_err(PersistenceError::database)?;
+        Ok(Some(soland_storage::AccountRealmWindow {
+            governance_generation: generation,
+            window,
+            committed_events: delivered,
+        }))
+    })
+    .await
+    .map_err(snapshot_transaction_error)
+}
+
+/// See [`soland_storage::AuthorityCommitStore::account_window_basis`].
+pub(crate) async fn account_window_basis(
+    pool: &PgPool,
+    realm_id: &arkret_wire::RealmId,
+    account: &arkret_wire::AccountId,
+    window_cursor: &str,
+    stream_ref: &arkret_wire::CommitStreamRef,
+    issuer: &arkret_wire::DidCoreId,
+    now_ms: i64,
+) -> PersistenceResult<
+    Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis>,
+> {
+    let account_key = account_key(account)?;
+    let stream_key = crate::authority_commit::stream_key(stream_ref)?;
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let Some(row) = sql_query(
+            "SELECT snapshot.snapshot_json, reserved.expires_at_ms \
+             FROM realm_state_snapshot_window_reservations reserved \
+             JOIN realm_state_snapshots snapshot ON snapshot.snapshot_id = reserved.snapshot_id \
+             WHERE reserved.window_cursor=$1 AND reserved.account_id=$2 \
+               AND reserved.stream_key=$3 AND snapshot.realm_id=$4",
+        )
+        .bind::<Text, _>(window_cursor)
+        .bind::<Text, _>(&account_key)
+        .bind::<Text, _>(&stream_key)
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<ReservedSnapshotRow>(&mut *conn)
+        .await
+        .optional()?
+        else {
+            return Ok(None);
+        };
+        if row.expires_at_ms <= now_ms {
+            return Ok(None);
+        }
+        let snapshot: arkret_wire::RealmStateSnapshot =
+            serde_json::from_value(row.snapshot_json).map_err(PersistenceError::database)?;
+        let [anchor] = snapshot.visible_stream_heads.as_slice() else {
+            return Ok(None);
+        };
+        let Some(basis) = basis_from_snapshot(&snapshot, stream_ref, anchor) else {
+            return Ok(None);
+        };
+        if !still_disclosable(conn, account, issuer, &snapshot).await? {
+            return Ok(None);
+        }
+        Ok(Some(basis))
+    })
+    .await
+    .map_err(snapshot_transaction_error)
+}
+
+/// Reclaim issued snapshots on the retention sweep's exclusive lock (0441).
+///
+/// Expired window reservations go first. An issuance is then reclaimable only
+/// when no live reservation names it and it is older than
+/// [`soland_storage::UNRESERVED_ISSUED_SNAPSHOT_RETENTION_MS`]; the signed
+/// object goes with its last issuance. A snapshot that was never issued (a
+/// private handoff anchor) is never a candidate. Each class is bounded to
+/// 10000 rows per sweep.
+pub(crate) async fn prune_in_connection(
+    conn: &mut AsyncPgConnection,
+    now_ms: i64,
+) -> Result<(), PgTransactionError> {
+    sql_query(
+        "DELETE FROM realm_state_snapshot_window_reservations WHERE ctid IN \
+         (SELECT ctid FROM realm_state_snapshot_window_reservations \
+          WHERE expires_at_ms <= $1 ORDER BY expires_at_ms LIMIT 10000)",
+    )
+    .bind::<super::BigInt, _>(now_ms)
+    .execute(&mut *conn)
+    .await?;
+    sql_query(
+        "WITH doomed AS ( \
+           SELECT issued.snapshot_id, issued.account_id \
+           FROM realm_state_snapshot_issuances issued \
+           WHERE issued.issued_at <= to_timestamp(($1 - $2)::double precision / 1000) \
+             AND NOT EXISTS (SELECT 1 FROM realm_state_snapshot_window_reservations reserved \
+                             WHERE reserved.snapshot_id = issued.snapshot_id \
+                               AND reserved.account_id = issued.account_id) \
+           ORDER BY issued.issued_at LIMIT 10000 \
+         ), removed AS ( \
+           DELETE FROM realm_state_snapshot_issuances issued USING doomed \
+           WHERE issued.snapshot_id = doomed.snapshot_id \
+             AND issued.account_id = doomed.account_id \
+           RETURNING issued.snapshot_id, issued.account_id \
+         ) \
+         DELETE FROM realm_state_snapshots snapshot \
+         WHERE snapshot.snapshot_id IN (SELECT snapshot_id FROM removed) \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM realm_state_snapshot_issuances remaining \
+             WHERE remaining.snapshot_id = snapshot.snapshot_id \
+               AND NOT EXISTS (SELECT 1 FROM removed \
+                               WHERE removed.snapshot_id = remaining.snapshot_id \
+                                 AND removed.account_id = remaining.account_id))",
+    )
+    .bind::<super::BigInt, _>(now_ms)
+    .bind::<super::BigInt, _>(soland_storage::UNRESERVED_ISSUED_SNAPSHOT_RETENTION_MS)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
