@@ -237,7 +237,7 @@ async fn ensure_logout_family_not_fenced(
 
 /// Serialize active public handoff writes with account lifecycle changes.
 /// The lifecycle writer locks the same account row before changing its state.
-async fn ensure_active_account_in_transaction(
+pub(crate) async fn ensure_active_account_in_transaction(
     conn: &mut AsyncPgConnection,
     account_id: &AccountId,
 ) -> PersistenceResult<()> {
@@ -2285,6 +2285,99 @@ mod tests {
         );
         let tombstone = store
             .get_intent(&source, active.registration_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tombstone.desired_state,
+            PushRegistrationHandoffState::Revoked
+        );
+        assert_eq!(
+            tombstone.status,
+            PushRegistrationHandoffIntentStatus::AwaitingReceipt
+        );
+    }
+
+    #[tokio::test]
+    async fn deactivated_account_stops_public_delivery_before_revoke_fanout() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let source = device_history_fixture::DeviceHistoryFixture::new(
+            device_history_fixture::did_web_station(&station_id),
+        );
+        seed_account(&pool, &source.account).await;
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+                .bind::<Text, _>(station_id.as_str())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+        for device in source.device_inventory_records() {
+            inventory.seed_test_record(&device).await.unwrap();
+        }
+        let authorization = source
+            .gate_selectors()
+            .into_iter()
+            .find(|selector| selector.device_id == source.founding_device_id.as_str())
+            .unwrap();
+        let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
+        let route = local_route_for_account(
+            source.account.clone(),
+            source.founding_device_id.clone(),
+            &destination,
+        );
+        let request = active_request_for_device(
+            "registration_9999999999999999",
+            &source.founding_device_id,
+            "ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
+            "provider-token",
+        );
+        let at = chrono::Utc::now();
+        let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
+        install_public_route(
+            &store,
+            &station_id,
+            &route,
+            &authorization,
+            &request,
+            &client_input_digest('e'),
+            at,
+        )
+        .await;
+        let push = PgPushDeviceStore { pool: pool.clone() };
+        assert_eq!(push.snapshot_all().await.unwrap().len(), 1);
+        let mut conn = pg_conn(&pool).await.unwrap();
+        sql_query(
+            "INSERT INTO account_lifecycle (account_pk, state, changed_at) \
+             SELECT pk, 'deactivated', $3 FROM accounts \
+             WHERE principal_id = $1 AND station_id = $2",
+        )
+        .bind::<Text, _>(&source.account.principal_id)
+        .bind::<Text, _>(&source.account.station_id)
+        .bind::<Timestamptz, _>(at)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        drop(conn);
+        assert!(stored_push_route(&pool, &route).await.is_some());
+        assert!(
+            push.snapshot_all().await.unwrap().is_empty(),
+            "the durable account lifecycle gate must stop delivery before fanout"
+        );
+        assert_eq!(
+            store
+                .begin_public_push_account_deactivation(&source.account, at)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(stored_push_route(&pool, &route).await.is_none());
+        let tombstone = store
+            .get_intent(&station_id, request.registration_id())
             .await
             .unwrap()
             .unwrap();

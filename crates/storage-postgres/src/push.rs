@@ -287,6 +287,22 @@ impl PushDeviceStore for PgPushDeviceStore {
                     let registration: arkret_models_integration::PushRegistrationRecord =
                         serde_json::from_value(row.payload.clone())
                             .map_err(PersistenceError::database)?;
+                    if source.public_handoff {
+                        // The lifecycle writer takes an exclusive lock on the
+                        // same account row. A completed deactivation cannot
+                        // leave a public route deliverable while its revoke
+                        // fanout and Gateway receipt are still pending.
+                        match crate::push_handoff::ensure_active_account_in_transaction(
+                            conn,
+                            &registration.account_id,
+                        )
+                        .await
+                        {
+                            Ok(()) => {}
+                            Err(PersistenceError::Conflict(_)) => continue,
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
                     // Delivery reads enforce the validity boundary after the
                     // device lock and exact-row re-read, independently from
                     // the asynchronous durable tombstone sweep.
