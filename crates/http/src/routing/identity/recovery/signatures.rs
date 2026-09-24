@@ -107,8 +107,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
     )
     .await?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
-        AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("recovery policy violates SDK shape: {error}"))
     })?;
     let transcript_bytes = arkret_models_crypto::recovery_policy_signature_transcript_bytes(&typed)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
@@ -278,8 +277,7 @@ pub(super) async fn verify_recovery_auth_signature(
                 ))
             })?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
-        AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("recovery policy violates SDK shape: {error}"))
     })?;
     let transcript_bytes = arkret_models_crypto::recovery_policy_signature_transcript_bytes(&typed)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;

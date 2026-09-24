@@ -128,10 +128,9 @@ fn reject_device_pairing_query(req: &Request) -> Result<(), AppError> {
     if req.uri().query().is_none() {
         return Ok(());
     }
-    Err(AppError::param_invalid(
+    Err(AppError::schema_violation(
         "device pairing inputs must be sent in the JSON body, never in URL path or query",
-    )
-    .with_wire_code("schema_violation"))
+    ))
 }
 
 fn is_device_pairing_token_shape(value: &str) -> bool {

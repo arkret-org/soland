@@ -25,17 +25,15 @@ async fn authorize_account_device_pair(
     session: &SessionRecord,
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
-    body.authorize_event.validate().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
-    arkret_schema::validate_event_for_submit(&body.authorize_event.event).map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    body.authorize_event
+        .validate()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
+    arkret_schema::validate_event_for_submit(&body.authorize_event.event)
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     if body.authorize_event.event.kind != arkret_wire::EventKind::DeviceAuthorize {
-        return Err(
-            AppError::param_invalid("pairing requires a device authorize Event")
-                .with_wire_code("schema_violation"),
-        );
+        return Err(AppError::schema_violation(
+            "pairing requires a device authorize Event",
+        ));
     }
     let authorizing_device = ensure_authorizing_device_verified(state, session).await?;
     let active_generation = crate::routing::identity::device_generation::current_device_generation(
@@ -239,10 +237,9 @@ async fn authorize_account_device_pair(
                 if id.as_str() == session.device_id
         )
     {
-        return Err(AppError::param_invalid(
+        return Err(AppError::schema_violation(
             "authorize_event does not bind the authenticated authorizer and candidate device",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     }
     let target_proof =
         arkret_models_collaboration::device_pairing::DevicePairingTargetProof {
@@ -289,10 +286,9 @@ async fn authorize_account_device_pair(
         != arkret_canonical::canonical_json_bytes(&stored_proof)
             .map_err(|error| AppError::internal(error.to_string()))?
     {
-        return Err(AppError::param_invalid(
+        return Err(AppError::schema_violation(
             "pairing target proof differs from the proof attached at finalize",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     }
     let authorized_by_actor_id =
         arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {

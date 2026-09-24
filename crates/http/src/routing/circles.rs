@@ -432,9 +432,9 @@ async fn submit_caller_signed_circle_event(
     session: &SessionRecord,
     submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<(), AppError> {
-    submission.validate().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    submission
+        .validate()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     state
         .authority()
         .submit_self_event(session, submission)
@@ -444,7 +444,7 @@ async fn submit_caller_signed_circle_event(
             soland_services::ServiceErrorKind::Conflict => AppError::conflict(error.detail()),
             soland_services::ServiceErrorKind::NotFound => AppError::not_found(error.detail()),
             soland_services::ServiceErrorKind::SchemaViolation => {
-                AppError::param_invalid(error.detail()).with_wire_code("schema_violation")
+                AppError::schema_violation(error.detail())
             }
             soland_services::ServiceErrorKind::Database
             | soland_services::ServiceErrorKind::Internal => AppError::internal(error.detail()),

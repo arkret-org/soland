@@ -1058,6 +1058,30 @@ impl AuthorityCommitApplication {
         Ok(scan)
     }
 
+    /// `ak.peer.committed_event.read.scan.v1`: the authenticated peer's
+    /// replication right, interval, and page at one governing read cut. See
+    /// [`soland_storage::AuthorityCommitStore::scan_stream_for_peer`].
+    pub async fn scan_stream_for_peer(
+        &self,
+        request: &StreamScanRequest,
+        peer: &DidCoreId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::AccountStreamScan> {
+        request.validate().map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!("invalid stream scan request: {error}"))
+        })?;
+        let scan = self
+            .store()
+            .scan_stream_for_peer(request, peer, issuer)
+            .await?;
+        if let soland_storage::AccountStreamScan::Page(outcome) = &scan {
+            outcome.validate_for_request(request).map_err(|error| {
+                crate::ServiceError::Internal(format!("invalid stream scan outcome: {error}"))
+            })?;
+        }
+        Ok(scan)
+    }
+
     pub async fn install_handoff(&self, request: &AuthorityHandoffRequest) -> ServiceResult<()> {
         request.validate_shape().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid authority handoff: {error}"))
@@ -1400,6 +1424,14 @@ pub trait AuthorityProtocolPort: Send + Sync {
     async fn scan_stream_for_account(
         &self,
         account: &arkret_wire::AccountId,
+        request: StreamScanRequest,
+    ) -> ServiceResult<soland_storage::AccountStreamScan>;
+
+    /// `ak.peer.committed_event.read.scan.v1` for the authenticated peer
+    /// Station; its identity comes only from the verified transport.
+    async fn scan_stream_for_peer(
+        &self,
+        peer: &AuthenticatedPeerContext,
         request: StreamScanRequest,
     ) -> ServiceResult<soland_storage::AccountStreamScan>;
 

@@ -2345,6 +2345,15 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .await
     }
 
+    async fn scan_stream_for_peer(
+        &self,
+        request: &arkret_wire::StreamScanRequest,
+        peer: &arkret_wire::DidCoreId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::AccountStreamScan> {
+        crate::account_stream_scan::scan_stream_for_peer(&self.pool, request, peer, issuer).await
+    }
+
     async fn install_handoff(
         &self,
         handoff: &arkret_wire::RealmAuthorityHandoff,

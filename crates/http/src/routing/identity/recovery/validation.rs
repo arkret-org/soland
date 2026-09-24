@@ -16,15 +16,13 @@ pub(super) fn validate_recovery_policy(
     payload: &Value,
 ) -> Result<ValidatedRecoveryPolicy, AppError> {
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
-        AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("recovery policy violates SDK shape: {error}"))
     })?;
     reject_unexecutable_recovery_policy(&typed)?;
     typed.validate_shape().map_err(|error| {
-        AppError::param_invalid(format!(
+        AppError::schema_violation(format!(
             "recovery policy violates protocol invariants: {error}"
         ))
-        .with_wire_code("schema_violation")
     })?;
     require_const_string(payload, "schema", arkret_wire::SchemaId::RECOVERY_POLICY_V1)?;
     let policy_id = require_string(payload, "policy_id")?;

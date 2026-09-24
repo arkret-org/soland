@@ -428,8 +428,10 @@ async fn admit_caller_signed_account_data_set(
             }
             return mapped;
         }
-        crate::app_error!(
-            ParamInvalid,
+        // A registered top-level rejection keeps its registry status.
+        AppError::from_rejection(
+            soland_http::error::ErrorCode::from_wire(&error.code())
+                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
             format!("account_data Event admission failed: {}", error.message()),
         )
         .with_rejection_code(error.code())

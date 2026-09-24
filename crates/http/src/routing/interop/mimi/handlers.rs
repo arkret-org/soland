@@ -466,8 +466,7 @@ pub(super) async fn mimi_consent_update(
         return Err(AppError::param_invalid(message).with_reason_code("mimi_draft_unsupported"));
     }
     body.validate_consent_event().map_err(|error| {
-        AppError::param_invalid(format!("MIMI consent Event binding is invalid: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("MIMI consent Event binding is invalid: {error}"))
     })?;
     let (session, source_id) = verify_mimi_consent_update_authority(state, req, aa, &body).await?;
     verify_mimi_consent_correlation(state, &body, source_id.as_deref()).await?;

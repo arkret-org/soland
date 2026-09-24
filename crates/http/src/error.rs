@@ -471,6 +471,11 @@ impl AppError {
     pub fn param_invalid(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::ParamInvalid, message)
     }
+    /// Parsed input outside the declared schema contract: `schema_violation`
+    /// at its registry status (422), never a `param_invalid` 400 renamed.
+    pub fn schema_violation(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::SchemaViolation, message)
+    }
     pub fn unauthenticated(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Unauthenticated, message)
     }

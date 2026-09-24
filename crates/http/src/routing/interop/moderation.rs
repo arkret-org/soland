@@ -121,8 +121,10 @@ pub(crate) async fn prepare_franking_proof_event(
     )
     .await
     .map_err(|error| {
-        crate::app_error!(
-            ParamInvalid,
+        // A registered top-level rejection keeps its registry status.
+        AppError::from_rejection(
+            soland_http::error::ErrorCode::from_wire(&error.code())
+                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
             format!("franking Event admission failed: {}", error.message()),
         )
         .with_rejection_code(error.code())

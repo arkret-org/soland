@@ -342,8 +342,7 @@ pub(super) async fn admit_mimi_room_binding_event(
 ) -> Result<String, AppError> {
     let submission: arkret_wire::EventAdmissionSubmission = serde_json::from_value(submission)
         .map_err(|error| {
-            AppError::param_invalid(format!("MIMI room binding Event is invalid: {error}"))
-                .with_wire_code("schema_violation")
+            AppError::schema_violation(format!("MIMI room binding Event is invalid: {error}"))
         })?;
     let realm_id = binding
         .get("binding_scope")
@@ -386,12 +385,10 @@ pub(super) async fn admit_mimi_room_binding_event(
     validate_mimi_room_binding_payload(binding)?;
     let next: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingPayload =
         serde_json::from_value(binding.clone()).map_err(|error| {
-            AppError::param_invalid(format!("MIMI binding payload is invalid: {error}"))
-                .with_wire_code("schema_violation")
+            AppError::schema_violation(format!("MIMI binding payload is invalid: {error}"))
         })?;
     next.validate_shape().map_err(|error| {
-        AppError::param_invalid(format!("MIMI binding payload is invalid: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("MIMI binding payload is invalid: {error}"))
     })?;
     let current = state
         .authority_commits()

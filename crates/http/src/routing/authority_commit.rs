@@ -1,8 +1,9 @@
 //! Canonical current-protocol authority routes.
 //!
 //! `POST /_arkret/self/events` is mounted by the events router; this module
-//! contributes the self stream scan and the open authority bundle. Peer
-//! handoff has no authenticated, fenced implementation and stays unmounted.
+//! contributes the self and peer stream scans and the open authority bundle.
+//! Peer handoff has no authenticated, fenced implementation and stays
+//! unmounted.
 
 use arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest;
 use arkret_wire::{AuthorityBundleRequest, ErrorCode, StreamScanRequest};
@@ -16,6 +17,11 @@ use crate::state::AppState;
 /// `ak.self.committed_event.read.scan.v1`, under the authenticated `self` tree.
 pub(super) fn self_router() -> Router {
     Router::with_path("streams/scan").post(scan_stream)
+}
+
+/// `ak.peer.committed_event.read.scan.v1`, under the signed `peer` tree.
+pub(super) fn peer_router() -> Router {
+    Router::with_path("streams/scan").post(peer_scan_stream)
 }
 
 /// `ak.open.realm_authority.read.bundle.v1`, under the unauthenticated `open` tree.
@@ -38,8 +44,18 @@ async fn parse_closed_body<T: serde::de::DeserializeOwned>(
     req: &mut Request,
     res: &mut Response,
 ) -> Option<T> {
+    parse_exact_closed_body(req, res)
+        .await
+        .map(|(value, _)| value)
+}
+
+/// [`parse_closed_body`] that also returns the exact request bytes.
+async fn parse_exact_closed_body<T: serde::de::DeserializeOwned>(
+    req: &mut Request,
+    res: &mut Response,
+) -> Option<(T, Vec<u8>)> {
     let body = match req.payload().await {
-        Ok(body) => body.clone(),
+        Ok(body) => body.to_vec(),
         Err(error) => {
             crate::error::render_error_code(
                 ErrorCode::JsonInvalid,
@@ -50,7 +66,7 @@ async fn parse_closed_body<T: serde::de::DeserializeOwned>(
         }
     };
     match serde_json::from_slice::<T>(&body) {
-        Ok(value) => Some(value),
+        Ok(value) => Some((value, body)),
         Err(error) => {
             let code = if error.is_data() {
                 ErrorCode::SchemaViolation
@@ -61,14 +77,6 @@ async fn parse_closed_body<T: serde::de::DeserializeOwned>(
             None
         }
     }
-}
-
-async fn parse_current_json<T: serde::de::DeserializeOwned>(
-    req: &mut Request,
-) -> Result<T, String> {
-    req.parse_json::<T>()
-        .await
-        .map_err(|error| format!("invalid canonical request body: {error}"))
 }
 
 fn state(depot: &Depot) -> Result<&AppState, String> {
@@ -92,16 +100,6 @@ fn render_result<T: Serialize + Send>(res: &mut Response, result: ServiceResult<
         Ok(value) => res.render(Json(value)),
         Err(error) => render_service_error(res, error),
     }
-}
-
-fn render_bad_request(res: &mut Response, detail: String) {
-    res.status_code(StatusCode::BAD_REQUEST);
-    res.render(Json(serde_json::json!({
-        "type": "https://arkret.org/problems/schema_violation",
-        "status": 400,
-        "code": "schema_violation",
-        "detail": detail,
-    })));
 }
 
 fn render_service_error(res: &mut Response, error: ServiceError) {
@@ -166,7 +164,10 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
             (StatusCode::FORBIDDEN, "quota_exceeded")
         }
         ServiceError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
-        ServiceError::SchemaViolation(_) => (StatusCode::BAD_REQUEST, "schema_violation"),
+        ServiceError::SchemaViolation(_) => (
+            crate::error::error_http_status(ErrorCode::SchemaViolation),
+            ErrorCode::SCHEMA_VIOLATION,
+        ),
         ServiceError::Database(_) | ServiceError::Internal(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
         }
@@ -189,7 +190,9 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
 pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
     let app_state = match state(depot) {
         Ok(state) => state,
-        Err(error) => return render_bad_request(res, error),
+        Err(error) => {
+            return crate::error::render_error_code(ErrorCode::InternalError, res, &error);
+        }
     };
     let Some(session) = crate::routing::auth_or_render(app_state, req, res).await else {
         return;
@@ -215,31 +218,17 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
             &error.message,
         );
     }
-    let exact_request_body = match req.payload().await {
-        Ok(body) => body.to_vec(),
-        Err(error) => {
-            return render_bad_request(
-                res,
-                format!("unable to read exact authority request body: {error}"),
-            );
-        }
+    let Some((request, exact_request_body)) =
+        parse_exact_closed_body::<SelfAuthoritySubmitRequest>(req, res).await
+    else {
+        return;
     };
-    let request = match parse_current_json::<SelfAuthoritySubmitRequest>(req).await {
-        Ok(request) => request,
-        Err(error) => return render_bad_request(res, error),
-    };
-    if serde_json::from_slice::<SelfAuthoritySubmitRequest>(&exact_request_body)
-        .ok()
-        .as_ref()
-        != Some(&request)
-    {
-        return render_bad_request(
-            res,
-            "exact body differs from parsed authority request".to_owned(),
-        );
-    }
     if let Err(error) = request.validate() {
-        return render_bad_request(res, validation_error(error));
+        return crate::error::render_error_code(
+            ErrorCode::SchemaViolation,
+            res,
+            &validation_error(error),
+        );
     }
     let authority = app_state.authority();
     let result = authority
@@ -313,9 +302,20 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
         .authority()
         .scan_stream_for_account(account, request.clone())
         .await;
+    render_stream_scan(res, &request, result);
+}
+
+/// Render one caller-scoped scan decision. A refused caller receives the
+/// universal non-enumerating `capability_denied`; an interval this Station
+/// cannot prove fails closed as `temporarily_unavailable`, never as a page.
+fn render_stream_scan(
+    res: &mut Response,
+    request: &StreamScanRequest,
+    result: ServiceResult<soland_storage::AccountStreamScan>,
+) {
     match result {
         Ok(soland_storage::AccountStreamScan::Page(outcome)) => {
-            if let Err(error) = outcome.validate_for_request(&request) {
+            if let Err(error) = outcome.validate_for_request(request) {
                 return render_service_error(res, invalid_application_output(error));
             }
             no_store(res);
@@ -339,6 +339,41 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
         }
         Err(error) => render_service_error(res, error),
     }
+}
+
+/// `POST /_arkret/peer/streams/scan`. The caller is the peer Station proved
+/// by the RFC 9421 service signature (with the inbound deny policy); the
+/// body never names it. The replication right is decided on the governing
+/// read cut, with the same closed request contract as the self scan.
+#[handler]
+async fn peer_scan_stream(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let app_state = match state(depot) {
+        Ok(state) => state.clone(),
+        Err(error) => {
+            return crate::error::render_error_code(ErrorCode::InternalError, res, &error);
+        }
+    };
+    let peer = match crate::routing::events::peer::authenticated_peer_context(&app_state, req, true)
+        .await
+    {
+        Ok(peer) => peer,
+        Err(error) => return error.write(req, depot, res).await,
+    };
+    let Some(request) = parse_closed_body::<StreamScanRequest>(req, res).await else {
+        return;
+    };
+    if let Err(error) = request.validate() {
+        return crate::error::render_error_code(
+            ErrorCode::SchemaViolation,
+            res,
+            &validation_error(error),
+        );
+    }
+    let result = app_state
+        .authority()
+        .scan_stream_for_peer(&peer, request.clone())
+        .await;
+    render_stream_scan(res, &request, result);
 }
 
 #[handler]
@@ -399,6 +434,10 @@ mod tests {
                 arkret_wire::ServiceOperationId::SelfCommittedEventReadScanV1,
             ),
             (
+                "/_arkret/peer/streams/scan",
+                arkret_wire::ServiceOperationId::PeerCommittedEventReadScanV1,
+            ),
+            (
                 "/_arkret/open/realm-authority/bundle",
                 arkret_wire::ServiceOperationId::OpenRealmAuthorityReadBundleV1,
             ),
@@ -428,6 +467,26 @@ mod tests {
             "https://arkret.org/problems/failed_precondition"
         );
         assert_eq!(body["reason_code"], "snapshot_capacity_exceeded");
+    }
+
+    /// `schema_violation` is registered at 422 (`error-code-registry.json`);
+    /// the authority lane must not render it as a 400.
+    #[tokio::test]
+    async fn schema_violation_renders_at_its_registry_status() {
+        let mut res = Response::new();
+        render_service_error(
+            &mut res,
+            ServiceError::SchemaViolation("stream_ref is outside the closed union".to_owned()),
+        );
+        assert_eq!(res.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
+        let body: serde_json::Value = salvo::test::ResponseExt::take_json(&mut res)
+            .await
+            .expect("problem body");
+        assert_eq!(body["status"], 422, "{body}");
+        assert_eq!(
+            body["type"], "https://arkret.org/problems/schema_violation",
+            "{body}"
+        );
     }
 
     #[tokio::test]
@@ -532,6 +591,31 @@ mod tests {
             body["type"], "https://arkret.org/problems/unauthenticated",
             "{body}"
         );
+
+        // The peer scan is selectable (http_core) and authenticates the
+        // calling Station before it reads the body: an unsigned request is
+        // refused and never reaches the application port.
+        let peer_scan = arkret_wire::ServiceOperationId::PEER_COMMITTED_EVENT_READ_SCAN_V1;
+        let realm_id = "ak:realm:AdP2S6y0Ms7yp9-GNvXZ3sVfvTEo8mtnV3G_RfApIOn0";
+        let mut response = post("/_arkret/peer/streams/scan", peer_scan)
+            .json(&serde_json::json!({
+                "realm_id": realm_id,
+                "stream_ref": {"kind": "realm", "realm_id": realm_id},
+                "after_position": null,
+                "limit": 10,
+            }))
+            .send(&service)
+            .await;
+        let status = response.status_code.expect("status");
+        let body: serde_json::Value = response.take_json().await.expect("problem body");
+        assert!(status.is_client_error(), "{status}: {body}");
+        for unreachable in ["unrecognized_endpoint", "unsupported_operation_version"] {
+            assert_ne!(
+                body["type"],
+                format!("https://arkret.org/problems/{unreachable}"),
+                "{body}"
+            );
+        }
 
         // No legacy resolver and no unauthenticated peer handoff are mounted.
         for path in [

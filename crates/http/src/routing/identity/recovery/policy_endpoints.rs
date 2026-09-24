@@ -21,8 +21,7 @@ pub(super) async fn resolve_recovery_read_account(
     })?;
     if let Some(requested) = account_id_param.filter(|value| !value.trim().is_empty()) {
         let requested: arkret_wire::AccountId = serde_json::from_str(&requested).map_err(|_| {
-            AppError::param_invalid("account_id must be RFC 8785 JCS(AccountId)")
-                .with_wire_code("schema_violation")
+            AppError::schema_violation("account_id must be RFC 8785 JCS(AccountId)")
         })?;
         if requested != account_id {
             return Err(crate::app_error!(
@@ -202,12 +201,10 @@ pub(super) async fn recovery_policy_put(
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
     request.validate().map_err(|error| {
-        AppError::param_invalid(format!("invalid recovery policy publication: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("invalid recovery policy publication: {error}"))
     })?;
     let typed_payload = request.payload().map_err(|error| {
-        AppError::param_invalid(format!("invalid recovery policy payload: {error}"))
-            .with_wire_code("schema_violation")
+        AppError::schema_violation(format!("invalid recovery policy payload: {error}"))
     })?;
     let payload = serde_json::to_value(&typed_payload.value)
         .map_err(|error| AppError::internal(format!("recovery policy serialize: {error}")))?;

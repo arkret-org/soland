@@ -2294,3 +2294,115 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn peer_stream_scan_refuses_non_hosting_peers_and_never_serves_an_unproved_interval() {
+    use arkret_wire::StreamScanDirection::After;
+    use soland_storage::AccountStreamScan;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap();
+    let remote = arkret_wire::DidCoreId::new("ak:did_core:web:remote-station.example").unwrap();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let scan = |request: arkret_wire::StreamScanRequest, peer: arkret_wire::DidCoreId| {
+        let store = store.clone();
+        let station = station.clone();
+        async move {
+            store
+                .scan_stream_for_peer(&request, &peer, &station)
+                .await
+                .unwrap()
+        }
+    };
+
+    // A peer hosting no joined member has no replication right, even though
+    // the founding stream is fully readable by its local founder.
+    assert_eq!(
+        scan(scan_request(&realm_id, After(None), 3), remote.clone()).await,
+        AccountStreamScan::NotAuthorized
+    );
+    // A Realm not governed here is refused without enumerating it.
+    let unknown = arkret_wire::RealmId::from_event_id(&unit.transactions[1].event.event_id);
+    assert_eq!(
+        scan(
+            scan_request(&unknown, After(None), 3),
+            creator.station_id.clone()
+        )
+        .await,
+        AccountStreamScan::NotAuthorized
+    );
+
+    // A peer hosting a joined member may hold a right, but its join floor,
+    // history access and disclosure are not proved: fail closed, no page.
+    let remote_member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:remote-member.example").unwrap(),
+        remote.clone(),
+    ))
+    .to_string();
+    let mut conn = pool.get().await.unwrap();
+    for membership in ["knock", "join"] {
+        diesel::sql_query(
+            "INSERT INTO member_state_current_results \
+             (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+             VALUES ($1,$2,$3,$4,6,jsonb_build_object('membership',$3::text),now()) \
+             ON CONFLICT (realm_id,member_id) DO UPDATE SET membership=EXCLUDED.membership, \
+             value=EXCLUDED.value",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(&remote_member)
+        .bind::<Text, _>(membership)
+        .bind::<Text, _>(unit.transactions[6].commit.commit_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let decision = scan(scan_request(&realm_id, After(None), 3), remote.clone()).await;
+        if membership == "join" {
+            assert!(
+                matches!(decision, AccountStreamScan::Unproved(_)),
+                "{decision:?}"
+            );
+        } else {
+            // A knock is not a joined member and grants nothing.
+            assert_eq!(decision, AccountStreamScan::NotAuthorized);
+        }
+    }
+    // The same holds for a Circle stream and for a Station that lost tenure.
+    let mut circle = scan_request(&realm_id, After(None), 3);
+    circle.stream_ref = arkret_wire::CommitStreamRef::Circle {
+        realm_id: realm_id.clone(),
+        circle_id: arkret_wire::CircleId::new(
+            "ak:circle:AdP2S6y0Ms7yp9-GNvXZ3sVfvTEo8mtnV3G_RfApIOn0".to_owned(),
+        )
+        .unwrap(),
+    };
+    assert!(matches!(
+        scan(circle, remote.clone()).await,
+        AccountStreamScan::Unproved(_)
+    ));
+    let other_station =
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+    assert!(matches!(
+        store
+            .scan_stream_for_peer(
+                &scan_request(&realm_id, After(None), 3),
+                &remote,
+                &other_station
+            )
+            .await
+            .unwrap(),
+        AccountStreamScan::Unproved(_)
+    ));
+}

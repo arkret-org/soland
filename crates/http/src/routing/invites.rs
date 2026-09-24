@@ -1120,10 +1120,9 @@ async fn resolve_invite_locator(
 ) -> JsonResult<PrincipalLocator> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     if locator_token_appears_in_url(req) {
-        return Err(AppError::param_invalid(
+        return Err(AppError::schema_violation(
             "locator_token must be sent in the JSON body, never in URL path or query",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     }
     let body = req
         .parse_json::<InviteLocatorResolveRequestBody>()

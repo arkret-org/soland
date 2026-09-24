@@ -2130,10 +2130,9 @@ async fn transaction_endpoint(
         ));
     }
     let AppletTransactionRequestBody::Events(transaction) = body.into_inner() else {
-        return Err(AppError::param_invalid(
+        return Err(AppError::schema_violation(
             "managed Actor authoring completion is allowed only from Station to Applet",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     };
     if transaction.events.is_empty() {
         return Err(AppError::param_invalid(

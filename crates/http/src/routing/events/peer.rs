@@ -1668,7 +1668,7 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
 }
 
 pub(in crate::routing) fn schema_violation(message: impl Into<String>) -> AppError {
-    AppError::param_invalid(message).with_wire_code("schema_violation")
+    AppError::schema_violation(message)
 }
 
 pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> AppError {

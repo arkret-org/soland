@@ -117,8 +117,14 @@ fn is_tus_operation_path(method: &str, path: &str) -> bool {
 /// Core-tier operations that the formal registry places in no operation
 /// bundle: claiming v1 support implies them, so they are selectable without
 /// a bundle advertisement. Only operations this Station mounts belong here.
-const MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE: &[arkret_wire::ServiceOperationId] =
-    &[arkret_wire::ServiceOperationId::OpenRealmAuthorityReadBundleV1];
+///
+/// - `open/realm-authority/bundle` sits in the core `authority_commit` group.
+/// - `self/events/delivery-status` sits in the core `events_sync` group and is
+///   the only fanout-progress read (`service-http-binding.md` §3.1.5).
+const MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE: &[arkret_wire::ServiceOperationId] = &[
+    arkret_wire::ServiceOperationId::OpenRealmAuthorityReadBundleV1,
+    arkret_wire::ServiceOperationId::SelfEventsReadDeliveryStatusV1,
+];
 
 fn locally_advertises(
     state: &AppState,
@@ -386,7 +392,9 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(identity::peer_keys_router())
                 .push(federation::erasure_receipts::router())
                 .push(realm_join::peer_router())
-                .push(mls::peer_router()),
+                .push(mls::peer_router())
+                // peer/streams/scan (ak.peer.committed_event.read.scan.v1).
+                .push(authority_commit::peer_router()),
         )
         // `open` - unauthenticated, body-only handoff resolver surface.
         .push(
@@ -615,6 +623,215 @@ mod tests {
     use soland_storage_postgres::Db;
 
     use super::*;
+
+    /// Live `/_arkret` routes as `(METHOD, path pattern)`, from a walk of the
+    /// production router (not from the OpenAPI annotations).
+    fn mounted_protocol_routes() -> Vec<(String, String)> {
+        crate::openapi::product_registered_routes()
+            .expect("production router walks")
+            .into_iter()
+            .filter(|(path, _)| path.starts_with("/_arkret/"))
+            .flat_map(|(path, methods)| {
+                methods
+                    .into_iter()
+                    .map(move |method| (method.to_ascii_uppercase(), path.clone()))
+            })
+            .collect()
+    }
+
+    fn is_mounted(routes: &[(String, String)], operation: arkret_wire::ServiceOperationId) -> bool {
+        routes
+            .iter()
+            .any(|(method, path)| operation.matches_http_request(method, path))
+    }
+
+    /// Advertised JSON bundle members this Station does not mount. Each is a
+    /// false claim: `service-surface.md` §3 allows advertising only bundles
+    /// the deployment really implements, and a frozen bundle cannot drop a
+    /// member. The set may only shrink as the operations are implemented;
+    /// withdrawing `http_core` instead would unselect the whole Station
+    /// surface, which is a protocol decision, not a Station fallback.
+    const KNOWN_ADVERTISED_UNMOUNTED: &[(&str, arkret_wire::ServiceOperationId)] = &[
+        (
+            "ak.operation_bundle.station.applet.v1",
+            arkret_wire::ServiceOperationId::EdgeAppletManagedActorCommandAuthorV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::GateAccountCommandFinalizeDevicePairingV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::GateAccountReadClaimDevicePairingCodeV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::PeerMlsReadGroupStateMaterialV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::PeerRealmJoinReadApplicationStatusV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::PeerRealmJoinReadPreviewV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::SelfCurrentResultsReadExactV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::SelfMediaServiceBindingReadResolveV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::SelfRealmReadStreamsV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::SelfRealmJoinReadApplicationStatusV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::SelfRealmJoinReadPreviewV1,
+        ),
+        (
+            "ak.operation_bundle.station.http_core.v1",
+            arkret_wire::ServiceOperationId::SelfStrandWatchReadCurrentV1,
+        ),
+    ];
+
+    /// `service-surface.md` §3: Describe advertises only bundles this
+    /// deployment really implements, and the expanded `(operation_id,
+    /// binding_kind)` union is the reachability source. Every advertised JSON
+    /// member must therefore be mounted, and every mounted canonical route
+    /// must be selectable; a mounted route the selector always refuses is
+    /// dead, and an advertised member without a route is a false claim.
+    #[test]
+    fn advertised_operations_and_mounted_routes_agree() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        let routes = mounted_protocol_routes();
+        let description = crate::routing::system::describe::build_server_description(&state);
+        let mut unmounted = Vec::new();
+        for bundle_id in &description.supported_operation_bundles {
+            let bundle = arkret_wire::operation_bundle_descriptor(bundle_id)
+                .unwrap_or_else(|| panic!("unregistered advertised bundle {bundle_id}"));
+            for member in bundle.members {
+                if member.binding_kind == arkret_wire::BindingKind::HttpJson
+                    && !is_mounted(&routes, member.operation_id)
+                {
+                    unmounted.push((bundle_id.as_str(), member.operation_id));
+                }
+            }
+        }
+        unmounted.sort_by_key(|(bundle, operation)| (*bundle, operation.as_str()));
+        assert_eq!(
+            unmounted, KNOWN_ADVERTISED_UNMOUNTED,
+            "advertised but unmounted bundle members changed"
+        );
+        assert!(
+            !unmounted.iter().any(|(_, operation)| {
+                *operation == arkret_wire::ServiceOperationId::PeerCommittedEventReadScanV1
+            }),
+            "the peer stream scan is mounted"
+        );
+
+        // Core-tier members of no registered bundle are implied by v1 and
+        // admitted explicitly; each must be mounted and truly bundle-less.
+        for operation in MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE {
+            assert!(
+                is_mounted(&routes, *operation),
+                "{operation} is not mounted"
+            );
+            assert!(
+                arkret_wire::OPERATION_BUNDLES
+                    .iter()
+                    .all(|bundle| !bundle.contains(*operation, arkret_wire::BindingKind::HttpJson)),
+                "{operation} now belongs to a registered bundle"
+            );
+        }
+
+        // Registered operations mounted here but selectable by no advertised
+        // bundle, so every call is refused before dispatch. The set may only
+        // shrink:
+        // - `self/invites/dispatch` is an extension-tier operation the formal
+        //   registry places in no bundle, so no conformant Describe can
+        //   advertise it (a registry gap, not a Station choice);
+        // - the `device_pairing_handoff` bundle is deliberately unadvertised
+        //   (see `wire.rs`), leaving its three open routes unreachable;
+        // - `present_token` is the only mounted member of the unadvertised
+        //   `third_party_invite_handoff` bundle.
+        let dead = arkret_wire::ServiceOperationId::ALL
+            .iter()
+            .copied()
+            .filter(|operation| is_mounted(&routes, *operation))
+            .filter(|operation| {
+                !locally_advertises(&state, *operation, arkret_wire::BindingKind::HttpJson)
+                    && !locally_advertises(&state, *operation, arkret_wire::BindingKind::Websocket)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            dead,
+            [
+                arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
+                arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
+                arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
+                arkret_wire::ServiceOperationId::OpenThirdPartyInviteCommandPresentTokenV1,
+                arkret_wire::ServiceOperationId::SelfInvitesCommandDispatchV1,
+            ],
+            "mounted operations the selector refuses"
+        );
+        assert!(
+            !dead.contains(&arkret_wire::ServiceOperationId::SelfEventsReadDeliveryStatusV1),
+            "delivery-status is a mounted core read"
+        );
+    }
+
+    #[test]
+    fn peer_stream_scan_and_delivery_status_are_selectable() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        for operation in [
+            arkret_wire::ServiceOperationId::PeerCommittedEventReadScanV1,
+            arkret_wire::ServiceOperationId::SelfEventsReadDeliveryStatusV1,
+        ] {
+            assert!(
+                locally_advertises(&state, operation, arkret_wire::BindingKind::HttpJson),
+                "{operation}"
+            );
+        }
+    }
+
+    /// The selector admits the core delivery-status read, so the request is
+    /// dispatched and authenticates instead of being refused pre-dispatch.
+    #[tokio::test]
+    async fn delivery_status_selector_dispatches_to_the_authenticated_read() {
+        use salvo::test::{ResponseExt as _, TestClient};
+
+        let service = crate::service(AppState::new(
+            crate::config::AppConfig::test_default(),
+            Db { pool: None },
+        ));
+        let mut response = TestClient::query("http://server/_arkret/self/events/delivery-status")
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_EVENTS_READ_DELIVERY_STATUS_V1,
+                true,
+            )
+            .json(&serde_json::json!({"event_id": "ak:event:AdP2S6y0Ms7yp9-GNvXZ3sVfvTEo8mtnV3G_RfApIOn0"}))
+            .send(&service)
+            .await;
+        let body: serde_json::Value = response.take_json().await.expect("problem body");
+        assert_eq!(
+            response.status_code,
+            Some(StatusCode::UNAUTHORIZED),
+            "{body}"
+        );
+        assert_eq!(
+            body["type"], "https://arkret.org/problems/unauthenticated",
+            "{body}"
+        );
+    }
 
     #[test]
     fn device_pairing_selectors_are_reachable_through_the_registered_bundle() {

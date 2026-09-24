@@ -358,6 +358,16 @@ impl AuthorityProtocolPort for AppState {
             .await
     }
 
+    async fn scan_stream_for_peer(
+        &self,
+        peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+        request: StreamScanRequest,
+    ) -> ServiceResult<soland_storage::AccountStreamScan> {
+        self.authority_commits()
+            .scan_stream_for_peer(&request, &peer.source_service_id, &self.service_core_id())
+            .await
+    }
+
     /// The nonce-bound genesis-to-current chain, signed by this Station's
     /// notary method and carrying its current authenticated service route.
     async fn authority_bundle(

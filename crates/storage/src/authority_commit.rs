@@ -14,13 +14,14 @@ use chrono::{DateTime, Utc};
 
 use crate::PersistenceResult;
 
-/// Result of an Account-scoped stream scan at one governing read cut.
+/// Result of a caller-scoped stream scan at one governing read cut. The
+/// caller is an authenticated Account (`self`) or peer Station (`peer`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum AccountStreamScan {
     /// A page inside the caller's proved readable interval.
     Page(arkret_wire::StreamScanOutcome),
-    /// The Realm is not governed here or the Account is not a currently
-    /// joined member: the caller has no readable interval on this stream.
+    /// The Realm is not governed here, or the caller is not (and hosts no)
+    /// currently joined member: it has no readable interval on this stream.
     NotAuthorized,
     /// The caller may be authorized, but this Station cannot prove its exact
     /// readable interval and disclosure at this cut.
@@ -652,6 +653,21 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         request: &arkret_wire::StreamScanRequest,
         account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<AccountStreamScan>;
+
+    /// `ak.peer.committed_event.read.scan.v1` for one authenticated peer
+    /// Station (`service-http-binding.md` §3.1.3: the calling Station must
+    /// hold the replication right for the exact stream).
+    ///
+    /// A peer with no currently joined member routed to it has no right on
+    /// any stream of the Realm. Every other shape is decided at the same
+    /// governing read cut and fails closed as [`AccountStreamScan::Unproved`]
+    /// until this Station can prove the peer's exact interval and disclosure.
+    async fn scan_stream_for_peer(
+        &self,
+        request: &arkret_wire::StreamScanRequest,
+        peer: &arkret_wire::DidCoreId,
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<AccountStreamScan>;
 

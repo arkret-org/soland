@@ -196,9 +196,7 @@ pub(super) async fn security_transaction_create(
     };
     let (resource, canonical_request) = request
         .into_initial_resource(prepared_plan, chrono::Utc::now())
-        .map_err(|error| {
-            AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-        })?;
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     if transaction_account_actor(&resource.account_id, &state.service_core_id())?
         != crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?
     {
@@ -1118,9 +1116,9 @@ pub(crate) async fn backup_series_erase_command(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
-    request.validate_structural().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    request
+        .validate_structural()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     let canonical_request = arkret_canonical::canonical_json_bytes(&request)
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let transaction_id = request.transaction_id.as_str().to_owned();
@@ -1490,10 +1488,9 @@ async fn continue_rotation_local_commit(
     let arkret_models_crypto::ClientStepAttestationArtifact::SecurityRotation(commit) =
         &attestation.artifact
     else {
-        return Err(
-            AppError::param_invalid("local commit requires SecurityRotationLocalCommit")
-                .with_wire_code("schema_violation"),
-        );
+        return Err(AppError::schema_violation(
+            "local commit requires SecurityRotationLocalCommit",
+        ));
     };
     // `erase_confirmation_digest` is no longer duplicated into the local
     // commit: the authoritative copy stays in `SecurityRotationPlan` and in the
@@ -1570,20 +1567,19 @@ async fn continue_commit_recovery_unit(
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let attestation = &request.client_attestation;
-    attestation.validate().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    attestation
+        .validate()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     let arkret_models_crypto::ClientStepAttestationArtifact::Recovery(terminal_commit) =
         &attestation.artifact
     else {
-        return Err(
-            AppError::param_invalid("terminal recovery requires RecoveryTerminalCommit")
-                .with_wire_code("schema_violation"),
-        );
+        return Err(AppError::schema_violation(
+            "terminal recovery requires RecoveryTerminalCommit",
+        ));
     };
-    terminal_commit.validate().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    terminal_commit
+        .validate()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     let receipt = &terminal_commit.recovery_receipt;
     let (binding, plan) = pcr_policy_parts(&transaction.resource)?;
     let binding = binding.clone();
@@ -1849,9 +1845,9 @@ async fn prepare_recovery_plan(
     request: &RecoveryTransactionCreateRequest,
 ) -> Result<PcrPolicyRecoveryPlan, AppError> {
     let intent = &request.recovery_intent;
-    intent.validate(&request.account_id).map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    intent
+        .validate(&request.account_id)
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     if session.device_id != intent.replacement_device_id.as_str() {
         return Err(crate::app_error!(
             CapabilityDenied,
@@ -1921,10 +1917,9 @@ async fn prepare_recovery_plan(
         ));
     }
     let [reanchor_event, authorize_event] = intent.reanchor_unit.request.events.as_slice() else {
-        return Err(AppError::param_invalid(
+        return Err(AppError::schema_violation(
             "recovery unit must contain exactly the ordered re-anchor and authorize Events",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     };
     let reanchor_event_id = reanchor_event.event_id.clone();
     let authorize_event_id = authorize_event.event_id.clone();
@@ -1935,8 +1930,7 @@ async fn prepare_recovery_plan(
                 .map_err(|error| AppError::internal(error.to_string()))?,
         )
         .map_err(|error| {
-            AppError::param_invalid(format!("device re-anchor payload is invalid: {error}"))
-                .with_wire_code("schema_violation")
+            AppError::schema_violation(format!("device re-anchor payload is invalid: {error}"))
         })?;
     let authorization_payload = authorize_event
         .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()

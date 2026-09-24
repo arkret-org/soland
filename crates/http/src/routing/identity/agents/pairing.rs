@@ -13,10 +13,9 @@ pub(super) async fn resolve_agent_pairing(
     req: &mut Request,
 ) -> JsonResult<AgentPairingBootstrap> {
     if agent_pairing_token_appears_in_url(req) {
-        return Err(AppError::param_invalid(
+        return Err(AppError::schema_violation(
             "pairing_token must be sent in the JSON body, never in URL path or query",
-        )
-        .with_wire_code("schema_violation"));
+        ));
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = req
@@ -117,9 +116,8 @@ pub(super) async fn submit_agent_runtime_key_request(
 ) -> JsonResult<AgentRuntimeApprovalOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    body.validate().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    body.validate()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     let pairing_code = body.pairing_code.trim();
     if pairing_code.is_empty() {
         return Err(AppError::param_invalid("pairing_code is required"));
@@ -343,9 +341,8 @@ pub(super) async fn agent_runtime_key_request_status(
 ) -> JsonResult<AgentRuntimeApprovalStatusOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    body.validate().map_err(|error| {
-        AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
-    })?;
+    body.validate()
+        .map_err(|error| AppError::schema_violation(error.to_string()))?;
     let agent_record = lookup_pairing_record(
         state,
         &body.pairing_request_id,

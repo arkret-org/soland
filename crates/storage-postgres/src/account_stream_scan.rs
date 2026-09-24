@@ -1,4 +1,5 @@
-//! Account-scoped `ak.self.committed_event.read.scan.v1` at one read cut.
+//! Caller-scoped `ak.self.committed_event.read.scan.v1` and
+//! `ak.peer.committed_event.read.scan.v1` at one read cut.
 //!
 //! The caller's readable interval is a protocol decision of the current
 //! governing Station: membership join floor, history-access policy, retention
@@ -8,6 +9,11 @@
 //! interval starts at the genesis Commit (`stream_start`) and every row is
 //! disclosable in full. Any other shape fails closed as unproved rather than
 //! serving a physical page.
+//!
+//! A peer Station's replication right on a stream derives from the currently
+//! joined members routed to it. That founding shape never has a remote member,
+//! so no peer interval is provable here yet: a peer hosting no joined member is
+//! refused, and a peer hosting one fails closed as unproved.
 
 use arkret_wire::{
     AccountId, ActorId, CommitStreamRef, CommittedEventView, DidCoreId, ReadableFloorReason,
@@ -135,6 +141,59 @@ pub(crate) async fn scan_stream_for_account(
             ));
         }
         Ok(AccountStreamScan::Page(page))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+pub(crate) async fn scan_stream_for_peer(
+    pool: &PgPool,
+    request: &StreamScanRequest,
+    peer: &DidCoreId,
+    issuer: &DidCoreId,
+) -> PersistenceResult<AccountStreamScan> {
+    request
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
+            .bind::<Text, _>(request.realm_id.as_str())
+            .get_result::<TenureRow>(&mut *conn)
+            .await
+            .optional()?
+        else {
+            return Ok(AccountStreamScan::NotAuthorized);
+        };
+        let members = sql_query(
+            "SELECT member_id, membership FROM member_state_current_results \
+             WHERE realm_id=$1 AND membership='join' ORDER BY member_id",
+        )
+        .bind::<Text, _>(request.realm_id.as_str())
+        .load::<MemberRow>(&mut *conn)
+        .await?;
+        let mut hosts_member = false;
+        for row in &members {
+            let member: ActorId = serde_json::from_str(&row.member_id).map_err(|error| {
+                PersistenceError::Internal(format!("stored member ActorId is invalid: {error}"))
+            })?;
+            hosts_member |= member.route_service_id() == peer;
+        }
+        if !hosts_member {
+            return Ok(AccountStreamScan::NotAuthorized);
+        }
+        if tenure.service_id != issuer.as_str() {
+            return Ok(AccountStreamScan::Unproved(
+                "this Station does not hold the Realm's governing tenure",
+            ));
+        }
+        Ok(AccountStreamScan::Unproved(
+            "the peer's join floor, history access and canonical-byte disclosure are not proved \
+             at this cut",
+        ))
     })
     .await
     .map_err(PgTransactionError::into_persistence)
