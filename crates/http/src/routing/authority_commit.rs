@@ -145,16 +145,35 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
             &error.message,
         );
     }
+    let exact_request_body = match req.payload().await {
+        Ok(body) => body.to_vec(),
+        Err(error) => {
+            return render_bad_request(
+                res,
+                format!("unable to read exact authority request body: {error}"),
+            );
+        }
+    };
     let request = match parse_current_json::<SelfAuthoritySubmitRequest>(req).await {
         Ok(request) => request,
         Err(error) => return render_bad_request(res, error),
     };
+    if serde_json::from_slice::<SelfAuthoritySubmitRequest>(&exact_request_body)
+        .ok()
+        .as_ref()
+        != Some(&request)
+    {
+        return render_bad_request(
+            res,
+            "exact body differs from parsed authority request".to_owned(),
+        );
+    }
     if let Err(error) = request.validate() {
         return render_bad_request(res, validation_error(error));
     }
     let authority = app_state.authority();
     let result = authority
-        .submit_self(&session, request.clone())
+        .submit_self(&session, request.clone(), &exact_request_body)
         .await
         .and_then(|outcome| {
             outcome

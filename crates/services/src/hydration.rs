@@ -379,6 +379,45 @@ async fn hydrate_canonical_realm_bootstraps(
             continue;
         }
 
+        // A current ordinary bootstrap is one confirmed Realm stream prefix.
+        // `snapshot_all` orders by receive time and Event id, neither of which
+        // proves the order of Events committed in an atomic bootstrap. Read
+        // the first stream positions instead and restore every facet before
+        // the later membership replay. Legacy single-Event genesis remains
+        // on the established path below.
+        if let Some(facets) =
+            confirmed_ordinary_bootstrap_facets(persistence, &records, &create_event).await?
+        {
+            let operations = facets
+                .iter()
+                .map(|record| {
+                    projection_adapter
+                        .operation_from_canonical_record(&application_canonical_event(record))
+                        .ok_or_else(|| {
+                            soland_storage::PersistenceError::Internal(format!(
+                                "ordinary bootstrap Event {} cannot rebuild its projection operation",
+                                record.event_id
+                            ))
+                        })
+                })
+                .collect::<soland_storage::PersistenceResult<Vec<_>>>()?;
+            let mut staged = proj.clone();
+            crate::projection::ProjectionService::apply_realm_bootstrap_to_state(
+                &mut staged,
+                &operations,
+                false,
+                hydration_hlc,
+            )
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "confirmed ordinary bootstrap failed deterministic hydration at slot {}: {}",
+                    error.operation_index, error.reason
+                ))
+            })?;
+            *proj = staged;
+            continue;
+        }
+
         // Realm creation is one producer-signed `ak.realm.create` Event. The
         // multi-Event bootstrap unit and the confirmed-order selector that
         // rebuilt it no longer exist: ordering and predecessor binding are
@@ -420,6 +459,118 @@ async fn hydrate_canonical_realm_bootstraps(
         *proj = staged;
     }
     Ok(())
+}
+
+async fn confirmed_ordinary_bootstrap_facets(
+    persistence: &dyn soland_storage::PersistenceStore,
+    records: &[CanonicalEventRecord],
+    create: &Event,
+) -> soland_storage::PersistenceResult<Option<Vec<CanonicalEventRecord>>> {
+    use arkret_schema::{
+        RealmBootstrapPresence, RealmBootstrapProfile, realm_bootstrap_profile_descriptor,
+    };
+    use arkret_wire::{CommitStreamRef, StreamScanDirection, StreamScanRequest};
+
+    let request = StreamScanRequest {
+        realm_id: create.realm_id.clone(),
+        stream_ref: CommitStreamRef::Realm {
+            realm_id: create.realm_id.clone(),
+        },
+        direction: StreamScanDirection::After(None),
+        limit: 9,
+    };
+    let scan = persistence
+        .authority_commits()
+        .scan_stream(&request)
+        .await?;
+    scan.validate_for_request(&request).map_err(|error| {
+        soland_storage::PersistenceError::Internal(format!(
+            "ordinary bootstrap confirmed stream is invalid: {error}"
+        ))
+    })?;
+    let items = &scan.committed_events;
+    if items
+        .first()
+        .is_none_or(|item| item.commit().event_ref != create.event_id)
+    {
+        return Ok(None);
+    }
+    if items.get(1).is_none_or(|item| {
+        item.reducer_input()
+            .is_none_or(|event| event.kind != arkret_wire::EventKind::RealmProfile)
+    }) {
+        return Ok(None);
+    }
+    let mut prefix = Vec::new();
+    for (position, item) in items.iter().enumerate() {
+        if item.commit().stream_position != position as u64 {
+            return Err(soland_storage::PersistenceError::Internal(
+                "ordinary bootstrap confirmed positions are discontinuous".to_owned(),
+            ));
+        }
+        let event = item.reducer_input().ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "ordinary bootstrap confirmed Event was withheld".to_owned(),
+            )
+        })?;
+        if event.actor_id != create.actor_id || event.realm_id != create.realm_id {
+            return Err(soland_storage::PersistenceError::Internal(
+                "ordinary bootstrap confirmed actor or Realm changed".to_owned(),
+            ));
+        }
+        prefix.push(event);
+        if event.kind == arkret_wire::EventKind::MemberState {
+            break;
+        }
+    }
+    let slots = realm_bootstrap_profile_descriptor(RealmBootstrapProfile::OrdinaryCollaboration)
+        .ordered_slots;
+    let mut cursor = prefix.iter().peekable();
+    for slot in slots {
+        if cursor
+            .peek()
+            .is_some_and(|event| event.kind.as_str() == slot.event_kind)
+        {
+            cursor.next();
+        } else if slot.presence == RealmBootstrapPresence::Required {
+            return Err(soland_storage::PersistenceError::Internal(format!(
+                "confirmed ordinary bootstrap is missing required slot {}",
+                slot.event_kind
+            )));
+        }
+    }
+    if cursor.next().is_some()
+        || prefix
+            .last()
+            .is_none_or(|event| event.kind != arkret_wire::EventKind::MemberState)
+    {
+        return Err(soland_storage::PersistenceError::Internal(
+            "confirmed ordinary bootstrap has an unregistered or incomplete prefix".to_owned(),
+        ));
+    }
+    // Membership is rebuilt once by `hydrate_canonical_realm_memberships`,
+    // after every Realm genesis has been installed. Apply the other facets in
+    // exact Commit order here.
+    prefix.pop();
+    let by_id = records
+        .iter()
+        .map(|record| (record.event_id.as_str(), record))
+        .collect::<BTreeMap<_, _>>();
+    prefix
+        .into_iter()
+        .map(|event| {
+            by_id
+                .get(event.event_id.as_str())
+                .map(|record| (*record).clone())
+                .ok_or_else(|| {
+                    soland_storage::PersistenceError::Internal(format!(
+                        "confirmed ordinary bootstrap Event {} is missing from canonical snapshot",
+                        event.event_id
+                    ))
+                })
+        })
+        .collect::<soland_storage::PersistenceResult<Vec<_>>>()
+        .map(Some)
 }
 
 /// Rebuild Agent and Applet-managed PCR state from canonical Events.

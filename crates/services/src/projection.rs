@@ -464,7 +464,7 @@ impl ProjectionService {
         })
     }
 
-    fn apply_realm_bootstrap_to_state(
+    pub(crate) fn apply_realm_bootstrap_to_state(
         state: &mut ProjectionState,
         operations: &[Operation],
         direct_conversation_founding: bool,

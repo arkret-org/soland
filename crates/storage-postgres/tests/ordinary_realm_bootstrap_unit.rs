@@ -48,6 +48,22 @@ async fn bootstrap_singleton_count(
     .count
 }
 
+async fn source_outbox_count(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM event_federation_outbox o \
+         JOIN canonical_events e ON e.pk=o.event_pk WHERE e.realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .count
+}
+
 fn event(
     kind: arkret_wire::EventKind,
     scope_ref: arkret_wire::ScopeRef,
@@ -262,6 +278,7 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
     assert!(store.current_authority(&realm_id).await.unwrap().is_none());
     assert_eq!(authority_root_count(&pool, &realm_id).await, 0);
     assert_eq!(bootstrap_singleton_count(&pool, &realm_id).await, 0);
+    assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
 
     let mut failing = unit.clone();
     failing.transactions[1].commit.signature.verification_method =
@@ -291,8 +308,20 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
         panic!("first unit must commit");
     };
     assert_eq!(commits.len(), 7);
+    for (position, commit) in commits.iter().enumerate() {
+        assert_eq!(commit.stream_position, position as u64);
+        assert_eq!(
+            commit.previous_commit_ref.as_ref(),
+            position
+                .checked_sub(1)
+                .map(|previous| &commits[previous].commit_id)
+        );
+    }
     assert_eq!(authority_root_count(&pool, &realm_id).await, 1);
     assert_eq!(bootstrap_singleton_count(&pool, &realm_id).await, 5);
+    // The only member of this closed founding unit is the creator, whose
+    // AccountId names the governing Station. The remote target set is empty.
+    assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
     let snapshot = store
         .realm_state_snapshot_material(&realm_id)
         .await

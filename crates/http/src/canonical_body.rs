@@ -200,12 +200,28 @@ mod tests {
         res.write_body(payload).expect("write echoed request body");
     }
 
+    #[handler]
+    async fn self_events_body_boundary(req: &mut Request, res: &mut Response) {
+        // Match the self/events ingress order: preserve exact bytes first,
+        // then retain Salvo's JSON Content-Type gate for typed decoding.
+        let exact = req.payload().await.unwrap().to_vec();
+        match req.parse_json::<serde_json::Value>().await {
+            Ok(_) => {
+                res.write_body(exact).unwrap();
+            }
+            Err(_) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
     fn canonical_body_test_service(max_wire_bytes: usize) -> Service {
         let router = Router::new()
             .hoop(SecureMaxSize::new(max_wire_bytes))
             .hoop(RequestWireSizeLimitMiddleware::new(max_wire_bytes))
             .hoop(CanonicalJsonBodyLimitMiddleware)
-            .push(Router::with_path("_arkret/peer/signal").post(echo_raw_body));
+            .push(Router::with_path("_arkret/peer/signal").post(echo_raw_body))
+            .push(Router::with_path("_arkret/self/events").post(self_events_body_boundary));
         Service::new(router)
     }
 
@@ -305,5 +321,32 @@ mod tests {
         assert_eq!(response.status_code, Some(StatusCode::PAYLOAD_TOO_LARGE));
         let response_body = response.take_string().await.unwrap();
         assert!(response_body.contains("payload_too_large"));
+    }
+
+    #[tokio::test]
+    async fn self_events_exact_body_capture_keeps_content_type_and_size_gates() {
+        let service = canonical_body_test_service(128);
+        let wrong_type = TestClient::post("http://server/_arkret/self/events")
+            .add_header("content-type", "text/plain", true)
+            .body("{}")
+            .send(&service)
+            .await;
+        assert_eq!(wrong_type.status_code, Some(StatusCode::BAD_REQUEST));
+
+        let oversize = TestClient::post("http://server/_arkret/self/events")
+            .add_header("content-type", "application/json", true)
+            .add_header("content-length", "129", true)
+            .body("{}")
+            .send(&service)
+            .await;
+        assert_eq!(oversize.status_code, Some(StatusCode::PAYLOAD_TOO_LARGE));
+
+        let mut admitted = TestClient::post("http://server/_arkret/self/events")
+            .add_header("content-type", "application/json", true)
+            .body("{\"value\":1}")
+            .send(&service)
+            .await;
+        assert_eq!(admitted.status_code, Some(StatusCode::OK));
+        assert_eq!(admitted.take_string().await.unwrap(), "{\"value\":1}");
     }
 }

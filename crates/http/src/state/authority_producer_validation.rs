@@ -8,7 +8,7 @@ use arkret_models_identity::session_credential::{
     SessionGrantCredentialClass, SessionGrantHolderBinding,
 };
 use arkret_wire::{AccountId, ActorId, DeviceId, Did, Event};
-use soland_services::identity::SessionIdentityState;
+use soland_services::identity::{SessionGrantAuthorizationState, SessionIdentityState};
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::SelfProducerCommitGuard;
 
@@ -28,6 +28,22 @@ fn method_device_id(
         return None;
     }
     DeviceId::new(fragment.to_owned()).ok()
+}
+
+fn standard_grant_for_account<'a>(
+    session: &'a SessionIdentityState,
+    account: &AccountId,
+) -> ServiceResult<&'a SessionGrantAuthorizationState> {
+    let grant = session
+        .session_grant
+        .as_ref()
+        .ok_or_else(|| rejected("self Event needs an authenticated standard grant"))?;
+    if grant.credential_class != SessionGrantCredentialClass::Standard
+        || grant.account_id != *account
+    {
+        return Err(rejected("self Event grant does not bind the exact Account"));
+    }
+    Ok(grant)
 }
 
 pub(crate) async fn verify_self_event_producer(
@@ -52,15 +68,7 @@ pub(crate) async fn verify_self_event_producer(
         .producer_proof
         .as_ref()
         .ok_or_else(|| ServiceError::SchemaViolation("self Event has no producer proof".into()))?;
-    let grant = session
-        .session_grant
-        .as_ref()
-        .ok_or_else(|| rejected("self Event needs an authenticated standard grant"))?;
-    if grant.credential_class != SessionGrantCredentialClass::Standard
-        || grant.account_id != *account
-    {
-        return Err(rejected("self Event grant does not bind the exact Account"));
-    }
+    let grant = standard_grant_for_account(session, account)?;
     let (key, guard) = match &grant.holder_binding {
         SessionGrantHolderBinding::HumanDevice { .. } => {
             human_producer_key(state, session, account, proof).await?
@@ -247,6 +255,29 @@ async fn human_producer_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_bearer_session_without_grant_cannot_produce_self_event() {
+        let account = AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        let now = chrono::Utc::now();
+        let session = SessionIdentityState {
+            token_hash: "local-only".to_owned(),
+            account_pk: None,
+            actor: account.principal_id.as_str().to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-0000000000a1".to_owned(),
+            audience: account.station_id.as_str().to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now + chrono::Duration::hours(1),
+            created_at: now,
+            revoked_at: None,
+        };
+        assert!(standard_grant_for_account(&session, &account).is_err());
+    }
 
     #[test]
     fn human_method_must_name_the_exact_account_did_and_device_fragment() {

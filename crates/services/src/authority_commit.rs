@@ -1086,6 +1086,7 @@ pub trait AuthorityProtocolPort: Send + Sync {
         &self,
         _session: &crate::identity::SessionIdentityState,
         _request: OrdinaryRealmBootstrapUnitSubmission,
+        _exact_request_body: &[u8],
     ) -> ServiceResult<OrdinaryRealmBootstrapAcceptanceOutcome> {
         Err(crate::ServiceError::internal(
             "ordinary Realm bootstrap is not connected to the authority transaction path",
@@ -1109,6 +1110,7 @@ pub trait AuthorityProtocolPort: Send + Sync {
         &self,
         session: &crate::identity::SessionIdentityState,
         request: SelfAuthoritySubmitRequest,
+        exact_request_body: &[u8],
     ) -> ServiceResult<SelfAuthoritySubmitOutcome> {
         request.validate().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!(
@@ -1124,7 +1126,7 @@ pub trait AuthorityProtocolPort: Send + Sync {
             }
             SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(value) => {
                 SelfAuthoritySubmitOutcome::OrdinaryRealmBootstrap(
-                    self.submit_self_ordinary_realm_bootstrap(session, value)
+                    self.submit_self_ordinary_realm_bootstrap(session, value, exact_request_body)
                         .await?,
                 )
             }
