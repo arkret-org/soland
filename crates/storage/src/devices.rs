@@ -155,14 +155,3 @@ pub fn fresh_device_message_ack_token() -> String {
     bytes.extend_from_slice(Uuid::new_v4().as_bytes());
     URL_SAFE_NO_PAD.encode(bytes)
 }
-#[doc(hidden)]
-pub fn ensure_device_message_id(message: &mut DeviceMessageRecord) {
-    if let Some(content) = message.content.as_object_mut()
-        && !content.contains_key("device_message_id")
-    {
-        content.insert(
-            "device_message_id".to_owned(),
-            Value::String(crate::ids::generate("device_message")),
-        );
-    }
-}

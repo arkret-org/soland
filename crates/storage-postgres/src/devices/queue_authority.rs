@@ -238,13 +238,9 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
 }
 
 pub(super) fn validate_recipient(message: &DeviceMessageRecord) -> PersistenceResult<()> {
-    let source = &message.recipient_device_authorization;
-    if source.principal_id.as_str() != message.recipient || source.device_id != message.device_id {
-        return Err(PersistenceError::SchemaViolation(
-            "queue recipient differs from its original authorization".into(),
-        ));
-    }
-    Ok(())
+    message
+        .validate_binding()
+        .map_err(|error| PersistenceError::SchemaViolation(error.into()))
 }
 
 /// Caller holds the shared queue writer lock. Count both delivery branches

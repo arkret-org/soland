@@ -509,8 +509,11 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
                 device_id: device_a.clone(),
                 recipient_device_authorization: authorization_a.clone(),
                 position: 1,
-                content: serde_json::json!({"type": "ak.test.device_message"}),
-                created_at: chrono::Utc::now(),
+                envelope: soland_storage::contract_tests::test_device_message_envelope(
+                    &authorization_a,
+                    &authorization_a,
+                    chrono::Utc::now(),
+                ),
             },
         )
         .await
@@ -527,8 +530,11 @@ async fn hard_logout_removes_push_registration_and_to_device_queue_for_device_bo
                 device_id: device_b.clone(),
                 recipient_device_authorization: authorization_b.clone(),
                 position: 2,
-                content: serde_json::json!({"type": "ak.test.device_message"}),
-                created_at: chrono::Utc::now(),
+                envelope: soland_storage::contract_tests::test_device_message_envelope(
+                    &authorization_b,
+                    &authorization_b,
+                    chrono::Utc::now(),
+                ),
             },
         )
         .await

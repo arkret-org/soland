@@ -174,10 +174,17 @@ pub async fn assert_device_message_snapshot_guard_contract(
                         authorization_b.clone()
                     },
                     position: index as i64 + 1,
-                    content: serde_json::json!({"kind":"ak.agent.runtime.command","content":{}}),
                     // The queue must retain an unacknowledged delivery even
                     // after the former one-hour expiry window has elapsed.
-                    created_at: now - Duration::hours(2),
+                    envelope: test_device_message_envelope(
+                        authorization_a,
+                        if index == 0 {
+                            authorization_a
+                        } else {
+                            authorization_b
+                        },
+                        now - Duration::hours(2),
+                    ),
                 }),
             })
             .collect(),
@@ -285,6 +292,46 @@ pub async fn assert_device_message_snapshot_guard_contract(
             .len(),
         1
     );
+}
+
+/// Complete closed human-device `DeviceMessageEnvelope` for queue contract
+/// fixtures. The sender and recipient come from real device authorization
+/// selectors; `sent_at` is floored to the canonical millisecond wire value.
+pub fn test_device_message_envelope(
+    sender: &DeviceRevocationGateSelector,
+    recipient: &DeviceRevocationGateSelector,
+    sent_at: chrono::DateTime<Utc>,
+) -> arkret_models_collaboration::device_messages::DeviceMessageEnvelope {
+    use arkret_models_collaboration::device_messages::{
+        DeviceMessageEnvelope, DeviceMessageSender,
+    };
+    let sent_at = arkret_canonical::normalize_timestamp_canonical(sent_at);
+    DeviceMessageEnvelope {
+        device_message_id: arkret_wire::DeviceMessageId::new(crate::ids::generate(
+            "device_message",
+        ))
+        .expect("generated device message id"),
+        kind: arkret_wire::ProtocolKind::new("ak.test.device_message")
+            .expect("test device message kind"),
+        sender: DeviceMessageSender::Account {
+            sender_account_id: arkret_wire::AccountId::new(
+                sender.principal_id.clone(),
+                sender.station_id.clone(),
+            ),
+            sender_device_id: arkret_wire::DeviceId::new(sender.device_id.clone())
+                .expect("sender selector carries a typed device id"),
+        },
+        recipient_account_id: arkret_wire::AccountId::new(
+            recipient.principal_id.clone(),
+            recipient.station_id.clone(),
+        ),
+        recipient_device_id: arkret_wire::DeviceId::new(recipient.device_id.clone())
+            .expect("recipient selector carries a typed device id"),
+        sent_at,
+        expires_at: sent_at + Duration::hours(1),
+        content: BTreeMap::new(),
+        unsigned: None,
+    }
 }
 
 fn database_timestamp_now() -> chrono::DateTime<Utc> {

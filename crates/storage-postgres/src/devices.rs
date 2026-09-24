@@ -10,8 +10,8 @@ use super::{
     DeviceRevocationGateStatus, Integer, JsonPayloadRow, Jsonb, MaxSeqRow, Nullable,
     OneTimeKeyStore, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
     PgTransactionError, QueryableByName, RecipientDeliveryRecord, RecipientQueueSelector,
-    RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, ensure_device_message_id,
-    fresh_device_message_ack_token, pg_conn, sql_query, sql_types,
+    RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, fresh_device_message_ack_token,
+    pg_conn, sql_query, sql_types,
 };
 pub struct PgDeviceMessageStore {
     pub pool: PgPool,
@@ -38,7 +38,7 @@ struct DeviceMessageRow {
 impl TryFrom<DeviceMessageRow> for DeviceMessageRecord {
     type Error = PersistenceError;
     fn try_from(row: DeviceMessageRow) -> PersistenceResult<Self> {
-        Ok(Self {
+        let record = Self {
             idempotency_key: row.idempotency_key,
             sender: row.sender,
             recipient: row.recipient,
@@ -48,9 +48,21 @@ impl TryFrom<DeviceMessageRow> for DeviceMessageRecord {
             )
             .map_err(PersistenceError::database)?,
             position: row.position,
-            content: row.content,
-            created_at: row.created_at,
-        })
+            envelope: serde_json::from_value(row.content).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "queued DeviceMessage is not a closed envelope: {error}"
+                ))
+            })?,
+        };
+        record
+            .validate_binding()
+            .map_err(|error| PersistenceError::SchemaViolation(error.into()))?;
+        if record.envelope.sent_at != row.created_at {
+            return Err(PersistenceError::SchemaViolation(
+                "queued DeviceMessage sent_at differs from its enqueue time".into(),
+            ));
+        }
+        Ok(record)
     }
 }
 #[derive(QueryableByName)]
@@ -94,10 +106,9 @@ impl DeviceMessageStore for PgDeviceMessageStore {
     async fn append(
         &self,
         device_revocation_gate: Option<&DeviceRevocationGateSelector>,
-        mut message: DeviceMessageRecord,
+        message: DeviceMessageRecord,
         per_device_queue_capacity: usize,
     ) -> PersistenceResult<()> {
-        ensure_device_message_id(&mut message);
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -135,8 +146,8 @@ impl DeviceMessageStore for PgDeviceMessageStore {
             .bind::<Text, _>(&message.sender)
             .bind::<Text, _>(&message.recipient)
             .bind::<Text, _>(&message.device_id)
-            .bind::<Jsonb, _>(&message.content)
-            .bind::<Timestamptz, _>(message.created_at)
+            .bind::<Jsonb, _>(serde_json::to_value(&message.envelope).map_err(PersistenceError::database)?)
+            .bind::<Timestamptz, _>(message.envelope.sent_at)
             .bind::<Jsonb, _>(serde_json::to_value(&message.recipient_device_authorization).map_err(PersistenceError::database)?)
             .execute(&mut *conn)
             .await
@@ -371,9 +382,10 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 .await
                 .map_err(PersistenceError::database)?;
                 outcomes.insert(item.message_key, delivered);
-                let Some(mut message) = item.message else {
+                let Some(message) = item.message else {
                     continue;
                 };
+                queue_authority::validate_recipient(&message)?;
                 crate::ensure_gate_allowed_in_transaction(conn, &message.recipient_device_authorization).await?;
                 if !queue_authority::human_queue_has_capacity_in_transaction(
                     conn,
@@ -384,7 +396,6 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 {
                     return Ok(DeviceMessageBatchCommitOutcome::QueueAtCapacity);
                 }
-                ensure_device_message_id(&mut message);
                 sql_query(
                     "INSERT INTO device_messages \
                      (id, idempotency_key, sender, recipient, device_id, position, content, created_at, recipient_device_authorization) \
@@ -395,8 +406,8 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 .bind::<Text, _>(&message.sender)
                 .bind::<Text, _>(&message.recipient)
                 .bind::<Text, _>(&message.device_id)
-                .bind::<Jsonb, _>(&message.content)
-                .bind::<Timestamptz, _>(message.created_at)
+                .bind::<Jsonb, _>(serde_json::to_value(&message.envelope).map_err(PersistenceError::database)?)
+                .bind::<Timestamptz, _>(message.envelope.sent_at)
             .bind::<Jsonb, _>(serde_json::to_value(&message.recipient_device_authorization).map_err(PersistenceError::database)?)
                 .execute(&mut *conn)
                 .await

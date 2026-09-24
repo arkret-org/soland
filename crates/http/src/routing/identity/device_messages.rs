@@ -159,6 +159,8 @@ pub(crate) fn station_device_message_sender(state: &AppState) -> DeviceMessageSe
 struct PreparedDeviceMessageTarget {
     recipient: String,
     device_id: String,
+    recipient_id: arkret_wire::DidCoreId,
+    recipient_device_id: arkret_wire::DeviceId,
     target: DeviceMessageTarget,
     message_key: String,
     intent_digest: String,
@@ -273,6 +275,8 @@ async fn send_device_messages(
             prepared_targets.push(PreparedDeviceMessageTarget {
                 recipient: recipient.to_string(),
                 device_id: device_id.to_string(),
+                recipient_id: recipient.clone(),
+                recipient_device_id: device_id.clone(),
                 target,
                 message_key,
                 intent_digest,
@@ -351,15 +355,33 @@ async fn send_device_messages(
             }
             let deliverable = target_verified;
             if deliverable {
-                let created_at = now();
-                let mut content = serde_json::to_value(&prepared.target)
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                if let Some(object) = content.as_object_mut() {
+                // The queue materializes `sent_at` at enqueue; the persisted
+                // row and every later read carry this exact closed envelope.
+                let envelope = DeviceMessageEnvelope {
+                    device_message_id: prepared.target.device_message_id.clone(),
+                    kind: prepared.target.kind.clone(),
                     // The send surface is device-authenticated, so the queued
-                    // body records the `device` branch of the §8.2.1 sender XOR.
-                    object.insert("sender_account_id".to_owned(), json!(sender_account_id));
-                    object.insert("sender_device_id".to_owned(), json!(session.device_id));
-                }
+                    // envelope records the human-device sender branch.
+                    sender: DeviceMessageSender::Account {
+                        sender_account_id: sender_account_id.clone(),
+                        sender_device_id: arkret_wire::DeviceId::new(session.device_id.clone())
+                            .map_err(|_| {
+                                AppError::capability_denied(
+                                    "to-device send requires a typed sender device",
+                                )
+                                .with_wire_code("device_unauthorized")
+                            })?,
+                    },
+                    recipient_account_id: arkret_wire::AccountId::new(
+                        prepared.recipient_id.clone(),
+                        state.service_core_id().clone(),
+                    ),
+                    recipient_device_id: prepared.recipient_device_id.clone(),
+                    sent_at: arkret_canonical::normalize_timestamp_canonical(now()),
+                    expires_at: prepared.target.expires_at,
+                    content: prepared.target.content.clone(),
+                    unsigned: None,
+                };
                 Some(DeviceMessageState {
                     idempotency_key: idempotency_key.clone(),
                     sender: session.actor.clone(),
@@ -371,8 +393,7 @@ async fn send_device_messages(
                     )
                     .await?,
                     position: state.next_to_device_position(),
-                    content,
-                    created_at,
+                    envelope,
                 })
             } else {
                 None
@@ -517,7 +538,7 @@ pub(crate) async fn fanout_actor_private_update(
     update: ActorPrivateDeviceUpdate,
 ) -> usize {
     let event_type = update.kind();
-    let created_at = update.created_at();
+    let created_at = arkret_canonical::normalize_timestamp_canonical(update.created_at());
     let sender = match &update {
         ActorPrivateDeviceUpdate::AccountData { sender, .. }
         | ActorPrivateDeviceUpdate::Blocklist { sender, .. }
@@ -640,13 +661,6 @@ pub(crate) async fn fanout_actor_private_update(
             content: content.clone(),
             unsigned: None,
         };
-        let envelope = match serde_json::to_value(envelope) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                tracing::error!(%error, actor, "failed to serialize actor-private envelope");
-                continue;
-            }
-        };
         let idempotency_key = format!("{event_type}:{actor}:{sender_endpoint_id}:{position}");
         match state
             .deliveries()
@@ -659,8 +673,7 @@ pub(crate) async fn fanout_actor_private_update(
                     device_id: device.device_id,
                     recipient_device_authorization,
                     position,
-                    content: envelope.clone(),
-                    created_at,
+                    envelope,
                 },
                 state.config().to_device_queue_capacity,
             )
@@ -891,12 +904,9 @@ fn device_message_envelope_from_record(
 ) -> Option<DeviceMessageEnvelope> {
     // Queue rows carry a complete closed envelope. Never repair missing
     // sender, recipient, or expiry fields while serving authenticated reads.
-    let envelope: DeviceMessageEnvelope = serde_json::from_value(message.content.clone()).ok()?;
-    if envelope.recipient_account_id.principal_id.as_str() != message.recipient
-        || envelope.recipient_account_id.station_id != state.service_core_id()
-        || envelope.recipient_device_id.as_str() != message.device_id
-        || envelope.sent_at != message.created_at
-    {
+    message.validate_binding().ok()?;
+    let envelope = message.envelope.clone();
+    if envelope.recipient_account_id.station_id != state.service_core_id() {
         return None;
     }
     if matches!(

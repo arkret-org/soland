@@ -466,8 +466,35 @@ pub struct DeviceMessageRecord {
     /// Private immutable authorization of the intended recipient instance.
     pub recipient_device_authorization: DeviceRevocationGateSelector,
     pub position: i64,
-    pub content: Value,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// The complete closed `DeviceMessageEnvelope` served to the recipient.
+    /// The queue persists exactly this shape; its `sent_at` is the queue's
+    /// materialized enqueue time and `recipient_*` must equal the row's
+    /// recipient endpoint (see [`DeviceMessageRecord::validate_binding`]).
+    pub envelope: arkret_models_collaboration::device_messages::DeviceMessageEnvelope,
+}
+
+impl DeviceMessageRecord {
+    /// Closed binding between the queue row columns, the recipient's original
+    /// device authorization, and the stored envelope. Writers and readers
+    /// apply the same check so a queue row can never be served under another
+    /// endpoint or with a repaired envelope.
+    pub fn validate_binding(&self) -> Result<(), &'static str> {
+        let source = &self.recipient_device_authorization;
+        if source.principal_id.as_str() != self.recipient || source.device_id != self.device_id {
+            return Err("queue recipient differs from its original authorization");
+        }
+        let envelope = &self.envelope;
+        if envelope.recipient_account_id.principal_id != source.principal_id
+            || envelope.recipient_account_id.station_id != source.station_id
+            || envelope.recipient_device_id.as_str() != self.device_id
+        {
+            return Err("DeviceMessage envelope differs from its queue recipient");
+        }
+        if arkret_canonical::normalize_timestamp_canonical(envelope.sent_at) != envelope.sent_at {
+            return Err("DeviceMessage sent_at is not a canonical millisecond timestamp");
+        }
+        Ok(())
+    }
 }
 
 /// The two closed recipient-delivery objects share one ordered cursor and
