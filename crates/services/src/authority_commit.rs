@@ -1500,6 +1500,7 @@ mod tests {
             }],
             current_state_entries: vec![arkret_wire::TypedCurrentResult::Value {
                 selector: arkret_wire::CurrentSelector::RealmPolicy,
+                source_stream_ref: stream_ref.clone(),
                 revision: arkret_wire::CurrentRevision {
                     commit_id: arkret_wire::RealmCommitId::from_digest([0x22; 32]),
                     stream_position: 7,
