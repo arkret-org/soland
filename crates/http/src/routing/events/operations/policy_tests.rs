@@ -730,12 +730,32 @@ fn act_on_behalf_message(
     )
 }
 
+/// Project a private Agent request as `Approved` whose confirmation is an
+/// Event nobody committed. The private projection alone must never authorize.
 fn insert_approved_agent_action(
     state: &AppState,
     message: &Operation,
     request_id: &str,
     agent_id: &str,
     approval_nonce: &str,
+) {
+    insert_resolved_agent_action(
+        state,
+        message,
+        request_id,
+        agent_id,
+        approval_nonce,
+        "ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5",
+    );
+}
+
+fn insert_resolved_agent_action(
+    state: &AppState,
+    message: &Operation,
+    request_id: &str,
+    agent_id: &str,
+    approval_nonce: &str,
+    resolution_event_id: &str,
 ) {
     state.test_projection().lock().agent_action_requests.insert(
         request_id.to_owned(),
@@ -751,9 +771,7 @@ fn insert_approved_agent_action(
             status: soland_domain::reducer::AgentActionRequestStatus::Approved,
             requested_at: message.created_at - chrono::Duration::minutes(1),
             resolved_at: Some(message.created_at),
-            resolution_event_id: Some(
-                "ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5".to_owned(),
-            ),
+            resolution_event_id: Some(resolution_event_id.to_owned()),
             cancel_reason: None,
             approval: Some(soland_domain::reducer::AgentActionApprovalProjection {
                 approval_id: "ak:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
@@ -1610,6 +1628,178 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         validate_agent_reply_participation(&state, &[message])
             .await
             .unwrap_err(),
+        "dependency_missing"
+    );
+}
+
+/// Commit one controller `ak.agent.action_approve` in `realm_id` through the
+/// governing Station's authority path, exactly as admission leaves it.
+async fn commit_agent_action_approval(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    controller: &str,
+    controller_did: &str,
+    payload: serde_json::Value,
+) -> arkret_wire::EventId {
+    let station = crate::test_event::station_id();
+    state
+        .authority_commits()
+        .install_genesis_authority(&soland_storage::CurrentRealmAuthority {
+            realm_id: realm_id.clone(),
+            generation: 0,
+            service_id: station.clone(),
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                realm_id.event_id(),
+            ),
+            last_handoff_ref: None,
+        })
+        .await
+        .expect("genesis authority installs");
+    let mut event = crate::test_event::raw_event(
+        arkret_wire::EventKind::AgentActionApprove.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        arkret_wire::DidCoreId::new(controller).unwrap(),
+        0,
+        arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+        payload,
+    )
+    .unwrap();
+    crate::test_event::attach_structural_only_producer_proof(
+        &mut event,
+        arkret_wire::DidUrl::new(format!("{controller_did}#key-1")).unwrap(),
+    );
+    let outcome = state
+        .authority_commits()
+        .admit_event(
+            &event,
+            &station,
+            state.service_verification_method("notary-key").unwrap(),
+            state.notary_signing_key().as_ref(),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("controller confirmation commits");
+    assert!(matches!(
+        outcome,
+        soland_services::authority_commit::AuthorityEventAdmissionOutcome::Committed(_)
+    ));
+    event.event_id
+}
+
+const CONFIRMED_APPROVAL_NONCE: &str = "Q29uZmlybWVkQXBwcm92YWxOb25jZQ";
+
+fn agent_action_approve_payload(
+    realm_id: &arkret_identifiers::RealmId,
+    request_id: &str,
+    agent_id: &str,
+    approved_event_id: &arkret_wire::EventId,
+) -> serde_json::Value {
+    json!({
+        "approval_id": "ak:agent_approval:01904100-0000-7000-8000-0000000007aa",
+        "request_id": request_id,
+        "agent_id": agent_id,
+        "proposed_action": arkret_wire::EventKind::MessageCreate.as_str(),
+        "target": { "kind": "realm", "realm_id": realm_id.as_str() },
+        "approved_event_id": approved_event_id.as_str(),
+        "approval_nonce": CONFIRMED_APPROVAL_NONCE,
+        "approved_at": "2026-01-01T00:00:00.000Z",
+        "expires_at": "2027-01-01T00:00:00.000Z"
+    })
+}
+
+async fn act_on_behalf_with_committed_confirmation(
+    realm_seed: u8,
+    seed: &str,
+    request_id: &str,
+    confirm: impl FnOnce(&Operation, &mut serde_json::Value) -> (&'static str, &'static str),
+) -> Result<(), &'static str> {
+    let state = test_state();
+    let realm_id = arkret_identifiers::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [realm_seed; 32],
+    ));
+    let agent = AGENT_CORE_ID;
+    register_agent_selection(&state, &realm_id, agent, true, true).await;
+    let grant = install_projected_grant(
+        state.authorization(),
+        realm_id.to_string(),
+        "ak:did_core:web:alice.example".to_owned(),
+        agent.to_owned(),
+        realm_id.to_string(),
+        vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
+        Vec::new(),
+    );
+    let message = act_on_behalf_message(
+        realm_id.clone(),
+        seed,
+        agent,
+        Some(grant.grant_id.as_str()),
+        Some((request_id, CONFIRMED_APPROVAL_NONCE)),
+    );
+    let mut payload =
+        agent_action_approve_payload(&realm_id, request_id, agent, &message.context.event_id);
+    let (controller, controller_did) = confirm(&message, &mut payload);
+    let confirmation =
+        commit_agent_action_approval(&state, &realm_id, controller, controller_did, payload).await;
+    insert_resolved_agent_action(
+        &state,
+        &message,
+        request_id,
+        agent,
+        CONFIRMED_APPROVAL_NONCE,
+        confirmation.as_str(),
+    );
+    validate_agent_reply_participation(&state, &[message]).await
+}
+
+#[tokio::test]
+async fn act_on_behalf_committed_controller_confirmation_authorizes_exact_event() {
+    act_on_behalf_with_committed_confirmation(0x75, "000000000705", "request-705", |_, _| {
+        (ALICE_CORE_ID, ALICE_DID)
+    })
+    .await
+    .expect("the exact committed controller confirmation authorizes this Event");
+}
+
+#[tokio::test]
+async fn act_on_behalf_committed_confirmation_of_another_event_is_missing() {
+    // The private request claims this Event, but the committed confirmation
+    // consumed the nonce for a different one.
+    assert_eq!(
+        act_on_behalf_with_committed_confirmation(
+            0x76,
+            "000000000706",
+            "request-706",
+            |_, payload| {
+                payload["approved_event_id"] = json!(
+                    arkret_wire::EventId::from_digest(
+                        arkret_canonical::DigestSuite::Sha256,
+                        [0x96; 32]
+                    )
+                    .as_str()
+                );
+                (ALICE_CORE_ID, ALICE_DID)
+            },
+        )
+        .await
+        .unwrap_err(),
+        "dependency_missing"
+    );
+}
+
+#[tokio::test]
+async fn act_on_behalf_confirmation_committed_by_another_account_is_missing() {
+    // A committed approval only counts when the Event sender, as controller,
+    // issued it; another Account's confirmation cannot stand in.
+    assert_eq!(
+        act_on_behalf_with_committed_confirmation(0x77, "000000000707", "request-707", |_, _| (
+            "ak:did_core:webvh:z6mkbob",
+            "did:webvh:z6mkbob:bob.example"
+        ),)
+        .await
+        .unwrap_err(),
         "dependency_missing"
     );
 }

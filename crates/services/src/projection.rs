@@ -90,6 +90,17 @@ pub struct InviteClaimProofContext {
     pub invite_digest: String,
 }
 
+/// A private Agent request's claim that one controller confirmation approved
+/// an Operation. It is an index into durable state, never authority by itself.
+#[derive(Clone, Debug)]
+pub struct ProjectedAgentActionApproval {
+    /// The `ak.agent.action_approve` Event that resolved the request.
+    pub approval_event_id: arkret_wire::EventId,
+    pub controller_account_id: arkret_wire::AccountId,
+    pub request_id: String,
+    pub approval: soland_domain::reducer::AgentActionApprovalProjection,
+}
+
 #[derive(Clone, Debug)]
 pub enum MlsProjectionEffect {
     KeyPackagePublished {
@@ -397,14 +408,17 @@ impl ProjectionService {
         }))
     }
 
-    /// Confirm that an accepted `ak.agent.action.approve` authorizes exactly
-    /// this Operation.
+    /// Locate the controller confirmation this private Agent request claims
+    /// authorizes exactly this Operation.
     ///
-    /// The approval lives in the committed reducer projection: one request
-    /// resolves once, and the approval it carries names the exact approved
-    /// Event, nonce, agent, action and target. Nothing here re-derives an
-    /// order of its own; the projection only holds Events the current
-    /// governance Station has already committed.
+    /// `agent_action_requests` is the Agent's private draft/request state; it
+    /// derives from the confirmation, it is not the confirmation. A match here
+    /// only names the `ak.agent.action_approve` Event to read: the caller MUST
+    /// then prove that exact Event is committed in the target Realm with the
+    /// same nonce, approved Event, agent, action and target
+    /// (`constraint-schema.md` §9.2.6, `conformance-profiles.md` Agent draft
+    /// approval). Returning success from this projection alone would let a
+    /// private approval stand in for the exact consumed confirmation.
     pub async fn validate_agent_action_approval(
         &self,
         operation: &Operation,
@@ -413,7 +427,7 @@ impl ProjectionService {
         approval_nonce: &str,
         action: &str,
         _now: DateTime<Utc>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<ProjectedAgentActionApproval, &'static str> {
         let state = self.state.lock();
         let request = state
             .agent_action_requests
@@ -437,7 +451,17 @@ impl ProjectionService {
         if !agent_action_target_matches(&approval.target, operation) {
             return Err("agent_act_on_behalf_approval_target_mismatch");
         }
-        Ok(())
+        let approval_event_id = request
+            .resolution_event_id
+            .as_deref()
+            .and_then(|event_id| arkret_wire::EventId::new(event_id).ok())
+            .ok_or("dependency_missing")?;
+        Ok(ProjectedAgentActionApproval {
+            approval_event_id,
+            controller_account_id: request.controller_account_id.clone(),
+            request_id: request.request_id.clone(),
+            approval: approval.clone(),
+        })
     }
 
     pub fn stage_realm_bootstrap(

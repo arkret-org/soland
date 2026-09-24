@@ -374,7 +374,7 @@ impl ProjectionState {
             };
             request.status = status;
             request.resolved_at = Some(operation.created_at);
-            request.resolution_event_id = Some(operation.operation_id.to_string());
+            request.resolution_event_id = Some(operation.context.event_id.to_string());
             request.cancel_reason = None;
             request.approval = approval;
         }
@@ -415,7 +415,7 @@ impl ProjectionState {
                 ) => {
                     request.status = AgentActionRequestStatus::Cancelled;
                     request.resolved_at = Some(operation.created_at);
-                    request.resolution_event_id = Some(operation.operation_id.to_string());
+                    request.resolution_event_id = Some(operation.context.event_id.to_string());
                     request.cancel_reason = Some("agent_deactivated".to_owned());
                 }
                 _ => {}

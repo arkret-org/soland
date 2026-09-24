@@ -378,7 +378,7 @@ pub(super) async fn validate_agent_act_on_behalf_approval(
         .ok_or("agent_act_on_behalf_approval_nonce_missing")?;
     let action = agent_participation_action(operation)
         .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
-    state
+    let projected = state
         .projections()
         .validate_agent_action_approval(
             operation,
@@ -388,7 +388,62 @@ pub(super) async fn validate_agent_act_on_behalf_approval(
             action.as_str(),
             chrono::Utc::now(),
         )
+        .await?;
+    require_committed_agent_action_approval(state, operation, agent_id, &projected).await
+}
+
+/// The private request projection only names a confirmation. Publication is
+/// authorized by the exact `ak.agent.action_approve` Event the governing
+/// Station committed in the target Realm: that confirmation consumed the
+/// controller's nonce for this complete `approved_event_id` and nothing else
+/// (`constraint-schema.md` §9.2.6; `event-payload.schema.json`
+/// `agent_action_approve_payload`). Anything short of that exact committed
+/// Event is a missing dependency, so the gate fails closed.
+async fn require_committed_agent_action_approval(
+    state: &AppState,
+    operation: &Operation,
+    agent_id: &str,
+    projected: &soland_services::projection::ProjectedAgentActionApproval,
+) -> Result<(), &'static str> {
+    let committed = state
+        .authority_commits()
+        .committed_event(&projected.approval_event_id)
         .await
+        .map_err(|_| "dependency_missing")?
+        .ok_or("dependency_missing")?;
+    let event = &committed.event;
+    if event.event_id != projected.approval_event_id
+        || committed.commit.event_ref != projected.approval_event_id
+        || event.kind != arkret_wire::EventKind::AgentActionApprove
+        || event.realm_id != operation.realm_id
+        || committed.commit.realm_id != operation.realm_id
+        || event.executed_by.is_some()
+        || event.actor_id.as_account_id() != Some(&projected.controller_account_id)
+        || operation.context.sender.as_account_id() != Some(&projected.controller_account_id)
+    {
+        return Err("dependency_missing");
+    }
+    let payload = serde_json::to_value(&event.payload).map_err(|_| "dependency_missing")?;
+    let confirmed: arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload =
+        serde_json::from_value(payload.clone()).map_err(|_| "dependency_missing")?;
+    let approval = &projected.approval;
+    let request_matches = confirmed
+        .request_id
+        .as_deref()
+        .or(confirmed.draft_id.as_deref())
+        == Some(projected.request_id.as_str());
+    if !request_matches
+        || confirmed.agent_id.as_str() != agent_id
+        || confirmed.approval_id != approval.approval_id
+        || confirmed.approval_nonce != approval.approval_nonce
+        || confirmed.approved_event_id != operation.context.event_id
+        || confirmed.approved_event_id != approval.approved_event_id
+        || confirmed.proposed_action != approval.proposed_action
+        || payload.get("target") != Some(&approval.target)
+    {
+        return Err("dependency_missing");
+    }
+    Ok(())
 }
 
 pub(super) fn operation_agent_context(operation: &Operation) -> Option<&Value> {
