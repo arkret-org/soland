@@ -1129,6 +1129,20 @@ async fn commit_transaction_in_connection_with_device_guard(
         Some(previous) => {
             let previous_commit: arkret_wire::RealmCommit =
                 decode_json(previous.commit_json, "previous RealmCommit")?;
+            // The Station assigns the order (authority-commit-log.md §2/§4):
+            // another Commit won this stream after the candidate was built on
+            // an older head. Nothing is committed and the exact Event may be
+            // retried, so this is `retryable_unavailable`, never a schema fault.
+            if previous_commit.stream_ref == transaction.commit.stream_ref
+                && previous_commit.stream_position >= transaction.commit.stream_position
+            {
+                return Err(PersistenceError::Conflict(format!(
+                    "{}: stream head advanced to position {} before this RealmCommit",
+                    soland_storage::ConflictCode::TemporarilyUnavailable.as_str(),
+                    previous_commit.stream_position
+                ))
+                .into());
+            }
             transaction
                 .commit
                 .validate_successor_of(&previous_commit)

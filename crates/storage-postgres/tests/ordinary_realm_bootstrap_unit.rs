@@ -2807,3 +2807,120 @@ async fn moderation_report_row_refuses_the_single_member_disclosure_cut() {
         "{error}"
     );
 }
+
+async fn event_row_count(pool: &soland_storage_postgres::PgPool, event_id: &str) -> i64 {
+    let token = soland_storage::ids::parse_event_id(event_id).unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM canonical_events WHERE id=$1")
+        .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
+/// Real PostgreSQL: two self reports built on the same Realm-stream head race
+/// concurrently. Exactly one commits; the other loses the head CAS and answers
+/// the registered retryable `temporarily_unavailable` (authority-commit-log.md
+/// §4 `retryable_unavailable`) with zero Event, Commit, current and outbox
+/// writes. The exact same Event then commits once rebuilt on the new head.
+#[tokio::test]
+async fn concurrent_self_reports_on_one_stream_head_leave_one_winner_and_a_retryable_loser() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let reporter = default
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
+    let first = moderation_report_request(
+        &default,
+        &reporter,
+        report_payload(&realm_id, strand_id.as_str(), &reporter),
+    );
+    let mut second_payload = report_payload(&realm_id, realm_id.as_str(), &reporter);
+    second_payload["report_reason_code"] = serde_json::json!("harassment");
+    let second = moderation_report_request(&default, &reporter, second_payload.clone());
+    assert_eq!(
+        first.authority_commit.commit.stream_position,
+        second.authority_commit.commit.stream_position
+    );
+
+    let first_uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let second_uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let (first_result, second_result) = tokio::join!(
+        first_uow.commit_event(first.clone()),
+        second_uow.commit_event(second.clone())
+    );
+    let (winner, loser, error) = match (first_result, second_result) {
+        (Ok(_), Err(error)) => (&first, &second, error),
+        (Err(error), Ok(_)) => (&second, &first, error),
+        (first, second) => panic!(
+            "expected exactly one winner: first ok={} second ok={}",
+            first.is_ok(),
+            second.is_ok()
+        ),
+    };
+    assert_eq!(
+        error.conflict_code(),
+        Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+        "{error}"
+    );
+    assert_eq!(
+        soland_services::ServiceError::from(error).conflict_code(),
+        Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+    );
+    let committed = store
+        .committed_event(&winner.authority_commit.event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.commit, winner.authority_commit.commit);
+    assert!(
+        store
+            .committed_event(&loser.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        event_row_count(&pool, loser.authority_commit.event.event_id.as_str()).await,
+        0
+    );
+    assert_eq!(report_row_count(&pool).await, 1);
+    assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
+
+    // Exact retry: the same signed Event, ordered by the Station on the new head.
+    let retried = moderation_report_request(
+        winner,
+        &reporter,
+        serde_json::to_value(&loser.authority_commit.event.payload).unwrap(),
+    );
+    assert_eq!(retried.authority_commit.event, loser.authority_commit.event);
+    uow.commit_event(retried.clone()).await.unwrap();
+    assert_eq!(report_row_count(&pool).await, 2);
+    assert_eq!(
+        store
+            .committed_event(&loser.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit
+            .stream_position,
+        winner.authority_commit.commit.stream_position + 1
+    );
+}
