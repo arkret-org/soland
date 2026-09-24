@@ -5,15 +5,16 @@
 //! every registered current family. This gate admits only the exact producer
 //! kinds whose complete result writes it can derive from accepted Events.
 
-use super::{
-    AsyncConnection, Bool, Jsonb, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RunQueryDsl, Text, Value, pg_conn, sql_query,
-};
 use arkret_wire::{
     ActorId, CommitStreamHead, CommitStreamRef, CurrentRevision, CurrentSelector, Event, EventKind,
     RealmCommit, RealmId, TypedCurrentResult,
 };
 use diesel::sql_types::Text as SqlText;
+
+use super::{
+    AsyncConnection, Bool, Jsonb, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    QueryableByName, RunQueryDsl, Text, Value, pg_conn, sql_query,
+};
 
 #[derive(QueryableByName)]
 struct CommittedRow {
@@ -39,7 +40,6 @@ struct PresenceRow {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arkret_wire::{
         AccountId, Base64UrlString, DetachedObjectSignature, DetachedSignatureAlgorithm,
         DetachedSignatureContext, DidCoreId, DidUrl, Discoverability, GenesisSalt, Hash,
@@ -48,6 +48,8 @@ mod tests {
     };
     use chrono::{TimeZone, Utc};
     use serde_json::json;
+
+    use super::*;
 
     fn fixture() -> (
         AccountId,
@@ -233,6 +235,17 @@ mod tests {
         }
         assert!(validate_single_member_bootstrap_cut(&material, &account, &accepted).is_err());
     }
+
+    #[test]
+    fn different_authority_or_scope_cannot_extend_the_founder_chain() {
+        let (account, material, mut accepted) = fixture();
+        accepted[1].0.authority_ref =
+            RealmCommitAuthorityRef::GenesisOrChangeEvent(accepted[1].1.event_id.clone());
+        assert!(validate_single_member_bootstrap_cut(&material, &account, &accepted).is_err());
+        let (account, material, mut accepted) = fixture();
+        accepted[1].1.scope_ref = ScopeRef::RealmGenesis;
+        assert!(validate_single_member_bootstrap_cut(&material, &account, &accepted).is_err());
+    }
 }
 
 /// Read both the candidate material and all permitted accepted Events from
@@ -386,6 +399,8 @@ pub(crate) fn validate_single_member_bootstrap_cut(
         ));
     }
     let actor = ActorId::account(account.clone());
+    let genesis_authority =
+        arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(accepted[0].1.event_id.clone());
     let mut expected = Vec::new();
     let mut previous = None;
     let mut strand_id = None;
@@ -407,6 +422,12 @@ pub(crate) fn validate_single_member_bootstrap_cut(
             || commit.previous_commit_ref != previous
             || commit.event_ref != event.event_id
             || commit.governance_generation != 0
+            || commit.authority_ref != genesis_authority
+            || (index > 0
+                && event.scope_ref
+                    != arkret_wire::ScopeRef::Realm {
+                        realm_id: material.realm_id.clone(),
+                    })
         {
             return Err(rejected(
                 "accepted Event/Commit history is not the closed single-owner chain",
