@@ -159,6 +159,12 @@ impl AuthorityProtocolPort for AppState {
         let producer_guard =
             super::authority_producer_validation::verify_self_event_producer(self, session, event)
                 .await?;
+        if event.kind == arkret_wire::EventKind::KeyBackupActiveSeries {
+            return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
+                self, &request,
+            )
+            .await;
+        }
         if !matches!(
             event.kind,
             arkret_wire::EventKind::StrandCreate

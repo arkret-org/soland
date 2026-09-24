@@ -1991,6 +1991,10 @@ pub trait KeyBackupPort: Send + Sync {
         device_id: &arkret_wire::DeviceId,
         now: DateTime<Utc>,
     ) -> ServiceResult<Option<arkret_models_crypto::BackupActiveSeriesState>>;
+    async fn commit_active_series_pointer(
+        &self,
+        write: soland_storage::KeyBackupActiveSeriesCommitWrite,
+    ) -> ServiceResult<soland_storage::KeyBackupActiveSeriesCommitOutcome>;
     async fn confirmed_active_series(
         &self,
         account_id: &AccountId,
@@ -2205,6 +2209,15 @@ impl KeyBackupService {
         self.backups
             .confirmed_active_series_for_device(account_id, device_id, now)
             .await
+    }
+
+    /// Accept one self-authored active-series pointer through the registered
+    /// same-cut PCR unit. The storage unit is the only admission authority.
+    pub async fn commit_active_series_pointer(
+        &self,
+        write: soland_storage::KeyBackupActiveSeriesCommitWrite,
+    ) -> ServiceResult<soland_storage::KeyBackupActiveSeriesCommitOutcome> {
+        self.backups.commit_active_series_pointer(write).await
     }
 
     pub async fn confirmed_list_page_for_device(

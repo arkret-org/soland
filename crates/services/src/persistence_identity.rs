@@ -1094,6 +1094,17 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
             .await?)
     }
 
+    async fn commit_active_series_pointer(
+        &self,
+        write: soland_storage::KeyBackupActiveSeriesCommitWrite,
+    ) -> crate::ServiceResult<soland_storage::KeyBackupActiveSeriesCommitOutcome> {
+        Ok(self
+            .0
+            .key_backups()
+            .commit_active_series_pointer(write)
+            .await?)
+    }
+
     async fn confirmed_active_series(
         &self,
         account_id: &arkret_wire::AccountId,

@@ -7,6 +7,7 @@ pub mod did_resolver_chain;
 mod account_authority_device_pairing;
 mod app_state;
 mod authority_bootstrap_validation;
+mod authority_key_backup_pointer;
 mod authority_port;
 mod authority_producer_validation;
 mod member_identity;

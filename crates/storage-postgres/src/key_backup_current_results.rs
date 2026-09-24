@@ -119,7 +119,7 @@ pub(crate) async fn commit_key_backup_pointer_in_connection(
         .transpose()
         .map_err(|error| invalid(error.to_string()))?;
     validate_key_backup_active_series_transition(prior_head.as_ref(), &record)
-        .map_err(|error| invalid(error.to_string()))?;
+        .map_err(|error| PersistenceError::Conflict(error.reason_code().to_owned()))?;
     if prior
         .as_ref()
         .is_some_and(|prior| record.series_pointer_version <= prior.series_pointer_version)
