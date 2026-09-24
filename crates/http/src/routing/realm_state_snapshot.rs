@@ -23,14 +23,20 @@ fn enforce_inline_snapshot_capacity<T: serde::Serialize>(
 pub(crate) async fn realm_state_snapshot_manifest_for_realm(
     state: &AppState,
     realm_id: &str,
+    account: &arkret_wire::AccountId,
 ) -> Result<arkret_wire::RealmStateSnapshot, soland_http::error::AppError> {
     let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
         .map_err(|_| soland_http::error::AppError::param_invalid("invalid realm_id"))?;
     let material = state
         .authority_commits()
-        .realm_state_snapshot_material(&realm_id)
+        .realm_state_snapshot_material_for_account(&realm_id, account)
         .await
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
+        .map_err(|_| {
+            crate::app_error!(
+                RealmStateSnapshotUnavailable,
+                "complete Account disclosure cannot be proved at this cut",
+            )
+        })?
         .ok_or_else(|| soland_http::error::AppError::not_found("not found"))?;
     let authority = state
         .authority_commits()

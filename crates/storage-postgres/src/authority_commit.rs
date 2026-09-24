@@ -2125,6 +2125,17 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn realm_state_snapshot_material_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+        crate::snapshot_disclosure_gate::single_member_bootstrap_snapshot_material(
+            &self.pool, realm_id, account,
+        )
+        .await
+    }
+
     async fn scan_stream(
         &self,
         request: &arkret_wire::StreamScanRequest,

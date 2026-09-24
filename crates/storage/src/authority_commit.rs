@@ -471,6 +471,15 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
 
+    /// Return snapshot material only when this exact Account's complete
+    /// disclosure can be proved at one durable cut. Unsupported Realm shapes
+    /// remain unavailable to the public snapshot endpoint.
+    async fn realm_state_snapshot_material_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
+
     /// Keyset page over one independent commit stream.
     ///
     /// The only paging key is `realm_commits.stream_position` inside the

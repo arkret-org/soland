@@ -762,12 +762,24 @@ pub(super) async fn realm_state_snapshot_head(
     {
         return Err(soland_http::error::AppError::not_found("not found"));
     }
-    // The current materializer has no authenticated-caller scope: it selects
-    // all Realm stream heads and only a subset of the persisted current
-    // families. A signed partial or over-disclosed snapshot cannot satisfy
-    // the v1 manifest contract, even when Realm-level access succeeds.
-    Err(crate::app_error!(
-        RealmStateSnapshotUnavailable,
-        "caller-scoped complete Realm snapshot materialization is unavailable",
-    ))
+    let actor = crate::routing::identity::session_actor::validated_session_actor(state, &session)
+        .await?;
+    let account = actor
+        .as_account_id()
+        .ok_or_else(|| soland_http::error::AppError::not_found("not found"))?;
+    let manifest = realm_state_snapshot_manifest_for_realm(state, &realm_id, account)
+        .await
+        .map_err(|error| {
+            if matches!(
+                error.code,
+                soland_http::error::ErrorCode::NotFound
+                    | soland_http::error::ErrorCode::PayloadTooLarge
+                    | soland_http::error::ErrorCode::InternalError
+            ) {
+                error
+            } else {
+                crate::app_error!(RealmStateSnapshotUnavailable, error.message,)
+            }
+        })?;
+    soland_http::result::json_ok(manifest)
 }

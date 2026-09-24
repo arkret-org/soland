@@ -932,6 +932,17 @@ impl AuthorityCommitApplication {
         Ok(self.store().realm_state_snapshot_material(realm_id).await?)
     }
 
+    pub async fn realm_state_snapshot_material_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+    ) -> ServiceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+        Ok(self
+            .store()
+            .realm_state_snapshot_material_for_account(realm_id, account)
+            .await?)
+    }
+
     /// Keyset page over one independent commit stream.
     ///
     /// Paging uses a `stream_position` keyset inside one [`CommitStreamRef`].
