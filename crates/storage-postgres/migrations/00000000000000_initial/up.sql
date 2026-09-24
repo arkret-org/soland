@@ -2321,6 +2321,32 @@ CREATE TABLE public.server_settings (
     CONSTRAINT server_settings_pkey PRIMARY KEY (key)
 );
 
+-- keys-operations.schema.json#/$defs/backup_metadata is a closed allowlist
+-- projection of the signed envelope (key-management section 7.6.1): members
+-- are copied only when present, with their stored value (the tristate
+-- `supersedes_id` / `expires_at` keep an explicit null), and `encryption` keeps
+-- only `recipient_method` / `recipient_key_ref`. The ciphertext,
+-- `domain_separation`, `contents`, `auth_data`, `plaintext_commitment`,
+-- `mixed_secret_storage`, AEAD/KDF material and `x_*` extensions never reach a
+-- list row.
+CREATE FUNCTION public.key_backup_list_metadata(payload jsonb) RETURNS jsonb
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT COALESCE(jsonb_object_agg(
+        member.key,
+        CASE WHEN member.key = 'encryption' AND jsonb_typeof(member.value) = 'object' THEN
+            COALESCE((SELECT jsonb_object_agg(field.key, field.value)
+                FROM jsonb_each(member.value) AS field
+                WHERE field.key IN ('recipient_method', 'recipient_key_ref')), '{}'::jsonb)
+        ELSE member.value END), '{}'::jsonb)
+    FROM jsonb_each(payload) AS member
+    WHERE member.key IN (
+        'backup_id', 'actor_id', 'device_id', 'backup_kind', 'backup_version',
+        'series_id', 'series_seq', 'supersedes_id', 'supersedes_digest',
+        'source_commit_ref', 'recovery_policy_ref', 'expires_at', 'created_at',
+        'updated_at', 'ciphertext_digest', 'encryption', 'retention'
+    )
+$$;
+
 CREATE TABLE public.key_backups (
     id uuid PRIMARY KEY,
     actor_id text,
@@ -2328,7 +2354,9 @@ CREATE TABLE public.key_backups (
     backup_kind text GENERATED ALWAYS AS ((payload ->> 'backup_kind')) STORED,
     backup_version text,
     payload jsonb NOT NULL,
-    metadata jsonb NOT NULL,
+    -- The `KeysBackupsList.backups[]` row. Generated, so no writer can store
+    -- anything but the closed projection of the envelope it sits beside.
+    metadata jsonb GENERATED ALWAYS AS (public.key_backup_list_metadata(payload)) STORED NOT NULL,
     last_accessed_at timestamp with time zone,
     account_pk bigint,
     scheme text,

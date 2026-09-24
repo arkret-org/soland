@@ -6052,6 +6052,7 @@ dependencies = [
  "arkret-models-integration",
  "arkret-policy",
  "arkret-schema",
+ "arkret-schema-conformance",
  "arkret-signatures",
  "arkret-state",
  "arkret-wire",

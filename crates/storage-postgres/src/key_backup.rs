@@ -245,10 +245,8 @@ impl KeyBackupStore for PgKeyBackupStore {
         typed
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let mut metadata = payload.clone();
-        if let Some(object) = metadata.as_object_mut() {
-            object.remove("ciphertext");
-        }
+        // `metadata` is generated from `payload` by the initial schema's closed
+        // `backup_metadata` projection; no writer supplies it.
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -287,15 +285,15 @@ impl KeyBackupStore for PgKeyBackupStore {
             });
         sql_query(
             "INSERT INTO key_backups \
-             (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, metadata, created_at, last_accessed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NULL) \
+             (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
              ON CONFLICT (id) DO UPDATE SET \
                 actor_id = EXCLUDED.actor_id, \
                 device_id = EXCLUDED.device_id, \
                 scheme = EXCLUDED.scheme, \
                 version = EXCLUDED.version, \
                 key_material_encrypted = EXCLUDED.key_material_encrypted, \
-                payload = EXCLUDED.payload, metadata = EXCLUDED.metadata",
+                payload = EXCLUDED.payload",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
         .bind::<Text, _>(&actor_id)
@@ -304,7 +302,6 @@ impl KeyBackupStore for PgKeyBackupStore {
         .bind::<Integer, _>(version)
         .bind::<Nullable<Binary>, _>(key_material.as_deref())
         .bind::<Jsonb, _>(&payload)
-        .bind::<Jsonb, _>(&metadata)
         .execute(&mut *conn).await
         .map(|_| ())
         .map_err(map_key_backup_put_error)

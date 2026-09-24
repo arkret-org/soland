@@ -311,17 +311,16 @@ async fn initial_schema_rejects_every_other_backup_class() {
     class_less.as_object_mut().unwrap().remove("backup_kind");
     raw_payloads.push(("<missing>".to_owned(), class_less_id, class_less));
     for (class, backup_id, payload) in raw_payloads {
-        let error = diesel::sql_query(
-            "INSERT INTO key_backups(id,actor_id,payload,metadata) VALUES($1,$2,$3,$3)",
-        )
-        .bind::<Uuid, _>(soland_storage::ids::typed_uuid_part_expect_internal(
-            &backup_id,
-        ))
-        .bind::<Text, _>(actor.to_string())
-        .bind::<Jsonb, _>(&payload)
-        .execute(&mut conn)
-        .await
-        .expect_err(&format!("{class} envelope row must be rejected"));
+        let error =
+            diesel::sql_query("INSERT INTO key_backups(id,actor_id,payload) VALUES($1,$2,$3)")
+                .bind::<Uuid, _>(soland_storage::ids::typed_uuid_part_expect_internal(
+                    &backup_id,
+                ))
+                .bind::<Text, _>(actor.to_string())
+                .bind::<Jsonb, _>(&payload)
+                .execute(&mut conn)
+                .await
+                .expect_err(&format!("{class} envelope row must be rejected"));
         assert!(
             error.to_string().contains("key_backups_backup_kind_check"),
             "{class}: {error}"

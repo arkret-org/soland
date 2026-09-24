@@ -168,6 +168,7 @@ DROP TABLE IF EXISTS invite_new_source_ledgers CASCADE;
 DROP TABLE IF EXISTS invite_locators CASCADE;
 DROP TABLE IF EXISTS key_backup_delete_challenges CASCADE;
 DROP TABLE IF EXISTS key_backups CASCADE;
+DROP FUNCTION IF EXISTS key_backup_list_metadata(jsonb) CASCADE;
 DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
 DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;

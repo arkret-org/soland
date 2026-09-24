@@ -49,6 +49,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+arkret-schema-conformance.workspace = true
 rand_chacha = "0.10.0"
 rand_core = "0.10.1"
 arkret-bootstrap.workspace = true

@@ -333,7 +333,7 @@ impl Fixture {
             .bind::<Timestamptz,_>(now)
             .bind::<crate::Binary,_>(basis_token.to_vec())
             .execute(&mut *conn).await.unwrap();
-        sql_query("INSERT INTO key_backups(id,payload,metadata,actor_id) VALUES($1,$2,'{}',$3)")
+        sql_query("INSERT INTO key_backups(id,payload,actor_id) VALUES($1,$2,$3)")
             .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(BACKUP))
             .bind::<Jsonb, _>(&backup)
             .bind::<Text, _>(
