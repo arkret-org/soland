@@ -30,6 +30,23 @@ pub struct ConfirmedKeyBackupListPage {
     pub page: KeyBackupListPage,
 }
 
+/// One self-authored `ak.key_backup.active_series` Event together with the
+/// RealmCommit the governance Station signed for it on the PCR stream. The
+/// storage unit rechecks the signing device, generation, source checkpoint,
+/// record signature and pointer CAS at the locked PCR cut before any write.
+#[derive(Clone, Debug)]
+pub struct KeyBackupActiveSeriesCommitWrite {
+    pub commit: crate::AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeyBackupActiveSeriesCommitOutcome {
+    Committed(arkret_wire::RealmCommit),
+    /// The exact same Event and Commit were already accepted by this unit.
+    Duplicate(arkret_wire::RealmCommit),
+}
+
 use super::{PersistenceResult, Utc, Value, async_trait};
 
 /// A server-issued key-backup delete challenge
@@ -95,6 +112,16 @@ pub trait KeyBackupStore: Send + Sync {
     ) -> PersistenceResult<ConfirmedKeyBackupListPage> {
         Err(crate::PersistenceError::SchemaViolation(
             "same-cut KeyBackup listing is unavailable".to_owned(),
+        ))
+    }
+    /// Accept one active-series pointer Event, its PCR RealmCommit, the typed
+    /// current pointer and the PCR conflict-index marker atomically.
+    async fn commit_active_series_pointer(
+        &self,
+        _write: KeyBackupActiveSeriesCommitWrite,
+    ) -> PersistenceResult<KeyBackupActiveSeriesCommitOutcome> {
+        Err(crate::PersistenceError::Conflict(
+            "key_backup_active_series_current_device_authority_unavailable".to_owned(),
         ))
     }
     async fn issue_unlock_challenge(

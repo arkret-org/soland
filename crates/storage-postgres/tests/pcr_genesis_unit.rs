@@ -1362,3 +1362,559 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .unwrap()
     );
 }
+
+/// Station-sign one PCR successor Commit for `event` directly after `previous`.
+fn station_successor(
+    previous: &arkret_wire::RealmCommit,
+    event: &arkret_wire::Event,
+    station_did: &arkret_wire::Did,
+    offset_seconds: i64,
+) -> arkret_wire::RealmCommit {
+    let mut commit = previous.clone();
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{}:{}:successor", event.event_id, previous.commit_id).as_bytes(),
+    ));
+    commit.stream_position = previous.stream_position + 1;
+    commit.previous_commit_ref = Some(previous.commit_id.clone());
+    commit.event_ref = event.event_id.clone();
+    commit.committed_at = previous.committed_at + chrono::TimeDelta::seconds(offset_seconds);
+    let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        DetachedSignatureContext::RealmCommit,
+        DidUrl::new(format!("{station_did}#authority")).unwrap(),
+        commit.committed_at,
+        &SigningKey::from_bytes(&[83; 32]),
+    )
+    .unwrap();
+    commit
+}
+
+struct PointerAuthor {
+    account: arkret_wire::AccountId,
+    realm_id: RealmId,
+    method: DidUrl,
+    seed: [u8; 32],
+}
+
+impl PointerAuthor {
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &self,
+        series: &BackupSeriesId,
+        version: u64,
+        previous: Vec<BackupSeriesId>,
+        source: &RealmCommitId,
+        authorize_event_id: &arkret_wire::EventId,
+        generation: u64,
+        signing_seed: [u8; 32],
+    ) -> serde_json::Value {
+        use arkret_models_collaboration::events_payloads::{
+            ControllerBackupTrustAnchor, UnsignedKeyBackupActiveSeries,
+        };
+        let unsigned = UnsignedKeyBackupActiveSeries::new(
+            arkret_wire::ActorId::account(self.account.clone()),
+            arkret_models_crypto::BackupKind::SecretStorage,
+            series.clone(),
+            version,
+            previous,
+            source.clone(),
+            chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            self.method.clone(),
+            ControllerBackupTrustAnchor {
+                authorize_event_id: authorize_event_id.clone(),
+                generation_ref: generation,
+            },
+        )
+        .unwrap();
+        let signature = SigningKey::from_bytes(&signing_seed)
+            .sign(&unsigned.signing_payload_bytes().unwrap())
+            .to_bytes();
+        serde_json::to_value(
+            unsigned
+                .attach_signature(
+                    arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                        signature,
+                    ))
+                    .unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn event(&self, payload: serde_json::Value, nonce: u32) -> arkret_wire::Event {
+        let mut event = arkret_wire::test_support::raw_event(
+            EventKind::KeyBackupActiveSeries.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: self.realm_id.clone(),
+            },
+            self.account.principal_id.clone(),
+            self.account.station_id.clone(),
+            payload,
+        )
+        .unwrap();
+        event.created_at += chrono::TimeDelta::milliseconds(i64::from(nonce));
+        device_history_fixture::sign_event(event, self.method.clone(), self.seed)
+    }
+}
+
+#[derive(diesel::QueryableByName)]
+struct PointerFootprint {
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    commits: i64,
+    #[diesel(sql_type = BigInt)]
+    pointers: i64,
+}
+
+async fn pointer_footprint(pool: &PgPool, realm_id: &RealmId) -> (i64, i64, i64) {
+    let mut conn = pool.get().await.unwrap();
+    let row = diesel::sql_query(
+        "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
+                (SELECT COUNT(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
+                (SELECT COUNT(*) FROM key_backup_active_series_current_results WHERE realm_id=$1) \
+                  AS pointers",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<PointerFootprint>(&mut *conn)
+    .await
+    .unwrap();
+    (row.events, row.commits, row.pointers)
+}
+
+#[tokio::test]
+async fn key_backup_active_series_pointer_unit_commits_only_at_the_active_device_cut() {
+    use soland_storage::{KeyBackupActiveSeriesCommitOutcome, KeyBackupActiveSeriesCommitWrite};
+
+    let (pool, station) = contract_store().await;
+    let fixture = fixture(&station);
+    let author = PointerAuthor {
+        account: fixture.account.clone(),
+        realm_id: RealmId::new(fixture.events[0].realm_id.to_string()).unwrap(),
+        method: fixture.device_verification_method.clone(),
+        seed: fixture.founding_device_signing_seed,
+    };
+    let device = fixture.founding_device_id.clone();
+    let station_did = fixture.station_did.clone();
+    let did = fixture.did.clone();
+    let genesis = assemble(station.clone(), fixture);
+    let at = genesis.transactions[1].commit.committed_at;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_pcr_genesis_unit(&genesis, at)
+        .await
+        .unwrap();
+    let head = genesis.transactions[1].commit.clone();
+    let authorize_id = genesis.transactions[1].event.event_id.clone();
+    let create_id = genesis.transactions[0].event.event_id.clone();
+    let authority = genesis.transactions[1].expected_authority.clone();
+    let backups = PgKeyBackupStore { pool: pool.clone() };
+    let series = BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let write = |event: arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        KeyBackupActiveSeriesCommitWrite {
+            commit: AuthorityCommitTransaction {
+                expected_authority: authority.clone(),
+                event,
+                commit,
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: at,
+        }
+    };
+    let baseline = pointer_footprint(&pool, &author.realm_id).await;
+    assert_eq!(baseline, (2, 2, 0));
+
+    // Every rejected candidate leaves no Event, Commit or pointer behind.
+    let mut rejected = Vec::new();
+    let other_seed = [91; 32];
+    let cases: [(&str, serde_json::Value); 6] = [
+        (
+            "stale generation",
+            author.record(
+                &series,
+                1,
+                vec![],
+                &head.commit_id,
+                &authorize_id,
+                2,
+                author.seed,
+            ),
+        ),
+        (
+            "non-current authorization Event",
+            author.record(
+                &series,
+                1,
+                vec![],
+                &head.commit_id,
+                &create_id,
+                1,
+                author.seed,
+            ),
+        ),
+        (
+            "foreign record signature",
+            author.record(
+                &series,
+                1,
+                vec![],
+                &head.commit_id,
+                &authorize_id,
+                1,
+                other_seed,
+            ),
+        ),
+        (
+            "unaccepted source checkpoint",
+            author.record(
+                &series,
+                1,
+                vec![],
+                &unrelated_commit_id(),
+                &authorize_id,
+                1,
+                author.seed,
+            ),
+        ),
+        (
+            "source before device authorization",
+            author.record(
+                &series,
+                1,
+                vec![],
+                &genesis.transactions[0].commit.commit_id,
+                &authorize_id,
+                1,
+                author.seed,
+            ),
+        ),
+        (
+            "first pointer version gap",
+            author.record(
+                &series,
+                2,
+                vec![],
+                &head.commit_id,
+                &authorize_id,
+                1,
+                author.seed,
+            ),
+        ),
+    ];
+    for (nonce, (label, payload)) in cases.into_iter().enumerate() {
+        let event = author.event(payload, nonce as u32 + 1);
+        let commit = station_successor(&head, &event, &station_did, 1);
+        rejected.push((
+            label,
+            backups
+                .commit_active_series_pointer(write(event, commit))
+                .await,
+        ));
+    }
+    let valid = author.record(
+        &series,
+        1,
+        vec![],
+        &head.commit_id,
+        &authorize_id,
+        1,
+        author.seed,
+    );
+    // A different device fragment has no current authorization at this cut.
+    let foreign_method = author_with_method(
+        &author,
+        DidUrl::new(format!(
+            "{did}#{}",
+            DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap()
+        ))
+        .unwrap(),
+    );
+    let foreign_payload = foreign_method.record(
+        &series,
+        1,
+        vec![],
+        &head.commit_id,
+        &authorize_id,
+        1,
+        author.seed,
+    );
+    let foreign_event = foreign_method.event(foreign_payload, 20);
+    let foreign_commit = station_successor(&head, &foreign_event, &station_did, 1);
+    rejected.push((
+        "unauthorized device method",
+        backups
+            .commit_active_series_pointer(write(foreign_event, foreign_commit))
+            .await,
+    ));
+    // The Commit must extend the confirmed PCR head, not an older position.
+    let event = author.event(valid.clone(), 30);
+    let mut behind = station_successor(&genesis.transactions[0].commit, &event, &station_did, 1);
+    behind.stream_position = head.stream_position + 1;
+    rejected.push((
+        "Commit behind head",
+        backups
+            .commit_active_series_pointer(write(event, behind))
+            .await,
+    ));
+    // A tampered producer proof is rejected even when the record is valid.
+    let mut tampered = author.event(valid.clone(), 31);
+    tampered.producer_proof.as_mut().unwrap().jws = "invalid".to_owned();
+    let tampered_commit = station_successor(&head, &tampered, &station_did, 1);
+    rejected.push((
+        "tampered producer proof",
+        backups
+            .commit_active_series_pointer(write(tampered, tampered_commit))
+            .await,
+    ));
+    // An incomplete conflict-index cut cannot prove the device is active.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=1 WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(author.realm_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let marker_event = author.event(valid.clone(), 32);
+    let marker_commit = station_successor(&head, &marker_event, &station_did, 1);
+    rejected.push((
+        "incomplete conflict marker",
+        backups
+            .commit_active_series_pointer(write(marker_event, marker_commit))
+            .await,
+    ));
+    diesel::sql_query(
+        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=0 WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(author.realm_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let expected_reasons = [
+        ("stale generation", "backup_revision_stale"),
+        (
+            "non-current authorization Event",
+            "device authorization that is not current",
+        ),
+        (
+            "foreign record signature",
+            "signature does not match the device key",
+        ),
+        (
+            "unaccepted source checkpoint",
+            "source checkpoint is not an accepted PCR Commit",
+        ),
+        (
+            "source before device authorization",
+            "source checkpoint is not an accepted PCR Commit",
+        ),
+        (
+            "first pointer version gap",
+            "key_backup_active_series_pointer_version_gap",
+        ),
+        ("unauthorized device method", "has no current authorization"),
+        (
+            "Commit behind head",
+            "does not extend the confirmed PCR head",
+        ),
+        (
+            "tampered producer proof",
+            "producer proof does not match the device key",
+        ),
+        ("incomplete conflict marker", "status inputs are incomplete"),
+    ];
+    assert_eq!(rejected.len(), expected_reasons.len());
+    for ((label, outcome), (expected_label, reason)) in rejected.iter().zip(expected_reasons) {
+        assert_eq!(*label, expected_label);
+        let error = outcome
+            .as_ref()
+            .err()
+            .unwrap_or_else(|| panic!("{label} was accepted"))
+            .to_string();
+        assert!(
+            error.contains(reason),
+            "{label} failed for another reason: {error}"
+        );
+    }
+    assert_eq!(
+        pointer_footprint(&pool, &author.realm_id).await,
+        baseline,
+        "a rejected pointer candidate left a durable write"
+    );
+    assert!(matches!(
+        backups
+            .confirmed_active_series_for_device(&author.account, &device, at)
+            .await
+            .unwrap()
+            .unwrap()
+            .secret_storage,
+        BackupActiveSeriesPointer::Absent {}
+    ));
+
+    // The generic authority path still refuses the pointer kind.
+    let first = author.event(valid, 40);
+    let first_commit = station_successor(&head, &first, &station_did, 1);
+    assert!(
+        PgAuthorityCommitStore { pool: pool.clone() }
+            .admit_event_transaction(&write(first.clone(), first_commit.clone()).commit, at)
+            .await
+            .is_err()
+    );
+
+    let committed = backups
+        .commit_active_series_pointer(write(first.clone(), first_commit.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        committed,
+        KeyBackupActiveSeriesCommitOutcome::Committed(first_commit.clone())
+    );
+    assert_eq!(
+        backups
+            .commit_active_series_pointer(write(first.clone(), first_commit.clone()))
+            .await
+            .unwrap(),
+        KeyBackupActiveSeriesCommitOutcome::Duplicate(first_commit.clone())
+    );
+    let mut other_commit = station_successor(&head, &first, &station_did, 2);
+    other_commit.commit_id = unrelated_commit_id();
+    assert!(
+        backups
+            .commit_active_series_pointer(write(first.clone(), other_commit))
+            .await
+            .is_err(),
+        "the same Event under a different Commit is not a replay"
+    );
+    assert_eq!(pointer_footprint(&pool, &author.realm_id).await, (3, 3, 1));
+    let active = backups
+        .confirmed_active_series_for_device(&author.account, &device, at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.authority_commit_id, first_commit.commit_id);
+    assert_eq!(
+        active.secret_storage,
+        BackupActiveSeriesPointer::Active {
+            active_series_id: series.clone(),
+            series_pointer_version: 1,
+        }
+    );
+    let page = backups
+        .confirmed_list_page_for_device(
+            &author.account,
+            &device,
+            at,
+            &KeyBackupListQuery {
+                actor_id: arkret_wire::ActorId::account(author.account.clone()).to_string(),
+                backup_kind: None,
+                series_id: None,
+                after: None,
+                limit: 50,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.active_series, active);
+
+    // Successor: exactly +1 with the prior series retained. A same-version
+    // fork and a version gap at the new head are both rejected.
+    let next_series =
+        BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let fork = author.event(
+        author.record(
+            &next_series,
+            1,
+            vec![],
+            &first_commit.commit_id,
+            &authorize_id,
+            1,
+            author.seed,
+        ),
+        50,
+    );
+    let fork_commit = station_successor(&first_commit, &fork, &station_did, 1);
+    assert!(
+        backups
+            .commit_active_series_pointer(write(fork, fork_commit))
+            .await
+            .is_err()
+    );
+    let gap = author.event(
+        author.record(
+            &next_series,
+            3,
+            vec![series.clone()],
+            &first_commit.commit_id,
+            &authorize_id,
+            1,
+            author.seed,
+        ),
+        51,
+    );
+    let gap_commit = station_successor(&first_commit, &gap, &station_did, 1);
+    assert!(
+        backups
+            .commit_active_series_pointer(write(gap, gap_commit))
+            .await
+            .is_err()
+    );
+    assert_eq!(pointer_footprint(&pool, &author.realm_id).await, (3, 3, 1));
+    // An earlier accepted checkpoint under the same generation is not stale.
+    let second = author.event(
+        author.record(
+            &next_series,
+            2,
+            vec![series.clone()],
+            &head.commit_id,
+            &authorize_id,
+            1,
+            author.seed,
+        ),
+        52,
+    );
+    let second_commit = station_successor(&first_commit, &second, &station_did, 1);
+    backups
+        .commit_active_series_pointer(write(second, second_commit.clone()))
+        .await
+        .unwrap();
+
+    // A fresh pool reads the same durable pointer and status cut.
+    let restarted = Db::connect(Some(&support::contract_database_url()), Default::default())
+        .await
+        .unwrap()
+        .pool
+        .unwrap();
+    let reread = PgKeyBackupStore { pool: restarted }
+        .confirmed_active_series_for_device(&author.account, &device, at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reread.authority_commit_id, second_commit.commit_id);
+    assert_eq!(
+        reread.secret_storage,
+        BackupActiveSeriesPointer::Active {
+            active_series_id: next_series,
+            series_pointer_version: 2,
+        }
+    );
+    assert!(
+        PgDeviceRevocationStore { pool: pool.clone() }
+            .pcr_device_active(&author.account, &device, at)
+            .await
+            .unwrap()
+    );
+}
+
+fn author_with_method(author: &PointerAuthor, method: DidUrl) -> PointerAuthor {
+    PointerAuthor {
+        account: author.account.clone(),
+        realm_id: author.realm_id.clone(),
+        method,
+        seed: author.seed,
+    }
+}

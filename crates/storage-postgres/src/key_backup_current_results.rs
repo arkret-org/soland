@@ -163,6 +163,276 @@ struct PcrRow {
     pcr_realm_id: String,
 }
 
+#[derive(QueryableByName)]
+struct RealmLockRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+}
+
+#[derive(QueryableByName)]
+struct AcceptedPointerEventRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    commit_json: Option<Value>,
+}
+
+#[derive(QueryableByName)]
+struct SourceCheckpointRow {
+    #[diesel(sql_type = Nullable<BigInt>)]
+    source_position: Option<i64>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    generation_position: Option<i64>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    authorization_position: Option<i64>,
+}
+
+fn pointer_rejected(reason: impl Into<String>) -> PgTransactionError {
+    PersistenceError::Conflict(reason.into()).into()
+}
+
+fn verification_method_device(
+    method: &arkret_wire::DidUrl,
+    account: &AccountId,
+) -> Option<DeviceId> {
+    let (controller, fragment) = method.as_str().rsplit_once('#')?;
+    let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
+    if arkret_wire::project_did_to_core_id(&did).ok()? != account.principal_id {
+        return None;
+    }
+    DeviceId::new(fragment.to_owned()).ok()
+}
+
+/// The registered `ak.key_backup.active_series` unit. The caller supplies the
+/// Station-signed RealmCommit it prepared at the PCR head; everything that
+/// depends on durable state is decided here under the PCR authority lock:
+/// the signing device is `active` at the same status cut, the record names
+/// that device's current authorization Event and the current generation, the
+/// source checkpoint is an accepted Commit of this PCR at or after the
+/// generation and authorization it relies on, both the record signature and
+/// the Event producer proof verify against the accepted device key, and the
+/// pointer version advances by exactly one. The Event, Commit, typed pointer
+/// and PCR conflict-index marker become visible together or not at all.
+pub(crate) async fn commit_key_backup_pointer_unit_in_connection(
+    conn: &mut AsyncPgConnection,
+    write: &soland_storage::KeyBackupActiveSeriesCommitWrite,
+) -> Result<soland_storage::KeyBackupActiveSeriesCommitOutcome, PgTransactionError> {
+    use soland_storage::KeyBackupActiveSeriesCommitOutcome as Outcome;
+
+    let event = &write.commit.event;
+    let commit = &write.commit.commit;
+    if event.kind != arkret_wire::EventKind::KeyBackupActiveSeries
+        || event.executed_by.is_some()
+        || commit.event_ref != event.event_id
+        || commit.realm_id != event.realm_id
+        || event.scope_ref
+            != (arkret_wire::ScopeRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.stream_ref
+            != (CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+    {
+        return Err(invalid("KeyBackup pointer unit Event and Commit differ").into());
+    }
+    let suite =
+        arkret_canonical::canonical::digest_suite(event.event_id.digest_suite_code().as_str())
+            .map_err(|error| invalid(error.to_string()))?;
+    event
+        .verify_event_id_matches_content_with_digest_suite(suite)
+        .map_err(|error| invalid(error.to_string()))?;
+    let record: KeyBackupActiveSeries = serde_json::from_value(
+        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+    )
+    .map_err(|error| invalid(format!("KeyBackup pointer payload is invalid: {error}")))?;
+    validate_key_backup_active_series_record(&record)
+        .map_err(|error| PersistenceError::Conflict(error.reason_code().to_owned()))?;
+    let account = event
+        .actor_id
+        .as_account_id()
+        .ok_or_else(|| invalid("KeyBackup pointer actor is not an account"))?;
+    if record.actor_id != event.actor_id || record.backup_kind != BackupKind::SecretStorage {
+        return Err(pointer_rejected(
+            "key_backup_active_series_actor_or_class_mismatch",
+        ));
+    }
+    let proof = event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| pointer_rejected("KeyBackup pointer producer proof is absent"))?;
+    if proof.verification_method != record.auth_data.verification_method {
+        return Err(pointer_rejected(
+            "KeyBackup pointer record and Event are signed by different methods",
+        ));
+    }
+    let device_id = verification_method_device(&record.auth_data.verification_method, account)
+        .ok_or_else(|| {
+            pointer_rejected("KeyBackup pointer method is not an Account device method")
+        })?;
+
+    // Every accepted PCR writer takes this row lock before changing its head,
+    // so the status cut read below cannot move before this unit commits.
+    let lock = sql_query("SELECT realm_id FROM realm_authorities WHERE realm_id=$1 FOR UPDATE")
+        .bind::<Text, _>(event.realm_id.as_str())
+        .get_result::<RealmLockRow>(&mut *conn)
+        .await
+        .optional()?
+        .ok_or_else(|| pointer_rejected("KeyBackup pointer PCR authority is absent"))?;
+    if lock.realm_id != event.realm_id.as_str() {
+        return Err(pointer_rejected("KeyBackup pointer PCR lock differs"));
+    }
+    let token = crate::ids::parse_event_id(event.event_id.as_str())
+        .ok_or_else(|| invalid("KeyBackup pointer Event id is not canonical"))?;
+    let existing = sql_query(
+        "SELECT e.envelope,c.commit_json FROM canonical_events e \
+         LEFT JOIN realm_commits c ON c.event_pk=e.pk WHERE e.id=$1",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .get_result::<AcceptedPointerEventRow>(&mut *conn)
+    .await
+    .optional()?;
+    if let Some(existing) = existing {
+        let envelope = serde_json::to_value(event).map_err(PersistenceError::database)?;
+        let presented = serde_json::to_value(commit).map_err(PersistenceError::database)?;
+        return match existing.commit_json {
+            Some(stored) if existing.envelope == envelope && stored == presented => {
+                Ok(Outcome::Duplicate(commit.clone()))
+            }
+            _ => Err(pointer_rejected(
+                "KeyBackup pointer Event is already known with different content or Commit",
+            )),
+        };
+    }
+
+    let status = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+        conn,
+        account,
+        &device_id,
+        commit.committed_at,
+    )
+    .await?
+    .ok_or_else(|| pointer_rejected("KeyBackup pointer device has no confirmed PCR cut"))?;
+    if status.authority.realm_id != event.realm_id
+        || status.generation_conflicted
+        || status.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
+    {
+        return Err(pointer_rejected(
+            "KeyBackup pointer device is not active at the PCR cut",
+        ));
+    }
+    if commit.previous_commit_ref.as_ref() != Some(&status.authority.authority_commit_id) {
+        return Err(pointer_rejected(
+            "KeyBackup pointer Commit does not extend the confirmed PCR head",
+        ));
+    }
+    let authorization = status
+        .authority
+        .authorization
+        .as_ref()
+        .ok_or_else(|| pointer_rejected("KeyBackup pointer device has no authorization"))?;
+    let generation = status
+        .authority
+        .current_generation
+        .ok_or_else(|| pointer_rejected("KeyBackup pointer PCR has no current generation"))?;
+    if record.auth_data.device_authorize_event_id != authorization.event_id {
+        return Err(pointer_rejected(
+            "KeyBackup pointer names a device authorization that is not current",
+        ));
+    }
+    if record.source_commit_ref.device_generation_ref != generation {
+        return Err(pointer_rejected("backup_revision_stale"));
+    }
+    let checkpoint = sql_query(
+        "SELECT \
+           (SELECT c.stream_position FROM realm_commits c WHERE c.commit_id=$2 AND c.realm_id=$1 \
+              AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',$1::text)) AS source_position, \
+           (SELECT g.current_stream_position FROM pcr_device_generation_current_results g \
+              WHERE g.realm_id=$1) AS generation_position, \
+           (SELECT c.stream_position FROM realm_commits c WHERE c.commit_id=$3 AND c.realm_id=$1) \
+              AS authorization_position",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(record.source_commit_ref.realm_commit_id.as_str())
+    .bind::<Text, _>(authorization.source_commit_id.as_str())
+    .get_result::<SourceCheckpointRow>(&mut *conn)
+    .await?;
+    match (
+        checkpoint.source_position,
+        checkpoint.generation_position,
+        checkpoint.authorization_position,
+    ) {
+        (Some(source), Some(generation_at), Some(authorized_at))
+            if source >= generation_at && source >= authorized_at => {}
+        _ => {
+            return Err(pointer_rejected(
+                "KeyBackup pointer source checkpoint is not an accepted PCR Commit under the current generation and device",
+            ));
+        }
+    }
+
+    let did_key = authorization
+        .payload
+        .device_public_key_did
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| pointer_rejected("current device authorization has no did:key key"))?;
+    let public_key = arkret_canonical::multibase::decode_ed25519_multibase(did_key)
+        .map_err(|_| pointer_rejected("current device authorization key is invalid"))?;
+    let device_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: public_key.to_vec(),
+    };
+    let signed = record
+        .signing_payload_bytes()
+        .map_err(|error| invalid(error.to_string()))?;
+    if !arkret_signatures::verify_detached_ed25519_signature(
+        &device_key,
+        &signed,
+        record.auth_data.signature.as_str(),
+    ) {
+        return Err(pointer_rejected(
+            "KeyBackup pointer signature does not match the device key",
+        ));
+    }
+    let envelope_bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| invalid(format!("KeyBackup pointer envelope is invalid: {error}")))?;
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &envelope_bytes,
+        &event.actor_id,
+        &device_key,
+        suite,
+    )
+    .map_err(|_| {
+        pointer_rejected("KeyBackup pointer producer proof does not match the device key")
+    })?;
+
+    crate::authority_commit::queue_event_in_connection(conn, event, write.queued_at).await?;
+    match crate::authority_commit::commit_verified_key_backup_pointer_in_connection(
+        conn,
+        &write.commit,
+    )
+    .await?
+    {
+        soland_storage::AuthorityCommitWriteOutcome::Committed => {}
+        soland_storage::AuthorityCommitWriteOutcome::Duplicate => {
+            return Err(pointer_rejected(
+                "KeyBackup pointer Event was committed outside this unit",
+            ));
+        }
+        soland_storage::AuthorityCommitWriteOutcome::StaleAuthority(_) => {
+            return Err(pointer_rejected(
+                "PCR authority changed before KeyBackup pointer commit",
+            ));
+        }
+    }
+    commit_key_backup_pointer_in_connection(conn, event, commit).await?;
+    crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(conn, commit)
+        .await?;
+    Ok(Outcome::Committed(commit.clone()))
+}
+
 /// Returns `None` when the PCR or confirmed Realm head is unavailable. A
 /// confirmed head with no pointer row yields the explicit `Absent` branch.
 /// One SQL statement gives all inputs the same PostgreSQL MVCC snapshot.

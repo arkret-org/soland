@@ -861,7 +861,8 @@ pub(crate) async fn commit_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
-    commit_transaction_in_connection_with_device_guard(conn, transaction, false, false).await
+    commit_transaction_in_connection_with_device_guard(conn, transaction, VerifiedPcrUnit::None)
+        .await
 }
 
 /// Only registered PCR genesis and recovery UoWs may call this after they
@@ -870,7 +871,8 @@ pub(crate) async fn commit_verified_pcr_device_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
-    commit_transaction_in_connection_with_device_guard(conn, transaction, true, false).await
+    commit_transaction_in_connection_with_device_guard(conn, transaction, VerifiedPcrUnit::Device)
+        .await
 }
 
 /// Only the SecurityRotation proposal unit may call this after rechecking the
@@ -879,20 +881,53 @@ pub(crate) async fn commit_verified_pcr_revoke_proposal_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
-    commit_transaction_in_connection_with_device_guard(conn, transaction, false, true).await
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::RevokeProposal,
+    )
+    .await
+}
+
+/// Only the KeyBackup pointer unit may call this after rechecking the signing
+/// device, generation, source checkpoint and record signature under the PCR
+/// authority lock; the same transaction then projects the pointer and marker.
+pub(crate) async fn commit_verified_key_backup_pointer_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::KeyBackupPointer,
+    )
+    .await
+}
+
+/// The registered PCR unit whose same-cut checks already ran on this
+/// connection. Generic admission is `None` and cannot write these kinds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerifiedPcrUnit {
+    None,
+    Device,
+    RevokeProposal,
+    KeyBackupPointer,
 }
 
 async fn commit_transaction_in_connection_with_device_guard(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
-    verified_pcr_device_unit: bool,
-    verified_pcr_revoke_unit: bool,
+    verified_unit: VerifiedPcrUnit,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    let verified_pcr_device_unit = verified_unit == VerifiedPcrUnit::Device;
+    let verified_pcr_revoke_unit = verified_unit == VerifiedPcrUnit::RevokeProposal;
     // The pointer's own signature, accepted device authorization, current
-    // generation and source checkpoint must be rechecked at this cut. The
-    // current-generation authority result is not yet available here; do not
-    // allow a generic Event admission to publish an unchecked pointer.
-    if transaction.event.kind == arkret_wire::EventKind::KeyBackupActiveSeries {
+    // generation and source checkpoint are rechecked only by the registered
+    // pointer unit; generic Event admission must not publish an unchecked
+    // pointer.
+    if transaction.event.kind == arkret_wire::EventKind::KeyBackupActiveSeries
+        && verified_unit != VerifiedPcrUnit::KeyBackupPointer
+    {
         return Err(PersistenceError::Conflict(
             "key_backup_active_series_current_device_authority_unavailable".to_owned(),
         )

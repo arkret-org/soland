@@ -158,6 +158,23 @@ impl KeyBackupStore for PgKeyBackupStore {
         .map_err(crate::PgTransactionError::into_persistence)
     }
 
+    async fn commit_active_series_pointer(
+        &self,
+        write: soland_storage::KeyBackupActiveSeriesCommitWrite,
+    ) -> PersistenceResult<soland_storage::KeyBackupActiveSeriesCommitOutcome> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<soland_storage::KeyBackupActiveSeriesCommitOutcome, crate::PgTransactionError, _>(
+            async |conn| {
+                crate::key_backup_current_results::commit_key_backup_pointer_unit_in_connection(
+                    conn, &write,
+                )
+                .await
+            },
+        )
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
+    }
+
     async fn confirmed_active_series_for_device(
         &self,
         account_id: &arkret_wire::AccountId,
