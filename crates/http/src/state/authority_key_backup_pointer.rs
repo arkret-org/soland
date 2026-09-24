@@ -68,23 +68,7 @@ pub(super) async fn submit_self_key_backup_pointer(
         })
         .await?;
     if matches!(outcome, KeyBackupActiveSeriesCommitOutcome::Committed(_)) {
-        // Hydration replays accepted Events into the process cache after a
-        // restart; mirror that here so the live cache does not lag the
-        // durable pointer. The durable typed result stays the only authority.
-        let envelope = serde_json::to_value(event)
-            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        if let Some(operation_id) = crate::routing::events::event_log::event_operation_id(
-            &envelope,
-            event.event_id.as_str(),
-        ) && let Ok(operation) = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-            operation_id,
-            arkret_wire::OperationKind::Create,
-            None,
-            event,
-            arkret_canonical::DigestSuite::Sha256,
-        ) {
-            let _ = state.projections().apply_projected(&operation, state.hlc());
-        }
+        mirror_committed_key_backup_pointer(state, event);
     }
     Ok(match outcome {
         KeyBackupActiveSeriesCommitOutcome::Committed(commit) => AuthoritySubmitOutcome::Accepted {
@@ -96,4 +80,26 @@ pub(super) async fn submit_self_key_backup_pointer(
             commit,
         },
     })
+}
+
+/// Hydration replays accepted Events into the process cache after a restart;
+/// mirror a freshly committed pointer Event the same way so the live cache
+/// does not lag the durable pointer. The durable typed result stays the only
+/// authority, so a cache miss here is never an admission decision.
+pub(crate) fn mirror_committed_key_backup_pointer(state: &AppState, event: &arkret_wire::Event) {
+    let Ok(envelope) = serde_json::to_value(event) else {
+        return;
+    };
+    if let Some(operation_id) =
+        crate::routing::events::event_log::event_operation_id(&envelope, event.event_id.as_str())
+        && let Ok(operation) = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            operation_id,
+            arkret_wire::OperationKind::Create,
+            None,
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+    {
+        let _ = state.projections().apply_projected(&operation, state.hlc());
+    }
 }

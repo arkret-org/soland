@@ -23,6 +23,7 @@ pub use app_state::{
     getrandom_seed, realm_genesis_payload,
 };
 pub(crate) use authority_producer_validation::verify_self_event_producer;
+pub(crate) use authority_key_backup_pointer::mirror_committed_key_backup_pointer;
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
     MemberIdentitySubjectKey,

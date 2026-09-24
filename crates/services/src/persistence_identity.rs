@@ -1532,11 +1532,33 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
         Ok(())
     }
 
-    async fn rotations_awaiting_revoke(&self, limit: u32) -> crate::ServiceResult<Vec<String>> {
+    async fn rotations_awaiting_worker(&self, limit: u32) -> crate::ServiceResult<Vec<String>> {
         Ok(self
             .0
             .security_transactions()
-            .rotations_awaiting_revoke(limit)
+            .rotations_awaiting_worker(limit)
+            .await?)
+    }
+
+    async fn commit_rotation_upload(
+        &self,
+        write: crate::identity::RotationUploadCommitWrite,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionRecord> {
+        Ok(self
+            .0
+            .security_transactions()
+            .commit_rotation_upload(write)
+            .await?)
+    }
+
+    async fn commit_rotation_pointer_switch(
+        &self,
+        write: crate::identity::RotationPointerSwitchWrite,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionRecord> {
+        Ok(self
+            .0
+            .security_transactions()
+            .commit_rotation_pointer_switch(write)
             .await?)
     }
 

@@ -1757,7 +1757,8 @@ impl RecoverySessionService {
 
 pub use soland_storage::{
     BackupSeriesEraseProgressRecord as BackupSeriesEraseProgressState, RecoveryUnitCommitWrite,
-    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, SecurityTransactionRecord,
+    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, RotationPointerSwitchWrite,
+    RotationUploadCommitWrite, SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord as SecurityTransactionStepAttemptState,
     SecurityTransactionStepOutcomeRecord as SecurityTransactionStepOutcomeState,
 };
@@ -1781,7 +1782,15 @@ pub trait SecurityTransactionPort: Send + Sync {
         transaction_id: &str,
     ) -> ServiceResult<Option<SecurityTransactionRecord>>;
     async fn save(&self, transaction: SecurityTransactionRecord) -> ServiceResult<()>;
-    async fn rotations_awaiting_revoke(&self, limit: u32) -> ServiceResult<Vec<String>>;
+    async fn rotations_awaiting_worker(&self, limit: u32) -> ServiceResult<Vec<String>>;
+    async fn commit_rotation_upload(
+        &self,
+        write: RotationUploadCommitWrite,
+    ) -> ServiceResult<SecurityTransactionRecord>;
+    async fn commit_rotation_pointer_switch(
+        &self,
+        write: RotationPointerSwitchWrite,
+    ) -> ServiceResult<SecurityTransactionRecord>;
     async fn step_outcome(
         &self,
         transaction_id: &str,
@@ -1845,8 +1854,22 @@ impl SecurityTransactionService {
             .await
     }
 
-    pub async fn rotations_awaiting_revoke(&self, limit: u32) -> ServiceResult<Vec<String>> {
-        self.transactions.rotations_awaiting_revoke(limit).await
+    pub async fn rotations_awaiting_worker(&self, limit: u32) -> ServiceResult<Vec<String>> {
+        self.transactions.rotations_awaiting_worker(limit).await
+    }
+
+    pub async fn commit_rotation_upload(
+        &self,
+        write: RotationUploadCommitWrite,
+    ) -> ServiceResult<SecurityTransactionRecord> {
+        self.transactions.commit_rotation_upload(write).await
+    }
+
+    pub async fn commit_rotation_pointer_switch(
+        &self,
+        write: RotationPointerSwitchWrite,
+    ) -> ServiceResult<SecurityTransactionRecord> {
+        self.transactions.commit_rotation_pointer_switch(write).await
     }
 
     pub async fn create(

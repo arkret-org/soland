@@ -1,7 +1,8 @@
 //! Durable SecurityRotation coordinator worker.
 //!
-//! `revoke` is a coordinator-owned step (security-transactions.md §3): the
-//! Station advances it, never a client `continue`. Every transition is a
+//! `revoke`, `upload_new_material` and `switch_authoritative_pointer` are
+//! coordinator-owned steps (security-transactions.md §3): the Station
+//! advances them, never a client `continue`. Every transition is a
 //! registered storage unit, so a sweep that finds a transaction mid-way only
 //! resumes it; the process holds no rotation state of its own.
 
@@ -16,7 +17,7 @@ pub fn spawn(state: AppState) -> Arc<tokio::task::JoinHandle<()>> {
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
         loop {
             ticker.tick().await;
-            crate::routing::identity::recovery::sweep_rotation_revokes(&state).await;
+            crate::routing::identity::recovery::sweep_rotation_worker(&state).await;
         }
     }))
 }

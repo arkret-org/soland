@@ -77,6 +77,26 @@ fn local_backup_actor(
     )))
 }
 
+/// Serving-layer checks of one planned SecurityRotation replacement envelope:
+/// the closed body, encryption, KDF, domain separation and ciphertext digest,
+/// the recovery-policy reference and a recovery-public-key recipient, as the
+/// self PUT applies them. Identity, signer, current authorization, signature
+/// and series chain are rechecked by the upload storage unit at the locked
+/// PCR cut.
+pub(in crate::routing) async fn validate_rotation_replacement_backup(
+    state: &AppState,
+    value: &Value,
+) -> Result<(), AppError> {
+    let backup: KeyBackup = serde_json::from_value(value.clone())
+        .map_err(|error| schema_error(format!("invalid replacement backup envelope: {error}")))?;
+    validate_key_backup_body_typed(&backup.backup_id, &backup.actor_id, &backup)?;
+    enforce_recovery_policy_ref_typed(state, "", &backup).await?;
+    if backup.encryption.recipient_method == KeyBackupRecipientMethod::RecoveryPublicKey {
+        validate_current_recovery_recipient(state, &backup, Utc::now()).await?;
+    }
+    Ok(())
+}
+
 fn backup_actor_matches(backup: &Value, actor_id: &arkret_wire::ActorId) -> bool {
     backup
         .get("actor_id")

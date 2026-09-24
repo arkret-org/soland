@@ -216,9 +216,10 @@ pub(super) async fn security_transaction_create(
         .await
         .map_err(security_transaction_service_error)?;
     let resource = if stored.resource.security_rotation_plan().is_some() {
-        // The durable worker owns `revoke`; drive it now rather than waiting
+        // The durable worker owns `revoke`, `upload_new_material` and
+        // `switch_authoritative_pointer`; drive them now rather than waiting
         // for the next sweep, then answer with the durable resource.
-        advance_rotation_revoke(state, stored.resource.transaction_id.as_str()).await;
+        advance_rotation(state, stored.resource.transaction_id.as_str()).await;
         state
             .security_transactions()
             .transaction(stored.resource.transaction_id.as_str())
@@ -363,16 +364,12 @@ pub(super) async fn security_transaction_continue(
             )
             .await
         }
-        SecurityTransactionStep::Revoke => Err(crate::app_error!(
+        SecurityTransactionStep::Revoke
+        | SecurityTransactionStep::UploadNewMaterial
+        | SecurityTransactionStep::SwitchAuthoritativePointer => Err(crate::app_error!(
             FailedPrecondition,
-            "revoke is advanced only by the Station's durable rotation worker",
+            "coordinator-owned rotation steps are advanced only by the Station's durable worker",
         )),
-        SecurityTransactionStep::UploadNewMaterial => {
-            continue_rotation_upload(state, transaction, canonical_request, res).await
-        }
-        SecurityTransactionStep::SwitchAuthoritativePointer => {
-            continue_rotation_switch(state, &session, transaction, canonical_request, res).await
-        }
         SecurityTransactionStep::EraseOldMaterial => Err(crate::app_error!(
             FailedPrecondition,
             "erase_old_material advances only through ak.self.keys.backup_series.command.erase.v1",
@@ -481,25 +478,90 @@ async fn accept_rotation_step(
 }
 
 /// Upper bound of transactions one worker sweep drives.
-const ROTATION_REVOKE_SWEEP_LIMIT: u32 = 32;
+const ROTATION_WORKER_SWEEP_LIMIT: u32 = 32;
 
 /// One pass of the durable SecurityRotation worker over every live rotation
-/// whose coordinator-owned `revoke` step has no terminal decision.
-pub(crate) async fn sweep_rotation_revokes(state: &AppState) {
+/// whose next step is coordinator-owned.
+pub(crate) async fn sweep_rotation_worker(state: &AppState) {
     let pending = match state
         .security_transactions()
-        .rotations_awaiting_revoke(ROTATION_REVOKE_SWEEP_LIMIT)
+        .rotations_awaiting_worker(ROTATION_WORKER_SWEEP_LIMIT)
         .await
     {
         Ok(pending) => pending,
         Err(error) => {
-            tracing::warn!(%error, "rotation revoke sweep could not list pending transactions");
+            tracing::warn!(%error, "rotation worker sweep could not list pending transactions");
             return;
         }
     };
     for transaction_id in pending {
-        advance_rotation_revoke(state, &transaction_id).await;
+        advance_rotation(state, &transaction_id).await;
     }
+}
+
+/// Drive every coordinator-owned step of one SecurityRotation that is ready
+/// (security-transactions.md §3): `revoke`, then `upload_new_material`, then
+/// `switch_authoritative_pointer`. Each transition is one registered storage
+/// unit, so the loop stops at the first step that makes no durable progress
+/// and the next sweep resumes exactly there.
+pub(crate) async fn advance_rotation(state: &AppState, transaction_id: &str) {
+    for _ in 0..3 {
+        match try_advance_rotation_step(state, transaction_id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    transaction_id,
+                    "rotation step deferred to the next worker sweep"
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Run the one step the durable resource names next. `Ok(true)` means the
+/// resource changed (a step, a proposal or a terminal outcome was stored).
+async fn try_advance_rotation_step(
+    state: &AppState,
+    transaction_id: &str,
+) -> Result<bool, soland_services::ServiceError> {
+    let progress = |record: &SecurityTransactionRecord| {
+        (
+            record.resource.accepted_steps.len(),
+            record.resource.revoke_proposal.is_some(),
+            record.resource.terminal_outcome.is_some(),
+        )
+    };
+    let Some(before) = state
+        .security_transactions()
+        .transaction(transaction_id)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let next = before
+        .resource
+        .next_required_step()
+        .map_err(|error| soland_services::ServiceError::Internal(error.to_string()))?;
+    match next {
+        Some(SecurityTransactionStep::Revoke) => {
+            try_advance_rotation_revoke(state, transaction_id).await?;
+        }
+        Some(SecurityTransactionStep::UploadNewMaterial) => {
+            try_advance_rotation_upload(state, before.clone()).await?;
+        }
+        Some(SecurityTransactionStep::SwitchAuthoritativePointer) => {
+            try_advance_rotation_switch(state, before.clone()).await?;
+        }
+        _ => return Ok(false),
+    }
+    let after = state
+        .security_transactions()
+        .transaction(transaction_id)
+        .await?;
+    Ok(after.is_some_and(|after| progress(&after) != progress(&before)))
 }
 
 /// Drive the coordinator-owned `revoke` step of one SecurityRotation
@@ -518,16 +580,6 @@ pub(crate) async fn sweep_rotation_revokes(state: &AppState) {
 /// A refusal that retrying cannot change aborts a transaction that has no
 /// proposal; expiry writes `expired`, with the rejected result exactly when a
 /// proposal exists. Anything else is left for the next sweep.
-pub(crate) async fn advance_rotation_revoke(state: &AppState, transaction_id: &str) {
-    if let Err(error) = try_advance_rotation_revoke(state, transaction_id).await {
-        tracing::warn!(
-            %error,
-            transaction_id,
-            "rotation revoke step deferred to the next worker sweep"
-        );
-    }
-}
-
 async fn try_advance_rotation_revoke(
     state: &AppState,
     transaction_id: &str,
@@ -737,132 +789,225 @@ async fn expire_rotation_revoke(
         .map(|_| ())
 }
 
-fn public_backup_values(
-    material: &arkret_wire::CanonicalPublicMaterial,
-) -> Result<&[Value], AppError> {
-    material
-        .value
-        .get("backups")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| {
-            crate::app_error!(
-                FailedPrecondition,
-                "prepared backup material does not contain a backups array"
-            )
-        })
+/// The worker's step request is the transaction's own canonical request: a
+/// coordinator-owned step takes no client bytes.
+fn worker_step_outcome(
+    transaction: &SecurityTransactionRecord,
+    step: SecurityTransactionStep,
+) -> Result<SecurityTransactionStepOutcomeState, soland_services::ServiceError> {
+    Ok(SecurityTransactionStepOutcomeState {
+        transaction_id: transaction.resource.transaction_id.as_str().to_owned(),
+        step,
+        canonical_request: transaction.canonical_request.clone(),
+        response: serde_json::to_value(&transaction.resource)
+            .map_err(|error| soland_services::ServiceError::Internal(error.to_string()))?,
+        participant_outcome: None,
+    })
 }
 
-async fn continue_rotation_upload(
+/// Append one Station-accepted worker step carrying its plan-derived
+/// evidence and return the candidate resource for its storage unit.
+fn with_worker_step(
+    state: &AppState,
+    transaction: &SecurityTransactionRecord,
+    evidence: soland_storage::RotationStepEvidence,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> Result<SecurityTransactionRecord, soland_services::ServiceError> {
+    let mut next = transaction.clone();
+    next.resource.accepted_steps.push(AcceptedStep {
+        prepared_material_digest: evidence.prepared_material_digest,
+        acceptor: SecurityTransactionAcceptor::Principal {
+            principal_id: state.service_core_id(),
+        },
+        output_ref: evidence.output_ref,
+        output_digest: evidence.output_digest,
+        accepted_at,
+    });
+    next.resource
+        .validate_structural()
+        .map_err(|error| soland_services::ServiceError::Internal(error.to_string()))?;
+    Ok(next)
+}
+
+/// A refusal of a worker unit that no retry can change, with the reason code
+/// the aborted terminal carries. Only a registered-code conflict is final; a
+/// retryable code, an unavailable dependency or an infrastructure failure is
+/// left for the next sweep (and, at worst, for expiry).
+fn permanent_worker_refusal(error: &soland_services::ServiceError) -> Option<Option<String>> {
+    use soland_storage::ConflictCode;
+
+    if error.kind() != soland_services::ServiceErrorKind::Conflict {
+        return None;
+    }
+    match error.conflict_code() {
+        Some(ConflictCode::TemporarilyUnavailable) => None,
+        Some(ConflictCode::SignatureInvalid) => Some(Some("proof_invalid".to_owned())),
+        Some(code) => Some(Some(code.as_str().to_owned())),
+        None => {
+            let detail = error.detail();
+            let token = detail.split_once(": ").map_or(detail, |(head, _)| head);
+            let is_code = !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+            Some(is_code.then(|| token.to_owned()))
+        }
+    }
+}
+
+/// Stop a rotation whose accepted prefix cannot advance: expired at its
+/// deadline, or aborted on a final refusal. Accepted facts stay accepted.
+async fn stop_rotation(
+    state: &AppState,
+    mut transaction: SecurityTransactionRecord,
+    reason_code: Option<Option<String>>,
+) -> Result<(), soland_services::ServiceError> {
+    transaction.resource.terminal_outcome = Some(match reason_code {
+        None => SecurityTransactionTerminalOutcome::Expired {
+            completed_at: transaction.resource.expires_at,
+            reason_code: None,
+        },
+        Some(reason_code) => SecurityTransactionTerminalOutcome::Aborted {
+            completed_at: chrono::Utc::now(),
+            reason_code,
+        },
+    });
+    state.security_transactions().save(transaction).await
+}
+
+/// `upload_new_material`: store every planned replacement envelope of the
+/// frozen material and accept the step, atomically. The serving-layer
+/// envelope checks run first; the storage unit rechecks the authorizing
+/// device, its current authorization, each signature, the fresh series chain
+/// and the reserved ids at the locked PCR cut.
+async fn try_advance_rotation_upload(
     state: &AppState,
     transaction: SecurityTransactionRecord,
-    canonical_request: Vec<u8>,
-    res: &mut Response,
-) -> JsonResult<SecurityTransaction> {
-    let plan = rotation_plan(&transaction)?;
-    let transaction_actor =
-        transaction_account_actor(&transaction.resource.account_id, &state.service_core_id())?;
-    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
-    begin_rotation_step(
-        state,
-        &transaction_id,
-        SecurityTransactionStep::UploadNewMaterial,
-        &canonical_request,
-    )
-    .await?;
-    for prepared in &plan.backup_rotations {
-        let rotation = &prepared.binding;
-        let values = public_backup_values(&prepared.encrypted_backup_material)?;
-        if values.len() != rotation.new_backups.len() {
-            return Err(crate::app_error!(
-                FailedPrecondition,
-                "prepared backup material has unreserved entries"
-            ));
-        }
-        for expected in &rotation.new_backups {
-            let value = values
-                .iter()
-                .find(|value| {
-                    value.get("backup_id").and_then(Value::as_str)
-                        == Some(expected.backup_id.as_str())
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    crate::app_error!(
-                        FailedPrecondition,
-                        "prepared backup material omits a reserved backup"
-                    )
-                })?;
-            if !backup_value_matches_rotation(
-                &value,
-                &transaction_actor,
-                &rotation.new_series_id,
-                rotation.backup_kind,
-                expected,
-            ) {
-                return Err(crate::app_error!(
-                    FailedPrecondition,
-                    "prepared backup identity, series, kind, or digest changed",
-                ));
-            }
-            if let Some(existing) = state
-                .key_backups()
-                .backup(expected.backup_id.as_str())
-                .await
-                .map_err(recovery_service_error)?
+) -> Result<(), soland_services::ServiceError> {
+    let internal = |error: &dyn std::fmt::Display| {
+        soland_services::ServiceError::Internal(error.to_string())
+    };
+    let now = chrono::Utc::now();
+    if transaction.resource.expires_at <= now {
+        return stop_rotation(state, transaction, None).await;
+    }
+    let Some(plan) = transaction.resource.security_rotation_plan().cloned() else {
+        return Ok(());
+    };
+    for rotation in &plan.backup_rotations {
+        let Some(values) = rotation
+            .encrypted_backup_material
+            .value
+            .get("backups")
+            .and_then(Value::as_array)
+        else {
+            return stop_rotation(state, transaction, Some(Some("schema_violation".to_owned())))
+                .await;
+        };
+        for value in values {
+            if let Err(error) =
+                crate::routing::identity::key_backup::validate_rotation_replacement_backup(state, value).await
             {
-                if existing != value {
-                    return Err(AppError::conflict(
-                        "reserved backup id already stores different bytes",
-                    )
-                    .with_wire_code("duplicate_conflict"));
+                if error.http_status().is_server_error() {
+                    return Err(internal(&error));
                 }
-            } else {
-                state
-                    .key_backups()
-                    .store_backup(expected.backup_id.as_str().to_owned(), value)
-                    .await
-                    .map_err(recovery_service_error)?;
+                let reason = error.wire_code().to_owned();
+                return stop_rotation(state, transaction, Some(Some(reason))).await;
             }
         }
     }
-    let digest = canonical_digest(&plan.backup_rotations)?;
-    accept_rotation_step(
-        state,
-        transaction,
-        SecurityTransactionStep::UploadNewMaterial,
-        canonical_request,
-        digest.clone(),
-        digest.as_str().to_owned(),
-        digest,
-        None,
-        res,
-    )
-    .await
+    let evidence = soland_storage::rotation_upload_step_evidence(&plan).map_err(|e| internal(&e))?;
+    let next = with_worker_step(state, &transaction, evidence, now)?;
+    let step_outcome = worker_step_outcome(&next, SecurityTransactionStep::UploadNewMaterial)?;
+    match state
+        .security_transactions()
+        .commit_rotation_upload(soland_storage::RotationUploadCommitWrite {
+            transaction: next,
+            step_outcome,
+        })
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) => match permanent_worker_refusal(&error) {
+            Some(reason_code) => {
+                tracing::warn!(%error, "rotation upload refused; aborting the transaction");
+                stop_rotation(state, transaction, Some(reason_code)).await
+            }
+            None => Err(error),
+        },
+    }
 }
 
-async fn continue_rotation_switch(
-    _state: &AppState,
-    _session: &SessionRecord,
+/// `switch_authoritative_pointer`: the Station signs the successor PCR Commit
+/// for the prepared `ak.key_backup.active_series` Event, and the storage unit
+/// admits it through the registered same-cut pointer unit (active signer,
+/// current authorization and generation, exactly one version up from the
+/// planned previous series) together with the accepted step.
+async fn try_advance_rotation_switch(
+    state: &AppState,
     transaction: SecurityTransactionRecord,
-    _canonical_request: Vec<u8>,
-    _res: &mut Response,
-) -> JsonResult<SecurityTransaction> {
-    let plan = rotation_plan(&transaction)?;
-    for prepared in &plan.backup_rotations {
-        prepared.active_series_unit.validate().map_err(|error| {
-            AppError::json_invalid(format!(
-                "prepared active-series Event unit is invalid: {error}"
-            ))
-        })?;
+) -> Result<(), soland_services::ServiceError> {
+    let internal = |error: &dyn std::fmt::Display| {
+        soland_services::ServiceError::Internal(error.to_string())
+    };
+    let now = chrono::Utc::now();
+    if transaction.resource.expires_at <= now {
+        return stop_rotation(state, transaction, None).await;
     }
-    // Do not write a pending switch step until every accepted Event and its
-    // RealmCommit can be committed with the pointer change in one transaction.
-    Err(crate::app_error!(
-        ServiceUnavailable,
-        "rotation pointer switch awaits atomic Event/RealmCommit admission",
-    ))
+    let Some(plan) = transaction.resource.security_rotation_plan().cloned() else {
+        return Ok(());
+    };
+    let [rotation] = plan.backup_rotations.as_slice() else {
+        return stop_rotation(state, transaction, Some(Some("schema_violation".to_owned()))).await;
+    };
+    let [event] = rotation.active_series_unit.request.events.as_slice() else {
+        return stop_rotation(state, transaction, Some(Some("schema_violation".to_owned()))).await;
+    };
+    let method = DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .map_err(|e| internal(&e))?;
+    let commit = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            now,
+        )
+        .await?;
+    let evidence = soland_storage::rotation_switch_step_evidence(&plan, &commit.commit)
+        .map_err(|e| internal(&e))?;
+    let next = with_worker_step(state, &transaction, evidence, now)?;
+    let step_outcome =
+        worker_step_outcome(&next, SecurityTransactionStep::SwitchAuthoritativePointer)?;
+    match state
+        .security_transactions()
+        .commit_rotation_pointer_switch(soland_storage::RotationPointerSwitchWrite {
+            transaction: next,
+            step_outcome,
+            commit,
+            queued_at: now,
+        })
+        .await
+    {
+        Ok(_) => {
+            crate::state::mirror_committed_key_backup_pointer(state, event);
+            Ok(())
+        }
+        Err(error) => match permanent_worker_refusal(&error) {
+            Some(reason_code) => {
+                tracing::warn!(%error, "rotation pointer switch refused; aborting the transaction");
+                stop_rotation(state, transaction, Some(reason_code)).await
+            }
+            None => Err(error),
+        },
+    }
 }
+
 fn backup_rotation_kind_name(kind: arkret_models_crypto::BackupRotationKind) -> &'static str {
     match kind {
         arkret_models_crypto::BackupRotationKind::SecretStorage => "secret_storage",

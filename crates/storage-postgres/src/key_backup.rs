@@ -63,6 +63,80 @@ fn map_key_backup_put_error(error: diesel::result::Error) -> PersistenceError {
     }
     PersistenceError::database(error)
 }
+
+/// Store one validated envelope inside a transaction the caller owns. The
+/// series uniqueness constraint is the race guard; a lost race surfaces as
+/// `series_seq_not_monotonic`.
+pub(crate) async fn put_key_backup_in_connection(
+    conn: &mut crate::AsyncPgConnection,
+    backup_id: &str,
+    payload: &Value,
+) -> PersistenceResult<()> {
+    let typed: arkret_models_crypto::KeyBackup =
+        serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
+    typed
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    // `metadata` is generated from `payload` by the initial schema's closed
+    // `backup_metadata` projection; no writer supplies it.
+    let extract_str = |key: &str| -> Option<String> {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    let actor_id = payload
+        .get("actor_id")
+        .cloned()
+        .ok_or_else(|| PersistenceError::database("key backup actor_id is missing"))
+        .and_then(|value| {
+            serde_json::from_value::<arkret_wire::ActorId>(value)
+                .map_err(|_| PersistenceError::database("key backup actor_id is invalid"))
+        })?
+        .to_string();
+    let device_id = extract_str("device_id");
+    let scheme = extract_str("scheme").or_else(|| extract_str("algorithm"));
+    let version: i32 = payload
+        .get("version")
+        .and_then(Value::as_i64)
+        .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+        .unwrap_or(0);
+    // base64-decoded key material lives in `key_material_encrypted` if the
+    // caller already provided raw bytes via a `bytes_b64` field. Otherwise
+    // the encrypted material stays in the JSONB envelope.
+    let key_material: Option<Vec<u8>> = payload
+        .get("key_material_encrypted_b64")
+        .and_then(Value::as_str)
+        .and_then(|s| {
+            use base64::Engine as _;
+            use base64::engine::general_purpose::STANDARD;
+            STANDARD.decode(s).ok()
+        });
+    sql_query(
+        "INSERT INTO key_backups \
+         (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
+         ON CONFLICT (id) DO UPDATE SET \
+            actor_id = EXCLUDED.actor_id, \
+            device_id = EXCLUDED.device_id, \
+            scheme = EXCLUDED.scheme, \
+            version = EXCLUDED.version, \
+            key_material_encrypted = EXCLUDED.key_material_encrypted, \
+            payload = EXCLUDED.payload",
+    )
+    .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(backup_id))
+    .bind::<Text, _>(&actor_id)
+    .bind::<Nullable<Text>, _>(&device_id)
+    .bind::<Nullable<Text>, _>(&scheme)
+    .bind::<Integer, _>(version)
+    .bind::<Nullable<Binary>, _>(key_material.as_deref())
+    .bind::<Jsonb, _>(payload)
+    .execute(conn)
+    .await
+    .map(|_| ())
+    .map_err(map_key_backup_put_error)
+}
+
 pub struct PgKeyBackupStore {
     pub pool: PgPool,
 }
@@ -165,6 +239,14 @@ impl KeyBackupStore for PgKeyBackupStore {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<soland_storage::KeyBackupActiveSeriesCommitOutcome, crate::PgTransactionError, _>(
             async |conn| {
+                // An active-series Event a SecurityRotation reserved moves the
+                // pointer only through that rotation's switch step, after its
+                // replacement material is accepted (security-transactions §3).
+                crate::security_transactions::refuse_rotation_reserved_pointer_in_connection(
+                    conn,
+                    &write.commit.event.event_id,
+                )
+                .await?;
                 crate::key_backup_current_results::commit_key_backup_pointer_unit_in_connection(
                     conn, &write,
                 )
@@ -240,71 +322,10 @@ impl KeyBackupStore for PgKeyBackupStore {
         .await
     }
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()> {
-        let typed: arkret_models_crypto::KeyBackup =
-            serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
-        typed
-            .validate()
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        // `metadata` is generated from `payload` by the initial schema's closed
-        // `backup_metadata` projection; no writer supplies it.
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let extract_str = |key: &str| -> Option<String> {
-            payload
-                .get(key)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        };
-        let actor_id = payload
-            .get("actor_id")
-            .cloned()
-            .ok_or_else(|| PersistenceError::database("key backup actor_id is missing"))
-            .and_then(|value| {
-                serde_json::from_value::<arkret_wire::ActorId>(value)
-                    .map_err(|_| PersistenceError::database("key backup actor_id is invalid"))
-            })?
-            .to_string();
-        let device_id = extract_str("device_id");
-        let scheme = extract_str("scheme").or_else(|| extract_str("algorithm"));
-        let version: i32 = payload
-            .get("version")
-            .and_then(Value::as_i64)
-            .map(|v| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
-            .unwrap_or(0);
-        // base64-decoded key material lives in `key_material_encrypted` if the
-        // caller already provided raw bytes via a `bytes_b64` field. Otherwise
-        // the encrypted material stays in the JSONB envelope.
-        let key_material: Option<Vec<u8>> = payload
-            .get("key_material_encrypted_b64")
-            .and_then(Value::as_str)
-            .and_then(|s| {
-                use base64::Engine as _;
-                use base64::engine::general_purpose::STANDARD;
-                STANDARD.decode(s).ok()
-            });
-        sql_query(
-            "INSERT INTO key_backups \
-             (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
-             ON CONFLICT (id) DO UPDATE SET \
-                actor_id = EXCLUDED.actor_id, \
-                device_id = EXCLUDED.device_id, \
-                scheme = EXCLUDED.scheme, \
-                version = EXCLUDED.version, \
-                key_material_encrypted = EXCLUDED.key_material_encrypted, \
-                payload = EXCLUDED.payload",
-        )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
-        .bind::<Text, _>(&actor_id)
-        .bind::<Nullable<Text>, _>(&device_id)
-        .bind::<Nullable<Text>, _>(&scheme)
-        .bind::<Integer, _>(version)
-        .bind::<Nullable<Binary>, _>(key_material.as_deref())
-        .bind::<Jsonb, _>(&payload)
-        .execute(&mut *conn).await
-        .map(|_| ())
-        .map_err(map_key_backup_put_error)
+        put_key_backup_in_connection(&mut conn, &backup_id, &payload).await
     }
 
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>> {

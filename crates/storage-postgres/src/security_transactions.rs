@@ -5,7 +5,8 @@ use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     QueryableByName, RecoveryUnitCommitWrite, RevokeCommandTerminalWrite,
-    RevokeProposalCommitWrite, RunQueryDsl, SecurityTransactionRecord,
+    RevokeProposalCommitWrite, RotationPointerSwitchWrite, RotationUploadCommitWrite, RunQueryDsl,
+    SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
     SecurityTransactionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
     sql_types,
@@ -13,6 +14,9 @@ use super::{
 
 mod recovery_unit;
 mod revoke_unit;
+mod rotation_units;
+
+pub(crate) use rotation_units::refuse_rotation_reserved_pointer_in_connection;
 
 pub struct PgSecurityTransactionStore {
     pub pool: PgPool,
@@ -616,7 +620,33 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
-    async fn rotations_awaiting_revoke(&self, limit: u32) -> PersistenceResult<Vec<String>> {
+    async fn commit_rotation_upload(
+        &self,
+        write: RotationUploadCommitWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord> {
+        write.validate()?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            rotation_units::commit_rotation_upload_in_connection(conn, write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn commit_rotation_pointer_switch(
+        &self,
+        write: RotationPointerSwitchWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord> {
+        write.validate()?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            rotation_units::commit_rotation_pointer_switch_in_connection(conn, write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn rotations_awaiting_worker(&self, limit: u32) -> PersistenceResult<Vec<String>> {
         #[derive(QueryableByName)]
         struct AwaitingRow {
             #[diesel(sql_type = sql_types::Uuid)]
@@ -625,8 +655,8 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT id FROM security_transactions WHERE kind='security_rotation' \
-             AND terminal_outcome IS NULL AND revoke_command_outcome IS NULL \
-             AND accepted_steps='[]'::jsonb ORDER BY created_at, id LIMIT $1",
+             AND terminal_outcome IS NULL AND jsonb_array_length(accepted_steps) < 3 \
+             ORDER BY created_at, id LIMIT $1",
         )
         .bind::<sql_types::BigInt, _>(i64::from(limit))
         .load::<AwaitingRow>(&mut conn)
@@ -873,10 +903,16 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         record: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeRecord,
     ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord> {
-        if outcome.step == SecurityTransactionStep::Revoke {
-            return Err(PersistenceError::Conflict(
-                "revoke accepted step requires its guarded terminal unit".to_owned(),
-            ));
+        if matches!(
+            outcome.step,
+            SecurityTransactionStep::Revoke
+                | SecurityTransactionStep::UploadNewMaterial
+                | SecurityTransactionStep::SwitchAuthoritativePointer
+        ) {
+            return Err(PersistenceError::Conflict(format!(
+                "rotation {:?} accepted step requires its guarded worker unit",
+                outcome.step
+            )));
         }
         record
             .resource

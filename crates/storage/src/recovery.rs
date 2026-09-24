@@ -140,6 +140,179 @@ impl RevokeProposalCommitWrite {
     }
 }
 
+/// SecurityRotation `upload_new_material`: every planned replacement envelope
+/// of the prepared `encrypted_backup_material` and `accepted_steps[1]` become
+/// visible in one durable write. The unit re-derives the envelopes from the
+/// frozen plan; the caller supplies no bytes of its own.
+#[derive(Clone, Debug)]
+pub struct RotationUploadCommitWrite {
+    pub transaction: SecurityTransactionRecord,
+    pub step_outcome: SecurityTransactionStepOutcomeRecord,
+}
+
+/// SecurityRotation `switch_authoritative_pointer`: the prepared
+/// `ak.key_backup.active_series` Event, the Station-signed covering Commit,
+/// the typed pointer and `accepted_steps[2]` become visible in one durable
+/// write through the registered same-cut pointer unit.
+#[derive(Clone, Debug)]
+pub struct RotationPointerSwitchWrite {
+    pub transaction: SecurityTransactionRecord,
+    pub step_outcome: SecurityTransactionStepOutcomeRecord,
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The accepted-step evidence of a coordinator-owned rotation step, derived
+/// only from the frozen plan and the step's own durable output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RotationStepEvidence {
+    pub prepared_material_digest: arkret_wire::Hash,
+    pub output_ref: String,
+    pub output_digest: arkret_wire::Hash,
+}
+
+fn rotation_digest(value: &impl serde::Serialize) -> PersistenceResult<arkret_wire::Hash> {
+    let digest = arkret_canonical::canonical_sha256(value)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    arkret_wire::Hash::new(digest).map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
+}
+
+fn single_backup_rotation(
+    plan: &arkret_models_crypto::SecurityRotationPlan,
+) -> PersistenceResult<&arkret_models_crypto::BackupRotationPlan> {
+    match plan.backup_rotations.as_slice() {
+        [rotation] => Ok(rotation),
+        _ => Err(PersistenceError::SchemaViolation(
+            "security rotation plan must carry exactly one secret_storage rotation".to_owned(),
+        )),
+    }
+}
+
+/// `upload_new_material` consumes the prepared encrypted material (its own
+/// canonical digest) and outputs the reserved replacement series holding
+/// exactly the planned object refs.
+pub fn rotation_upload_step_evidence(
+    plan: &arkret_models_crypto::SecurityRotationPlan,
+) -> PersistenceResult<RotationStepEvidence> {
+    let rotation = single_backup_rotation(plan)?;
+    Ok(RotationStepEvidence {
+        prepared_material_digest: rotation.encrypted_backup_material.digest.clone(),
+        output_ref: rotation.binding.new_series_id.as_str().to_owned(),
+        output_digest: rotation_digest(&rotation.binding.new_backups)?,
+    })
+}
+
+/// `switch_authoritative_pointer` consumes the prepared active-series Event
+/// unit and outputs the RealmCommit that accepted it.
+pub fn rotation_switch_step_evidence(
+    plan: &arkret_models_crypto::SecurityRotationPlan,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<RotationStepEvidence> {
+    let rotation = single_backup_rotation(plan)?;
+    Ok(RotationStepEvidence {
+        prepared_material_digest: rotation.active_series_unit.request_digest.clone(),
+        output_ref: commit.commit_id.as_str().to_owned(),
+        output_digest: rotation_digest(&arkret_wire::CommittedEventRef {
+            event_id: commit.event_ref.clone(),
+            commit_id: commit.commit_id.clone(),
+            stream_ref: commit.stream_ref.clone(),
+            stream_position: commit.stream_position,
+        })?,
+    })
+}
+
+/// Shared shape of a worker step outcome: it appends exactly `step` at
+/// `index`, carries `evidence`, is acceptored by the Station and is stored
+/// with the resulting resource as its first response.
+fn validate_worker_step_outcome(
+    transaction: &SecurityTransactionRecord,
+    step_outcome: &SecurityTransactionStepOutcomeRecord,
+    step: arkret_models_crypto::SecurityTransactionStep,
+    index: usize,
+    evidence: &RotationStepEvidence,
+) -> PersistenceResult<()> {
+    let resource = &transaction.resource;
+    let accepted = resource.accepted_steps.get(index);
+    if resource.accepted_steps.len() != index + 1
+        || resource.terminal_outcome.is_some()
+        || resource.step_order().ok().and_then(|order| order.get(index).copied()) != Some(step)
+        || step_outcome.step != step
+        || step_outcome.transaction_id != resource.transaction_id.as_str()
+        || step_outcome.canonical_request != transaction.canonical_request
+        || step_outcome.participant_outcome.is_some()
+        || step_outcome.response
+            != serde_json::to_value(resource)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+        || accepted.is_none_or(|accepted| {
+            accepted.prepared_material_digest != evidence.prepared_material_digest
+                || accepted.output_ref != evidence.output_ref
+                || accepted.output_digest != evidence.output_digest
+                || !matches!(
+                    accepted.acceptor,
+                    arkret_models_crypto::SecurityTransactionAcceptor::Principal { ref principal_id }
+                        if *principal_id == resource.account_id.station_id
+                )
+        })
+    {
+        return Err(PersistenceError::SchemaViolation(format!(
+            "rotation {step:?} outcome differs from its frozen plan evidence or resource"
+        )));
+    }
+    Ok(())
+}
+
+impl RotationUploadCommitWrite {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        let resource = &self.transaction.resource;
+        resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let plan = resource.security_rotation_plan().ok_or_else(|| {
+            PersistenceError::SchemaViolation("rotation upload requires SecurityRotation".to_owned())
+        })?;
+        validate_worker_step_outcome(
+            &self.transaction,
+            &self.step_outcome,
+            arkret_models_crypto::SecurityTransactionStep::UploadNewMaterial,
+            1,
+            &rotation_upload_step_evidence(plan)?,
+        )
+    }
+}
+
+impl RotationPointerSwitchWrite {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        let resource = &self.transaction.resource;
+        resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let plan = resource.security_rotation_plan().ok_or_else(|| {
+            PersistenceError::SchemaViolation("rotation switch requires SecurityRotation".to_owned())
+        })?;
+        let rotation = single_backup_rotation(plan)?;
+        if rotation.active_series_unit.request.events.as_slice() != [self.commit.event.clone()]
+            || self.commit.event.event_id != rotation.binding.active_series_event_id
+            || self.commit.event.kind != arkret_wire::EventKind::KeyBackupActiveSeries
+            || self.commit.event.actor_id
+                != arkret_wire::ActorId::account(resource.account_id.clone())
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "rotation switch differs from its prepared active-series Event".to_owned(),
+            ));
+        }
+        self.commit
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        validate_worker_step_outcome(
+            &self.transaction,
+            &self.step_outcome,
+            arkret_models_crypto::SecurityTransactionStep::SwitchAuthoritativePointer,
+            2,
+            &rotation_switch_step_evidence(plan, &self.commit.commit)?,
+        )
+    }
+}
+
 impl RecoveryUnitCommitWrite {
     pub fn validate(&self) -> PersistenceResult<()> {
         self.transaction
@@ -301,10 +474,25 @@ pub trait SecurityTransactionStore: Send + Sync {
         transaction_id: &str,
     ) -> PersistenceResult<Option<SecurityTransactionRecord>>;
     async fn update(&self, record: SecurityTransactionRecord) -> PersistenceResult<()>;
-    /// Live SecurityRotation transactions whose coordinator-owned `revoke`
-    /// step has no terminal decision, oldest first. The durable rotation
-    /// worker drives exactly these; the list carries no authority.
-    async fn rotations_awaiting_revoke(&self, limit: u32) -> PersistenceResult<Vec<String>>;
+    /// Live SecurityRotation transactions whose next step is one the durable
+    /// rotation worker owns (`revoke`, `upload_new_material`,
+    /// `switch_authoritative_pointer`), oldest first. The list carries no
+    /// authority; every transition rechecks its own preconditions.
+    async fn rotations_awaiting_worker(&self, limit: u32) -> PersistenceResult<Vec<String>>;
+    /// Stores the planned replacement envelopes, re-verified against the
+    /// authorizing device at the confirmed PCR cut, and accepts
+    /// `upload_new_material` in one PostgreSQL transaction.
+    async fn commit_rotation_upload(
+        &self,
+        write: RotationUploadCommitWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord>;
+    /// Admits the prepared active-series Event through the same-cut pointer
+    /// unit and accepts `switch_authoritative_pointer` in one PostgreSQL
+    /// transaction.
+    async fn commit_rotation_pointer_switch(
+        &self,
+        write: RotationPointerSwitchWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord>;
     async fn step_outcome(
         &self,
         transaction_id: &str,

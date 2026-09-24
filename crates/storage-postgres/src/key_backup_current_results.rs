@@ -191,7 +191,7 @@ fn pointer_rejected(reason: impl Into<String>) -> PgTransactionError {
     PersistenceError::Conflict(reason.into()).into()
 }
 
-fn verification_method_device(
+pub(crate) fn verification_method_device(
     method: &arkret_wire::DidUrl,
     account: &AccountId,
 ) -> Option<DeviceId> {
