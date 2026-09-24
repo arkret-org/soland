@@ -187,30 +187,40 @@ pub(crate) async fn confirmed_key_backup_pointer_for_active_device(
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *conn)
             .await?;
-        let cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+        confirmed_key_backup_pointer_for_active_device_in_connection(
             conn, account_id, device_id, now,
         )
-        .await?
-        .ok_or_else(|| invalid("KeyBackup device has no confirmed PCR status"))?;
-        if cut.generation_conflicted
-            || cut.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
-        {
-            return Err(invalid("KeyBackup device is not active at the PCR cut").into());
-        }
-        let pointer = confirmed_key_backup_pointer_in_connection(conn, account_id)
-            .await?
-            .ok_or_else(|| invalid("KeyBackup pointer has no confirmed PCR head"))?;
-        if pointer.authority_commit_id != cut.authority.authority_commit_id
-            || pointer.control_realm_id != cut.authority.realm_id
-        {
-            return Err(
-                invalid("KeyBackup pointer and device status name different PCR cuts").into(),
-            );
-        }
-        Ok(Some(pointer))
+        .await
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+pub(crate) async fn confirmed_key_backup_pointer_for_active_device_in_connection(
+    conn: &mut AsyncPgConnection,
+    account_id: &AccountId,
+    device_id: &DeviceId,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<BackupActiveSeriesState>, PgTransactionError> {
+    let cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+        conn, account_id, device_id, now,
+    )
+    .await?
+    .ok_or_else(|| invalid("KeyBackup device has no confirmed PCR status"))?;
+    if cut.generation_conflicted
+        || cut.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
+    {
+        return Err(invalid("KeyBackup device is not active at the PCR cut").into());
+    }
+    let pointer = confirmed_key_backup_pointer_in_connection(conn, account_id)
+        .await?
+        .ok_or_else(|| invalid("KeyBackup pointer has no confirmed PCR head"))?;
+    if pointer.authority_commit_id != cut.authority.authority_commit_id
+        || pointer.control_realm_id != cut.authority.realm_id
+    {
+        return Err(invalid("KeyBackup pointer and device status name different PCR cuts").into());
+    }
+    Ok(Some(pointer))
 }
 
 async fn confirmed_key_backup_pointer_in_connection(

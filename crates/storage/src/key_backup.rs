@@ -24,6 +24,12 @@ pub struct KeyBackupListPage {
     pub payloads: Vec<serde_json::Value>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ConfirmedKeyBackupListPage {
+    pub active_series: arkret_models_crypto::BackupActiveSeriesState,
+    pub page: KeyBackupListPage,
+}
+
 use super::{PersistenceResult, Utc, Value, async_trait};
 
 /// A server-issued key-backup delete challenge
@@ -78,6 +84,17 @@ pub trait KeyBackupStore: Send + Sync {
     ) -> PersistenceResult<Option<arkret_models_crypto::BackupActiveSeriesState>> {
         Err(crate::PersistenceError::SchemaViolation(
             "same-cut KeyBackup device authority is unavailable".to_owned(),
+        ))
+    }
+    async fn confirmed_list_page_for_device(
+        &self,
+        _account_id: &arkret_wire::AccountId,
+        _device_id: &arkret_wire::DeviceId,
+        _now: chrono::DateTime<Utc>,
+        _query: &KeyBackupListQuery,
+    ) -> PersistenceResult<ConfirmedKeyBackupListPage> {
+        Err(crate::PersistenceError::SchemaViolation(
+            "same-cut KeyBackup listing is unavailable".to_owned(),
         ))
     }
     async fn issue_unlock_challenge(

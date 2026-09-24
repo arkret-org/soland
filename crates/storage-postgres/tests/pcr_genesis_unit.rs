@@ -29,9 +29,9 @@ use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, DeviceRevocationStore,
-    KeyBackupStore, PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError,
-    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, SecurityTransactionRecord,
-    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
+    KeyBackupListQuery, KeyBackupStore, PcrGenesisCommitOutcome, PcrGenesisCommitUnit,
+    PersistenceError, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
+    SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
 };
 use soland_storage_postgres::{
     Db, PgAuthorityCommitStore, PgDeviceRevocationStore, PgKeyBackupStore, PgPool,
@@ -751,6 +751,28 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         initial_pointer.secret_storage,
         BackupActiveSeriesPointer::Absent {}
     ));
+    let list_query = KeyBackupListQuery {
+        actor_id: arkret_wire::ActorId::account(account.clone()).to_string(),
+        backup_kind: None,
+        series_id: None,
+        after: None,
+        limit: 51,
+    };
+    let confirmed_page = backups
+        .confirmed_list_page_for_device(&account, &authorizer, at, &list_query)
+        .await
+        .unwrap();
+    assert_eq!(confirmed_page.active_series, initial_pointer);
+    assert!(confirmed_page.page.payloads.is_empty());
+    assert_eq!(confirmed_page.page.revision, 0);
+    let mut wrong_actor = list_query.clone();
+    wrong_actor.actor_id = "different-account".to_owned();
+    assert!(
+        backups
+            .confirmed_list_page_for_device(&account, &authorizer, at, &wrong_actor)
+            .await
+            .is_err()
+    );
 
     let target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
     let payload = serde_json::json!({
@@ -911,6 +933,12 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     assert!(
         backups
             .confirmed_active_series_for_device(&account, &authorizer, at)
+            .await
+            .is_err()
+    );
+    assert!(
+        backups
+            .confirmed_list_page_for_device(&account, &authorizer, at, &list_query)
             .await
             .is_err()
     );

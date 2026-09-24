@@ -105,7 +105,7 @@ async fn list(
             .map_err(|error| invalid_cursor(error))?,
         limit: Some(limit),
     };
-    let active_series = active_pointers(state, account).await?;
+    let active_series = active_pointers_for_device(state, account, &session.device_id).await?;
     let filter = arkret_server::cursor_filter_digest(&json!({
         "operation":operation, "series_id":query.series_id, "backup_kind":query.backup_kind,
         "order":"backup_kind,series_id,series_seq,backup_id", "active_series":active_series,
@@ -131,17 +131,30 @@ async fn list(
     } else {
         None
     };
-    let page = state
+    let device_id = arkret_wire::DeviceId::new(session.device_id.clone())
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let confirmed = state
         .key_backups()
-        .list_page(&StorageQuery {
-            actor_id: actor.to_string(),
-            backup_kind: query.backup_kind.map(|kind| kind.as_str().to_owned()),
-            series_id: query.series_id.as_ref().map(ToString::to_string),
-            after: previous.as_ref().map(|p| p.after.clone()),
-            limit: limit + 1,
-        })
+        .confirmed_list_page_for_device(
+            account,
+            &device_id,
+            chrono::Utc::now(),
+            &StorageQuery {
+                actor_id: actor.to_string(),
+                backup_kind: query.backup_kind.map(|kind| kind.as_str().to_owned()),
+                series_id: query.series_id.as_ref().map(ToString::to_string),
+                after: previous.as_ref().map(|p| p.after.clone()),
+                limit: limit + 1,
+            },
+        )
         .await
-        .map_err(internal)?;
+        .map_err(unavailable)?;
+    if confirmed.active_series != active_series {
+        return Err(unavailable(
+            "KeyBackup PCR cut changed while resolving page cursor",
+        ));
+    }
+    let page = confirmed.page;
     if previous
         .as_ref()
         .is_some_and(|p| p.revision != page.revision)
@@ -219,6 +232,21 @@ pub(super) async fn active_pointers(
     Err(unavailable(
         "confirmed key-backup pointer result is unavailable",
     ))
+}
+
+async fn active_pointers_for_device(
+    state: &AppState,
+    account: &arkret_wire::AccountId,
+    device_id: &str,
+) -> Result<BackupActiveSeriesState, AppError> {
+    let device_id = arkret_wire::DeviceId::new(device_id.to_owned())
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    state
+        .key_backups()
+        .confirmed_active_series_for_device(account, &device_id, chrono::Utc::now())
+        .await
+        .map_err(unavailable)?
+        .ok_or_else(|| unavailable("confirmed PCR pointer cut is absent"))
 }
 
 fn invalid_cursor(error: impl std::fmt::Display) -> AppError {
