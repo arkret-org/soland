@@ -12,7 +12,7 @@ use arkret_models_crypto::{
     SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
     SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
     SecurityTransactionAcceptor, SecurityTransactionCreateRequest, SecurityTransactionPreparedPlan,
-    SecurityTransactionStep,
+    SecurityTransactionStep, SecurityTransactionTerminalOutcome,
 };
 use arkret_models_identity::{
     IdentityBindingPurpose, IdentityCreationControlProofKind, PCR_GENESIS_UNIT_KINDS,
@@ -761,7 +761,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             serde_json::json!({"fixture":"prepared-only"}),
         )
         .unwrap(),
-        device_method,
+        device_method.clone(),
         device_seed,
     );
     let mut covering: RealmCommit = genesis.transactions[1].commit.clone();
@@ -1057,4 +1057,164 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .bind::<Uuid,_>(uuid::Uuid::parse_str(transaction_id.as_str().strip_prefix("ak:transaction:").unwrap()).unwrap())
         .get_result::<CountRow>(&mut *conn).await.unwrap();
     assert_eq!(terminal_rows.count, 1);
+
+    let reject_target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let reject_event = device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            serde_json::json!({
+                "device_id": reject_target,
+                "revoked_by": authorizer,
+                "revoked_at": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "reason": "security_rotation"
+            }),
+        )
+        .unwrap(),
+        device_method,
+        device_seed,
+    );
+    let mut reject_commit = covering.clone();
+    reject_commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{}:rejected", reject_event.event_id).as_bytes(),
+    ));
+    reject_commit.stream_position += 1;
+    reject_commit.previous_commit_ref = Some(covering.commit_id.clone());
+    reject_commit.event_ref = reject_event.event_id.clone();
+    reject_commit.committed_at += chrono::TimeDelta::seconds(1);
+    let unsigned =
+        arkret_canonical::canonical::unsigned_value(&reject_commit, &["signature"]).unwrap();
+    reject_commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        DetachedSignatureContext::RealmCommit,
+        DidUrl::new(format!("{}#authority", station_did)).unwrap(),
+        reject_commit.committed_at,
+        &station_key,
+    )
+    .unwrap();
+    let reject_request = SecurityRotationTransactionCreateRequest::from_prepared_rotations(
+        TransactionId::new(format!("ak:transaction:{}", uuid::Uuid::now_v7())).unwrap(),
+        account.clone(),
+        authorizer.clone(),
+        at + chrono::TimeDelta::hours(1),
+        PreparedEventUnit::new(
+            arkret_canonical::DigestSuite::Sha256,
+            PreparedEventBatchRequest {
+                events: vec![reject_event.clone()],
+            },
+        )
+        .unwrap(),
+        hash("second-secret"),
+        decided
+            .resource
+            .security_rotation_plan()
+            .unwrap()
+            .backup_rotations
+            .clone(),
+    )
+    .unwrap();
+    let reject_plan =
+        SecurityTransactionPreparedPlan::SecurityRotation(reject_request.prepared_plan.clone());
+    let (reject_initial, reject_request_bytes) =
+        SecurityTransactionCreateRequest::SecurityRotation(reject_request)
+            .into_initial_resource(reject_plan, at)
+            .unwrap();
+    let reject_id = reject_initial.transaction_id.clone();
+    transactions
+        .create(SecurityTransactionRecord {
+            resource: reject_initial.clone(),
+            canonical_request: reject_request_bytes.clone(),
+        })
+        .await
+        .unwrap();
+    let mut reject_proposed = reject_initial;
+    reject_proposed.revoke_proposal = Some(SecurityRotationRevokeProposal {
+        proposal_event_id: reject_event.event_id.clone(),
+        covering_commit_id: reject_commit.commit_id.clone(),
+    });
+    transactions
+        .commit_revoke_proposal(RevokeProposalCommitWrite {
+            transaction: SecurityTransactionRecord {
+                resource: reject_proposed,
+                canonical_request: reject_request_bytes,
+            },
+            commit: AuthorityCommitTransaction {
+                expected_authority: genesis.transactions[1].expected_authority.clone(),
+                event: reject_event.clone(),
+                commit: reject_commit.clone(),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: at,
+        })
+        .await
+        .unwrap();
+    let mut rejected = transactions.get(reject_id.as_str()).await.unwrap().unwrap();
+    rejected.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
+        proposal_event_id: reject_event.event_id,
+        covering_commit_id: reject_commit.commit_id,
+        result: SecurityRotationRevokeCommandResult::Rejected,
+        decided_at: at + chrono::TimeDelta::seconds(3),
+    });
+    rejected.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Aborted {
+        completed_at: at + chrono::TimeDelta::seconds(3),
+        reason_code: Some("rejected".to_owned()),
+    });
+    let rejected_write = RevokeCommandTerminalWrite {
+        transaction: rejected,
+        step_outcome: None,
+    };
+    let rejected_result = transactions
+        .commit_revoke_command_terminal(rejected_write.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        rejected_result
+            .resource
+            .revoke_command_outcome
+            .as_ref()
+            .unwrap()
+            .result,
+        SecurityRotationRevokeCommandResult::Rejected
+    );
+    assert_eq!(
+        transactions
+            .commit_revoke_command_terminal(rejected_write.clone())
+            .await
+            .unwrap()
+            .resource,
+        rejected_result.resource
+    );
+    let mut changed_terminal = rejected_write;
+    changed_terminal
+        .transaction
+        .resource
+        .revoke_command_outcome
+        .as_mut()
+        .unwrap()
+        .decided_at += chrono::TimeDelta::seconds(1);
+    assert!(
+        transactions
+            .commit_revoke_command_terminal(changed_terminal)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        transactions
+            .get(reject_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .resource,
+        rejected_result.resource,
+    );
+    let rejected_rows = diesel::sql_query("SELECT COUNT(*) AS count FROM security_transaction_step_outcomes WHERE transaction_id=$1 AND step='revoke'")
+        .bind::<Uuid,_>(uuid::Uuid::parse_str(reject_id.as_str().strip_prefix("ak:transaction:").unwrap()).unwrap())
+        .get_result::<CountRow>(&mut *conn).await.unwrap();
+    assert_eq!(rejected_rows.count, 0);
 }
