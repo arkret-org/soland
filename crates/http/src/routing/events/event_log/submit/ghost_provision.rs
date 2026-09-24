@@ -12,7 +12,7 @@ use super::*;
 fn validate_applet_unit(events: &[Event]) -> Result<(), SubmitOneError> {
     if events.is_empty() {
         return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "Applet formal Event unit must not be empty",
         ));
@@ -21,14 +21,14 @@ fn validate_applet_unit(events: &[Event]) -> Result<(), SubmitOneError> {
     for event in events {
         event.validate_for_submit_structural().map_err(|error| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("invalid Applet formal Event: {error}"),
             )
         })?;
         if !ids.insert(event.event_id.clone()) {
             return Err(SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "Applet formal unit repeats an Event id",
             ));
@@ -79,7 +79,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         || events[3].realm_id.as_str() != realm_id
     {
         return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "Ghost formal Event unit actor or Realm binding differs from the validated request",
         ));

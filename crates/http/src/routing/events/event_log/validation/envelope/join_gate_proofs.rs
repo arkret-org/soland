@@ -111,7 +111,7 @@ fn provider_did_controller(proof: &JoinGateProof) -> Result<String, EventValidat
 
 fn gate_check_failed() -> EventValidationError {
     event_validation_error(
-        StatusCode::FORBIDDEN,
+        StatusCode::CONFLICT,
         "failed_precondition",
         "gate_check_failed",
     )

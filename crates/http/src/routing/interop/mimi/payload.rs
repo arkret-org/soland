@@ -27,7 +27,7 @@ pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, 
     let Some(opaque) = body.get("update").and_then(|update| update.get("payload")) else {
         return Err(
             AppError::param_invalid("MIMI room update requires update.payload")
-                .with_wire_code("mimi_payload_invalid"),
+                .with_internal_reason("mimi_payload_invalid"),
         );
     };
     decode_optional_mimi_opaque_json(opaque, "payload_digest", "MIMI room update payload")
@@ -48,19 +48,19 @@ pub(super) fn decode_mimi_ciphertext_payload(
     let bytes =
         arkret_canonical::base64url_decode(ciphertext.payload.as_str()).map_err(|error| {
             AppError::param_invalid(format!("MIMI ciphertext payload is not base64url: {error}"))
-                .with_wire_code("mimi_payload_invalid")
+                .with_internal_reason("mimi_payload_invalid")
         })?;
     if arkret_canonical::sha256_digest(&bytes) != ciphertext.ciphertext_digest.as_str() {
         return Err(
             AppError::param_invalid("MIMI ciphertext payload digest mismatch")
-                .with_wire_code("mimi_payload_digest_mismatch"),
+                .with_internal_reason("mimi_payload_digest_mismatch"),
         );
     }
     arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
         AppError::param_invalid(format!(
             "MIMI ciphertext payload is not canonical JSON: {error}"
         ))
-        .with_wire_code("mimi_payload_invalid")
+        .with_internal_reason("mimi_payload_invalid")
     })
 }
 
@@ -75,12 +75,12 @@ pub(super) fn decode_mimi_associated_data(
     };
     let bytes = arkret_canonical::base64url_decode(payload.as_str()).map_err(|error| {
         AppError::param_invalid(format!("MIMI associated_data is not base64url: {error}"))
-            .with_wire_code("mimi_payload_invalid")
+            .with_internal_reason("mimi_payload_invalid")
     })?;
     if arkret_canonical::sha256_digest(&bytes) != associated_data.payload_digest.as_str() {
         return Err(
             AppError::param_invalid("MIMI associated_data digest mismatch")
-                .with_wire_code("mimi_payload_digest_mismatch"),
+                .with_internal_reason("mimi_payload_digest_mismatch"),
         );
     }
     arkret_canonical::from_canonical_json_slice::<Value>(&bytes)
@@ -89,7 +89,7 @@ pub(super) fn decode_mimi_associated_data(
             AppError::param_invalid(format!(
                 "MIMI associated_data is not canonical JSON: {error}"
             ))
-            .with_wire_code("mimi_payload_invalid")
+            .with_internal_reason("mimi_payload_invalid")
         })
 }
 
@@ -103,7 +103,7 @@ pub(super) fn decode_optional_mimi_opaque_json(
     };
     let value = arkret_canonical::from_canonical_json_slice::<Value>(&bytes).map_err(|error| {
         AppError::param_invalid(format!("{context} is not canonical JSON: {error}"))
-            .with_wire_code("mimi_payload_invalid")
+            .with_internal_reason("mimi_payload_invalid")
     })?;
     Ok(Some(value))
 }
@@ -118,7 +118,7 @@ pub(super) fn decode_mimi_opaque_bytes(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             AppError::param_invalid(format!("{context} requires {digest_field}"))
-                .with_wire_code("mimi_payload_invalid")
+                .with_internal_reason("mimi_payload_invalid")
         })?;
     let payload = match opaque.get("payload").and_then(Value::as_str) {
         Some(payload) if !payload.trim().is_empty() => payload,
@@ -126,13 +126,13 @@ pub(super) fn decode_mimi_opaque_bytes(
     };
     let bytes = arkret_canonical::base64url_decode(payload).map_err(|error| {
         AppError::param_invalid(format!("{context} payload is not base64url: {error}"))
-            .with_wire_code("mimi_payload_invalid")
+            .with_internal_reason("mimi_payload_invalid")
     })?;
     let observed = arkret_canonical::sha256_digest(&bytes);
     if observed != digest {
         return Err(
             AppError::param_invalid(format!("{context} digest mismatch"))
-                .with_wire_code("mimi_payload_digest_mismatch"),
+                .with_internal_reason("mimi_payload_digest_mismatch"),
         );
     }
     Ok(Some(bytes))

@@ -170,7 +170,7 @@ fn handle_unverified_error(canonical_handle: &str) -> AppError {
     AppError::capability_denied(format!(
         "handle `{canonical_handle}` is not bound to the subject account"
     ))
-    .with_wire_code("handle_unverified")
+    .with_internal_reason("handle_unverified")
 }
 
 fn handle_claim_proof(

@@ -62,10 +62,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
         || message.starts_with("direct_conversation_")
         || message == "reaction_outside_scope"
     {
-        (
-            salvo::http::StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-        )
+        (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message == "applet_registration_unauthorized" {
         // applet-integration.md §4 — surface the spec reason verbatim (matches
         // the dedicated install aggregate's `with_wire_code`), not the generic

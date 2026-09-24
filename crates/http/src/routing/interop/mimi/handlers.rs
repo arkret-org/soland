@@ -1173,7 +1173,7 @@ pub(super) async fn mimi_report_abuse(
 
 fn mimi_reporter_resolution_required() -> AppError {
     AppError::capability_denied("MIMI reporter authority admission is unavailable")
-        .with_wire_code("mimi_reporter_resolution_required")
+        .with_internal_reason("mimi_reporter_resolution_required")
 }
 #[endpoint(
     operation_id = "ak.open.mimi.command.proxy_download",

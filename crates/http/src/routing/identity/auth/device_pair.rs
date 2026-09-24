@@ -139,7 +139,7 @@ async fn authorize_account_device_pair(
         return Err(AppError::conflict(
             "new device id must differ from the authorizing session device",
         )
-        .with_wire_code("cannot_pair_current_device"));
+        .with_internal_reason("cannot_pair_current_device"));
     }
     if let Some(existing) = state
         .identities()
@@ -160,7 +160,7 @@ async fn authorize_account_device_pair(
                 == Some(body.authorize_event.event.event_id.as_str());
         if existing.verification_state == "verified" && !exact_authorize_replay {
             return Err(AppError::conflict("device is already authorized")
-                .with_wire_code("device_already_authorized"));
+                .with_internal_reason("device_already_authorized"));
         }
     }
 

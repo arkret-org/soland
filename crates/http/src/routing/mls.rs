@@ -268,9 +268,149 @@ pub fn protocol_router() -> Router {
 }
 
 pub(crate) fn peer_router() -> Router {
-    Router::with_path("keys/keypackages")
-        .push(Router::with_path("claim").post(peer_claim_keypackage))
-        .push(Router::with_path("claims/query").post(peer_query_keypackage_claim))
+    Router::new()
+        .push(
+            Router::with_path("keys/keypackages")
+                .push(Router::with_path("claim").post(peer_claim_keypackage))
+                .push(Router::with_path("claims/query").post(peer_query_keypackage_claim)),
+        )
+        .push(
+            Router::with_path("mls/group-state-material")
+                .post(resolve_peer_mls_group_state_material),
+        )
+}
+
+fn mls_group_state_material_not_found() -> AppError {
+    AppError::not_found("MLS group-state material not found")
+}
+
+// The body is parsed by hand after the peer trust check, so the extractor does
+// not document it; the registry declares this POST with a request schema, so
+// the generated document must still publish it.
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.mls.read.group_state_material",
+    request_body = arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody,
+    tags("governance")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.mls.read.group_state_material.v1"))]
+async fn resolve_peer_mls_group_state_material(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome>
+{
+    use arkret_models_collaboration::mls_group_state_material::{
+        MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES, MlsGroupStateMaterialOutcome,
+        MlsGroupStateMaterialRequestBody, material_digest_from_ref,
+    };
+
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    super::events::peer::validate_peer_request(state, req, true).await?;
+    let source_id = super::events::peer::source_id_from_request(req)?;
+    let request = req
+        .parse_json::<MlsGroupStateMaterialRequestBody>()
+        .await
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
+    request
+        .validate()
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
+
+    let event = state
+        .event_queries()
+        .accepted_event(request.group_state_event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("accepted MLS genesis lookup: {error}")))?
+        .ok_or_else(mls_group_state_material_not_found)?;
+    if event.event_id != request.group_state_event_id.as_str()
+        || event.kind != arkret_wire::EventKind::MlsGenesis.as_str()
+        || event.realm_id.as_deref() != Some(request.realm_id.as_str())
+        || !super::events::peer::peer_event_visibility(state, &source_id, &event).await?
+    {
+        return Err(mls_group_state_material_not_found());
+    }
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload = event
+        .envelope
+        .get("payload")
+        .cloned()
+        .and_then(|payload| serde_json::from_value(payload).ok())
+        .ok_or_else(mls_group_state_material_not_found)?;
+    if payload.effective_scope() != &request.effective_scope
+        || payload.mls_group_id().ok().as_ref() != Some(&request.mls_group_id)
+        || payload.group_info_ref != request.group_info_ref
+        || payload.ratchet_tree_ref != request.ratchet_tree_ref
+    {
+        return Err(mls_group_state_material_not_found());
+    }
+
+    let realm_digest_suite = state
+        .projections()
+        .realm_digest_suite(request.realm_id.as_str());
+    for (field, blob_ref) in [
+        ("group_info_ref", &request.group_info_ref),
+        ("ratchet_tree_ref", &request.ratchet_tree_ref),
+    ] {
+        let suite = material_digest_from_ref(blob_ref)
+            .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?
+            .digest_suite()
+            .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
+        if suite != realm_digest_suite {
+            return Err(mls_group_state_material_schema_violation(format!(
+                "{field} digest suite {} does not match Realm digest_algorithm {}",
+                suite.as_str(),
+                realm_digest_suite.as_str()
+            )));
+        }
+    }
+
+    let limit = request
+        .max_response_bytes
+        .unwrap_or(MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES) as usize;
+    let group_info_bytes =
+        load_mls_public_blob(state, request.group_info_ref.as_str(), limit).await?;
+    let ratchet_tree_bytes = load_mls_public_blob(
+        state,
+        request.ratchet_tree_ref.as_str(),
+        limit - group_info_bytes.len(),
+    )
+    .await?;
+    let outcome = MlsGroupStateMaterialOutcome {
+        realm_id: request.realm_id.clone(),
+        effective_scope: request.effective_scope.clone(),
+        mls_group_id: request.mls_group_id.clone(),
+        epoch: request.epoch,
+        group_state_event_id: request.group_state_event_id.clone(),
+        group_info_ref: request.group_info_ref.clone(),
+        group_info_bytes_b64: arkret_wire::Base64UrlString::new(
+            arkret_canonical::base64url_encode(&group_info_bytes),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
+        ratchet_tree_ref: request.ratchet_tree_ref.clone(),
+        ratchet_tree_bytes_b64: arkret_wire::Base64UrlString::new(
+            arkret_canonical::base64url_encode(&ratchet_tree_bytes),
+        )
+        .map_err(|error| AppError::internal(error.to_string()))?,
+    };
+    // Selector echo, raw-byte content addresses and the response bound are
+    // checked by the same validator the consumer runs; the RFC 9420 check then
+    // proves GroupInfo and the ratchet tree describe the requested group at
+    // epoch zero. Stored material failing either is not served.
+    let validated = outcome
+        .validate_for_request(&request)
+        .map_err(|_| mls_group_state_material_not_found())?;
+    arkret_mls::validate_public_group_state(
+        &validated.group_info_bytes,
+        &validated.ratchet_tree_bytes,
+        request.mls_group_id.as_str(),
+        0,
+    )
+    .map_err(|_| mls_group_state_material_not_found())?;
+    json_ok(outcome)
+}
+
+fn mls_group_state_material_schema_violation(message: impl Into<String>) -> AppError {
+    super::events::peer::schema_violation(format!(
+        "invalid peer MLS group-state material request: {}",
+        message.into()
+    ))
 }
 
 /// Read one public MLS blob (`group_info_ref` / `ratchet_tree_ref`) under a hard
@@ -3064,17 +3204,15 @@ async fn keypackage_device_revocation_gate(
         .await
         .map_err(|_| {
             crate::app_error!(
-                FailedPrecondition,
+                ClaimFailed,
                 "KeyPackage device authorization is unavailable",
             )
-            .with_wire_code("claim_failed")
         })?;
     if selector.authorization_ref.event_id.as_str() != device_authorize_event_id {
         return Err(crate::app_error!(
-            FailedPrecondition,
+            ClaimFailed,
             "KeyPackage device authorization is not current",
-        )
-        .with_wire_code("claim_failed"));
+        ));
     }
     Ok(Some(selector))
 }

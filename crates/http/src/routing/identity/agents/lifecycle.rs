@@ -1131,10 +1131,10 @@ pub(super) async fn lifecycle_transition(
     // Accepted terminal lifecycle is the parent gate for keys and grants.
     let Some(lifecycle_event) = lifecycle_event else {
         if state.config().development_mode {
-            return Err(AppError::unsupported_feature(
+            return Err(crate::app_error!(
+                ControllerSignedEventRequired,
                 "operation requires a controller-signed delegated SDK Event",
-            )
-            .with_wire_code("controller_signed_event_required"));
+            ));
         }
         return Err(AppError::unsupported_feature(
             "production agent lifecycle transitions require protocol-valid delegated fan-out",

@@ -531,7 +531,6 @@ mod tests {
             .expect_err("genesis envelope carrying `supersedes_id` must be series_chain_broken");
         assert_eq!(err.code, ErrorCode::Conflict);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(err.wire_code_override, None);
         assert_eq!(
             err.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN)
@@ -553,7 +552,6 @@ mod tests {
         );
         assert_eq!(err.code, ErrorCode::Conflict);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
-        assert_eq!(err.wire_code_override, None);
         assert_eq!(
             err.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN)

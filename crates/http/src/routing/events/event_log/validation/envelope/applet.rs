@@ -55,14 +55,14 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     let effective_scope: arkret_wire::ScopeRef =
         serde_json::from_value(object.get("scope_ref").cloned().ok_or_else(|| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "applet Event requires scope_ref",
             )
         })?)
         .map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("applet Event scope_ref is invalid: {error}"),
             )
@@ -73,7 +73,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         .cloned()
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "Applet Event requires a complete producer ActorId",
             )
@@ -81,7 +81,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     let executed_by_actor =
         serde_json::from_value::<arkret_wire::ActorId>(executed_by).map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("applet executed_by is invalid: {error}"),
             )
@@ -204,7 +204,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
     let event_actor = serde_json::from_value::<arkret_wire::ActorId>(
         object.get("actor_id").cloned().ok_or_else(|| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "Applet-managed actor Event requires actor_id",
             )
@@ -212,7 +212,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
     )
     .map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("Applet-managed actor Event actor_id is invalid: {error}"),
         )
@@ -251,7 +251,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             serde_json::from_value::<arkret_wire::ScopeRef>(
                 object.get("scope_ref").cloned().ok_or_else(|| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         "Applet-managed actor Event requires scope_ref",
                     )
@@ -259,7 +259,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             )
             .map_err(|error| {
                 event_validation_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     format!("Applet-managed actor Event scope_ref is invalid: {error}"),
                 )
@@ -383,7 +383,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                     .cloned()
                     .ok_or_else(|| {
                         event_validation_error(
-                            StatusCode::BAD_REQUEST,
+                            StatusCode::UNPROCESSABLE_ENTITY,
                             "schema_violation",
                             "Applet-managed write requires a producer ActorId",
                         )
@@ -391,7 +391,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             )
             .map_err(|error| {
                 event_validation_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     format!("invalid Applet producer ActorId: {error}"),
                 )

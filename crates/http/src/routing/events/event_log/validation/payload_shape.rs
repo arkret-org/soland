@@ -61,7 +61,7 @@ fn scan_sidecar_forbidden_wire_fields(value: &Value) -> Result<(), EventValidati
 
 fn sidecar_forbidden_wire_field_error(token: &str) -> EventValidationError {
     event_validation_error(
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         "schema_violation",
         format!(
             "`{token}` is Sidecar-exchange material and must not appear in plaintext event payloads \
@@ -146,7 +146,7 @@ fn wire_rejection_to_validation_error(
     rejection: soland_http::wire_validators::WireRejection,
 ) -> EventValidationError {
     event_validation_error(
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         arkret_wire::ErrorCode::SCHEMA_VIOLATION,
         rejection.message,
     )
@@ -157,7 +157,7 @@ pub(super) fn validate_space_container_lifecycle_payload(
 ) -> Result<(), EventValidationError> {
     let Some(object) = payload.as_object() else {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "space lifecycle payload must be an object",
         ));
@@ -167,21 +167,21 @@ pub(super) fn validate_space_container_lifecycle_payload(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "space lifecycle payload requires space_id",
             )
         })?;
     if validate_space_id(target).is_err() {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "space lifecycle payload space_id must use ak:space:",
         ));
     }
     if object.get("target_ref").is_some() {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "space lifecycle payload must use space_id, not target_ref",
         ));
@@ -198,7 +198,7 @@ pub(super) fn validate_event_audience_fields(
         && audience != *state.service_id()
     {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
+            StatusCode::BAD_REQUEST,
             "audience_mismatch",
             "event audience must bind to this service DID",
         ));
@@ -245,7 +245,7 @@ mod tests {
             &payload,
         )
         .expect_err("plaintext metadata must not carry the exchange binding");
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(error.code, "schema_violation");
     }
 
@@ -262,7 +262,7 @@ mod tests {
             &payload,
         )
         .expect_err("plaintext exchange_id must be rejected in any nested position");
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(error.code, "schema_violation");
     }
 
@@ -281,7 +281,7 @@ mod tests {
                 &payload,
             )
             .expect_err("Sidecar schema ids must never appear as plaintext wire values");
-            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
             assert_eq!(error.code, "schema_violation");
         }
     }

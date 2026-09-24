@@ -17,14 +17,14 @@ pub(crate) async fn submit_sidecar_ensure_batch(
 ) -> Result<(), SubmitOneError> {
     if context_attach_event.kind != EventKind::SidecarContextAttach {
         return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "Sidecar ensure requires a context attach Event",
         ));
     }
     arkret_schema::validate_event_for_submit(&context_attach_event).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid Sidecar attach Event: {error}"),
         )
@@ -35,14 +35,14 @@ pub(crate) async fn submit_sidecar_ensure_batch(
             || create_event.actor_id != context_attach_event.actor_id
         {
             return Err(SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "Sidecar create and attach Events must share Realm and controller",
             ));
         }
         arkret_schema::validate_event_for_submit(&create_event).map_err(|error| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("invalid Sidecar create Event: {error}"),
             )

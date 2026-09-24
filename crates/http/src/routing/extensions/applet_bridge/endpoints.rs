@@ -171,8 +171,10 @@ async fn install_preview_endpoint(
         crate::state::verify_self_event_producer(state, &session, event)
             .await
             .map_err(|error| {
-                AppError::param_invalid(format!("install admin Event producer is invalid: {error}"))
-                    .with_wire_code("signature_invalid")
+                crate::app_error!(
+                    SignatureInvalid,
+                    "install admin Event producer is invalid: {error}"
+                )
             })?;
     }
     let validated_admin =
@@ -239,8 +241,10 @@ async fn install_endpoint(
     let body_digest = crate::util::canonical_digest(&body)?;
     let authoring_request = commit.authoring_request();
     let basis = authoring_request.basis.install().ok_or_else(|| {
-        AppError::param_invalid("install commit requires an install_bot authoring basis")
-            .with_wire_code("applet_install_plan_mismatch")
+        crate::app_error!(
+            AppletInstallPlanMismatch,
+            "install commit requires an install_bot authoring basis"
+        )
     })?;
     if let Some(existing) = applet_record(
         state,
@@ -542,10 +546,10 @@ fn require_first_install_commit_fresh(
     if first_install_commit_is_fresh(expires_at, now) {
         return Ok(());
     }
-    Err(
-        AppError::param_invalid("install authoring request is expired")
-            .with_wire_code("authoring_request_expired"),
-    )
+    Err(crate::app_error!(
+        AuthoringRequestExpired,
+        "install authoring request is expired"
+    ))
 }
 
 fn require_current_station_authoring_binding(
@@ -919,7 +923,7 @@ fn validate_revoke_scope(
     {
         return Err(
             AppError::conflict("effective_scope does not match active applet install")
-                .with_wire_code("applet_effective_scope_mismatch"),
+                .with_internal_reason("applet_effective_scope_mismatch"),
         );
     }
     Ok(())
@@ -1099,10 +1103,10 @@ async fn build_revoke_plan(
         preview.revoke_mode,
         AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeDelegatedSessions
     ) {
-        return Err(AppError::unsupported_feature(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "delegated-session revoke preview requires an Account Authority enumeration binding",
-        )
-        .with_wire_code("failed_precondition"));
+        ));
     }
     let response = &record.install_response;
     if matches!(
@@ -1110,10 +1114,10 @@ async fn build_revoke_plan(
         AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeWidgetOnly
     ) && response.widget_policy_ref.is_some()
     {
-        return Err(AppError::unsupported_feature(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "widget-token revoke preview requires the durable token inventory",
-        )
-        .with_wire_code("failed_precondition"));
+        ));
     }
     let package = &record.package;
     let mut capability_revocations = Vec::new();
@@ -1228,7 +1232,7 @@ fn incomplete_managed_membership_projection(detail: impl std::fmt::Display) -> A
     AppError::conflict(format!(
         "Applet managed membership projection is incomplete: {detail}"
     ))
-    .with_wire_code("applet_install_projection_incomplete")
+    .with_internal_reason("applet_install_projection_incomplete")
 }
 
 async fn exact_managed_membership_removals(
@@ -2672,10 +2676,7 @@ mod revoke_saga_tests {
             }),
         );
         let error = validate_revoke_submissions(&actor, &plan, &request).unwrap_err();
-        assert_eq!(
-            error.wire_code_override.as_deref(),
-            Some("failed_precondition")
-        );
+        assert_eq!(error.wire_code(), "failed_precondition");
     }
 
     fn completed_execution() -> Value {
@@ -2717,10 +2718,7 @@ mod revoke_saga_tests {
             expired.http_status(),
             soland_http::error::error_http_status(expired.code)
         );
-        assert_eq!(
-            expired.wire_code_override.as_deref(),
-            Some("authoring_request_expired")
-        );
+        assert_eq!(expired.wire_code(), "authoring_request_expired");
         assert!(
             require_exact_successful_install_replay(
                 "install-key",
@@ -2775,10 +2773,7 @@ mod revoke_saga_tests {
             "sha256:changed",
         )
         .unwrap_err();
-        assert_eq!(
-            error.wire_code_override.as_deref(),
-            Some("duplicate_conflict")
-        );
+        assert_eq!(error.wire_code(), "duplicate_conflict");
     }
 
     #[test]
@@ -2809,10 +2804,7 @@ mod revoke_saga_tests {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
             .unwrap_err();
-            assert_eq!(
-                error.wire_code_override.as_deref(),
-                Some("duplicate_conflict")
-            );
+            assert_eq!(error.wire_code(), "duplicate_conflict");
         }
     }
 

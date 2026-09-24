@@ -531,7 +531,7 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     if !content_type_ok {
         render_error(
             res,
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            StatusCode::BAD_REQUEST,
             "param_invalid",
             "PATCH requires content-type application/offset+octet-stream",
         );
@@ -869,12 +869,7 @@ async fn complete_resumable_upload(
         return;
     }
     if let Err(message) = enforce_blob_quota(state, actor, realm_id.as_deref(), size_bytes).await {
-        render_error(
-            res,
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "quota_exceeded",
-            message,
-        );
+        render_error(res, StatusCode::FORBIDDEN, "quota_exceeded", message);
         return;
     }
     let sha256 = match sha256_file_hex(&staged_data_path).await {
@@ -897,7 +892,7 @@ async fn complete_resumable_upload(
         crate::metrics::record_digest_mismatch("blob_resumable_patch");
         render_error(
             res,
-            StatusCode::CONFLICT,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "digest_mismatch",
             "provided content_digest does not match blob content",
         );

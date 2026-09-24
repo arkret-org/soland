@@ -18,7 +18,7 @@ pub(in crate::routing) async fn validate_private_invite_envelope(
 ) -> Result<PrivateInviteEnvelope, EventValidationError> {
     let event: arkret_wire::Event = serde_json::from_value(envelope.clone()).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             error.to_string(),
         )
@@ -29,14 +29,14 @@ pub(in crate::routing) async fn validate_private_invite_envelope(
         || !invite_create_actor_is_inviter(object, &session.actor)
     {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
             arkret_wire::ErrorCode::SIGNATURE_INVALID,
             "invite producer binding mismatch",
         ));
     }
     arkret_schema::validate_event_for_submit(&event).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             arkret_wire::ErrorCode::SCHEMA_VIOLATION,
             format!("private Invite Event violates the submit schema: {error}"),
         )

@@ -294,7 +294,7 @@ async fn enforce_recovery_session_grant_operation(
         .map_err(|_| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
+                "temporarily_unavailable",
                 "recovery session authorization state is unavailable",
             )
         })?
@@ -579,7 +579,7 @@ async fn enforce_session_device_revocation_gate(
             tracing::warn!(%error, "PCR device status unavailable at session admission");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
+                "temporarily_unavailable",
                 "PCR device status is unavailable",
             )
         })?;
@@ -736,7 +736,7 @@ async fn enforce_agent_session_authority(
         .map_err(|_| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
+                "temporarily_unavailable",
                 "Agent pairing authority is unavailable",
             )
         })?

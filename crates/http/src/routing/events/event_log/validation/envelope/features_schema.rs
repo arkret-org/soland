@@ -40,7 +40,7 @@ pub(crate) fn validate_event_critical_features(
     {
         let Some(features) = features.as_array() else {
             return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "requirements.features must be an array",
             ));
@@ -48,7 +48,7 @@ pub(crate) fn validate_event_critical_features(
         for feature in features {
             let Some(feature) = feature.as_str() else {
                 return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     "requirements.features entries must be strings",
                 ));
@@ -70,7 +70,7 @@ pub(crate) fn validate_event_critical_features(
     };
     let Some(critical_extensions) = critical_extensions.as_array() else {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "requirements.critical_extensions must be an array",
         ));
@@ -81,7 +81,7 @@ pub(crate) fn validate_event_critical_features(
             Value::Object(object) => {
                 let id = object.get("id").and_then(Value::as_str).ok_or_else(|| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         "requirements.critical_extensions[].id is required",
                     )
@@ -94,7 +94,7 @@ pub(crate) fn validate_event_critical_features(
             }
             _ => {
                 return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     "requirements.critical_extensions entries must be strings or objects",
                 ));
@@ -199,7 +199,7 @@ pub(crate) fn validate_event_schema_and_payload(
 ) -> Result<(), EventValidationError> {
     serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("event envelope violates its typed wire contract: {error}"),
         )
@@ -226,7 +226,7 @@ pub(crate) fn validate_event_schema_and_payload(
     let typed_kind = arkret_wire::EventKind::from(kind);
     arkret_event_draft::validate_event_payload(&typed_kind, payload).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("event payload violates its typed SDK contract: {error}"),
         )
@@ -234,7 +234,7 @@ pub(crate) fn validate_event_schema_and_payload(
     if kind == arkret_wire::EventKind::SchemaDefine.as_str() {
         arkret_schema::validate_schema_definition_payload(payload).map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("event payload violates its registered validator profile: {error}"),
             )
@@ -259,7 +259,7 @@ pub(crate) async fn validate_member_identity_proof(
             ));
         }
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "identity_payload must carry member_identity or encrypted_payload",
         ));
@@ -267,7 +267,7 @@ pub(crate) async fn validate_member_identity_proof(
     let identity: arkret_models_identity::member_identity::MemberIdentity =
         serde_json::from_value(member_identity_value.clone()).map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("MemberIdentity payload shape is invalid: {error}"),
             )
@@ -281,21 +281,21 @@ pub(crate) async fn validate_member_identity_proof(
         || payload_actor.as_ref() != Some(&identity.actor_id)
     {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "MemberIdentity realm_id/actor_id must match the update payload subject",
         ));
     }
     let canonical_bytes = identity.canonical_payload_bytes().map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("MemberIdentity canonical payload failed: {error}"),
         )
     })?;
     let payload_digest = identity.canonical_payload_sha256().map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("MemberIdentity payload digest failed: {error}"),
         )

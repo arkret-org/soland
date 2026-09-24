@@ -840,11 +840,14 @@ impl SubmitOneError {
         } else {
             "reason_detail"
         };
-        Self::new(StatusCode::BAD_REQUEST, "schema_violation", reason_code).with_details(
-            serde_json::json!({
-                detail_key: reason_code,
-            }),
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            reason_code,
         )
+        .with_details(serde_json::json!({
+            detail_key: reason_code,
+        }))
     }
 
     pub(in crate::routing) fn quarantine(
@@ -1060,7 +1063,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
 > {
     request.validate().map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid PCR genesis relay: {error}"),
         )
@@ -1071,7 +1074,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
         .typed_payload::<arkret_wire::event_spec::RealmCreate>()
         .map_err(|error| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("invalid PCR genesis create payload: {error}"),
             )
@@ -1081,7 +1084,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
         .founding_device_descriptor
         .ok_or_else(|| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "PCR genesis omits its founding device descriptor",
             )
@@ -1151,7 +1154,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
         )
         .map_err(|error| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("PCR genesis authority preparation failed: {error}"),
             )
@@ -1237,7 +1240,7 @@ async fn validate_identity_creation_control_proof(
     )
     .map_err(|error| {
         SubmitOneError::new(
-            StatusCode::FORBIDDEN,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "historical_did_evidence_invalid",
             format!("frozen registration DID evidence is invalid: {error}"),
         )

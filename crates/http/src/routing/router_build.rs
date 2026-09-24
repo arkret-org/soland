@@ -639,10 +639,6 @@ mod tests {
         ),
         (
             "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::PeerMlsReadGroupStateMaterialV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::PeerRealmJoinReadApplicationStatusV1,
         ),
         (
@@ -711,12 +707,7 @@ mod tests {
         );
 
         // Registered operations mounted here but selectable by no advertised
-        // bundle, so every call is refused before dispatch. The set may only
-        // shrink:
-        // - the `device_pairing_handoff` bundle is deliberately unadvertised (see `wire.rs`),
-        //   leaving its three open routes unreachable;
-        // - `present_token` is the only mounted member of the unadvertised
-        //   `third_party_invite_handoff` bundle.
+        // bundle are refused before dispatch on every call: none may exist.
         let dead = arkret_wire::ServiceOperationId::ALL
             .iter()
             .copied()
@@ -726,19 +717,9 @@ mod tests {
                     && !locally_advertises(&state, *operation, arkret_wire::BindingKind::Websocket)
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            dead,
-            [
-                arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
-                arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
-                arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
-                arkret_wire::ServiceOperationId::OpenThirdPartyInviteCommandPresentTokenV1,
-            ],
-            "mounted operations the selector refuses"
-        );
         assert!(
-            !dead.contains(&arkret_wire::ServiceOperationId::SelfEventsReadDeliveryStatusV1),
-            "delivery-status is a mounted core read"
+            dead.is_empty(),
+            "mounted operations the selector refuses: {dead:?}"
         );
     }
 

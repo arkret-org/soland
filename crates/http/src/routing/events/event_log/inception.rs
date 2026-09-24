@@ -83,7 +83,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     }
     if refs.len() != 1 || !refs[0].2 {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "root-anchored Event requires exactly one critical DID anchor reference",
         ));
@@ -92,7 +92,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     let (role, anchor_id, _) = refs[0];
     if role != DID_INCEPTION_REF_ROLE || !principal_control_genesis_shape(object, actor_id) {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
+            StatusCode::CONFLICT,
             "failed_precondition",
             "identity-root Event proof is restricted to the Account's PCR genesis",
         ));
@@ -189,7 +189,7 @@ fn principal_control_genesis_resolution_did(
         .and_then(|value| arkret_wire::Did::new(value.to_owned()).ok())
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "principal-control genesis must carry a valid initial_resolution.did",
             )

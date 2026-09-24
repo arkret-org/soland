@@ -966,7 +966,7 @@ pub(super) async fn recovery_session_create(
             "trust_domain `{trust_domain}` does not match active policy `{}`",
             active.trust_domain
         ))
-        .with_wire_code("recovery_policy_trust_domain_mismatch"));
+        .with_internal_reason("recovery_policy_trust_domain_mismatch"));
     }
     if active
         .raw_payload
@@ -980,7 +980,7 @@ pub(super) async fn recovery_session_create(
             "active recovery policy `{}` permits no proof kinds (recovery disabled)",
             active.policy_id
         ))
-        .with_wire_code("recovery_policy_revoked"));
+        .with_internal_reason("recovery_policy_revoked"));
     }
 
     let active_policy: RecoveryPolicy = serde_json::from_value(active.raw_payload.clone())
@@ -1029,7 +1029,7 @@ pub(super) async fn recovery_session_create(
             .map_err(recovery_store_error)?
             .ok_or_else(|| {
                 AppError::conflict("recovery requires a non-empty accepted RealmCommit stream")
-                    .with_wire_code("device_reanchor_frontier_mismatch")
+                    .with_internal_reason("device_reanchor_frontier_mismatch")
             })?;
         (
             RecoveryIdentityModel::PcrPolicy,
@@ -1068,7 +1068,7 @@ pub(super) async fn recovery_session_create(
         .map_err(|error| AppError::internal(format!("PCR authority lookup failed: {error}")))?
         .ok_or_else(|| {
             AppError::conflict("PCR Realm has no current governance authority")
-                .with_wire_code("device_reanchor_frontier_mismatch")
+                .with_internal_reason("device_reanchor_frontier_mismatch")
         })?;
     let authority_context = soland_storage::RecoveryAuthorityContext {
         realm_id: realm_id.clone(),
@@ -1247,7 +1247,7 @@ pub(super) async fn recovery_session_proof_submit(
         return Err(AppError::conflict(format!(
             "proof.kind `{proof_kind}` is not permitted by the bound recovery policy",
         ))
-        .with_wire_code("recovery_proof_kind_not_allowed"));
+        .with_internal_reason("recovery_proof_kind_not_allowed"));
     }
     let bound_policy: RecoveryPolicy = serde_json::from_value(record.policy_payload.clone())
         .map_err(|e| recovery_proof_authority_error(format!("bound policy invalid: {e}")))?;
@@ -1293,7 +1293,7 @@ pub(super) async fn recovery_session_proof_submit(
             return Err(AppError::unsupported_feature(format!(
                 "proof.kind `{other}` verification not yet implemented (C-P3)"
             ))
-            .with_wire_code("recovery_proof_kind_unimplemented"));
+            .with_internal_reason("recovery_proof_kind_unimplemented"));
         }
     }
 
@@ -1771,7 +1771,7 @@ fn trusted_recovery_service_proof_body(
 
 fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
     crate::app_error!(SignatureInvalid, message.into())
-        .with_wire_code("recovery_proof_authority_invalid")
+        .with_internal_reason("recovery_proof_authority_invalid")
 }
 
 /// Canonical recovery-proof transcript binding every session-defining field.

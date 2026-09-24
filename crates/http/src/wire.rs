@@ -586,6 +586,11 @@ pub fn describe(
             "ak.operation_bundle.station.applet_ghost.v1".to_owned(),
             "ak.operation_bundle.station.applet_install.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
+            // service-surface.md 2.7: the client-visible stage/resolve/status
+            // origin is the Station, which forwards the exact DTO to its
+            // Account Authority. The Authority is a Station-internal role, so
+            // its unavailability is runtime availability, not a missing member.
+            "ak.operation_bundle.station.device_pairing_handoff.v1".to_owned(),
             "ak.operation_bundle.station.http_core_current.v1".to_owned(),
             // Private invite dispatch is a mounted optional operation. It has
             // its own bundle so core tier no longer implies reachability.
@@ -916,8 +921,11 @@ mod tests {
             .as_array()
             .expect("operation bundle ids are present");
         assert!(bundles.contains(&json!("ak.operation_bundle.station.describe.v1")));
-        assert!(!bundles.contains(&json!(
+        assert!(bundles.contains(&json!(
             "ak.operation_bundle.station.device_pairing_handoff.v1"
+        )));
+        assert!(!bundles.contains(&json!(
+            "ak.operation_bundle.station.third_party_invite_handoff.v1"
         )));
         assert!(!bundles.contains(&json!(
             "ak.operation_bundle.station.history_key_recovery.v1"
@@ -964,10 +972,14 @@ mod tests {
             arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
         ] {
             assert!(
-                !description
+                description
                     .supports_operation_binding(operation, arkret_wire::BindingKind::HttpJson)
             );
         }
+        assert!(!description.supports_operation_binding(
+            arkret_wire::ServiceOperationId::OpenThirdPartyInviteCommandPresentTokenV1,
+            arkret_wire::BindingKind::HttpJson
+        ));
         for operation in [
             arkret_wire::ServiceOperationId::SelfSecurityTransactionCommandContinueV1,
             arkret_wire::ServiceOperationId::SelfSecurityTransactionCommandCreateV1,

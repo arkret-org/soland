@@ -143,6 +143,10 @@ pub fn render_error_code(code: ErrorCode, res: &mut Response, message: &str) {
 }
 
 #[cfg(test)]
+#[path = "error_status_registry_gate.rs"]
+mod status_registry_gate;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -178,6 +182,29 @@ mod tests {
         let error =
             AppError::new(ErrorCode::Conflict, "bad").with_wire_code(ErrorCode::CAS_CONFLICT);
         assert_eq!(error.wire_code(), "cas_conflict");
+        assert_eq!(error.code, ErrorCode::CasConflict);
+    }
+
+    #[test]
+    fn wire_code_reclassification_always_renders_the_registry_status() {
+        for code in ErrorCode::ALL {
+            for base in [
+                ErrorCode::ParamInvalid,
+                ErrorCode::Conflict,
+                ErrorCode::InternalError,
+            ] {
+                let error = AppError::new(base, "bad").with_wire_code(code.as_str());
+                assert_eq!(error.wire_code(), code.as_str());
+                assert_eq!(error.http_status(), error_http_status(*code), "{code}");
+                let error = AppError::new(base, "bad").with_rejection_code(code.as_str());
+                assert_eq!(error.wire_code(), code.as_str());
+                assert_eq!(error.http_status(), error_http_status(*code), "{code}");
+            }
+        }
+        let error = AppError::new(ErrorCode::Conflict, "denied")
+            .with_status_context(arkret_wire::ErrorStatusContext::SessionIssuanceOrRefresh)
+            .with_wire_code(ErrorCode::ACCOUNT_DEACTIVATED);
+        assert_eq!(error.http_status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -254,12 +281,6 @@ pub struct AppError {
     pub message: Box<str>,
     /// Registry context for codes whose status varies by trust surface.
     pub status_context: Option<arkret_wire::ErrorStatusContext>,
-    /// When set, overrides the wire-form `error.code` string. Use sparingly -
-    /// only for handlers that emit a non-canonical code downstream
-    /// clients (or tests) depend on (e.g. `unknown_schema`,
-    /// `<kind>_not_active`, `batch_not_supported`). New code should prefer
-    /// a canonical `ErrorCode` variant.
-    pub wire_code_override: Option<Box<str>>,
     /// Stable protocol reason code rendered as `error.details.reason_code`.
     /// Registry-locked to `registry/reason-code-registry.json`;
     /// [`AppError::with_reason_code`] enforces the lock in debug builds.
@@ -317,7 +338,6 @@ impl AppError {
             code: rejection.code(),
             message: rejection.message().to_owned().into_boxed_str(),
             status_context: rejection.status_context(),
-            wire_code_override: None,
             reason_code: None,
             reason_detail: None,
             private_detail: None,
@@ -326,23 +346,32 @@ impl AppError {
         }
     }
 
-    /// Override the on-wire `error.code` string. See `wire_code_override` for
-    /// the rationale + caveats.
+    /// Reclassify the rejection under a registered top-level wire code.
     ///
     /// The value MUST be a registered member of
     /// `registry/error-code-registry.json` `codes[]`: `error.code` is the tail
     /// of the RFC 9457 `type` URI, and api-conventions.md 5.1 binds that tail
-    /// to the registry. A registered `reason_codes[]` member is NOT a
-    /// top-level code - route it through [`Self::with_reason_code`]; an
-    /// internal discriminator belongs on [`Self::with_internal_reason`].
-    pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
-        let wire_code = wire_code.into();
-        debug_assert!(
-            ErrorCode::is_registered(&wire_code),
-            "unregistered top-level error code `{wire_code}`; a registered reason code belongs \
-             on `with_reason_code` and an internal discriminator on `with_internal_reason`"
-        );
-        self.wire_code_override = Some(wire_code.into_boxed_str());
+    /// to the registry. The code replaces [`Self::code`] outright, so the HTTP
+    /// status is always the registry status of the code that reaches the wire;
+    /// a wire code can never be rendered under another code's status. A
+    /// registered `reason_codes[]` member is NOT a top-level code - route it
+    /// through [`Self::with_reason_code`]; an internal discriminator belongs on
+    /// [`Self::with_internal_reason`].
+    pub fn with_wire_code(mut self, wire_code: impl AsRef<str>) -> Self {
+        let wire_code = wire_code.as_ref();
+        match ErrorCode::from_wire(wire_code) {
+            Some(code) => self.code = code,
+            None => {
+                if cfg!(debug_assertions) {
+                    panic!(
+                        "unregistered top-level error code `{wire_code}`; a registered reason \
+                         code belongs on `with_reason_code` and an internal discriminator on \
+                         `with_internal_reason`"
+                    );
+                }
+                self.attach_internal_reason(wire_code);
+            }
+        }
         self
     }
 
@@ -376,15 +405,14 @@ impl AppError {
     /// whose registry membership is only known at runtime: reducer and
     /// admission lanes mix registered top-level codes, registered reason codes
     /// and internal discriminators in one `&str`. Dispatching on membership
-    /// here keeps a registered top-level code on `error.code` (its previous
-    /// behaviour) while an unregistered discriminator can no longer reach that
-    /// field.
+    /// here reclassifies the error under a registered top-level code (and its
+    /// registry status) while an unregistered discriminator can no longer
+    /// reach `error.code`.
     pub fn with_rejection_code(mut self, value: impl AsRef<str>) -> Self {
         let value = value.as_ref();
-        if ErrorCode::is_registered(value) {
-            self.wire_code_override = Some(value.into());
-        } else {
-            self.attach_internal_reason(value);
+        match ErrorCode::from_wire(value) {
+            Some(code) => self.code = code,
+            None => self.attach_internal_reason(value),
         }
         self
     }
@@ -451,12 +479,9 @@ impl AppError {
         StatusCode::from_u16(status).expect("registry status codes are valid HTTP statuses")
     }
 
-    /// Resolve the on-wire `error.code` string: explicit override first, then the
-    /// canonical mapping from the registry.
+    /// The on-wire `error.code` string: always the registered [`Self::code`].
     pub fn wire_code(&self) -> &str {
-        self.wire_code_override
-            .as_deref()
-            .unwrap_or_else(|| self.code.as_str())
+        self.code.as_str()
     }
 
     // ── Convenience constructors for the most-used codes. The full

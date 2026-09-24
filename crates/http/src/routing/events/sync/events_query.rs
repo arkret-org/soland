@@ -36,7 +36,7 @@ pub(crate) async fn events_subscribe(_depot: &mut Depot, _req: &mut Request, res
     render_error(
         res,
         StatusCode::SERVICE_UNAVAILABLE,
-        "dependency_missing",
+        "temporarily_unavailable",
         "committed Event stream cut is unavailable",
     );
 }

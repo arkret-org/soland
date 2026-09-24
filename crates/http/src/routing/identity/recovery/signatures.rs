@@ -140,7 +140,7 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
             "session device `{}` is not bound to principal `{principal_id}` with a public key",
             session.device_id
         ))
-        .with_wire_code("recovery_policy_device_unauthorized")
+        .with_internal_reason("recovery_policy_device_unauthorized")
     };
     let device = state
         .identities()

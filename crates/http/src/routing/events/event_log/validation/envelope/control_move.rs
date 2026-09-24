@@ -9,7 +9,7 @@ pub(super) fn validate_control_move_seal_basis(
     {
         if object.contains_key("auth_context") || object.contains_key("seal_basis") {
             return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "ak.realm.create genesis bootstrap must not carry auth_context or seal_basis",
             ));
@@ -21,7 +21,7 @@ pub(super) fn validate_control_move_seal_basis(
     {
         if object.contains_key("auth_context") || object.contains_key("seal_basis") {
             return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "ak.device.reanchor must use payload.pre_fence_seal_frontier and must not carry Event seal fields",
             ));
@@ -59,14 +59,14 @@ pub(super) fn validate_control_move_seal_basis(
         .and_then(Value::as_array)
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::FORBIDDEN,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "Control Move requires seal_basis.leaves",
             )
         })?;
     if leaves.is_empty() {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "Control Move seal_basis.leaves must be non-empty",
         ));

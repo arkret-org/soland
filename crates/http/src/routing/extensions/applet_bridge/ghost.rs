@@ -165,7 +165,7 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
     if record.portal_realm_id != basis.realm_id {
         return Err(
             AppError::conflict("realm_id does not match installed applet effective scope")
-                .with_wire_code("applet_effective_scope_mismatch"),
+                .with_internal_reason("applet_effective_scope_mismatch"),
         );
     }
     if !record.ghost_actors_allowed {
@@ -210,7 +210,7 @@ pub(super) fn ghost_provision_authorization_ref(record: &AppletRecord) -> Result
     }
     Err(
         AppError::conflict("applet ghost provisioning grant projection is incomplete")
-            .with_wire_code("applet_install_projection_incomplete"),
+            .with_internal_reason("applet_install_projection_incomplete"),
     )
 }
 

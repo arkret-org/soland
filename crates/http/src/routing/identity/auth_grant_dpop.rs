@@ -91,7 +91,7 @@ fn configured_service_audience(state: &AppState) -> Result<DidCoreId, AuthError>
     DidCoreId::new(state.service_id().clone()).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "auth_misconfigured",
+            "internal_error",
             "runtime principal service_id is not a core_id",
         )
     })
@@ -397,14 +397,14 @@ async fn introspect_session_grant_remote(
     let Some(introspection_url) = state.config().session_grant_introspection_url.as_deref() else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            "auth_misconfigured",
+            "internal_error",
             "session grant introspection URL is not configured",
         ));
     };
     let Some(channel) = state.config().internal_authority_channel.as_ref() else {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            "auth_misconfigured",
+            "internal_error",
             "session grant introspection internal channel is not configured",
         ));
     };

@@ -71,7 +71,7 @@ pub(crate) async fn set_account_lifecycle_state(
     if previous_state == "erasure_pending" {
         return Err(
             AppError::conflict("accounts pending erasure cannot transition state")
-                .with_wire_code("account_erased"),
+                .with_internal_reason(arkret_wire::ErrorCode::ACCOUNT_ERASED),
         );
     }
     if previous_state == "deactivated" && next_state == "active" {
@@ -82,7 +82,7 @@ pub(crate) async fn set_account_lifecycle_state(
         return Err(AppError::conflict(
             "deactivated accounts cannot be reactivated through the local admin surface",
         )
-        .with_wire_code("account_deactivated"));
+        .with_internal_reason(arkret_wire::ErrorCode::ACCOUNT_DEACTIVATED));
     }
 
     let changed_at = now();

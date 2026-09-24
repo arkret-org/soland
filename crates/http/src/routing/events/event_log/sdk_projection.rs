@@ -458,7 +458,7 @@ pub(in crate::routing) fn validate_device_revoke_submission(
         .unwrap_or_default();
     if device_id.is_empty() {
         return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "ak.device.revoke payload.device_id is required",
         ));

@@ -65,10 +65,10 @@ pub(super) fn approved_scope_grants(
     approved_actions: Vec<String>,
 ) -> Result<Vec<ScopeGrant>, AppError> {
     if approved_actions.is_empty() {
-        return Err(AppError::param_invalid(
+        return Err(crate::app_error!(
+            AppletInstallPlanMismatch,
             "applet install requires at least one approved capability grant action",
-        )
-        .with_wire_code("applet_install_plan_mismatch"));
+        ));
     }
     let (realm_id, circle_ids) = match effective_scope {
         ScopeRef::Realm { realm_id } => (realm_id.clone(), None),
@@ -147,10 +147,10 @@ pub(super) fn validate_admin_install_events(
         || registration.scope_ref != basis.effective_scope
         || registration.producer_proof.is_none()
     {
-        return Err(AppError::param_invalid(
+        return Err(crate::app_error!(
+            AppletInstallPlanMismatch,
             "registration_event must be a caller-signed Applet registration in the exact effective scope",
-        )
-        .with_wire_code("applet_install_plan_mismatch"));
+        ));
     }
     let registration_epoch_evidence = registration_epoch_evidence_from_event(registration)?;
     let expected_registration =
@@ -167,10 +167,10 @@ pub(super) fn validate_admin_install_events(
         .with_wire_code("applet_install_plan_mismatch"));
     }
     if basis.capability_grant_events.is_empty() {
-        return Err(AppError::param_invalid(
+        return Err(crate::app_error!(
+            AppletInstallPlanMismatch,
             "capability_grant_events must contain at least one caller-signed Event",
-        )
-        .with_wire_code("applet_install_plan_mismatch"));
+        ));
     }
 
     let expected_resource = match &basis.effective_scope {
@@ -208,10 +208,10 @@ pub(super) fn validate_admin_install_events(
             || event.producer_proof.is_none()
             || !event_ids.insert(event.event_id.clone())
         {
-            return Err(AppError::param_invalid(
+            return Err(crate::app_error!(
+                AppletInstallPlanMismatch,
                 "every capability_grant_event must be unique, caller-signed, and use the exact effective scope",
-            )
-            .with_wire_code("applet_install_plan_mismatch"));
+            ));
         }
         let payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
             serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
@@ -220,10 +220,10 @@ pub(super) fn validate_admin_install_events(
                 ))
             })?)
             .map_err(|error| {
-                AppError::param_invalid(format!(
-                    "capability_grant_event payload is invalid: {error}"
-                ))
-                .with_wire_code("applet_install_plan_mismatch")
+                crate::app_error!(
+                    AppletInstallPlanMismatch,
+                    format!("capability_grant_event payload is invalid: {error}")
+                )
             })?;
         let grant = payload.grant;
         if grant.issuer_id != event.actor_id
@@ -236,10 +236,10 @@ pub(super) fn validate_admin_install_events(
             || grant.resources.len() != 1
             || grant.resources[0] != expected_resource
         {
-            return Err(AppError::param_invalid(
+            return Err(crate::app_error!(
+                AppletInstallPlanMismatch,
                 "capability grant issuer, subject authority pair, resource, or id does not match the install",
-            )
-            .with_wire_code("applet_install_plan_mismatch"));
+            ));
         }
         let binding_count = grant
             .constraints
@@ -255,17 +255,17 @@ pub(super) fn validate_admin_install_events(
             })
             .count();
         if binding_count != 1 || grant.actions.is_empty() {
-            return Err(AppError::param_invalid(
+            return Err(crate::app_error!(
+                AppletInstallPlanMismatch,
                 "capability grant must carry one exact applet_authority binding and at least one action",
-            )
-            .with_wire_code("applet_install_plan_mismatch"));
+            ));
         }
         for action in &grant.actions {
             if !requested.contains(action) || !approved_actions.insert(action.clone()) {
-                return Err(AppError::param_invalid(
+                return Err(crate::app_error!(
+                    AppletInstallPlanMismatch,
                     "capability grant actions must be unique and requested by the Applet package",
-                )
-                .with_wire_code("applet_install_plan_mismatch"));
+                ));
             }
         }
         grant_ids.push(arkret_identifiers::GrantId::from_event_id(&event.event_id));
@@ -527,15 +527,17 @@ fn verify_install_registration_epoch_payload_jws(
     let document =
         crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             AppError::param_invalid("Applet service DID document could not be resolved")
-                .with_wire_code("applet_registration_epoch_evidence_mismatch")
-                .with_reason_detail(reason)
+                .with_reason_detail(format!(
+                    "applet_registration_epoch_evidence_mismatch: {reason}"
+                ))
         })?;
     evidence
         .validate_against_did_document(&document)
         .map_err(|error| {
             AppError::param_invalid("Applet registration-epoch DID evidence mismatch")
-                .with_wire_code("applet_registration_epoch_evidence_mismatch")
-                .with_reason_detail(error.to_string())
+                .with_reason_detail(format!(
+                    "applet_registration_epoch_evidence_mismatch: {error}"
+                ))
         })?;
     let verification_method =
         arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
@@ -763,10 +765,10 @@ pub(super) async fn register_package_install(
                     .with_internal_reason("applet_managed_actor_reuse_invalid")
             })?;
             if existing.globally_fenced_at.is_some() {
-                return Err(
-                    AppError::conflict("applet managed identity is globally fenced")
-                        .with_wire_code("applet_revoked"),
-                );
+                return Err(crate::app_error!(
+                    AppletRevoked,
+                    "applet managed identity is globally fenced"
+                ));
             }
             let reference = reuse.reuse_existing_managed_actor;
             let initial_package = &existing.initial_package;
@@ -1117,7 +1119,7 @@ pub(super) fn validate_applet_package(
         && expires_at <= chrono::Utc::now()
     {
         return Err(AppError::conflict("applet package has expired")
-            .with_wire_code("applet_package_expired"));
+            .with_internal_reason("applet_package_expired"));
     }
     let expected_digest = package
         .compute_package_digest()
@@ -1181,8 +1183,9 @@ pub(super) fn registration_epoch_producer_signing_key(
     let document =
         crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             AppError::param_invalid("applet service DID document could not be resolved")
-                .with_wire_code("applet_registration_epoch_evidence_mismatch")
-                .with_reason_detail(reason)
+                .with_reason_detail(format!(
+                    "applet_registration_epoch_evidence_mismatch: {reason}"
+                ))
         })?;
     registration_epoch_signing_key_from_document(package, evidence, &document)
 }
@@ -1201,7 +1204,7 @@ fn registration_epoch_signing_key_from_document(
         AppError::param_invalid(format!(
             "applet registration-epoch producer key is invalid: {error}"
         ))
-        .with_wire_code("applet_registration_epoch_signing_key_mismatch")
+        .with_internal_reason("applet_registration_epoch_signing_key_mismatch")
     })?;
     let public_key_multibase =
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(public_key.as_bytes());
@@ -1209,7 +1212,7 @@ fn registration_epoch_signing_key_from_document(
         AppError::param_invalid(format!(
             "applet registration-epoch producer key is invalid: {error}"
         ))
-        .with_wire_code("applet_registration_epoch_signing_key_mismatch")
+        .with_internal_reason("applet_registration_epoch_signing_key_mismatch")
     })
 }
 
@@ -1280,8 +1283,9 @@ fn validated_registration_epoch_evidence(
     let document =
         crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
             AppError::param_invalid("applet service DID document could not be resolved")
-                .with_wire_code("applet_registration_epoch_evidence_mismatch")
-                .with_reason_detail(reason)
+                .with_reason_detail(format!(
+                    "applet_registration_epoch_evidence_mismatch: {reason}"
+                ))
         })?;
     validate_registration_epoch_evidence_for_document(package, evidence, &document)
 }
@@ -1297,14 +1301,15 @@ fn validate_registration_epoch_evidence_for_document(
             AppError::param_invalid(
                 "applet registration_epoch evidence does not match service DID document",
             )
-            .with_wire_code("applet_registration_epoch_evidence_mismatch")
-            .with_reason_detail(reason.to_string())
+            .with_reason_detail(format!(
+                "applet_registration_epoch_evidence_mismatch: {reason}"
+            ))
         })?;
     if !evidence.contains_signing_key(&package.webhook_auth.key_ref) {
         return Err(AppError::param_invalid(
             "applet webhook_auth key_ref is outside registration_epoch evidence",
         )
-        .with_wire_code("applet_registration_epoch_signing_key_mismatch"));
+        .with_internal_reason("applet_registration_epoch_signing_key_mismatch"));
     }
     Ok(())
 }
@@ -1413,7 +1418,8 @@ pub(super) fn registration_epoch_evidence_from_event(
     event: &Event,
 ) -> Result<AppletRegistrationEpochEvidence, AppError> {
     super::registration_epoch_evidence_from_event(event).map_err(|error| {
-        AppError::param_invalid(error).with_wire_code("applet_registration_epoch_evidence_mismatch")
+        AppError::param_invalid(error)
+            .with_internal_reason("applet_registration_epoch_evidence_mismatch")
     })
 }
 
@@ -1952,11 +1958,16 @@ mod tests {
                         .as_bytes(),
                 ),
             );
-            assert_eq!(
-                registration_epoch_signing_key_from_document(&package, &evidence, &rotated)
-                    .unwrap_err()
-                    .wire_code(),
-                "applet_registration_epoch_evidence_mismatch"
+            let error = registration_epoch_signing_key_from_document(&package, &evidence, &rotated)
+                .unwrap_err();
+            assert_eq!(error.wire_code(), "param_invalid");
+            assert!(
+                error
+                    .reason_detail
+                    .as_deref()
+                    .is_some_and(|detail| detail
+                        .starts_with("applet_registration_epoch_evidence_mismatch: ")),
+                "{error:?}"
             );
         }
     }
@@ -1975,11 +1986,12 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        let error = registration_epoch_signing_key_from_document(&package, &evidence, &document)
+            .unwrap_err();
+        assert_eq!(error.wire_code(), "param_invalid");
         assert_eq!(
-            registration_epoch_signing_key_from_document(&package, &evidence, &document)
-                .unwrap_err()
-                .wire_code(),
-            "applet_registration_epoch_signing_key_mismatch"
+            error.reason_detail.as_deref(),
+            Some("applet_registration_epoch_signing_key_mismatch")
         );
     }
 

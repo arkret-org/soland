@@ -131,14 +131,14 @@ pub(in crate::routing) async fn submit_event_value(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let event: Event = serde_json::from_value(envelope).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             error.to_string(),
         )
     })?;
     arkret_schema::validate_event_for_submit(&event).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             error.to_string(),
         )
@@ -164,7 +164,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     submission.validate().map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid Event admission submission: {error}"),
         )
@@ -205,7 +205,7 @@ fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
     let message = error.to_string();
     let (status, code) = match &error {
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
-        ServiceError::SchemaViolation(_) => (StatusCode::BAD_REQUEST, "schema_violation"),
+        ServiceError::SchemaViolation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "schema_violation"),
         ServiceError::Conflict(_) => match error.conflict_code() {
             Some(ConflictCode::DuplicateConflict) => (StatusCode::CONFLICT, "duplicate_conflict"),
             Some(ConflictCode::SnapshotCapacityExceeded) => (
@@ -246,7 +246,7 @@ pub(in crate::routing) async fn submit_initial_event_submission_with_contact_pro
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     submission.validate().map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid Contact Event submission: {error}"),
         )
@@ -348,7 +348,7 @@ pub(super) fn moderation_franking_replay_nonce(
     }
     let payload = envelope.get("payload").cloned().ok_or_else(|| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "moderation report Event has no payload",
         )
@@ -356,7 +356,7 @@ pub(super) fn moderation_franking_replay_nonce(
     let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
         serde_json::from_value(payload).map_err(|error| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("moderation report payload is invalid: {error}"),
             )
@@ -377,7 +377,7 @@ fn membership_compensation_signature_bytes<T: serde::Serialize>(
 ) -> Result<Vec<u8>, SubmitOneError> {
     let mut value = serde_json::to_value(value).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("membership compensation evidence cannot be encoded: {error}"),
         )
@@ -387,14 +387,14 @@ fn membership_compensation_signature_bytes<T: serde::Serialize>(
         .and_then(|object| object.remove("signature"))
         .ok_or_else(|| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "membership compensation signed object is missing signature",
             )
         })?;
     arkret_canonical::canonical_json_bytes(&value).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("membership compensation transcript is not canonicalizable: {error}"),
         )
@@ -580,14 +580,14 @@ pub(super) async fn submit_event_value_with_context(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let event: Event = serde_json::from_value(envelope).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid Event: {error}"),
         )
     })?;
     arkret_schema::validate_event_for_submit(&event).map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid Event: {error}"),
         )
@@ -619,7 +619,7 @@ pub(super) async fn preflight_moderation_dismiss(
         })
         .ok_or_else(|| {
             SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "moderation_dismiss_requires_report_event",
             )
@@ -640,7 +640,7 @@ pub(super) async fn preflight_moderation_dismiss(
             || report.realm_id.as_deref() != Some(operation.realm_id.as_str())
     }) {
         return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "moderation_dismiss_requires_report_event",
         ));
@@ -660,7 +660,7 @@ pub(super) async fn preflight_account_data_cas(
                 .typed_payload::<arkret_wire::event_spec::AccountDataSet>()
                 .map_err(|error| {
                     SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         format!("account_data payload violates its typed SDK contract: {error}"),
                     )
@@ -683,7 +683,7 @@ pub(super) async fn preflight_account_data_cas(
                     .cloned()
                     .ok_or_else(|| {
                         SubmitOneError::new(
-                            StatusCode::BAD_REQUEST,
+                            StatusCode::UNPROCESSABLE_ENTITY,
                             "schema_violation",
                             "account_data payload has no value",
                         )
@@ -703,7 +703,7 @@ pub(super) async fn preflight_account_data_cas(
                 .typed_payload::<arkret_wire::event_spec::AccountBlocklist>()
                 .map_err(|error| {
                     SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         format!(
                             "account blocklist payload violates its typed SDK contract: {error}"
@@ -712,7 +712,7 @@ pub(super) async fn preflight_account_data_cas(
                 })?;
             let expected_revision = typed.version.checked_sub(1).ok_or_else(|| {
                 SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     "account blocklist version must be at least 1",
                 )
@@ -894,7 +894,7 @@ fn validate_actor_profile_state_digest(
 ) -> Result<(), SubmitOneError> {
     let current = current.ok_or_else(|| {
         SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
+            StatusCode::CONFLICT,
             "failed_precondition",
             "profile update target has no settled current row",
         )
@@ -912,7 +912,7 @@ fn validate_actor_profile_state_digest(
         return Ok(());
     }
     Err(SubmitOneError::new(
-        StatusCode::PRECONDITION_FAILED,
+        StatusCode::CONFLICT,
         "failed_precondition",
         "expected_state_digest does not match the current Actor Profile",
     )

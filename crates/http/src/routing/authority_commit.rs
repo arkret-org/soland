@@ -139,7 +139,8 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
             }
             Some(
                 code @ (soland_storage::ConflictCode::EpochUpdateRequired
-                | soland_storage::ConflictCode::MlsActivationRequired),
+                | soland_storage::ConflictCode::MlsActivationRequired
+                | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid),
             ) => {
                 return crate::error::render_error_with_reason_code(
                     res,
@@ -155,15 +156,6 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
     }
     let (status, code) = match &error {
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
-        ServiceError::Conflict(_)
-            if error.conflict_code()
-                == Some(soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid) =>
-        {
-            (
-                StatusCode::CONFLICT,
-                "mimi_room_binding_migration_proof_invalid",
-            )
-        }
         ServiceError::Conflict(_)
             if error.conflict_code()
                 == Some(soland_storage::ConflictCode::RecipientQueueAtCapacity) =>

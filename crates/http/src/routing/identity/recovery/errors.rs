@@ -6,7 +6,7 @@ pub(super) fn stored_recovery_type_error(context: &str, error: impl std::fmt::Di
 
 pub(super) fn recovery_session_store_error(error: PersistenceError) -> AppError {
     if error.conflict_code() == Some(soland_storage::ConflictCode::RecoverySessionAlreadyExists) {
-        AppError::conflict(error.detail()).with_wire_code("recovery_session_conflict")
+        AppError::conflict(error.detail()).with_internal_reason("recovery_session_conflict")
     } else {
         recovery_store_error(error)
     }
@@ -43,7 +43,7 @@ pub(super) fn recovery_policy_store_error(error: PersistenceError) -> AppError {
     // `conflict` is the abstract 409 base code; api-conventions.md 5.1 asks for
     // the precise registry entry. All three arms are the same top-level
     // rejection, discriminated by their registered reason code.
-    let rejection = AppError::conflict(message).with_wire_code("recovery_policy_conflict");
+    let rejection = AppError::conflict(message).with_internal_reason("recovery_policy_conflict");
     match error.conflict_code() {
         Some(soland_storage::ConflictCode::RecoveryPolicyVersionNotMonotonic) => {
             rejection.with_reason_code("recovery_policy_version_not_monotonic")

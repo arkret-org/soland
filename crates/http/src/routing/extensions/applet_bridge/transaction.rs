@@ -195,7 +195,7 @@ fn replayed_transaction_outcome(
     let Some(outcome) = existing.outcome else {
         return Err(
             AppError::conflict("applet transaction is already in progress")
-                .with_wire_code("applet_transaction_in_progress"),
+                .with_internal_reason("applet_transaction_in_progress"),
         );
     };
     serde_json::from_value(outcome).map_err(|error| {

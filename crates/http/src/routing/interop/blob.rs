@@ -178,12 +178,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     }
     if let Err(message) = enforce_blob_quota(state, &session.actor, realm_id.as_deref(), size).await
     {
-        render_error(
-            res,
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "quota_exceeded",
-            message,
-        );
+        render_error(res, StatusCode::FORBIDDEN, "quota_exceeded", message);
         return;
     }
     let upload_purpose = match blob_upload_purpose(req) {
@@ -276,7 +271,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             crate::metrics::record_digest_mismatch("blob_upload_header");
             render_error(
                 res,
-                StatusCode::CONFLICT,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "digest_mismatch",
                 "provided content_digest does not match blob content",
             );
@@ -299,7 +294,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         crate::metrics::record_digest_mismatch("blob_upload_attachment_blob_ref");
         render_error(
             res,
-            StatusCode::CONFLICT,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "digest_mismatch",
             "attachment blob_ref does not address the uploaded blob content",
         );

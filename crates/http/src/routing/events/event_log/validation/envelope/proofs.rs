@@ -119,7 +119,7 @@ pub(crate) async fn validate_event_proofs(
             serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone())).map_err(
                 |error| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         format!("device authorization must be a typed SDK Event: {error}"),
                     )
@@ -140,7 +140,7 @@ pub(crate) async fn validate_event_proofs(
             .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
             .map_err(|error| {
                 event_validation_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     format!("invalid typed ak.device.authorize payload: {error}"),
                 )
@@ -184,7 +184,7 @@ pub(crate) async fn validate_event_proofs(
         .transpose()
         .map_err(|_| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 "executed_by must be a full ActorId",
             )
@@ -300,7 +300,7 @@ pub(crate) async fn validate_event_proofs(
                 >(resolution)
                 .map_err(|error| {
                     event_validation_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         format!("stored PCR resolution is not the public SDK type: {error}"),
                     )
@@ -401,7 +401,7 @@ pub(crate) async fn validate_event_proofs(
                 .transpose()
                 .map_err(|error| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
+                        StatusCode::UNPROCESSABLE_ENTITY,
                         "schema_violation",
                         format!("executed_by is invalid: {error}"),
                     )
@@ -411,7 +411,7 @@ pub(crate) async fn validate_event_proofs(
                 serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone()))
                     .map_err(|error| {
                         event_validation_error(
-                            StatusCode::BAD_REQUEST,
+                            StatusCode::UNPROCESSABLE_ENTITY,
                             "schema_violation",
                             format!("producer Event is invalid: {error}"),
                         )

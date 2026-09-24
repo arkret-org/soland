@@ -19,7 +19,7 @@ pub(crate) async fn validate_device_authorization_binding(
     let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(object.clone()))
         .map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("invalid typed ak.device.authorize Event: {error}"),
             )
@@ -28,7 +28,7 @@ pub(crate) async fn validate_device_authorization_binding(
         .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
         .map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",
                 format!("invalid ak.device.authorize payload: {error}"),
             )
@@ -103,7 +103,7 @@ pub(crate) async fn validate_device_authorization_binding(
                 .map_err(|error| {
                     event_validation_error(
                         StatusCode::SERVICE_UNAVAILABLE,
-                        "failed_precondition",
+                        "temporarily_unavailable",
                         format!("authorizing device lookup failed: {error}"),
                     )
                 })?
@@ -117,7 +117,7 @@ pub(crate) async fn validate_device_authorization_binding(
             .map_err(|error| {
                 event_validation_error(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "failed_precondition",
+                    "temporarily_unavailable",
                     format!("device generation state unavailable: {error}"),
                 )
             })?
@@ -210,7 +210,7 @@ async fn validate_applet_managed_delegation(
     .map_err(|error| {
         event_validation_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "failed_precondition",
+            "temporarily_unavailable",
             format!("Applet-managed principal lookup failed: {error}"),
         )
     })?
@@ -248,7 +248,7 @@ async fn validate_applet_managed_delegation(
             .map_err(|error| {
                 event_validation_error(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "failed_precondition",
+                    "temporarily_unavailable",
                     format!("Applet-managed principal anchor lookup failed: {error}"),
                 )
             })?;
@@ -275,7 +275,7 @@ async fn validate_applet_managed_delegation(
             .map_err(|error| {
                 event_validation_error(
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "failed_precondition",
+                    "temporarily_unavailable",
                     format!("device generation state unavailable: {error}"),
                 )
             })?
@@ -289,7 +289,7 @@ async fn validate_applet_managed_delegation(
 }
 
 fn device_authorization_invalid(message: impl Into<String>) -> EventValidationError {
-    event_validation_error(StatusCode::FORBIDDEN, "failed_precondition", message)
+    event_validation_error(StatusCode::CONFLICT, "failed_precondition", message)
 }
 
 #[cfg(test)]

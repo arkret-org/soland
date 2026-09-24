@@ -74,7 +74,7 @@ fn typed_payload<T: serde::de::DeserializeOwned>(
     let payload = object.get("payload").cloned().unwrap_or(Value::Null);
     serde_json::from_value(payload).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("{kind} payload does not match its registered wire type: {error}"),
         )
@@ -106,14 +106,14 @@ pub(super) fn validate_strand_watch_manage_others_levels(
     // reserved in the registry, so retain the failed-precondition rejection.
     if matches!(payload.level, Some(StrandWatchLevel::Muted)) {
         return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
+            StatusCode::CONFLICT,
             arkret_wire::ErrorCode::FAILED_PRECONDITION,
             "manage_others strand watch writes cannot set level=muted",
         ));
     }
     if payload.level_public == Some(true) {
         return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
+            StatusCode::CONFLICT,
             arkret_wire::ErrorCode::FAILED_PRECONDITION,
             "manage_others strand watch writes cannot set level_public=true",
         ));
@@ -278,7 +278,7 @@ fn event_refs_with_role(
 
 fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError {
     event_validation_error(
-        StatusCode::PRECONDITION_FAILED,
+        StatusCode::CONFLICT,
         arkret_wire::ErrorCode::FAILED_PRECONDITION,
         message,
     )
@@ -373,7 +373,7 @@ mod tests {
 
         let alone = check(&[others_watch_write()]).expect_err("a lone .others write is rejected");
         assert_eq!(alone.code, arkret_wire::ErrorCode::FAILED_PRECONDITION);
-        assert_eq!(alone.status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(alone.status, StatusCode::CONFLICT);
 
         let mut wrong_target = paired_audit();
         wrong_target["payload"]["target_actor_id"] = json!(actor("ak:did_core:web:carol.example"));

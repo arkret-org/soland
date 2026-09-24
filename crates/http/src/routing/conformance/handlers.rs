@@ -825,10 +825,9 @@ pub async fn snapshot(
             && declared != digest
         {
             return Err(crate::app_error!(
-                SchemaViolation,
+                DigestMismatch,
                 format!("snapshot chunk {index} digest mismatch"),
-            )
-            .with_wire_code("realm_state_snapshot_chunk_digest_mismatch"));
+            ));
         }
         chunk_hashes.push(digest);
     }

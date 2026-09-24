@@ -23,7 +23,7 @@ pub(in crate::routing) async fn validate_realm_authority_root_authorization(
         .is_some_and(|reference| reference.starts_with("ak:cell:"))
     {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             "Cell-based authorization_ref is not a v1 Event authority proof",
         ));

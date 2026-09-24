@@ -19,7 +19,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
 ) -> Result<AgentMembershipCascadeOutcome, SubmitOneError> {
     submission.validate().map_err(|error| {
         SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
             format!("invalid Agent membership cascade: {error}"),
         )

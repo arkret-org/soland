@@ -209,7 +209,7 @@ pub(super) async fn fence_applet_record(
 
 pub(super) fn ensure_not_revoked(record: &AppletRecord) -> Result<(), AppError> {
     if record.revoked_at.is_some() || record.status == "revoked" {
-        return Err(AppError::conflict("applet has been revoked").with_wire_code("applet_revoked"));
+        return Err(crate::app_error!(AppletRevoked, "applet has been revoked"));
     }
     Ok(())
 }

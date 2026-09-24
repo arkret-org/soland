@@ -85,10 +85,10 @@ async fn keys_upload(
         )
         .await;
     if !matches!(current_facet.status, DeviceStatus::Active) {
-        return Err(AppError::capability_denied(
+        return Err(crate::app_error!(
+            DeviceGenerationFenced,
             "device is revoked, unverified, or fenced by the current generation",
-        )
-        .with_wire_code("device_generation_fenced"));
+        ));
     }
     verify_keys_upload_device_signature(
         &session.actor,

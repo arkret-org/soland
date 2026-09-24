@@ -16,7 +16,7 @@ pub(super) fn validate_capability_grant_body(
         serde_json::from_value(object.get("payload").cloned().unwrap_or(Value::Null)).map_err(
             |error| {
                 event_validation_error(
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::UNPROCESSABLE_ENTITY,
                     "schema_violation",
                     format!("invalid capability grant payload: {error}"),
                 )
