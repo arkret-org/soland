@@ -58,6 +58,7 @@ mod mls;
 mod moderation;
 mod notifications;
 mod organization_registration;
+mod pcr_device_current_results;
 mod policy;
 mod principal_resolution;
 mod projection;

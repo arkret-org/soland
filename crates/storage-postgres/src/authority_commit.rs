@@ -813,6 +813,14 @@ pub(crate) async fn commit_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_pcr_genesis(conn, transaction, false).await
+}
+
+async fn commit_transaction_in_connection_with_pcr_genesis(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+    verified_pcr_genesis: bool,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
     // The pointer's own signature, accepted device authorization, current
     // generation and source checkpoint must be rechecked at this cut. The
     // current-generation authority result is not yet available here; do not
@@ -820,6 +828,16 @@ pub(crate) async fn commit_transaction_in_connection(
     if transaction.event.kind == arkret_wire::EventKind::KeyBackupActiveSeries {
         return Err(PersistenceError::Conflict(
             "key_backup_active_series_current_device_authority_unavailable".to_owned(),
+        )
+        .into());
+    }
+    if matches!(
+        transaction.event.kind,
+        arkret_wire::EventKind::DeviceAuthorize | arkret_wire::EventKind::DeviceReanchor
+    ) && !verified_pcr_genesis
+    {
+        return Err(PersistenceError::Conflict(
+            "pcr_device_current_authority_unavailable".to_owned(),
         )
         .into());
     }
@@ -1521,7 +1539,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             }
             for transaction in &unit.transactions {
                 queue_event_in_connection(conn, &transaction.event, queued_at).await?;
-                match commit_transaction_in_connection(conn, transaction).await? {
+                match commit_transaction_in_connection_with_pcr_genesis(conn, transaction, true).await? {
                     AuthorityCommitWriteOutcome::Committed => {}
                     AuthorityCommitWriteOutcome::Duplicate => {
                         return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
@@ -1532,6 +1550,16 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                 }
                 commit_realm_authority_root_current_result_in_connection(conn, &transaction.event, &transaction.commit).await?;
                 commit_capability_grant_current_result_in_connection(conn, &transaction.event, &transaction.commit).await?;
+                crate::pcr_device_current_results::project_pcr_device_current_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                    Some(&arkret_wire::AccountId::new(
+                        submission.principal_id.clone(),
+                        submission.account_authority_id.clone(),
+                    )),
+                )
+                .await?;
             }
             let resolution_inserted = sql_query(
                 "WITH inserted AS ( \

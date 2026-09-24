@@ -3,6 +3,8 @@ DROP TABLE IF EXISTS mls_group_states CASCADE;
 DROP TABLE IF EXISTS realm_state_snapshots CASCADE;
 DROP TABLE IF EXISTS realm_authority_handoffs CASCADE;
 DROP TABLE IF EXISTS key_backup_active_series_current_results;
+DROP TABLE IF EXISTS pcr_device_authorization_current_results;
+DROP TABLE IF EXISTS pcr_device_generation_current_results;
 DROP TABLE IF EXISTS realm_commits CASCADE;
 DROP TABLE IF EXISTS realm_authorities CASCADE;
 DROP TABLE IF EXISTS state_seal_signing_positions;

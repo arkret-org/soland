@@ -15,7 +15,7 @@ use arkret_wire::{
     RealmCommitId, RealmId, TrustDomainId, WebOrigin,
 };
 use device_history_fixture::{DeviceHistoryFixture, DeviceHistoryFixtureOptions};
-use diesel::sql_types::{BigInt, Text, Uuid};
+use diesel::sql_types::{BigInt, Jsonb, Text, Uuid};
 use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
@@ -36,6 +36,14 @@ struct CountRow {
     count: i64,
 }
 
+#[derive(diesel::QueryableByName)]
+struct DeviceCurrentRow {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
 /// Every durable row a PCR genesis admission can write for one Realm and its
 /// principal.
 #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
@@ -54,6 +62,10 @@ struct GenesisFootprint {
     principal_resolutions: i64,
     #[diesel(sql_type = BigInt)]
     devices: i64,
+    #[diesel(sql_type = BigInt)]
+    device_generations: i64,
+    #[diesel(sql_type = BigInt)]
+    device_authorizations: i64,
 }
 
 const NO_FOOTPRINT: GenesisFootprint = GenesisFootprint {
@@ -64,6 +76,8 @@ const NO_FOOTPRINT: GenesisFootprint = GenesisFootprint {
     authority_roots: 0,
     principal_resolutions: 0,
     devices: 0,
+    device_generations: 0,
+    device_authorizations: 0,
 };
 
 const ACCEPTED_FOOTPRINT: GenesisFootprint = GenesisFootprint {
@@ -74,6 +88,8 @@ const ACCEPTED_FOOTPRINT: GenesisFootprint = GenesisFootprint {
     authority_roots: 1,
     principal_resolutions: 1,
     devices: 1,
+    device_generations: 1,
+    device_authorizations: 1,
 };
 
 async fn footprint(
@@ -92,7 +108,11 @@ async fn footprint(
              AS authority_roots, \
            (SELECT COUNT(*) FROM principal_resolutions WHERE principal_id=$2) \
              AS principal_resolutions, \
-           (SELECT COUNT(*) FROM devices WHERE actor_id=$2) AS devices",
+           (SELECT COUNT(*) FROM devices WHERE actor_id=$2) AS devices, \
+           (SELECT COUNT(*) FROM pcr_device_generation_current_results WHERE realm_id=$1) \
+             AS device_generations, \
+           (SELECT COUNT(*) FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
+             AS device_authorizations",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(principal_id.as_str())
@@ -442,6 +462,42 @@ async fn founding_device_conflict_rolls_back_both_commits_and_exact_replay_is_st
     let PcrGenesisCommitOutcome::Committed(result) = committed else {
         panic!("first PCR genesis must commit");
     };
+    let mut conn = pool.get().await.unwrap();
+    let generation = diesel::sql_query(
+        "SELECT current_commit_id,value FROM pcr_device_generation_current_results WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(unit.submission.pcr_realm_id.as_str())
+    .get_result::<DeviceCurrentRow>(&mut *conn)
+    .await
+    .unwrap();
+    let authorization = diesel::sql_query(
+        "SELECT current_commit_id,value FROM pcr_device_authorization_current_results \
+         WHERE realm_id=$1 AND device_id=$2",
+    )
+    .bind::<Text, _>(unit.submission.pcr_realm_id.as_str())
+    .bind::<Text, _>(device_id.as_str())
+    .get_result::<DeviceCurrentRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        generation.current_commit_id,
+        result.commits[1].commit_id.as_str()
+    );
+    assert_eq!(
+        authorization.current_commit_id,
+        result.commits[1].commit_id.as_str()
+    );
+    assert_eq!(
+        generation.value,
+        serde_json::json!({"current_device_generation_ref":1})
+    );
+    assert_eq!(authorization.value["authorized_generation_ref"], 1);
+    assert_eq!(
+        authorization.value["device_authorize_event_id"],
+        serde_json::json!(unit.transactions[1].event.event_id)
+    );
+    assert!(authorization.value.get("device_id").is_none());
+    drop(conn);
     assert_eq!(
         store
             .pcr_genesis_replay(&unit.submission, &unit.exact_request_body)

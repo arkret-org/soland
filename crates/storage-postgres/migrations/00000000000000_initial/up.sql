@@ -4289,6 +4289,33 @@ CREATE TABLE key_backup_active_series_current_results (
  CHECK((value->>'series_pointer_version')::bigint >= 1)
 );
 
+-- PCR-local device authority is projected with the accepting RealmCommit.
+-- The generation value is a singleton; authorization is keyed only by
+-- device_id because the PCR already fixes the AccountId.
+CREATE TABLE pcr_device_generation_current_results (
+ realm_id TEXT PRIMARY KEY,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value - 'current_device_generation_ref' = '{}'::jsonb),
+ CHECK((value->>'current_device_generation_ref')::bigint >= 1)
+);
+CREATE TABLE pcr_device_authorization_current_results (
+ realm_id TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,device_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value ? 'device_authorize_event_id'),
+ CHECK(value ? 'authorized_generation_ref'),
+ CHECK(NOT value ? 'device_id')
+);
+
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.
 CREATE TABLE current_selector_origins (
