@@ -4201,6 +4201,19 @@ CREATE TABLE member_state_current_results (
 CREATE INDEX member_state_current_result_membership
  ON member_state_current_results(realm_id,membership,member_id);
 
+-- Ordinary Realm bootstrap singleton families share one physical table. Each
+-- row is keyed by its registered typed-current-result selector kind and by
+-- the exact RealmCommit that first established it.
+CREATE TABLE realm_bootstrap_current_results (
+ realm_id TEXT NOT NULL,
+ result_family TEXT COLLATE "C" NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,result_family)
+);
+
 CREATE TABLE agent_status_current_results (
  realm_id TEXT NOT NULL,
  current_key TEXT NOT NULL,
@@ -4251,6 +4264,29 @@ CREATE TABLE agent_key_current_results (
  UNIQUE(realm_id,agent_id,agent_key_id),
  CHECK(jsonb_typeof(value)='object'),
  CHECK(jsonb_typeof(value->'authorizations')='array')
+);
+
+-- The signed active-series payload is projected only with its accepting
+-- RealmCommit. A missing row is meaningful only after the PCR Realm head has
+-- been read from the same database snapshot.
+CREATE TABLE key_backup_active_series_current_results (
+ realm_id TEXT NOT NULL,
+ current_key TEXT NOT NULL,
+ actor_id JSONB NOT NULL,
+ backup_kind TEXT NOT NULL CHECK(backup_kind = 'secret_storage'),
+ current_event_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,current_key),
+ UNIQUE(realm_id,actor_id,backup_kind),
+ CHECK(jsonb_typeof(actor_id)='object'),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'schema'='ak.schema.key_backup_active_series.v1'),
+ CHECK(value->'actor_id'=actor_id),
+ CHECK(value->>'backup_kind'=backup_kind),
+ CHECK((value->>'series_pointer_version')::bigint >= 1)
 );
 
 -- Irreversible composite subjects need an accepted origin association. This

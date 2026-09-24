@@ -62,6 +62,13 @@ pub struct KeyBackupDeleteGate {
 /// delete-challenge ledger the high-risk DELETE path consumes.
 #[async_trait]
 pub trait KeyBackupStore: Send + Sync {
+    /// Resolve the PCR Realm head and the secret-storage pointer from one
+    /// confirmed database cut. `None` means the PCR/current authority could
+    /// not be established; it must never be mapped to `Absent` by a caller.
+    async fn confirmed_active_series(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<arkret_models_crypto::BackupActiveSeriesState>>;
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,

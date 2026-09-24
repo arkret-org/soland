@@ -1067,6 +1067,16 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
 
 #[async_trait::async_trait]
 impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
+    async fn confirmed_active_series(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> crate::ServiceResult<Option<arkret_models_crypto::BackupActiveSeriesState>> {
+        Ok(self
+            .0
+            .key_backups()
+            .confirmed_active_series(account_id)
+            .await?)
+    }
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,

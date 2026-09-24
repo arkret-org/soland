@@ -1954,6 +1954,10 @@ pub use soland_storage::{
 
 #[async_trait]
 pub trait KeyBackupPort: Send + Sync {
+    async fn confirmed_active_series(
+        &self,
+        account_id: &AccountId,
+    ) -> ServiceResult<Option<arkret_models_crypto::BackupActiveSeriesState>>;
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,
@@ -2146,6 +2150,13 @@ impl SessionService {
 impl KeyBackupService {
     pub fn new(backups: Arc<dyn KeyBackupPort>) -> Self {
         Self { backups }
+    }
+
+    pub async fn confirmed_active_series(
+        &self,
+        account_id: &AccountId,
+    ) -> ServiceResult<Option<arkret_models_crypto::BackupActiveSeriesState>> {
+        self.backups.confirmed_active_series(account_id).await
     }
 
     pub async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>> {

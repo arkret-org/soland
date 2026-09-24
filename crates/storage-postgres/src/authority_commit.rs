@@ -554,7 +554,17 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
 
     let rows = sql_query(
-        "SELECT 'realm_policy'::text AS selector_kind, NULL::jsonb AS selector_subject, \
+        "SELECT result_family AS selector_kind, NULL::jsonb AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM realm_bootstrap_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'realm_authority_root'::text AS selector_kind, NULL::jsonb AS selector_subject, \
+                current_commit_id, current_stream_position, \
+                jsonb_build_object('controller_actor_id',controller_actor_id, \
+                    'controller_epoch',controller_epoch,'authority_generation',authority_generation) AS value \
+           FROM realm_authority_root_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'realm_policy_bundle'::text AS selector_kind, NULL::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM realm_policy_bundle_current_results WHERE realm_id = $1 \
          UNION ALL \
@@ -582,7 +592,17 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         .into_iter()
         .map(|row| {
             let selector = match (row.selector_kind.as_str(), row.selector_subject) {
-                ("realm_policy", None) => arkret_wire::CurrentSelector::RealmPolicy,
+                ("realm_genesis", None) => arkret_wire::CurrentSelector::RealmGenesis,
+                ("realm_authority_root", None) => arkret_wire::CurrentSelector::RealmAuthorityRoot,
+                ("realm_profile", None) => arkret_wire::CurrentSelector::RealmProfile,
+                ("realm_policy_bundle", None) => arkret_wire::CurrentSelector::RealmPolicyBundle,
+                ("realm_join_rule", None) => arkret_wire::CurrentSelector::RealmJoinRule,
+                ("realm_history_access", None) => arkret_wire::CurrentSelector::RealmHistoryAccess,
+                ("realm_discovery", None) => arkret_wire::CurrentSelector::RealmDiscovery,
+                ("realm_alias", None) => arkret_wire::CurrentSelector::RealmAlias,
+                ("realm_plaintext_visible_services", None) => {
+                    arkret_wire::CurrentSelector::RealmPlaintextVisibleServices
+                }
                 ("member_state", Some(actor_id)) => arkret_wire::CurrentSelector::MemberState {
                     actor_id: serde_json::from_value(actor_id).map_err(|error| {
                         PersistenceError::Internal(format!(
@@ -657,7 +677,26 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         })
         .collect::<PersistenceResult<Vec<_>>>()?;
     keyed_entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let current_state_entries = keyed_entries.into_iter().map(|(_, entry)| entry).collect();
+    let current_state_entries: Vec<_> = keyed_entries.into_iter().map(|(_, entry)| entry).collect();
+    let history_access = current_state_entries
+        .iter()
+        .find_map(|entry| match entry {
+            arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::RealmHistoryAccess,
+                value,
+                ..
+            } => Some(value),
+            _ => None,
+        })
+        .map(|value| {
+            serde_json::from_value::<arkret_wire::HistoryAccess>(value.clone()).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "stored Realm history access is invalid: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(arkret_wire::HistoryAccess::AllHistoryForCurrentMembers);
     let stream_floors = heads
         .iter()
         .map(|head| arkret_wire::StreamHistoryFloor {
@@ -671,7 +710,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         visible_stream_heads: heads,
         current_state_entries,
         retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
-            history_access: arkret_wire::HistoryAccess::AllHistoryForCurrentMembers,
+            history_access,
             stream_floors,
         },
     }))
@@ -774,6 +813,16 @@ pub(crate) async fn commit_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    // The pointer's own signature, accepted device authorization, current
+    // generation and source checkpoint must be rechecked at this cut. The
+    // current-generation authority result is not yet available here; do not
+    // allow a generic Event admission to publish an unchecked pointer.
+    if transaction.event.kind == arkret_wire::EventKind::KeyBackupActiveSeries {
+        return Err(PersistenceError::Conflict(
+            "key_backup_active_series_current_device_authority_unavailable".to_owned(),
+        )
+        .into());
+    }
     transaction.validate().map_err(invalid)?;
     if signature_service_id(&transaction.commit.signature)?
         != transaction.expected_authority.service_id
@@ -1150,6 +1199,170 @@ pub(crate) async fn check_self_producer_guard_in_connection(
     }
 }
 
+impl PgAuthorityCommitStore {
+    async fn admit_ordinary_realm_bootstrap_unit_inner(
+        &self,
+        unit: &OrdinaryRealmBootstrapCommitUnit,
+        producer_guards: Option<&[SelfProducerCommitGuard]>,
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome> {
+        unit.validate().map_err(invalid)?;
+        if producer_guards.is_some_and(|guards| guards.len() != unit.transactions.len()) {
+            return Err(invalid(
+                "ordinary Realm bootstrap needs one producer guard per Event",
+            ));
+        }
+        let first = &unit.transactions[0];
+        let authority = &first.expected_authority;
+        if authority.generation != 0
+            || authority.last_handoff_ref.is_some()
+            || authority.authority_ref
+                != arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    first.event.event_id.clone(),
+                )
+        {
+            return Err(invalid(
+                "ordinary Realm bootstrap requires its exact genesis authority",
+            ));
+        }
+        let realm_id = authority.realm_id.as_str().to_owned();
+        let key = unit.submission.idempotency_key.as_uuid().to_string();
+        let commits = unit
+            .transactions
+            .iter()
+            .map(|transaction| transaction.commit.clone())
+            .collect::<Vec<_>>();
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let inserted = sql_query(
+                "INSERT INTO ordinary_realm_bootstrap_units \
+                 (realm_id,idempotency_key,exact_request_body,commits_json,committed_at) \
+                 VALUES ($1,$2,$3,'[]'::jsonb,$4) ON CONFLICT DO NOTHING",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&key)
+            .bind::<Binary, _>(&unit.exact_request_body)
+            .bind::<Timestamptz, _>(queued_at)
+            .execute(&mut *conn)
+            .await?;
+            if inserted == 0 {
+                let existing = sql_query(
+                    "SELECT idempotency_key,exact_request_body,commits_json \
+                     FROM ordinary_realm_bootstrap_units WHERE realm_id=$1 FOR UPDATE",
+                )
+                .bind::<Text, _>(&realm_id)
+                .get_result::<OrdinaryBootstrapUnitRow>(&mut *conn)
+                .await
+                .optional()?;
+                let Some(existing) = existing else {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                };
+                if existing.idempotency_key != key
+                    || existing.exact_request_body != unit.exact_request_body
+                {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                }
+                let stored = decode_json::<Vec<arkret_wire::RealmCommit>>(
+                    existing.commits_json,
+                    "ordinary Realm bootstrap committed unit",
+                )?;
+                if stored.len() != commits.len() || stored.is_empty() {
+                    return Err(PersistenceError::Internal(
+                        "stored ordinary Realm bootstrap unit is incomplete".to_owned(),
+                    )
+                    .into());
+                }
+                return Ok(OrdinaryRealmBootstrapCommitOutcome::Duplicate(stored));
+            }
+            let authority_inserted = sql_query(
+                "INSERT INTO realm_authorities \
+                 (realm_id,generation,service_id,authority_ref,last_handoff_ref) \
+                 VALUES ($1,0,$2,$3,NULL) ON CONFLICT (realm_id) DO NOTHING",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(authority.service_id.as_str())
+            .bind::<Jsonb, _>(
+                serde_json::to_value(&authority.authority_ref)
+                    .map_err(PersistenceError::database)?,
+            )
+            .execute(&mut *conn)
+            .await?;
+            if authority_inserted != 1 {
+                return Err(PersistenceError::Conflict("realm_already_exists".to_owned()).into());
+            }
+            for (index, transaction) in unit.transactions.iter().enumerate() {
+                if let Some(guards) = producer_guards {
+                    check_self_producer_guard_in_connection(
+                        conn,
+                        &transaction.event,
+                        &guards[index],
+                        transaction.commit.committed_at,
+                    )
+                    .await?;
+                }
+                queue_event_in_connection(conn, &transaction.event, queued_at).await?;
+                match commit_transaction_in_connection(conn, transaction).await? {
+                    AuthorityCommitWriteOutcome::Committed => {}
+                    AuthorityCommitWriteOutcome::Duplicate => {
+                        return Err(
+                            PersistenceError::Conflict("duplicate_conflict".to_owned()).into()
+                        );
+                    }
+                    AuthorityCommitWriteOutcome::StaleAuthority(_) => {
+                        return Err(
+                            PersistenceError::Conflict("stale_realm_authority".to_owned()).into(),
+                        );
+                    }
+                }
+                commit_realm_authority_root_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                crate::realm_bootstrap_current_results::commit_ordinary_bootstrap_singleton_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                crate::unit_of_work::commit_parent_membership_current_results(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                commit_capability_grant_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                commit_mimi_room_binding_current_result_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                )
+                .await?;
+                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
+                    .await?;
+            }
+            sql_query(
+                "UPDATE ordinary_realm_bootstrap_units SET commits_json=$2 WHERE realm_id=$1",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Jsonb, _>(serde_json::to_value(&commits).map_err(PersistenceError::database)?)
+            .execute(&mut *conn)
+            .await?;
+            Ok(OrdinaryRealmBootstrapCommitOutcome::Committed(commits))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+}
+
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn pcr_genesis_replay(
@@ -1380,134 +1593,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         unit: &OrdinaryRealmBootstrapCommitUnit,
         queued_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome> {
-        unit.validate().map_err(invalid)?;
-        let first = &unit.transactions[0];
-        let authority = &first.expected_authority;
-        if authority.generation != 0
-            || authority.last_handoff_ref.is_some()
-            || authority.authority_ref
-                != arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
-                    first.event.event_id.clone(),
-                )
-        {
-            return Err(invalid(
-                "ordinary Realm bootstrap requires its exact genesis authority",
-            ));
-        }
-        let realm_id = authority.realm_id.as_str().to_owned();
-        let key = unit.submission.idempotency_key.as_uuid().to_string();
-        let commits = unit
-            .transactions
-            .iter()
-            .map(|transaction| transaction.commit.clone())
-            .collect::<Vec<_>>();
-        let mut conn = pg_conn(&self.pool).await?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let inserted = sql_query(
-                "INSERT INTO ordinary_realm_bootstrap_units \
-                 (realm_id,idempotency_key,exact_request_body,commits_json,committed_at) \
-                 VALUES ($1,$2,$3,'[]'::jsonb,$4) ON CONFLICT DO NOTHING",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(&key)
-            .bind::<Binary, _>(&unit.exact_request_body)
-            .bind::<Timestamptz, _>(queued_at)
-            .execute(&mut *conn)
-            .await?;
-            if inserted == 0 {
-                let existing = sql_query(
-                    "SELECT idempotency_key,exact_request_body,commits_json \
-                     FROM ordinary_realm_bootstrap_units WHERE realm_id=$1 FOR UPDATE",
-                )
-                .bind::<Text, _>(&realm_id)
-                .get_result::<OrdinaryBootstrapUnitRow>(&mut *conn)
-                .await
-                .optional()?;
-                let Some(existing) = existing else {
-                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
-                };
-                if existing.idempotency_key != key
-                    || existing.exact_request_body != unit.exact_request_body
-                {
-                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
-                }
-                let stored = decode_json::<Vec<arkret_wire::RealmCommit>>(
-                    existing.commits_json,
-                    "ordinary Realm bootstrap committed unit",
-                )?;
-                if stored.len() != commits.len() || stored.is_empty() {
-                    return Err(PersistenceError::Internal(
-                        "stored ordinary Realm bootstrap unit is incomplete".to_owned(),
-                    )
-                    .into());
-                }
-                return Ok(OrdinaryRealmBootstrapCommitOutcome::Duplicate(stored));
-            }
-            let authority_inserted = sql_query(
-                "INSERT INTO realm_authorities \
-                 (realm_id,generation,service_id,authority_ref,last_handoff_ref) \
-                 VALUES ($1,0,$2,$3,NULL) ON CONFLICT (realm_id) DO NOTHING",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(authority.service_id.as_str())
-            .bind::<Jsonb, _>(
-                serde_json::to_value(&authority.authority_ref)
-                    .map_err(PersistenceError::database)?,
-            )
-            .execute(&mut *conn)
-            .await?;
-            if authority_inserted != 1 {
-                return Err(PersistenceError::Conflict("realm_already_exists".to_owned()).into());
-            }
-            for transaction in &unit.transactions {
-                queue_event_in_connection(conn, &transaction.event, queued_at).await?;
-                match commit_transaction_in_connection(conn, transaction).await? {
-                    AuthorityCommitWriteOutcome::Committed => {}
-                    AuthorityCommitWriteOutcome::Duplicate => {
-                        return Err(
-                            PersistenceError::Conflict("duplicate_conflict".to_owned()).into()
-                        );
-                    }
-                    AuthorityCommitWriteOutcome::StaleAuthority(_) => {
-                        return Err(
-                            PersistenceError::Conflict("stale_realm_authority".to_owned()).into(),
-                        );
-                    }
-                }
-                commit_realm_authority_root_current_result_in_connection(
-                    conn,
-                    &transaction.event,
-                    &transaction.commit,
-                )
-                .await?;
-                commit_capability_grant_current_result_in_connection(
-                    conn,
-                    &transaction.event,
-                    &transaction.commit,
-                )
-                .await?;
-                commit_mimi_room_binding_current_result_in_connection(
-                    conn,
-                    &transaction.event,
-                    &transaction.commit,
-                )
-                .await?;
-                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
-                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
-            }
-            sql_query(
-                "UPDATE ordinary_realm_bootstrap_units SET commits_json=$2 WHERE realm_id=$1",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Jsonb, _>(serde_json::to_value(&commits).map_err(PersistenceError::database)?)
-            .execute(&mut *conn)
-            .await?;
-            Ok(OrdinaryRealmBootstrapCommitOutcome::Committed(commits))
-        })
-        .await
-        .map_err(PgTransactionError::into_persistence)
+        self.admit_ordinary_realm_bootstrap_unit_inner(unit, None, queued_at)
+            .await
+    }
+
+    async fn admit_self_ordinary_realm_bootstrap_unit(
+        &self,
+        unit: &OrdinaryRealmBootstrapCommitUnit,
+        producer_guards: &[SelfProducerCommitGuard],
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome> {
+        self.admit_ordinary_realm_bootstrap_unit_inner(unit, Some(producer_guards), queued_at)
+            .await
     }
 
     async fn install_genesis_authority(
