@@ -58,10 +58,32 @@ pub(super) fn validate_key_backup_body_typed(
     validate_key_backup_domain_separation_typed(backup)?;
     validate_recovery_policy_ref_shape_typed(backup)?;
     validate_key_backup_auth_data_typed(backup)?;
+    validate_key_backup_ciphertext_digest_typed(backup)?;
     if backup.contents.is_empty() {
         return Err(schema_error("key backup contents must not be empty"));
     }
     // KeyBackup::validate checks every closed secret_storage content entry.
+    Ok(())
+}
+
+pub(super) fn validate_key_backup_ciphertext_digest_typed(
+    backup: &KeyBackup,
+) -> Result<(), AppError> {
+    let ciphertext = arkret_canonical::base64url_decode(backup.ciphertext.as_str())
+        .map_err(|_| schema_error("key backup ciphertext must be canonical base64url"))?;
+    arkret_canonical::verify_digest(&ciphertext, backup.ciphertext_digest.as_str())
+        .map_err(|_| schema_error("key backup ciphertext_digest does not match ciphertext"))
+}
+
+pub(super) fn validate_key_backup_session_device(
+    backup: &KeyBackup,
+    session_device_id: &str,
+) -> Result<(), AppError> {
+    if backup.auth_data.device_id.as_str() != session_device_id {
+        return Err(AppError::capability_denied(
+            "key backup signer device must match the authenticated session device",
+        ));
+    }
     Ok(())
 }
 

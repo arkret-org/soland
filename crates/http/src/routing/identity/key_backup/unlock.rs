@@ -66,12 +66,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         .get("device_public_key_did")
         .and_then(Value::as_str)
         .ok_or_else(key_backup_untrusted_signature)?;
-    if !key_backup_verification_method_matches_device_key(
-        actor_id,
-        device_id,
-        device_public_key,
-        verification_method,
-    ) {
+    if !key_backup_envelope_method_matches_actor_device(actor_id, device_id, verification_method) {
         return Err(crate::app_error!(
             SignatureInvalid,
             "key backup verification method does not match the authorized device key",
@@ -79,6 +74,22 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         .with_reason_code("untrusted_backup_signature"));
     }
     verify_key_backup_auth_data_signature(backup, device_public_key, signature_b64)
+}
+
+fn key_backup_envelope_method_matches_actor_device(
+    principal_id: &str,
+    device_id: &str,
+    verification_method: &str,
+) -> bool {
+    let Ok(method) = arkret_wire::DidUrl::new(verification_method.to_owned()) else {
+        return false;
+    };
+    let Some((did_text, fragment)) = method.as_str().split_once('#') else {
+        return false;
+    };
+    arkret_wire::Did::new(did_text.to_owned())
+        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+        .is_ok_and(|core| core.as_str() == principal_id && fragment == device_id)
 }
 
 fn verify_key_backup_auth_data_signature(
@@ -473,7 +484,8 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey, Verifier as _};
 
     use super::{
-        enforce_unlock_signer_admission, key_backup_verification_method_matches_device_key,
+        enforce_unlock_signer_admission, key_backup_envelope_method_matches_actor_device,
+        key_backup_verification_method_matches_device_key,
     };
 
     #[test]
@@ -545,6 +557,28 @@ mod tests {
             device,
             key,
             did.as_str()
+        ));
+    }
+
+    #[test]
+    fn backup_envelope_method_requires_principal_and_exact_device_fragment() {
+        let did = arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        let principal = arkret_wire::project_did_to_core_id(&did).unwrap();
+        let device = "ak:device:primary";
+        assert!(key_backup_envelope_method_matches_actor_device(
+            principal.as_str(),
+            device,
+            &format!("{did}#{device}")
+        ));
+        assert!(!key_backup_envelope_method_matches_actor_device(
+            principal.as_str(),
+            device,
+            "did:key:z6MkBackup#device"
+        ));
+        assert!(!key_backup_envelope_method_matches_actor_device(
+            principal.as_str(),
+            device,
+            &format!("{did}#other")
         ));
     }
 }

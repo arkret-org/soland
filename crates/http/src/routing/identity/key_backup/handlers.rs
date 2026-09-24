@@ -223,6 +223,26 @@ pub(super) async fn put_key_backup(
     // type (matching `request_schema_ref: key-backup.schema.json`), so the
     // OpenAPI request contract is strong rather than `Value`.
     let backup = backup.into_inner();
+    let account_actor = local_backup_actor(state, &session.actor)?;
+    validate_key_backup_body_typed(&typed_backup_id, &account_actor, &backup)?;
+    validate_key_backup_session_device(&backup, &session.device_id)?;
+    let device_gate =
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            &session.actor,
+            &session.device_id,
+        )
+        .await
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    state
+        .persistence()
+        .device_revocation_gate_status(&device_gate)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ensure_allowed()
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    let backup_value = key_backup_to_value(&backup)?;
+    anchor_key_backup_auth_data_trust_root(state, &session.actor, &backup_value).await?;
     let request_hash = arkret_canonical::canonical_sha256(&backup).map_err(|error| {
         AppError::param_invalid(format!(
             "key backup body is not canonical-hashable: {error}"
@@ -258,14 +278,11 @@ pub(super) async fn put_key_backup(
         }
         None => {}
     }
-    let account_actor = local_backup_actor(state, &session.actor)?;
-    validate_key_backup_body_typed(&typed_backup_id, &account_actor, &backup)?;
     enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
     if backup.encryption.recipient_method == KeyBackupRecipientMethod::RecoveryPublicKey {
         validate_current_recovery_recipient(state, &backup, chrono::Utc::now()).await?;
     }
     let ciphertext_digest = backup.ciphertext_digest.clone();
-    let backup_value = key_backup_to_value(&backup)?;
     let existing = state
         .key_backups()
         .backup(&backup_id)

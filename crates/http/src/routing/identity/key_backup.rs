@@ -125,6 +125,33 @@ mod tests {
         })
     }
 
+    #[test]
+    fn key_backup_ciphertext_digest_uses_decoded_bytes() {
+        let mut body = key_backup_body("secret_storage", passphrase_encryption());
+        let backup = typed_key_backup_body(&body).unwrap();
+        validate_key_backup_ciphertext_digest_typed(&backup).unwrap();
+        body["ciphertext"] = json!("AAAB");
+        let backup = typed_key_backup_body(&body).unwrap();
+        assert!(validate_key_backup_ciphertext_digest_typed(&backup).is_err());
+        body["ciphertext_digest"] = json!(arkret_canonical::blake3_digest([0, 0, 1]));
+        let backup = typed_key_backup_body(&body).unwrap();
+        validate_key_backup_ciphertext_digest_typed(&backup).unwrap();
+    }
+
+    #[test]
+    fn key_backup_signer_must_be_the_session_device() {
+        let body = key_backup_body("secret_storage", passphrase_encryption());
+        let backup = typed_key_backup_body(&body).unwrap();
+        validate_key_backup_session_device(&backup, DEVICE_ID).unwrap();
+        assert!(
+            validate_key_backup_session_device(
+                &backup,
+                "ak:device:01964137-0000-7000-8000-000000000002"
+            )
+            .is_err()
+        );
+    }
+
     fn key_backup_body(backup_kind: &str, encryption: Value) -> Value {
         let mut body = json!({
             "backup_id": BACKUP_ID,
