@@ -3164,7 +3164,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .await
         .unwrap()
         .unwrap();
-    let erase_request = arkret_models_crypto::BackupSeriesEraseRequestBody {
+    let erase_request = soland_storage::BackupSeriesEraseRequestBody {
         transaction_id: transaction_id.clone(),
         transaction_request_digest: switched_record.resource.request_digest.clone(),
         prepared_plan_digest: switched_record.resource.prepared_plan_digest.clone(),
@@ -3173,6 +3173,54 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         authority_commit_id: after.authority_commit_id.clone(),
     };
     let erase_bytes = arkret_canonical::canonical_json_bytes(&erase_request).unwrap();
+    let erase_progress = soland_storage::BackupSeriesEraseProgressRecord {
+        transaction_id: transaction_id.to_string(),
+        canonical_request: erase_bytes.clone(),
+        outcome: soland_storage::BackupSeriesEraseOutcome {
+            transaction_id: transaction_id.clone(),
+            request_digest: Hash::new(arkret_canonical::canonical_sha256(&erase_request).unwrap())
+                .unwrap(),
+            status: soland_storage::BackupSeriesEraseStatus::Partial,
+            series_records: vec![soland_storage::BackupSeriesEraseRow {
+                backup_kind: BackupRotationKind::SecretStorage,
+                previous_series_id: series_one.clone(),
+                new_series_id: series.clone(),
+                status: soland_storage::BackupSeriesEraseRowStatus::Pending,
+                erased_backups: vec![],
+                remaining_backups: erase_request.series[0].old_backups.clone(),
+                reason_code: None,
+            }],
+            confirmation: None,
+        },
+    };
+    let persisted = transactions
+        .begin_backup_erase(erase_progress.clone())
+        .await
+        .unwrap();
+    assert_eq!(persisted.outcome, erase_progress.outcome);
+    let reloaded = transactions
+        .backup_erase_progress(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reloaded.canonical_request, erase_progress.canonical_request);
+    assert_eq!(reloaded.outcome, erase_progress.outcome);
+    assert_eq!(
+        transactions
+            .update_backup_erase(reloaded.clone())
+            .await
+            .unwrap()
+            .outcome,
+        reloaded.outcome
+    );
+    assert_eq!(
+        transactions
+            .begin_backup_erase(erase_progress)
+            .await
+            .unwrap()
+            .outcome,
+        reloaded.outcome
+    );
     transactions
         .begin_step(soland_storage::SecurityTransactionStepAttemptRecord {
             transaction_id: transaction_id.to_string(),

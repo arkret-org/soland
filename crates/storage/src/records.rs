@@ -255,7 +255,7 @@ pub struct SecurityTransactionStepOutcomeRecord {
 pub struct BackupSeriesEraseProgressRecord {
     pub transaction_id: String,
     pub canonical_request: Vec<u8>,
-    pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
+    pub outcome: crate::BackupSeriesEraseOutcome,
 }
 
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor.v1`.

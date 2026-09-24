@@ -613,6 +613,22 @@ pub fn validate_backup_erase_progress_initial(
             "backup erase progress requires a transaction and request".to_owned(),
         ));
     }
+    let request: crate::BackupSeriesEraseRequestBody =
+        serde_json::from_slice(&progress.canonical_request)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let canonical_request = arkret_canonical::canonical_json_bytes(&request)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if progress.canonical_request != canonical_request {
+        return Err(PersistenceError::SchemaViolation(
+            "backup erase progress request must use canonical JSON".to_owned(),
+        ));
+    }
+    if progress.transaction_id != request.transaction_id.as_str() {
+        return Err(PersistenceError::SchemaViolation(
+            "backup erase progress transaction differs from its canonical request".to_owned(),
+        ));
+    }
+    progress.outcome.validate_for_request(&request)?;
     Ok(())
 }
 
@@ -629,6 +645,29 @@ pub fn validate_backup_erase_progress_update(
         ));
     }
     validate_backup_erase_progress_initial(proposed)?;
+    validate_backup_erase_progress_initial(existing)?;
+    let previous = &existing.outcome.series_records[0];
+    let next = &proposed.outcome.series_records[0];
+    if existing.outcome.status == crate::BackupSeriesEraseStatus::Complete
+        && proposed.outcome != existing.outcome
+    {
+        return Err(PersistenceError::Conflict(
+            "completed backup erase progress cannot change".to_owned(),
+        ));
+    }
+    if !previous
+        .erased_backups
+        .iter()
+        .all(|object| next.erased_backups.contains(object))
+        || !next
+            .remaining_backups
+            .iter()
+            .all(|object| previous.remaining_backups.contains(object))
+    {
+        return Err(PersistenceError::Conflict(
+            "backup erase progress cannot restore erased material".to_owned(),
+        ));
+    }
     Ok(())
 }
 

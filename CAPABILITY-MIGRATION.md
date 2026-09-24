@@ -659,29 +659,15 @@ Also stale and misleading:
 hardcodes a schema id string and comments that the registry row has not landed.
 It has — `arkret-spec/spec/v1/artifacts/registry/contract-registry.json:3537`.
 
-### BackupSeriesErase has no SDK DTO at all
+### BackupSeriesErase worker carrier
 
-`crates/http/src/routing/identity/recovery/security_transaction_endpoints.rs`
-references `arkret_models_crypto::BackupSeriesEraseOutcome`,
-`BackupSeriesEraseRow` and `BackupSeriesEraseRowStatus`. None exist. The spec
-side is complete — `keys-operations.schema.json` carries all four `$defs`, and
-the operation is registered (`operation_ids.rs:5993`,
-`grpc: Some("SelfKeys/BackupSeriesErase")`) — so the operation is registered but
-uncallable. This is why the nine `terminal_result` / `series_results` renames in
-that file have no compiler backing: the file could not build before the rename
-either.
-
-One thing to adjudicate before writing the DTO: the preimage domain
-`"ak.backup_series_erase_confirmation_preimage.v1"` covers only
-`{domain, transaction_id, series}` and not the two digests the schema's
-confirmation object carries. Check the prose first to decide whether the digest
-function is missing inputs or the schema carries extra fields. Do not split the
-difference.
-
-Naming to settle at the same time: the spec calls the element type
-`backup_series_erase_record`, soland calls it `BackupSeriesEraseRow`. Both `Row`
-and `Record` are legal NC-TYPE-001 wrapper words, but the same thing should not
-have two names across the boundary.
+The public BackupSeriesErase operation was retired by `arkret-spec ddcfd6ec`.
+SecurityRotation still erases the old backup series as an internal worker
+action. Its durable request, progress row, status and outcome types live in
+`crates/storage/src/backup_series_erase.rs`; they are not exported by the SDK
+or exposed through HTTP. The protocol retains
+`BackupSeriesEraseConfirmation`, whose digest projection is defined by the
+formal SecurityRotation contract.
 
 `arkret_wire::UnsignedRecoveryCompletionAttestationBody` has already moved to
 `{reanchor_event_ref, device_authorization_event_ref}`;

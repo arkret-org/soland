@@ -35,6 +35,7 @@ mod agents;
 mod applets;
 mod audit;
 mod authority_commit;
+mod backup_series_erase;
 mod blobs;
 mod contacts;
 #[cfg(any(test, feature = "test-support"))]
@@ -82,6 +83,7 @@ pub use agents::*;
 pub use applets::*;
 pub use audit::*;
 pub use authority_commit::*;
+pub use backup_series_erase::*;
 pub use blobs::*;
 pub use contacts::*;
 pub use device_pairings::*;
