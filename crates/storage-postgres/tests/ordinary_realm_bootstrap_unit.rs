@@ -14,8 +14,82 @@ use soland_storage::{
     SelfProducerCommitGuard,
 };
 use soland_storage_postgres::{
-    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, test_database::TestDatabase,
+    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, single_member_bootstrap_snapshot_material,
+    test_database::TestDatabase,
 };
+
+#[tokio::test]
+async fn single_member_bootstrap_disclosure_requires_the_complete_accepted_cut() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let stranger = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let material = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.current_state_entries.len(), 8);
+    assert!(
+        single_member_bootstrap_snapshot_material(&pool, &realm_id, &stranger)
+            .await
+            .is_err()
+    );
+
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO relation_current_results \
+         (realm_id,domain_key,domain,relation_id,state,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES ($1,'injected','{}'::jsonb,'ak:relation:test','active',$2,6, \
+                 '{\"id\":\"ak:relation:test\",\"state\":\"active\"}'::jsonb,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(unit.transactions[6].commit.commit_id.as_str())
+    .execute(&mut conn).await.unwrap();
+    assert!(
+        single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+            .await
+            .is_err()
+    );
+    diesel::sql_query("DELETE FROM relation_current_results WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let strand = strand_create_request(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(strand.clone()).await.unwrap();
+    assert!(
+        single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+            .await
+            .is_err()
+    );
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default).await.unwrap();
+    let material = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.current_state_entries.len(), 10);
+}
 
 struct BootstrapHydrationAdapter;
 

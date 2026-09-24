@@ -85,6 +85,7 @@ mod sessions;
 mod settings;
 mod sidecars;
 mod signal;
+mod snapshot_disclosure_gate;
 mod strand_current_results;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
@@ -117,9 +118,9 @@ pub use events::*;
 pub use federation::*;
 pub use governance::*;
 pub use idempotency::*;
-pub use issued_realm_snapshots::*;
 pub use invite_locators::*;
 pub use invite_new_source_ledger::*;
+pub use issued_realm_snapshots::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
@@ -143,6 +144,7 @@ pub use sessions::*;
 pub use settings::*;
 pub use sidecars::*;
 pub use signal::*;
+pub use snapshot_disclosure_gate::*;
 pub use sync_cursor::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_database::TestDatabase;
