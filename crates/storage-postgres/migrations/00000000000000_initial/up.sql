@@ -4247,6 +4247,21 @@ CREATE TABLE realm_set_default_strand_current_results (
  CHECK(jsonb_typeof(value->'default_strand_id')='string')
 );
 
+-- Event-derived Message revision chain. The first accepted create stores the
+-- exact registered payload at the creating Event's covering RealmCommit.
+CREATE TABLE message_revision_current_results (
+ realm_id TEXT NOT NULL,
+ message_id TEXT NOT NULL PRIMARY KEY,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value ? 'strand_id'),
+ CHECK(value->>'track_name'='discussion')
+);
+CREATE INDEX message_revision_current_results_realm ON message_revision_current_results(realm_id,message_id);
+
 -- Ordinary Realm bootstrap singleton families share one physical table. Each
 -- row is keyed by its registered typed-current-result selector kind and by
 -- the exact RealmCommit that first established it.

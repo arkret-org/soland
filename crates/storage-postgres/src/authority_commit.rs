@@ -116,8 +116,8 @@ struct SnapshotCurrentRow {
     current_stream_position: i64,
     #[diesel(sql_type = Jsonb)]
     value: Value,
-    #[diesel(sql_type = Jsonb)]
-    source_stream_ref: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    source_stream_ref: Option<Value>,
 }
 
 #[derive(QueryableByName)]
@@ -583,6 +583,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM realm_set_default_strand_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'message_revision'::text AS selector_kind, to_jsonb(message_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM message_revision_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
@@ -594,7 +598,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
          SELECT 'agent_key'::text AS selector_kind, jsonb_build_object('agent_id',agent_id,'agent_key_id',agent_key_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM agent_key_current_results WHERE realm_id = $1 \
-         ) result JOIN realm_commits covering \
+         ) result LEFT JOIN realm_commits covering \
            ON covering.commit_id=result.current_commit_id \
           AND covering.stream_position=result.current_stream_position \
           AND covering.realm_id=$1",
@@ -635,6 +639,15 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         ))
                     })?,
                 },
+                ("message_revision", Some(message_id)) => {
+                    arkret_wire::CurrentSelector::MessageRevision {
+                        message_id: serde_json::from_value(message_id).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored Message revision selector identity is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
                 ("mimi_room_binding", Some(room_uri)) => {
                     arkret_wire::CurrentSelector::MimiRoomBinding {
                         mimi_room_uri: arkret_wire::MimiRoomUri::new(
@@ -682,7 +695,14 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
             };
             Ok(arkret_wire::TypedCurrentResult::Value {
                 selector,
-                source_stream_ref: decode_json(row.source_stream_ref, "current source stream ref")?,
+                source_stream_ref: decode_json(
+                    row.source_stream_ref.ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "snapshot current result has no covering RealmCommit".to_owned(),
+                        )
+                    })?,
+                    "current source stream ref",
+                )?,
                 revision: arkret_wire::CurrentRevision {
                     commit_id: decode_text(row.current_commit_id, "current RealmCommit id")?,
                     stream_position: to_u64(

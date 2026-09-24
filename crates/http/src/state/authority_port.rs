@@ -161,7 +161,9 @@ impl AuthorityProtocolPort for AppState {
                 .await?;
         if !matches!(
             event.kind,
-            arkret_wire::EventKind::StrandCreate | arkret_wire::EventKind::RealmSetDefaultStrand
+            arkret_wire::EventKind::StrandCreate
+                | arkret_wire::EventKind::RealmSetDefaultStrand
+                | arkret_wire::EventKind::MessageCreate
         ) {
             return Err(ServiceError::Internal(
                 "self Event current-result authority cut is unavailable for this kind".to_owned(),

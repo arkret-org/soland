@@ -138,6 +138,42 @@ fn event(
     event
 }
 
+fn rebind_authorization_ref(
+    request: &mut EventCommitRequest,
+    authorization_event_id: &arkret_wire::EventId,
+) {
+    let event = &mut request.authority_commit.event;
+    event.authorization_ref = Some(arkret_wire::AuthorizationRef::from(
+        authorization_event_id.clone(),
+    ));
+    let preimage =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    event.event_id = arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(&preimage),
+    );
+    let digest = arkret_wire::Hash::new(
+        event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
+    let proof = event.producer_proof.as_mut().unwrap();
+    proof.event_digest = digest.clone();
+    proof.jws = arkret_wire::test_support::structural_only_detached_jws(&digest);
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("message:{}", event.event_id).as_bytes()),
+    );
+    request.event.event_id = event.event_id.to_string();
+    request.event.envelope = serde_json::to_value(&*event).unwrap();
+    request.event.canonical_bytes = preimage;
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+}
+
 fn signature(
     station: &arkret_wire::DidCoreId,
     at: chrono::DateTime<chrono::Utc>,
@@ -278,6 +314,49 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
     }
 }
 
+fn unit_with_plaintext_service() -> OrdinaryRealmBootstrapCommitUnit {
+    let mut unit = unit();
+    let first = &unit.transactions[0];
+    let realm_id = first.event.realm_id.clone();
+    let account = first.event.actor_id.as_account_id().unwrap();
+    let station = first.expected_authority.service_id.clone();
+    let at = first.commit.committed_at;
+    let event = event(
+        arkret_wire::EventKind::RealmPlaintextVisibleServices,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        &account.principal_id,
+        &station,
+        serde_json::json!({"services":[{
+            "service_id":station,
+            "service_kind":"station",
+            "data_classes":["message_content"],
+            "purposes":["test"],
+            "visibility":"private_plaintext"
+        }]}),
+        at,
+    );
+    let mut transaction = unit.transactions[6].clone();
+    transaction.event = event.clone();
+    transaction.commit.event_ref = event.event_id.clone();
+    transaction.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("plaintext:{}", event.event_id).as_bytes()),
+    );
+    transaction.commit.previous_commit_ref = Some(unit.transactions[5].commit.commit_id.clone());
+    unit.transactions[6].commit.stream_position = 7;
+    unit.transactions[6].commit.previous_commit_ref = Some(transaction.commit.commit_id.clone());
+    unit.transactions.insert(6, transaction);
+    unit.submission
+        .events
+        .insert(6, arkret_wire::EventAdmissionSubmission::new(event));
+    unit.exact_request_body = serde_json::to_vec(
+        &SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(unit.submission.clone()),
+    )
+    .unwrap();
+    unit
+}
+
 fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommitRequest {
     let previous = unit.transactions.last().unwrap();
     let realm_id = previous.event.realm_id.clone();
@@ -401,6 +480,51 @@ fn set_default_strand_request(
     request.authority_commit.commit.event_ref = event.event_id.clone();
     request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
         arkret_canonical::sha256_bytes(format!("default:{}", event.event_id).as_bytes()),
+    );
+    request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
+    request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
+    request.event.event_id = event.event_id.to_string();
+    request.event.kind = event.kind.as_str().to_owned();
+    request.event.envelope = serde_json::to_value(&event).unwrap();
+    request.event.canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+    request.projections[0].event_kind = event.kind.as_str().to_owned();
+    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request
+}
+
+fn message_create_request(
+    previous: &EventCommitRequest,
+    strand_id: &arkret_wire::StrandId,
+    body: &str,
+) -> EventCommitRequest {
+    let mut request = previous.clone();
+    let previous_commit = &previous.authority_commit.commit;
+    let previous_event = &previous.authority_commit.event;
+    let realm_id = previous_event.realm_id.clone();
+    let actor = previous_event.actor_id.as_account_id().unwrap();
+    let event = event(
+        arkret_wire::EventKind::MessageCreate,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        &actor.principal_id,
+        &actor.station_id,
+        serde_json::json!({
+            "strand_id":strand_id,
+            "track_name":"discussion",
+            "content":{"kind":"ak.content.text","body":body,"format":"plain"}
+        }),
+        previous_commit.committed_at,
+    );
+    request.authority_commit.event = event.clone();
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("message:{}", event.event_id).as_bytes()),
     );
     request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
     request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
@@ -897,4 +1021,155 @@ async fn default_strand_writes_exact_current_at_commit_and_rejects_dangling_and_
         snapshot_after.current_state_entries
     );
     assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
+}
+
+#[tokio::test]
+async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_strand() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    unit.validate().unwrap();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+
+    let missing = arkret_wire::StrandId::from_event_id(&unit.transactions[0].event.event_id);
+    let denied = message_create_request(&default, &missing, "missing target");
+    assert!(uow.commit_event(denied.clone()).await.is_err());
+    assert!(
+        store
+            .committed_event(&denied.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let mut wrong_ref = message_create_request(&default, &strand_id, "wrong authorization ref");
+    rebind_authorization_ref(&mut wrong_ref, &unit.transactions[6].event.event_id);
+    assert!(uow.commit_event(wrong_ref.clone()).await.is_err());
+    assert!(
+        store
+            .committed_event(&wrong_ref.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let request = message_create_request(&default, &strand_id, "hello");
+    let outcome = uow.commit_event(request.clone()).await.unwrap();
+    assert!(outcome.event_inserted);
+    assert_eq!(outcome.projections_inserted, 1);
+    assert_eq!(outcome.outbox_inserted, 0);
+    let message_id =
+        arkret_wire::MessageId::from_event_id(&request.authority_commit.event.event_id);
+    let realm_id = &unit.transactions[0].event.realm_id;
+    let snapshot = store
+        .realm_state_snapshot_material(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.current_state_entries.iter().any(|entry| {
+        matches!(entry, arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
+            source_stream_ref,
+            revision,
+            value,
+        } if found == &message_id
+            && source_stream_ref == &request.authority_commit.commit.stream_ref
+            && revision.commit_id == request.authority_commit.commit.commit_id
+            && value == &serde_json::to_value(&request.authority_commit.event.payload).unwrap())
+    }));
+    let restarted = ProjectionService::new("message-current-restart-test");
+    restarted
+        .hydrate_from_persistence(
+            &soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
+            &BootstrapHydrationAdapter,
+            [realm_id.clone()],
+        )
+        .await
+        .unwrap();
+    assert!(
+        restarted
+            .snapshot()
+            .messages
+            .contains_key(request.authority_commit.event.event_id.as_str())
+    );
+    assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
+
+    // A newly joined remote account makes the empty federation target set
+    // false. The next Message must leave no Event, Commit or revision row.
+    let remote = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:message-remote.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:message-remote-station.example").unwrap(),
+    ));
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,'join',$3,$4,$5,$6)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(remote.to_string())
+    .bind::<Text, _>(unit.transactions.last().unwrap().commit.commit_id.as_str())
+    .bind::<BigInt, _>(unit.transactions.last().unwrap().commit.stream_position as i64)
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"membership":"join"}))
+    .bind::<diesel::sql_types::Timestamptz, _>(unit.transactions[0].commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let remote_denied = message_create_request(&request, &strand_id, "remote denied");
+    assert!(uow.commit_event(remote_denied.clone()).await.is_err());
+    assert!(
+        store
+            .committed_event(&remote_denied.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let snapshot_after = store
+        .realm_state_snapshot_material(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        snapshot_after
+            .current_state_entries
+            .iter()
+            .filter(|entry| matches!(
+                entry,
+                arkret_wire::TypedCurrentResult::Value {
+                    selector: arkret_wire::CurrentSelector::MessageRevision { .. },
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
+
+    // A current row whose covering Commit vanished cannot silently disappear
+    // from a snapshot (an INNER JOIN previously caused that data loss).
+    let nonexistent = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        b"missing-message-covering-commit",
+    ));
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE message_revision_current_results SET current_commit_id=$1 WHERE message_id=$2",
+    )
+    .bind::<Text, _>(nonexistent.as_str())
+    .bind::<Text, _>(message_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(store.realm_state_snapshot_material(realm_id).await.is_err());
 }

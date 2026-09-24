@@ -84,7 +84,9 @@ async fn ensure_local_only_realm_source_cut(
 ) -> soland_storage::PersistenceResult<()> {
     if !matches!(
         event.kind,
-        arkret_wire::EventKind::StrandCreate | arkret_wire::EventKind::RealmSetDefaultStrand
+        arkret_wire::EventKind::StrandCreate
+            | arkret_wire::EventKind::RealmSetDefaultStrand
+            | arkret_wire::EventKind::MessageCreate
     ) {
         return Ok(());
     }
@@ -2358,6 +2360,10 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::message_revision_current_results::commit_message_create_current_result_in_connection(
             conn, event, commit,
         )
         .await?;
