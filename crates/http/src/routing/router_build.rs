@@ -114,28 +114,11 @@ fn is_tus_operation_path(method: &str, path: &str) -> bool {
             || path.starts_with("/_arkret/self/blob/resumable/"))
 }
 
-/// Core-tier operations that the formal registry places in no operation
-/// bundle: claiming v1 support implies them, so they are selectable without
-/// a bundle advertisement. Only operations this Station mounts belong here.
-///
-/// - `open/realm-authority/bundle` sits in the core `authority_commit` group.
-/// - `self/events/delivery-status` sits in the core `events_sync` group and is
-///   the only fanout-progress read (`service-http-binding.md` §3.1.5).
-const MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE: &[arkret_wire::ServiceOperationId] = &[
-    arkret_wire::ServiceOperationId::OpenRealmAuthorityReadBundleV1,
-    arkret_wire::ServiceOperationId::SelfEventsReadDeliveryStatusV1,
-];
-
 fn locally_advertises(
     state: &AppState,
     operation: arkret_wire::ServiceOperationId,
     binding_kind: arkret_wire::BindingKind,
 ) -> bool {
-    if binding_kind == arkret_wire::BindingKind::HttpJson
-        && MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE.contains(&operation)
-    {
-        return true;
-    }
     if crate::routing::system::describe::build_server_description(state)
         .supports_operation_binding(operation, binding_kind)
     {
@@ -647,57 +630,47 @@ mod tests {
 
     /// Advertised JSON bundle members this Station does not mount. Each is a
     /// false claim: `service-surface.md` §3 allows advertising only bundles
-    /// the deployment really implements, and a frozen bundle cannot drop a
-    /// member. The set may only shrink as the operations are implemented;
-    /// withdrawing `http_core` instead would unselect the whole Station
-    /// surface, which is a protocol decision, not a Station fallback.
+    /// the deployment really implements. This existing implementation backlog
+    /// must shrink as the remaining current-v1 operations are mounted.
     const KNOWN_ADVERTISED_UNMOUNTED: &[(&str, arkret_wire::ServiceOperationId)] = &[
         (
             "ak.operation_bundle.station.applet.v1",
             arkret_wire::ServiceOperationId::EdgeAppletManagedActorCommandAuthorV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
-            arkret_wire::ServiceOperationId::GateAccountCommandFinalizeDevicePairingV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core.v1",
-            arkret_wire::ServiceOperationId::GateAccountReadClaimDevicePairingCodeV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::PeerMlsReadGroupStateMaterialV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::PeerRealmJoinReadApplicationStatusV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::PeerRealmJoinReadPreviewV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfCurrentResultsReadExactV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfMediaServiceBindingReadResolveV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfRealmReadStreamsV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfRealmJoinReadApplicationStatusV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfRealmJoinReadPreviewV1,
         ),
         (
-            "ak.operation_bundle.station.http_core.v1",
+            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfStrandWatchReadCurrentV1,
         ),
     ];
@@ -737,29 +710,11 @@ mod tests {
             "the peer stream scan is mounted"
         );
 
-        // Core-tier members of no registered bundle are implied by v1 and
-        // admitted explicitly; each must be mounted and truly bundle-less.
-        for operation in MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE {
-            assert!(
-                is_mounted(&routes, *operation),
-                "{operation} is not mounted"
-            );
-            assert!(
-                arkret_wire::OPERATION_BUNDLES
-                    .iter()
-                    .all(|bundle| !bundle.contains(*operation, arkret_wire::BindingKind::HttpJson)),
-                "{operation} now belongs to a registered bundle"
-            );
-        }
-
         // Registered operations mounted here but selectable by no advertised
         // bundle, so every call is refused before dispatch. The set may only
         // shrink:
-        // - `self/invites/dispatch` is an extension-tier operation the formal
-        //   registry places in no bundle, so no conformant Describe can
-        //   advertise it (a registry gap, not a Station choice);
-        // - the `device_pairing_handoff` bundle is deliberately unadvertised
-        //   (see `wire.rs`), leaving its three open routes unreachable;
+        // - the `device_pairing_handoff` bundle is deliberately unadvertised (see `wire.rs`),
+        //   leaving its three open routes unreachable;
         // - `present_token` is the only mounted member of the unadvertised
         //   `third_party_invite_handoff` bundle.
         let dead = arkret_wire::ServiceOperationId::ALL
@@ -778,7 +733,6 @@ mod tests {
                 arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
                 arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
                 arkret_wire::ServiceOperationId::OpenThirdPartyInviteCommandPresentTokenV1,
-                arkret_wire::ServiceOperationId::SelfInvitesCommandDispatchV1,
             ],
             "mounted operations the selector refuses"
         );

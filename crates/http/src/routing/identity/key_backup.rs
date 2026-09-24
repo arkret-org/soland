@@ -55,10 +55,6 @@ pub(super) fn protocol_router() -> Router {
                 .post(issue_key_backup_unlock_challenge),
         )
         .push(Router::with_path("keys/backups").get(list_key_backups))
-        .push(
-            Router::with_path("keys/backup-series/erase")
-                .post(super::recovery::backup_series_erase_command),
-        )
 }
 
 pub(crate) fn admin_router() -> Router {

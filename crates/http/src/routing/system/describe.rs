@@ -623,7 +623,7 @@ mod tests {
             ServiceKind::Station,
             vec![
                 "ak.operation_bundle.station.describe.v1".to_owned(),
-                "ak.operation_bundle.station.http_core.v1".to_owned(),
+                "ak.operation_bundle.station.http_core_current.v1".to_owned(),
             ],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
                 base_url: "https://soland.example/".to_owned(),
@@ -656,7 +656,7 @@ mod tests {
             ServiceKind::Station,
             vec![
                 "ak.operation_bundle.station.describe.v1".to_owned(),
-                "ak.operation_bundle.station.http_core.v1".to_owned(),
+                "ak.operation_bundle.station.http_core_current.v1".to_owned(),
             ],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
                 base_url: "https://soland.example/".to_owned(),

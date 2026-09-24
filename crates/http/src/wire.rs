@@ -586,7 +586,10 @@ pub fn describe(
             "ak.operation_bundle.station.applet_ghost.v1".to_owned(),
             "ak.operation_bundle.station.applet_install.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
-            "ak.operation_bundle.station.http_core.v1".to_owned(),
+            "ak.operation_bundle.station.http_core_current.v1".to_owned(),
+            // Private invite dispatch is a mounted optional operation. It has
+            // its own bundle so core tier no longer implies reachability.
+            "ak.operation_bundle.station.invite_delivery.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
             "ak.operation_bundle.station.push.v1".to_owned(),
             // Exact by-ref read of a Snapshot this Station issued to the
@@ -919,7 +922,8 @@ mod tests {
         assert!(!bundles.contains(&json!(
             "ak.operation_bundle.station.history_key_recovery.v1"
         )));
-        assert!(bundles.contains(&json!("ak.operation_bundle.station.http_core.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.station.http_core_current.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.station.invite_delivery.v1")));
         assert!(bundles.contains(&json!("ak.operation_bundle.station.tus_upload.v1")));
         assert!(value["transport_bindings"][0]["extension_profile_required"].is_null());
         assert!(value["transport_bindings"][0].get("operations").is_none());

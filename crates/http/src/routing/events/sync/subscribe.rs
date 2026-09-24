@@ -723,11 +723,9 @@ pub(crate) fn sync_filter_value(
     };
     let mut value = serde_json::to_value(filter).ok()?;
     if let Some(object) = value.as_object_mut() {
-        for field in ["realm_ids", "strand_ids", "event_kinds", "not_event_kinds"] {
-            if let Some(Value::Array(items)) = object.get_mut(field) {
-                items.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-                items.dedup();
-            }
+        if let Some(Value::Array(items)) = object.get_mut("realm_ids") {
+            items.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+            items.dedup();
         }
         // A stream selection is a set: its digest binds the members, not the
         // order they were listed in. Order by canonical `stream_ref` bytes.

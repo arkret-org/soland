@@ -398,8 +398,8 @@ fn basis_from_snapshot(
     (exact_head && exact_floor && &anchor.stream_ref == stream_ref).then(|| {
         StreamWindowStartBasis {
             anchor_kind: StreamWindowAnchorKind::AfterCommittedPrefix,
-            anchor_position: Some(anchor.stream_position),
-            anchor_commit_ref: Some(anchor.commit_id.clone()),
+            anchor_position: anchor.stream_position,
+            anchor_commit_ref: anchor.commit_id.clone(),
             snapshot_ref: snapshot.snapshot_id.clone(),
             governance_generation: snapshot.governance_generation,
             accepted_dependency_refs: None,
@@ -541,7 +541,7 @@ pub(crate) async fn freeze_account_realm_window(
         // The single-member cut proved a readable floor at genesis.
         let limited = start > 0;
         let mut basis = None;
-        if limited {
+        if start > 0 {
             let anchor_view = &chain[start_index - 1];
             let anchor = arkret_wire::CommitStreamHead {
                 stream_ref: stream_ref.clone(),
@@ -598,7 +598,7 @@ pub(crate) async fn freeze_account_realm_window(
             limited,
             window_limit: request.window_limit,
             complete: true,
-            preview_only: (limited && basis.is_none()).then_some(true),
+            preview_only: (start > 0 && basis.is_none()).then_some(true),
             window_start_basis: basis,
             e2ee_epoch: None,
         };
