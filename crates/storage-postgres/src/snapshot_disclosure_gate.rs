@@ -12,8 +12,9 @@ use arkret_wire::{
 use diesel::sql_types::Text as SqlText;
 
 use super::{
-    AsyncConnection, Bool, Jsonb, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RunQueryDsl, Text, Value, pg_conn, sql_query,
+    AsyncConnection, AsyncPgConnection, Bool, Jsonb, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Value,
+    pg_conn, sql_query,
 };
 
 #[derive(QueryableByName)]
@@ -30,6 +31,14 @@ struct CommittedRow {
 struct TableNameRow {
     #[diesel(sql_type = SqlText)]
     tablename: String,
+}
+
+#[derive(QueryableByName)]
+struct TenureRow {
+    #[diesel(sql_type = SqlText)]
+    service_id: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    generation: i64,
 }
 
 #[derive(QueryableByName)]
@@ -261,77 +270,154 @@ pub async fn single_member_bootstrap_snapshot_material(
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *conn)
             .await?;
-        let Some(material) =
-            crate::authority_commit::realm_state_snapshot_material_in_connection(conn, realm_id)
-                .await?
-        else {
-            return Ok(None);
-        };
-        // A new typed-current family could be projected by an admitted Event.
-        // Require a fresh schema audit before this closed subset can sign.
-        let families = sql_query(
-            "SELECT tablename FROM pg_catalog.pg_tables \
-             WHERE schemaname=current_schema() AND tablename LIKE '%_current_results'",
-        )
-        .load::<TableNameRow>(&mut *conn)
-        .await?;
-        const AUDITED_FAMILIES: &[&str] = &[
-            "relation_current_results", "realm_authority_root_current_results",
-            "capability_grant_current_results", "realm_policy_bundle_current_results",
-            "mimi_room_binding_current_results", "realm_link_current_results",
-            "member_state_current_results", "strand_current_results",
-            "realm_set_default_strand_current_results", "message_revision_current_results",
-            "realm_bootstrap_current_results", "agent_status_current_results",
-            "agent_key_current_results", "key_backup_active_series_current_results",
-            "pcr_device_generation_current_results", "pcr_device_authorization_current_results",
-        ];
-        if families.iter().any(|family| !AUDITED_FAMILIES.contains(&family.tablename.as_str())) {
-            return Err(rejected("an unaudited typed-current family is installed").into());
-        }
-        let omitted = sql_query(
-            "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
-                OR EXISTS(SELECT 1 FROM capability_grant_current_results WHERE realm_id=$1) \
-                OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
-                OR EXISTS(SELECT 1 FROM key_backup_active_series_current_results WHERE realm_id=$1) \
-                OR EXISTS(SELECT 1 FROM pcr_device_generation_current_results WHERE realm_id=$1) \
-                OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
-                OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1)) AS present",
-        )
-        .bind::<Text, _>(realm_id.as_str())
-        .get_result::<PresenceRow>(&mut *conn)
-        .await?;
-        if omitted.present {
-            return Err(rejected("a current family outside the disclosure subset has a row").into());
-        }
-        let rows = sql_query(
-            "SELECT commit_row.commit_json, event_row.envelope, event_row.state \
-             FROM realm_commits commit_row \
-             JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
-             WHERE commit_row.realm_id=$1 \
-             ORDER BY commit_row.stream_position, commit_row.commit_id LIMIT 10",
-        )
-        .bind::<Text, _>(realm_id.as_str())
-        .load::<CommittedRow>(&mut *conn)
-        .await?;
-        let mut accepted = Vec::with_capacity(rows.len());
-        for row in rows {
-            if row.state != "committed" {
-                return Err(PersistenceError::SchemaViolation(
-                    "snapshot cut includes an uncommitted Event".to_owned(),
-                )
-                .into());
-            }
-            let commit: RealmCommit =
-                serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
-            let event: Event =
-                serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
-            accepted.push((commit, event));
-        }
-        validate_single_member_bootstrap_cut(&material, account, &accepted)?;
-        Ok(Some(material))
+        single_member_bootstrap_material_in_connection(conn, realm_id, account)
+            .await
+            .map_err(Into::into)
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+/// Issue the complete signed Snapshot to `account` at one durable cut. The
+/// governing row is share-locked first, so no handoff can commit between the
+/// tenure check, the disclosure proof, the signature, and the issuance write.
+pub async fn issue_single_member_bootstrap_snapshot(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &arkret_wire::AccountId,
+    issuer: &arkret_wire::DidCoreId,
+    sign: soland_storage::RealmStateSnapshotSigner<'_>,
+) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(&mut *conn)
+            .await?;
+        let Some(tenure) = sql_query(
+            "SELECT service_id, generation FROM realm_authorities \
+             WHERE realm_id=$1 FOR SHARE",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<TenureRow>(&mut *conn)
+        .await
+        .optional()?
+        else {
+            return Ok(None);
+        };
+        if tenure.service_id != issuer.as_str() {
+            return Err(rejected("this Station does not hold the current governing tenure").into());
+        }
+        let Some(material) =
+            single_member_bootstrap_material_in_connection(conn, realm_id, account).await?
+        else {
+            return Ok(None);
+        };
+        if i64::try_from(material.governance_generation).ok() != Some(tenure.generation) {
+            return Err(rejected("material generation differs from the locked tenure").into());
+        }
+        let snapshot = sign(&material)?;
+        if !soland_storage::signed_snapshot_matches_material(&snapshot, &material) {
+            return Err(PersistenceError::Internal(
+                "snapshot signer changed the proved disclosure material".to_owned(),
+            )
+            .into());
+        }
+        soland_storage::enforce_inline_realm_state_snapshot_capacity(&snapshot)?;
+        crate::issued_realm_snapshots::issue_in_connection(conn, account, &snapshot).await?;
+        Ok(Some(snapshot))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+/// Candidate material plus the closed disclosure proof, on the caller's cut.
+pub(crate) async fn single_member_bootstrap_material_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    account: &arkret_wire::AccountId,
+) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+    let Some(material) =
+        crate::authority_commit::realm_state_snapshot_material_in_connection(conn, realm_id)
+            .await?
+    else {
+        return Ok(None);
+    };
+    // A new typed-current family could be projected by an admitted Event.
+    // Require a fresh schema audit before this closed subset can sign.
+    let families = sql_query(
+        "SELECT tablename FROM pg_catalog.pg_tables \
+         WHERE schemaname=current_schema() AND tablename LIKE '%_current_results'",
+    )
+    .load::<TableNameRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    const AUDITED_FAMILIES: &[&str] = &[
+        "relation_current_results",
+        "realm_authority_root_current_results",
+        "capability_grant_current_results",
+        "realm_policy_bundle_current_results",
+        "mimi_room_binding_current_results",
+        "realm_link_current_results",
+        "member_state_current_results",
+        "strand_current_results",
+        "realm_set_default_strand_current_results",
+        "message_revision_current_results",
+        "realm_bootstrap_current_results",
+        "agent_status_current_results",
+        "agent_key_current_results",
+        "key_backup_active_series_current_results",
+        "pcr_device_generation_current_results",
+        "pcr_device_authorization_current_results",
+    ];
+    if families
+        .iter()
+        .any(|family| !AUDITED_FAMILIES.contains(&family.tablename.as_str()))
+    {
+        return Err(rejected("an unaudited typed-current family is installed").into());
+    }
+    let omitted = sql_query(
+        "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM capability_grant_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM key_backup_active_series_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM pcr_device_generation_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1)) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<PresenceRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if omitted.present {
+        return Err(rejected("a current family outside the disclosure subset has a row").into());
+    }
+    let rows = sql_query(
+        "SELECT commit_row.commit_json, event_row.envelope, event_row.state \
+         FROM realm_commits commit_row \
+         JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
+         WHERE commit_row.realm_id=$1 \
+         ORDER BY commit_row.stream_position, commit_row.commit_id LIMIT 10",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<CommittedRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut accepted = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.state != "committed" {
+            return Err(PersistenceError::SchemaViolation(
+                "snapshot cut includes an uncommitted Event".to_owned(),
+            )
+            .into());
+        }
+        let commit: RealmCommit =
+            serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
+        let event: Event =
+            serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
+        accepted.push((commit, event));
+    }
+    validate_single_member_bootstrap_cut(&material, account, &accepted)?;
+    Ok(Some(material))
 }
 
 fn rejected(reason: &str) -> PersistenceError {

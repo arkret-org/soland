@@ -2171,6 +2171,31 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .await
     }
 
+    async fn issue_realm_state_snapshot_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+        sign: soland_storage::RealmStateSnapshotSigner<'_>,
+    ) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
+        crate::snapshot_disclosure_gate::issue_single_member_bootstrap_snapshot(
+            &self.pool, realm_id, account, issuer, sign,
+        )
+        .await
+    }
+
+    async fn issued_realm_state_snapshot(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        snapshot_id: &arkret_wire::RealmSnapshotId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
+        crate::issued_realm_snapshots::PgIssuedRealmSnapshotArchive::new(self.pool.clone())
+            .by_ref(account, realm_id, snapshot_id, issuer)
+            .await
+    }
+
     async fn scan_stream(
         &self,
         request: &arkret_wire::StreamScanRequest,
@@ -2426,7 +2451,9 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
-            "SELECT snapshot_json FROM realm_state_snapshots WHERE realm_id = $1 \
+            "SELECT snapshot_json FROM realm_state_snapshots snapshot WHERE realm_id = $1 \
+             AND NOT EXISTS (SELECT 1 FROM realm_state_snapshot_issuances issued \
+                             WHERE issued.snapshot_id = snapshot.snapshot_id) \
              ORDER BY governance_generation DESC, created_at DESC LIMIT 1",
         )
         .bind::<Text, _>(realm_id.as_str())

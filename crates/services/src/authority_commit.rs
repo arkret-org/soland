@@ -943,6 +943,50 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Materialize, tenure-check, sign, capacity-check and issue one complete
+    /// Snapshot to `account` in a single durable cut held by the store. The
+    /// signature is made with the Station's current service method only while
+    /// that cut proves `issuer` holds the Realm's governing term.
+    pub async fn issue_realm_state_snapshot_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+        verification_method: &DidUrl,
+        signing_key: &SigningKey,
+        created_at: DateTime<Utc>,
+    ) -> ServiceResult<Option<RealmStateSnapshot>> {
+        let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+            build_signed_realm_state_snapshot(
+                material,
+                verification_method.clone(),
+                signing_key,
+                created_at,
+            )
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+        };
+        Ok(self
+            .store()
+            .issue_realm_state_snapshot_for_account(realm_id, account, issuer, &sign)
+            .await?)
+    }
+
+    /// Return the exact original object issued to `account`, after the store
+    /// re-proves its disclosure at the read cut. A current head is never a
+    /// substitute for a missing or no-longer-disclosable reference.
+    pub async fn issued_realm_state_snapshot(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        snapshot_id: &arkret_wire::RealmSnapshotId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<Option<RealmStateSnapshot>> {
+        Ok(self
+            .store()
+            .issued_realm_state_snapshot(realm_id, account, snapshot_id, issuer)
+            .await?)
+    }
+
     /// Keyset page over one independent commit stream.
     ///
     /// Paging uses a `stream_position` keyset inside one [`CommitStreamRef`].

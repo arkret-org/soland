@@ -12,6 +12,7 @@
 //! - `GET  /_arkret/self/committed-events/subscribe` — committed Event live tail. Multi-Realm /
 //!   multi-actor stream; frame `kind` field replaces `type`.
 //! - `GET  /_arkret/self/realm-state-snapshot/head`
+//! - `GET  /_arkret/self/realm-state-snapshot/{snapshot_id}` — exact issued by-ref read
 //!
 //! `SyncCursor`, `SyncCursorError`, `parse_and_validate_sync_cursor`,
 //! `decode_sync_cursor_value`, `sync_token_for_client_sync`, `sync_filter_digest`,
@@ -114,6 +115,10 @@ pub(super) fn protocol_router() -> Router {
         .push(
             Router::with_path("realm-state-snapshot/head")
                 .get(events_query::realm_state_snapshot_head),
+        )
+        .push(
+            Router::with_path("realm-state-snapshot/{snapshot_id}")
+                .get(events_query::realm_state_snapshot_by_ref),
         )
 }
 

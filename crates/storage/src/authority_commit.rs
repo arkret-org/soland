@@ -67,6 +67,43 @@ pub struct RealmStateSnapshotMaterial {
     pub retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor,
 }
 
+/// Signs the exact material proved at an issuance cut. It runs inside that
+/// cut, so it must be synchronous and must not read other state.
+pub type RealmStateSnapshotSigner<'a> = &'a (
+        dyn Fn(&RealmStateSnapshotMaterial) -> PersistenceResult<RealmStateSnapshot> + Send + Sync
+    );
+
+/// Decision 0081 / 0068: the complete RFC 8785 canonical signed body is one
+/// inline object of at most 8 MiB. There is no page, chunk, or truncation.
+pub const MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Reject the whole signed object when its canonical body exceeds the limit.
+pub fn enforce_inline_realm_state_snapshot_capacity(
+    snapshot: &RealmStateSnapshot,
+) -> PersistenceResult<()> {
+    let bytes = arkret_canonical::canonical_json_bytes(snapshot)
+        .map_err(crate::PersistenceError::database)?;
+    if bytes.len() > MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES {
+        return Err(crate::PersistenceError::Conflict(
+            "snapshot_capacity_exceeded: complete signed Realm snapshot exceeds 8 MiB".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The signer may attach only identity, time, and signature; every disclosed
+/// member must be exactly the proved material.
+pub fn signed_snapshot_matches_material(
+    snapshot: &RealmStateSnapshot,
+    material: &RealmStateSnapshotMaterial,
+) -> bool {
+    snapshot.realm_id == material.realm_id
+        && snapshot.governance_generation == material.governance_generation
+        && snapshot.visible_stream_heads == material.visible_stream_heads
+        && snapshot.current_state_entries == material.current_state_entries
+        && snapshot.retention_and_history_floor == material.retention_and_history_floor
+}
+
 /// One transaction installed after all Event, authority and MLS checks pass.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuthorityCommitTransaction {
@@ -480,6 +517,32 @@ pub trait AuthorityCommitStore: Send + Sync {
         account: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
 
+    /// Issue one complete signed Snapshot to `account` from a single durable
+    /// cut: the governing tenure of `issuer` is locked and checked, the
+    /// complete Account disclosure is proved, `sign` signs exactly that
+    /// material, the canonical signed body is held to the 8 MiB inline limit,
+    /// and the original object plus its Account issuance are persisted before
+    /// the cut commits. Any failure leaves no issued object.
+    async fn issue_realm_state_snapshot_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+        sign: RealmStateSnapshotSigner<'_>,
+    ) -> PersistenceResult<Option<RealmStateSnapshot>>;
+
+    /// Read the original signed Snapshot previously issued to this exact
+    /// Account and recheck, at one read cut, that every disclosed row, head,
+    /// and floor is still disclosable to it. `None` means the exact object
+    /// was never issued to this Account for this Realm.
+    async fn issued_realm_state_snapshot(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        snapshot_id: &arkret_wire::RealmSnapshotId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<Option<RealmStateSnapshot>>;
+
     /// Keyset page over one independent commit stream.
     ///
     /// The only paging key is `realm_commits.stream_position` inside the
@@ -507,6 +570,8 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Vec<RealmAuthorityHandoff>>;
 
+    /// Latest handoff-installed snapshot. Account-issued `/head` objects are
+    /// caller-scoped disclosures and never serve as this Realm-wide anchor.
     async fn latest_snapshot(
         &self,
         realm_id: &arkret_wire::RealmId,

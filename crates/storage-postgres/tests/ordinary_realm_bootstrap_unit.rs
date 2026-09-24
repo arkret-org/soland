@@ -7,15 +7,16 @@ use arkret_models_collaboration::authority_commit::{
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
 use sha2::{Digest as _, Sha256};
-use soland_services::{hydration::HydrationProjectionAdapter, projection::ProjectionService};
+use soland_services::hydration::HydrationProjectionAdapter;
+use soland_services::projection::ProjectionService;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, EventCommitRequest,
     EventCommitUnitOfWork, OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
     SelfProducerCommitGuard,
 };
+use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
     Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, single_member_bootstrap_snapshot_material,
-    test_database::TestDatabase,
 };
 
 #[tokio::test]
@@ -89,6 +90,287 @@ async fn single_member_bootstrap_disclosure_requires_the_complete_accepted_cut()
         .unwrap()
         .unwrap();
     assert_eq!(material.current_state_entries.len(), 10);
+}
+
+async fn issuance_count(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> i64 {
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT count(*) AS count FROM realm_state_snapshot_issuances issued \
+         JOIN realm_state_snapshots snapshot ON snapshot.snapshot_id = issued.snapshot_id \
+         WHERE snapshot.realm_id = $1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<Count>(&mut conn)
+    .await
+    .unwrap()
+    .count
+}
+
+/// Real PostgreSQL: `/head` issuance materializes, checks tenure, signs,
+/// and archives in one cut; by-ref returns the exact object only while the
+/// read cut still re-proves the Account's disclosure.
+#[tokio::test]
+async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let stranger = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let other_station = arkret_wire::DidCoreId::new("ak:did_core:web:elsewhere.example").unwrap();
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let tamper = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        let mut partial = material.clone();
+        partial.current_state_entries.pop();
+        sign(&partial)
+    };
+
+    // No tenure, no complete disclosure, or a signer that alters the proved
+    // material: nothing is issued.
+    assert!(matches!(
+        store
+            .issue_realm_state_snapshot_for_account(&realm_id, &creator, &other_station, &sign)
+            .await,
+        Err(soland_storage::PersistenceError::SchemaViolation(_))
+    ));
+    assert!(
+        store
+            .issue_realm_state_snapshot_for_account(&realm_id, &stranger, &issuer, &sign)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        store
+            .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &tamper)
+            .await,
+        Err(soland_storage::PersistenceError::Internal(_))
+    ));
+    assert_eq!(issuance_count(&pool, &realm_id).await, 0);
+
+    let first = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.current_state_entries.len(), 8);
+    assert_eq!(issuance_count(&pool, &realm_id).await, 1);
+    let unsigned = arkret_canonical::unsigned_value(&first, &["signature"]).unwrap();
+    arkret_signatures::detached_object::verify_detached_object_signature(
+        &first.signature,
+        &unsigned,
+        arkret_wire::DetachedSignatureContext::RealmSnapshot,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: key.verifying_key().to_bytes().to_vec(),
+        },
+    )
+    .unwrap();
+    let by_ref = |account: arkret_wire::AccountId,
+                  realm: arkret_wire::RealmId,
+                  id: arkret_wire::RealmSnapshotId,
+                  station: arkret_wire::DidCoreId| {
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        async move {
+            store
+                .issued_realm_state_snapshot(&realm, &account, &id, &station)
+                .await
+        }
+    };
+    let exact = by_ref(
+        creator.clone(),
+        realm_id.clone(),
+        first.snapshot_id.clone(),
+        issuer.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        arkret_canonical::canonical_json_bytes(&exact).unwrap(),
+        arkret_canonical::canonical_json_bytes(&first).unwrap(),
+    );
+    assert!(
+        by_ref(
+            stranger.clone(),
+            realm_id.clone(),
+            first.snapshot_id.clone(),
+            issuer.clone()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    let other_realm = unit_with_plaintext_service().transactions[0]
+        .event
+        .realm_id
+        .clone();
+    assert!(
+        by_ref(
+            creator.clone(),
+            other_realm,
+            first.snapshot_id.clone(),
+            issuer.clone()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        by_ref(
+            creator.clone(),
+            realm_id.clone(),
+            first.snapshot_id.clone(),
+            other_station.clone()
+        )
+        .await
+        .is_err()
+    );
+
+    // A later cut issues a new exact object; the earlier one stays exactly
+    // readable while the Account's join revision is unchanged.
+    let strand = strand_create_request(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(strand.clone()).await.unwrap();
+    assert!(
+        store
+            .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+            .await
+            .is_err()
+    );
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    uow.commit_event(set_default_strand_request(&strand, &strand_id, None))
+        .await
+        .unwrap();
+    let second = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.current_state_entries.len(), 10);
+    assert_ne!(second.snapshot_id, first.snapshot_id);
+    assert_eq!(issuance_count(&pool, &realm_id).await, 2);
+    assert_eq!(
+        by_ref(
+            creator.clone(),
+            realm_id.clone(),
+            first.snapshot_id.clone(),
+            issuer.clone()
+        )
+        .await
+        .unwrap(),
+        Some(first.clone()),
+    );
+    // The Realm-wide anchor ignores Account-issued disclosures.
+    assert_eq!(store.latest_snapshot(&realm_id).await.unwrap(), None);
+
+    // Read-time recheck: once the Account's membership revision changes,
+    // neither exact object is disclosable, and restoring it re-admits them.
+    let mut conn = pool.get().await.unwrap();
+    let member = arkret_wire::ActorId::account(creator.clone()).to_string();
+    diesel::sql_query(
+        "UPDATE member_state_current_results SET membership='leave', \
+         value='{\"membership\":\"leave\"}'::jsonb WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(&member)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    for id in [&first.snapshot_id, &second.snapshot_id] {
+        assert!(matches!(
+            by_ref(
+                creator.clone(),
+                realm_id.clone(),
+                id.clone(),
+                issuer.clone()
+            )
+            .await,
+            Err(soland_storage::PersistenceError::SchemaViolation(_))
+        ));
+    }
+    diesel::sql_query(
+        "UPDATE member_state_current_results SET membership='join', \
+         value='{\"membership\":\"join\"}'::jsonb WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(&member)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(
+        by_ref(
+            creator.clone(),
+            realm_id.clone(),
+            second.snapshot_id.clone(),
+            issuer.clone()
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+
+    // Once another Station governs the Realm, this Station can neither
+    // re-prove the earlier object nor issue a new one.
+    diesel::sql_query("UPDATE realm_authorities SET service_id=$2 WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(other_station.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        by_ref(
+            creator.clone(),
+            realm_id.clone(),
+            second.snapshot_id.clone(),
+            issuer.clone()
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        store
+            .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+            .await
+            .is_err()
+    );
+    assert_eq!(issuance_count(&pool, &realm_id).await, 2);
 }
 
 struct BootstrapHydrationAdapter;

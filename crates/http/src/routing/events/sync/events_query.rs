@@ -762,8 +762,8 @@ pub(super) async fn realm_state_snapshot_head(
     {
         return Err(soland_http::error::AppError::not_found("not found"));
     }
-    let actor = crate::routing::identity::session_actor::validated_session_actor(state, &session)
-        .await?;
+    let actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
     let account = actor
         .as_account_id()
         .ok_or_else(|| soland_http::error::AppError::not_found("not found"))?;
@@ -782,4 +782,45 @@ pub(super) async fn realm_state_snapshot_head(
             }
         })?;
     soland_http::result::json_ok(manifest)
+}
+
+#[endpoint(operation_id = "ak.self.realm_state_snapshot.read.by_ref")]
+#[tracing::instrument(skip_all, fields(op = "ak.self.realm_state_snapshot.read.by_ref.v1"))]
+pub(super) async fn realm_state_snapshot_by_ref(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> soland_http::result::JsonResult<arkret_wire::RealmStateSnapshot> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let snapshot_id = req
+        .param::<String>("snapshot_id")
+        .and_then(|value| arkret_wire::RealmSnapshotId::new(value).ok())
+        .ok_or_else(|| soland_http::error::AppError::param_invalid("invalid snapshot_id"))?;
+    let realm_id = query_param(req, "realm_id")
+        .ok_or_else(|| soland_http::error::AppError::param_missing("realm_id is required"))?;
+    let realm_id = scope_selector_to_realm_id(&realm_id)?;
+    let session = authenticated_session(state, req)
+        .await
+        .map_err(|(_status, code, message)| {
+            let typed = soland_http::error::ErrorCode::from_wire(code)
+                .unwrap_or(soland_http::error::ErrorCode::Unauthenticated);
+            soland_http::error::AppError::from_rejection(typed, message)
+        })?;
+    if is_realm_deleted(state, &realm_id).await
+        || !realm_id_accessible(state, &realm_id, Some(&session)).await
+    {
+        return Err(soland_http::error::AppError::not_found("not found"));
+    }
+    let actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
+    let account = actor
+        .as_account_id()
+        .ok_or_else(|| soland_http::error::AppError::not_found("not found"))?;
+    let snapshot = crate::routing::realm_state_snapshot::issued_realm_state_snapshot_for_account(
+        state,
+        &realm_id,
+        &snapshot_id,
+        account,
+    )
+    .await?;
+    soland_http::result::json_ok(snapshot)
 }
