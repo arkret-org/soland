@@ -1037,19 +1037,24 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     .unwrap();
     let mut bad_authorizer = write.clone();
     bad_authorizer.transaction.resource.authorizing_device_id = Some(target.clone());
-    assert!(
+    assert_eq!(
         transactions
             .commit_revoke_proposal(bad_authorizer)
             .await
-            .is_err()
+            .unwrap_err()
+            .conflict_code(),
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+        "a producer other than the authorizing device is a registered precondition failure"
     );
     let mut bad_proof = write.clone();
     bad_proof.commit.event.producer_proof.as_mut().unwrap().jws = "invalid".to_owned();
+    let bad_proof = transactions
+        .commit_revoke_proposal(bad_proof)
+        .await
+        .unwrap_err();
     assert!(
-        transactions
-            .commit_revoke_proposal(bad_proof)
-            .await
-            .is_err()
+        matches!(bad_proof, PersistenceError::SchemaViolation(_)),
+        "an Event other than the prepared unit is refused before any read: {bad_proof}"
     );
     diesel::sql_query(
         "UPDATE pcr_device_generation_current_results SET value=jsonb_build_object('current_device_generation_ref',2) WHERE realm_id=$1",
@@ -1336,11 +1341,14 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .as_mut()
         .unwrap()
         .decided_at += chrono::TimeDelta::seconds(1);
-    assert!(
+    assert_eq!(
         transactions
             .commit_revoke_command_terminal(changed_terminal)
             .await
-            .is_err()
+            .unwrap_err()
+            .conflict_code(),
+        Some(soland_storage::ConflictCode::DuplicateConflict),
+        "a different terminal for the same proposal is a duplicate conflict"
     );
     assert_eq!(
         transactions

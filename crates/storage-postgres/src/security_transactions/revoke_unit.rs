@@ -8,7 +8,7 @@ use diesel::sql_types::{Jsonb, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
 use soland_storage::{
-    AuthorityCommitWriteOutcome, PersistenceError, RevokeCommandTerminalWrite,
+    AuthorityCommitWriteOutcome, ConflictCode, PersistenceError, RevokeCommandTerminalWrite,
     RevokeProposalCommitWrite, SecurityTransactionRecord,
 };
 
@@ -42,8 +42,22 @@ struct ProposalDotRow {
     commit_id: String,
 }
 
-fn rejected(reason: &str) -> PgTransactionError {
-    PersistenceError::Conflict(reason.to_owned()).into()
+/// Every refusal carries a registered [`ConflictCode`] prefix so the serving
+/// layer can map it to a wire code without reading diagnostics.
+fn rejected(code: ConflictCode, reason: &str) -> PgTransactionError {
+    PersistenceError::Conflict(format!("{code}: {reason}")).into()
+}
+
+fn authorizer_status_code(lifecycle: PcrDeviceLifecycle) -> ConflictCode {
+    match lifecycle {
+        PcrDeviceLifecycle::Revoked => ConflictCode::DeviceRevoked,
+        PcrDeviceLifecycle::RevocationPending => ConflictCode::DeviceRevocationPending,
+        PcrDeviceLifecycle::Active
+        | PcrDeviceLifecycle::Conflicted
+        | PcrDeviceLifecycle::GenerationFenced
+        | PcrDeviceLifecycle::Expired
+        | PcrDeviceLifecycle::NotYetEffective => ConflictCode::FailedPrecondition,
+    }
 }
 
 pub(super) async fn commit_revoke_command_terminal_in_connection(
@@ -58,9 +72,15 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
     let outcome = resource.revoke_command_outcome.as_ref().expect("validated");
     let existing = load_one(conn, resource.transaction_id.as_str(), true)
         .await?
-        .ok_or_else(|| rejected("rotation transaction is absent"))?;
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::FailedPrecondition,
+                "rotation transaction is absent",
+            )
+        })?;
     if existing.canonical_request != write.transaction.canonical_request {
         return Err(rejected(
+            ConflictCode::DuplicateConflict,
             "rotation terminal changed its original canonical request",
         ));
     }
@@ -72,13 +92,23 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
     .get_result::<AcceptedProposalRow>(&mut *conn)
     .await
     .optional()?
-    .ok_or_else(|| rejected("rotation terminal has no accepted proposal Event/Commit"))?;
+    .ok_or_else(|| {
+        rejected(
+            ConflictCode::DependencyMissing,
+            "rotation terminal has no accepted proposal Event/Commit",
+        )
+    })?;
     let dot = sql_query("SELECT commit_id FROM pcr_device_revocation_proposals WHERE event_id=$1")
         .bind::<Text, _>(proposal.proposal_event_id.as_str())
         .get_result::<ProposalDotRow>(&mut *conn)
         .await
         .optional()?
-        .ok_or_else(|| rejected("rotation terminal has no immutable proposal dot"))?;
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::DependencyMissing,
+                "rotation terminal has no immutable proposal dot",
+            )
+        })?;
     let plan = resource.security_rotation_plan().expect("validated");
     if dot.commit_id != proposal.covering_commit_id.as_str()
         || accepted.commit_json["commit_id"].as_str() != Some(proposal.covering_commit_id.as_str())
@@ -88,6 +118,7 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
                 .map_err(PersistenceError::database)?
     {
         return Err(rejected(
+            ConflictCode::DuplicateConflict,
             "rotation terminal differs from its accepted proposal",
         ));
     }
@@ -110,6 +141,7 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
             (SecurityRotationRevokeCommandResult::Rejected, None, None) => {}
             _ => {
                 return Err(rejected(
+                    ConflictCode::DuplicateConflict,
                     "rotation terminal exact replay changed its outcome",
                 ));
             }
@@ -122,6 +154,7 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
     initial.terminal_outcome = None;
     if existing.resource != initial {
         return Err(rejected(
+            ConflictCode::DuplicateConflict,
             "rotation terminal changed its accepted proposal or first result",
         ));
     }
@@ -142,7 +175,12 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
     }
     load_one(conn, resource.transaction_id.as_str(), false)
         .await?
-        .ok_or_else(|| rejected("rotation terminal vanished after write"))
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::FailedPrecondition,
+                "rotation terminal vanished after write",
+            )
+        })
 }
 
 pub(super) async fn commit_revoke_proposal_in_connection(
@@ -153,35 +191,48 @@ pub(super) async fn commit_revoke_proposal_in_connection(
     let resource = &write.transaction.resource;
     let event = &write.commit.event;
     let commit = &write.commit.commit;
-    let authorizer = resource
-        .authorizing_device_id
-        .as_ref()
-        .ok_or_else(|| rejected("rotation authorizing device is absent"))?;
+    let authorizer = resource.authorizing_device_id.as_ref().ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation authorizing device is absent",
+        )
+    })?;
     let payload: DeviceRevokePayload = serde_json::from_value(
         serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
     )
-    .map_err(|error| rejected(&format!("revoke payload is invalid: {error}")))?;
+    .map_err(|error| {
+        rejected(
+            ConflictCode::SchemaViolation,
+            &format!("revoke payload is invalid: {error}"),
+        )
+    })?;
     payload
         .validate()
-        .map_err(|error| rejected(&error.to_string()))?;
+        .map_err(|error| rejected(ConflictCode::SchemaViolation, &error.to_string()))?;
     if !matches!(&payload.revoked_by, DeviceOrPrincipalRef::DeviceId(id) if id == authorizer) {
         return Err(rejected(
+            ConflictCode::FailedPrecondition,
             "revoke producer differs from the rotation authorizing device",
         ));
     }
-    let actor = event
-        .actor_id
-        .as_account_id()
-        .ok_or_else(|| rejected("revoke actor is not the transaction Account"))?;
+    let actor = event.actor_id.as_account_id().ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "revoke actor is not the transaction Account",
+        )
+    })?;
     if actor != &resource.account_id || event.executed_by.is_some() {
         return Err(rejected(
+            ConflictCode::FailedPrecondition,
             "revoke actor or executor differs from the transaction",
         ));
     }
-    let proof = event
-        .producer_proof
-        .as_ref()
-        .ok_or_else(|| rejected("revoke producer proof is absent"))?;
+    let proof = event.producer_proof.as_ref().ok_or_else(|| {
+        rejected(
+            ConflictCode::SignatureInvalid,
+            "revoke producer proof is absent",
+        )
+    })?;
 
     // Every accepted PCR writer takes this row lock before changing its head.
     // Reading device status after it prevents a stale authorization from being
@@ -191,14 +242,20 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         .get_result::<RealmLockRow>(&mut *conn)
         .await
         .optional()?
-        .ok_or_else(|| rejected("PCR authority is absent"))?;
+        .ok_or_else(|| rejected(ConflictCode::FailedPrecondition, "PCR authority is absent"))?;
     if lock.realm_id != event.realm_id.as_str() {
-        return Err(rejected("PCR authority lock differs from Event Realm"));
+        return Err(rejected(
+            ConflictCode::FailedPrecondition,
+            "PCR authority lock differs from Event Realm",
+        ));
     }
     let transaction_id = resource.transaction_id.as_str();
-    let existing = load_one(conn, transaction_id, true)
-        .await?
-        .ok_or_else(|| rejected("rotation transaction is absent"))?;
+    let existing = load_one(conn, transaction_id, true).await?.ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation transaction is absent",
+        )
+    })?;
     let mut proposal_state = existing.resource.clone();
     proposal_state.revoke_command_outcome = None;
     proposal_state.accepted_steps.clear();
@@ -214,21 +271,34 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         .get_result::<AcceptedProposalRow>(&mut *conn)
         .await
         .optional()?
-        .ok_or_else(|| rejected("rotation proposal retry has no accepted Event/Commit"))?;
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::DependencyMissing,
+                "rotation proposal retry has no accepted Event/Commit",
+            )
+        })?;
         let dot =
             sql_query("SELECT commit_id FROM pcr_device_revocation_proposals WHERE event_id=$1")
                 .bind::<Text, _>(event.event_id.as_str())
                 .get_result::<ProposalDotRow>(&mut *conn)
                 .await
                 .optional()?
-                .ok_or_else(|| rejected("rotation proposal retry has no immutable dot"))?;
+                .ok_or_else(|| {
+                    rejected(
+                        ConflictCode::DependencyMissing,
+                        "rotation proposal retry has no immutable dot",
+                    )
+                })?;
         if accepted.commit_json
             != serde_json::to_value(commit).map_err(PersistenceError::database)?
             || accepted.envelope
                 != serde_json::to_value(event).map_err(PersistenceError::database)?
             || dot.commit_id != commit.commit_id.as_str()
         {
-            return Err(rejected("rotation proposal exact replay differs"));
+            return Err(rejected(
+                ConflictCode::DuplicateConflict,
+                "rotation proposal exact replay differs",
+            ));
         }
         return Ok(commit.clone());
     }
@@ -239,17 +309,24 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         commit.committed_at,
     )
     .await?
-    .ok_or_else(|| rejected("rotation authorizing device has no confirmed PCR cut"))?;
-    let authorization = status
-        .authority
-        .authorization
-        .as_ref()
-        .ok_or_else(|| rejected("rotation authorizing device has no authorization"))?;
+    .ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation authorizing device has no confirmed PCR cut",
+        )
+    })?;
+    let authorization = status.authority.authorization.as_ref().ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation authorizing device has no authorization",
+        )
+    })?;
     if status.authority.realm_id != event.realm_id
         || status.lifecycle != PcrDeviceLifecycle::Active
         || status.generation_conflicted
     {
         return Err(rejected(
+            authorizer_status_code(status.lifecycle),
             "rotation authorizing device is not active at this PCR cut",
         ));
     }
@@ -258,12 +335,27 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         .device_public_key_did
         .as_str()
         .strip_prefix("did:key:")
-        .ok_or_else(|| rejected("current device authorization has no did:key public key"))?;
-    let public_key = arkret_canonical::multibase::decode_ed25519_multibase(did_key)
-        .map_err(|_| rejected("current device authorization key is invalid"))?;
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::SignatureInvalid,
+                "current device authorization has no did:key public key",
+            )
+        })?;
+    let public_key =
+        arkret_canonical::multibase::decode_ed25519_multibase(did_key).map_err(|_| {
+            rejected(
+                ConflictCode::SignatureInvalid,
+                "current device authorization key is invalid",
+            )
+        })?;
     let envelope_bytes = arkret_signatures::EventProofBuilder::new()
         .envelope_bytes(event)
-        .map_err(|error| rejected(&format!("revoke proof envelope is invalid: {error}")))?;
+        .map_err(|error| {
+            rejected(
+                ConflictCode::SignatureInvalid,
+                &format!("revoke proof envelope is invalid: {error}"),
+            )
+        })?;
     arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
         proof,
         &envelope_bytes,
@@ -273,7 +365,12 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         },
         arkret_canonical::DigestSuite::Sha256,
     )
-    .map_err(|_| rejected("revoke producer proof does not match current device key"))?;
+    .map_err(|_| {
+        rejected(
+            ConflictCode::SignatureInvalid,
+            "revoke producer proof does not match current device key",
+        )
+    })?;
 
     let mut initial = resource.clone();
     initial.revoke_proposal = None;
@@ -281,6 +378,7 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         || existing.canonical_request != write.transaction.canonical_request
     {
         return Err(rejected(
+            ConflictCode::DuplicateConflict,
             "rotation proposal changed the prepared transaction",
         ));
     }
@@ -290,11 +388,13 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         AuthorityCommitWriteOutcome::Committed => {}
         AuthorityCommitWriteOutcome::Duplicate => {
             return Err(rejected(
+                ConflictCode::DuplicateConflict,
                 "revoke Event was committed outside this proposal unit",
             ));
         }
         AuthorityCommitWriteOutcome::StaleAuthority(_) => {
             return Err(rejected(
+                ConflictCode::CasConflict,
                 "PCR authority changed before revoke proposal commit",
             ));
         }
@@ -318,6 +418,7 @@ pub(super) async fn commit_revoke_proposal_in_connection(
     .await?;
     if affected != 1 {
         return Err(rejected(
+            ConflictCode::CasConflict,
             "rotation proposal first write lost its transaction CAS",
         ));
     }

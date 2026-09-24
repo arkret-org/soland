@@ -106,6 +106,26 @@ async fn load_owned_security_transaction(
     Ok(record)
 }
 
+/// The authorizing device's lifecycle at the confirmed PCR cut. The legacy
+/// device inventory is not an authority for rotation (§4).
+async fn authorizing_device_active(
+    state: &AppState,
+    account_id: &AccountId,
+    device_id: &DeviceId,
+) -> Result<bool, AppError> {
+    state
+        .persistence()
+        .pcr_device_active(account_id, device_id, chrono::Utc::now())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "PCR device status unavailable for security rotation");
+            crate::app_error!(
+                TemporarilyUnavailable,
+                "PCR device status is unavailable; retry the same request",
+            )
+        })
+}
+
 fn transaction_account_actor(
     account_id: &AccountId,
     local_station_id: &DidCoreId,
@@ -154,7 +174,12 @@ pub(super) async fn security_transaction_create(
     if let SecurityTransactionCreateRequest::SecurityRotation(rotation) = &request {
         if rotation.authorizing_device_id.as_str() != session.device_id
             || state.account_lifecycle_state(session.actor.as_str()) != "active"
-            || crate::routing::is_device_revoked(state, &session.actor, &session.device_id).await
+            || !authorizing_device_active(
+                state,
+                &rotation.account_id,
+                &rotation.authorizing_device_id,
+            )
+            .await?
         {
             return Err(crate::app_error!(
                 Unauthenticated,
@@ -251,6 +276,30 @@ pub(super) async fn security_transaction_continue(
         crate::app_error!(FailedPrecondition, "accepted step count is out of range")
     })?;
     if transaction.resource.accepted_steps.len() != expected_count {
+        // A lost response is retried with the same bytes after the step was
+        // accepted; it reads the first stored result instead of failing.
+        let accepted_step = transaction
+            .resource
+            .step_order()
+            .ok()
+            .and_then(|order| order.get(expected_count).copied())
+            .filter(|_| expected_count < transaction.resource.accepted_steps.len());
+        if let Some(step) = accepted_step
+            && let Some(stored) = state
+                .security_transactions()
+                .step_outcome(&transaction_id, step)
+                .await
+                .map_err(recovery_service_error)?
+            && stored.canonical_request == canonical_request
+        {
+            let resource = serde_json::from_value(stored.response).map_err(|error| {
+                AppError::internal(format!(
+                    "stored security transaction response invalid: {error}"
+                ))
+            })?;
+            res.status_code(StatusCode::OK);
+            return json_ok(resource);
+        }
         return Err(crate::app_error!(
             FailedPrecondition,
             "security transaction accepted step count changed",
@@ -292,6 +341,9 @@ pub(super) async fn security_transaction_continue(
         .validate_for_transaction(&transaction.resource)
         .map_err(|error| crate::app_error!(FailedPrecondition, error.to_string()))?;
     if transaction.resource.expires_at <= chrono::Utc::now() {
+        if requested_step == SecurityTransactionStep::Revoke {
+            expire_rotation_with_pending_revoke(state, &transaction).await?;
+        }
         return Err(
             crate::app_error!(FailedPrecondition, "security transaction has expired")
                 .with_internal_reason("security_transaction_expired"),
@@ -311,7 +363,7 @@ pub(super) async fn security_transaction_continue(
             .await
         }
         SecurityTransactionStep::Revoke => {
-            continue_rotation_revoke(state, &session, transaction, canonical_request, res).await
+            continue_rotation_revoke(state, transaction, canonical_request, res).await
         }
         SecurityTransactionStep::UploadNewMaterial => {
             continue_rotation_upload(state, transaction, canonical_request, res).await
@@ -426,25 +478,207 @@ async fn accept_rotation_step(
     json_ok(resource)
 }
 
+/// `revoke`: admit the prepared `ak.device.revoke` as an immutable pending
+/// proposal, then record this Station's terminal decision for it.
+///
+/// Both writes are the registered SecurityRotation storage units: the first
+/// commits Event, covering RealmCommit, proposal dot, conflict-index marker and
+/// `revoke_proposal` in one PostgreSQL transaction after rechecking, under the
+/// PCR authority lock, that the authorizing device is active and signed the
+/// Event with its current key; the second commits `revoke_command_outcome`
+/// together with `accepted_steps[0]`. Between the two the proposal is pending
+/// and fails the target device closed; an interrupted request is resumed by
+/// the same continue, which finds the stored proposal and only decides it.
 async fn continue_rotation_revoke(
-    _state: &AppState,
-    _session: &SessionRecord,
+    state: &AppState,
     transaction: SecurityTransactionRecord,
-    _canonical_request: Vec<u8>,
-    _res: &mut Response,
+    canonical_request: Vec<u8>,
+    res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
+    use arkret_models_crypto::{
+        SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+        SecurityRotationRevokeProposal,
+    };
+    use soland_services::identity::{RevokeCommandTerminalWrite, RevokeProposalCommitWrite};
+
     let plan = rotation_plan(&transaction)?;
     plan.revoke_unit.validate().map_err(|error| {
         AppError::json_invalid(format!("prepared revoke Event unit is invalid: {error}"))
     })?;
-    // The old batch submit cannot provide one committed Event/RealmCommit
-    // transaction with the rotation step. Reject before begin_rotation_step,
-    // which would otherwise leave a durable pending step without Events.
-    Err(crate::app_error!(
-        ServiceUnavailable,
-        "rotation revoke awaits atomic Event/RealmCommit admission",
-    ))
+    let [event] = plan.revoke_unit.request.events.as_slice() else {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "prepared revoke unit must hold exactly one Event",
+        ));
+    };
+
+    let proposed = match &transaction.resource.revoke_proposal {
+        Some(proposal) if proposal.proposal_event_id == event.event_id => transaction,
+        Some(_) => {
+            return Err(AppError::conflict(
+                "stored revoke proposal names another Event than the prepared unit",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        None => {
+            let committed_at = chrono::Utc::now();
+            let method = DidUrl::new(
+                crate::routing::federation::federation_service_signature_key_id(
+                    state.service_did().as_str(),
+                ),
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+            let commit = state
+                .authority_commits()
+                .prepare_self_event_transaction(
+                    event,
+                    &state.service_core_id(),
+                    method,
+                    state.notary_signing_key().as_ref(),
+                    committed_at,
+                )
+                .await
+                .map_err(revoke_unit_error)?;
+            let mut proposed = transaction;
+            proposed.resource.revoke_proposal = Some(SecurityRotationRevokeProposal {
+                proposal_event_id: event.event_id.clone(),
+                covering_commit_id: commit.commit.commit_id.clone(),
+            });
+            state
+                .security_transactions()
+                .commit_revoke_proposal(RevokeProposalCommitWrite {
+                    transaction: proposed.clone(),
+                    commit,
+                    queued_at: committed_at,
+                })
+                .await
+                .map_err(revoke_unit_error)?;
+            proposed
+        }
+    };
+
+    let proposal = proposed
+        .resource
+        .revoke_proposal
+        .clone()
+        .expect("proposal stored above");
+    let decided_at = chrono::Utc::now();
+    let mut decided = proposed;
+    let outcome = SecurityRotationRevokeCommandOutcome {
+        proposal_event_id: proposal.proposal_event_id,
+        covering_commit_id: proposal.covering_commit_id.clone(),
+        result: SecurityRotationRevokeCommandResult::Accepted,
+        decided_at,
+    };
+    let output_digest = canonical_digest(&outcome)?;
+    decided.resource.revoke_command_outcome = Some(outcome);
+    decided.resource.accepted_steps.push(AcceptedStep {
+        prepared_material_digest: plan.revoke_unit.request_digest.clone(),
+        acceptor: SecurityTransactionAcceptor::Principal {
+            principal_id: state.service_core_id(),
+        },
+        output_ref: proposal.covering_commit_id.as_str().to_owned(),
+        output_digest,
+        accepted_at: decided_at,
+    });
+    decided
+        .resource
+        .validate_structural()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let response = serde_json::to_value(&decided.resource)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let stored = state
+        .security_transactions()
+        .commit_revoke_command_terminal(RevokeCommandTerminalWrite {
+            step_outcome: Some(SecurityTransactionStepOutcomeState {
+                transaction_id: decided.resource.transaction_id.as_str().to_owned(),
+                step: SecurityTransactionStep::Revoke,
+                canonical_request,
+                response,
+                participant_outcome: None,
+            }),
+            transaction: decided,
+        })
+        .await
+        .map_err(revoke_unit_error)?;
+    res.status_code(StatusCode::OK);
+    json_ok(stored.resource)
 }
+
+/// An expired rotation whose revoke proposal is already accepted must record
+/// the rejected command result with its `expired` terminal (§3); one without
+/// a proposal has no result to write.
+async fn expire_rotation_with_pending_revoke(
+    state: &AppState,
+    transaction: &SecurityTransactionRecord,
+) -> Result<(), AppError> {
+    use arkret_models_crypto::{
+        SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+    };
+    use soland_services::identity::RevokeCommandTerminalWrite;
+
+    let resource = &transaction.resource;
+    let Some(proposal) = resource.revoke_proposal.as_ref() else {
+        return Ok(());
+    };
+    if resource.revoke_command_outcome.is_some() || resource.terminal_outcome.is_some() {
+        return Ok(());
+    }
+    let mut expired = transaction.clone();
+    expired.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
+        proposal_event_id: proposal.proposal_event_id.clone(),
+        covering_commit_id: proposal.covering_commit_id.clone(),
+        result: SecurityRotationRevokeCommandResult::Rejected,
+        decided_at: resource.expires_at,
+    });
+    expired.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Expired {
+        completed_at: resource.expires_at,
+        reason_code: None,
+    });
+    state
+        .security_transactions()
+        .commit_revoke_command_terminal(RevokeCommandTerminalWrite {
+            transaction: expired,
+            step_outcome: None,
+        })
+        .await
+        .map_err(revoke_unit_error)?;
+    Ok(())
+}
+
+/// Map a SecurityRotation revoke unit refusal by its registered conflict code.
+/// A conflict without a code is a local invariant breach, not a caller fault.
+fn revoke_unit_error(error: soland_services::ServiceError) -> AppError {
+    use soland_storage::ConflictCode;
+
+    let detail = error.detail();
+    match error.conflict_code() {
+        Some(ConflictCode::DuplicateConflict) => {
+            AppError::conflict(detail).with_wire_code("duplicate_conflict")
+        }
+        Some(ConflictCode::SignatureInvalid) => {
+            crate::app_error!(FailedPrecondition, detail).with_reason_code("proof_invalid")
+        }
+        Some(ConflictCode::DependencyMissing) => {
+            crate::app_error!(FailedPrecondition, detail).with_reason_code("dependency_missing")
+        }
+        Some(ConflictCode::SchemaViolation) => {
+            AppError::param_invalid(detail).with_wire_code("schema_violation")
+        }
+        Some(
+            ConflictCode::FailedPrecondition
+            | ConflictCode::CasConflict
+            | ConflictCode::DeviceRevoked
+            | ConflictCode::DeviceRevocationPending,
+        ) => crate::app_error!(FailedPrecondition, detail),
+        Some(_) => AppError::internal(format!("unexpected revoke unit conflict: {detail}")),
+        None if error.kind() == soland_services::ServiceErrorKind::Conflict => {
+            AppError::internal(format!("unclassified revoke unit conflict: {detail}"))
+        }
+        None => recovery_service_error(error),
+    }
+}
+
 fn public_backup_values(
     material: &arkret_wire::CanonicalPublicMaterial,
 ) -> Result<&[Value], AppError> {
