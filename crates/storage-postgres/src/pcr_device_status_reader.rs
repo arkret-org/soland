@@ -172,17 +172,9 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
         }
         let decision = match resource.revoke_command_outcome.as_ref() {
             Some(outcome) if outcome.result == SecurityRotationRevokeCommandResult::Accepted => {
-                if durable_step.is_none()
-                    || resource
-                        .accepted_steps
-                        .as_slice()
-                        .first()
-                        .is_none_or(|step| {
-                            step.prepared_material_digest != plan.revoke_unit.request_digest
-                        })
-                {
+                if durable_step.is_none() || resource.accepted_steps.is_empty() {
                     return Err(incomplete(
-                        "PCR revoke accepted step digest differs from the prepared unit",
+                        "PCR revoke accepted step is absent from the durable terminal outcome",
                     )
                     .into());
                 }

@@ -8,9 +8,7 @@
 //! the first result.
 
 use arkret_models_collaboration::events_payloads::KeyBackupActiveSeries;
-use arkret_models_crypto::{
-    BackupKind, KeyBackup, SecurityTransactionStep,
-};
+use arkret_models_crypto::{BackupKind, KeyBackup, SecurityTransactionStep};
 use arkret_wire::{AccountId, ActorId, DeviceId, RealmId};
 use diesel::sql_types::{BigInt, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
@@ -23,8 +21,8 @@ use soland_storage::{
 };
 
 use super::{
-    AsyncPgConnection, PgTransactionError, StepAttemptSource, accept_step_in_transaction,
-    load_one, load_step_outcome,
+    AsyncPgConnection, PgTransactionError, StepAttemptSource, accept_step_in_transaction, load_one,
+    load_step_outcome,
 };
 use crate::key_backup_current_results::{
     commit_key_backup_pointer_unit_in_connection, verification_method_device,
@@ -44,6 +42,12 @@ fn rejected(code: impl std::fmt::Display, reason: &str) -> PgTransactionError {
 struct PcrRealmRow {
     #[diesel(sql_type = Text)]
     pcr_realm_id: String,
+}
+
+#[derive(QueryableByName)]
+struct CurrentAccountDidRow {
+    #[diesel(sql_type = Text)]
+    did: String,
 }
 
 #[derive(QueryableByName)]
@@ -230,7 +234,10 @@ async fn verify_replacement_envelope(
         )
     })?;
     if &backup.auth_data.device_id != authorizer
-        || backup.device_id.as_ref().is_some_and(|device| device != authorizer)
+        || backup
+            .device_id
+            .as_ref()
+            .is_some_and(|device| device != authorizer)
         || verification_method_device(&backup.auth_data.verification_method, account).as_ref()
             != Some(authorizer)
     {
@@ -292,12 +299,13 @@ async fn verify_replacement_envelope(
                 "current device authorization has no did:key key",
             )
         })?;
-    let public_key = arkret_canonical::multibase::decode_ed25519_multibase(did_key).map_err(|_| {
-        rejected(
-            ConflictCode::FailedPrecondition,
-            "current device authorization key is invalid",
-        )
-    })?;
+    let public_key =
+        arkret_canonical::multibase::decode_ed25519_multibase(did_key).map_err(|_| {
+            rejected(
+                ConflictCode::FailedPrecondition,
+                "current device authorization key is invalid",
+            )
+        })?;
     let signed = backup
         .signing_payload_bytes()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
@@ -332,49 +340,33 @@ fn planned_replacement_chain(
         ));
     };
     let binding = &rotation.binding;
-    let values = rotation
-        .encrypted_backup_material
-        .value
-        .get("backups")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            rejected(
-                ConflictCode::SchemaViolation,
-                "prepared backup material has no backups array",
-            )
-        })?;
-    if values.len() != binding.new_backups.len() {
+    let envelopes = &rotation.new_backup_envelopes;
+    if envelopes.len() != binding.new_backups.len() {
         return Err(rejected(
             ConflictCode::SchemaViolation,
-            "prepared backup material differs from the reserved replacement set",
+            "prepared backup envelopes differ from the reserved replacement set",
         ));
     }
     let actor = ActorId::account(resource.account_id.clone());
-    let mut chain = Vec::with_capacity(values.len());
-    for value in values {
-        let backup: KeyBackup = serde_json::from_value(value.clone()).map_err(|error| {
-            rejected(
-                ConflictCode::SchemaViolation,
-                &format!("prepared replacement backup is not a KeyBackup: {error}"),
-            )
-        })?;
+    let mut chain = Vec::with_capacity(envelopes.len());
+    let mut previous_id: Option<&str> = None;
+    for (backup, reserved) in envelopes.iter().zip(&binding.new_backups) {
         backup.validate().map_err(|error| {
             rejected(
                 ConflictCode::SchemaViolation,
                 &format!("prepared replacement backup is invalid: {error}"),
             )
         })?;
-        if serde_json::to_value(&backup).map_err(PersistenceError::database)? != *value {
+        let value = serde_json::to_value(backup).map_err(PersistenceError::database)?;
+        if previous_id.is_some_and(|previous| previous >= backup.backup_id.as_str()) {
             return Err(rejected(
                 ConflictCode::SchemaViolation,
-                "prepared replacement backup carries members outside its closed envelope",
+                "prepared replacement backups are not in distinct canonical backup_id order",
             ));
         }
-        let reserved = binding
-            .new_backups
-            .iter()
-            .find(|reserved| reserved.backup_id == backup.backup_id);
-        if reserved.is_none_or(|reserved| reserved.ciphertext_digest != backup.ciphertext_digest)
+        previous_id = Some(backup.backup_id.as_str());
+        if reserved.backup_id != backup.backup_id
+            || reserved.ciphertext_digest != backup.ciphertext_digest
             || backup.actor_id != actor
             || backup.backup_kind != BackupKind::SecretStorage
             || backup.series_id != binding.new_series_id
@@ -384,7 +376,7 @@ fn planned_replacement_chain(
                 "prepared replacement backup differs from its reserved identity, series, class or digest",
             ));
         }
-        chain.push((backup, value.clone()));
+        chain.push((backup.clone(), value));
     }
     chain.sort_by_key(|(backup, _)| backup.series_seq);
     let mut predecessor: Option<&KeyBackup> = None;
@@ -454,12 +446,11 @@ pub(super) async fn commit_rotation_upload_in_connection(
     let cut = active_authorizer_cut(conn, account, &authorizer, &realm_id, accepted_at).await?;
 
     let series_id = chain[0].0.series_id.clone();
-    let existing = sql_query(
-        "SELECT id::text AS id, payload FROM key_backups WHERE series_id=$1 FOR UPDATE",
-    )
-    .bind::<Text, _>(series_id.as_str())
-    .load::<StoredBackupRow>(&mut *conn)
-    .await?;
+    let existing =
+        sql_query("SELECT id::text AS id, payload FROM key_backups WHERE series_id=$1 FOR UPDATE")
+            .bind::<Text, _>(series_id.as_str())
+            .load::<StoredBackupRow>(&mut *conn)
+            .await?;
     for row in &existing {
         let planned = chain.iter().find(|(backup, _)| {
             crate::ids::typed_uuid_part_expect_internal(backup.backup_id.as_str()).to_string()
@@ -475,11 +466,12 @@ pub(super) async fn commit_rotation_upload_in_connection(
     for (backup, value) in &chain {
         verify_replacement_envelope(conn, backup, &cut, account, &authorizer).await?;
         let uuid = crate::ids::typed_uuid_part_expect_internal(backup.backup_id.as_str());
-        let stored = sql_query("SELECT id::text AS id, payload FROM key_backups WHERE id=$1 FOR UPDATE")
-            .bind::<diesel::sql_types::Uuid, _>(uuid)
-            .get_result::<StoredBackupRow>(&mut *conn)
-            .await
-            .optional()?;
+        let stored =
+            sql_query("SELECT id::text AS id, payload FROM key_backups WHERE id=$1 FOR UPDATE")
+                .bind::<diesel::sql_types::Uuid, _>(uuid)
+                .get_result::<StoredBackupRow>(&mut *conn)
+                .await
+                .optional()?;
         match stored {
             Some(row) if row.payload == *value => {}
             Some(_) => {
@@ -544,7 +536,9 @@ pub(super) async fn commit_rotation_pointer_switch_in_connection(
         )
     })?;
     if record.active_series_id != binding.new_series_id
-        || !record.previous_series_ids.contains(&binding.previous_series_id)
+        || !record
+            .previous_series_ids
+            .contains(&binding.previous_series_id)
         || record.backup_kind != BackupKind::SecretStorage
     {
         return Err(rejected(
@@ -570,7 +564,12 @@ pub(super) async fn commit_rotation_pointer_switch_in_connection(
     .await
     .optional()?;
     if head.as_ref().map(|head| head.commit_id.as_str())
-        != write.commit.commit.previous_commit_ref.as_ref().map(|id| id.as_str())
+        != write
+            .commit
+            .commit
+            .previous_commit_ref
+            .as_ref()
+            .map(|id| id.as_str())
     {
         // The Station signs the covering Commit before this transaction; a
         // head that moved meanwhile is re-signed on the next worker pass.
@@ -741,9 +740,27 @@ pub(super) async fn commit_rotation_local_commit_in_connection(
     lock_pcr(conn, &realm_id, false).await?;
     let cut =
         active_authorizer_cut(conn, account, &artifact.device_id, &realm_id, accepted_at).await?;
-    if verification_method_device(&write.attestation.auth_data.verification_method, account)
-        .as_ref()
-        != Some(&artifact.device_id)
+    let account_did = sql_query(
+        "SELECT projection->>'did' AS did FROM principal_resolutions \
+         WHERE principal_id=$1 AND station_id=$2 AND pcr_realm_id=$3",
+    )
+    .bind::<Text, _>(account.principal_id.as_str())
+    .bind::<Text, _>(account.station_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<CurrentAccountDidRow>(&mut *conn)
+    .await
+    .optional()?
+    .ok_or_else(|| {
+        rejected(
+            ConflictCode::TemporarilyUnavailable,
+            "current Account DID is absent",
+        )
+    })?;
+    let expected_method = format!("{}#{}", account_did.did, artifact.device_id.as_str());
+    if write.attestation.auth_data.verification_method.as_str() != expected_method
+        || verification_method_device(&write.attestation.auth_data.verification_method, account)
+            .as_ref()
+            != Some(&artifact.device_id)
     {
         return Err(rejected(
             ConflictCode::SignatureInvalid,
@@ -789,7 +806,9 @@ pub(super) async fn commit_rotation_local_commit_in_connection(
 fn pointer_refusal(error: PgTransactionError) -> PgTransactionError {
     match error.into_persistence() {
         PersistenceError::Conflict(detail) => {
-            let token = detail.split_once(": ").map_or(detail.as_str(), |(head, _)| head);
+            let token = detail
+                .split_once(": ")
+                .map_or(detail.as_str(), |(head, _)| head);
             let is_code = !token.is_empty()
                 && token
                     .bytes()

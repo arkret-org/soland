@@ -19,9 +19,9 @@ use arkret_models_identity::{
     UnsignedIdentityCreationControlProof, UnsignedIdentityCreationControlProofBody,
 };
 use arkret_wire::{
-    BackupId, BackupSeriesId, CanonicalPublicMaterial, DetachedSignatureContext, DeviceId,
-    DidCoreId, DidUrl, EventKind, Hash, IdempotencyKey, PcrGenesisUnit, RealmCommitAuthorityRef,
-    RealmCommitId, RealmId, TransactionId, TrustDomainId, WebOrigin,
+    BackupId, BackupSeriesId, DetachedSignatureContext, DeviceId, DidCoreId, DidUrl, EventKind,
+    Hash, IdempotencyKey, PcrGenesisUnit, RealmCommitAuthorityRef, RealmCommitId, RealmId,
+    TransactionId, TrustDomainId, WebOrigin,
 };
 use device_history_fixture::{DeviceHistoryFixture, DeviceHistoryFixtureOptions};
 use diesel::sql_types::{BigInt, Jsonb, Text, Uuid};
@@ -925,8 +925,25 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         },
     )
     .unwrap();
+    let author = PointerAuthor {
+        account: account.clone(),
+        realm_id: realm_id.clone(),
+        method: device_method.clone(),
+        seed: device_seed,
+    };
+    let new_series_id =
+        BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let envelope = signed_backup(
+        &author,
+        &authorizer,
+        &genesis.transactions[1].event.event_id,
+        &new_series_id,
+        0,
+        None,
+        device_seed,
+    );
     let backup =
-        |suffix: &str| BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7())).unwrap();
+        |_suffix: &str| BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7())).unwrap();
     let binding = BackupRotationBinding {
         backup_kind: BackupRotationKind::SecretStorage,
         previous_series_id: BackupSeriesId::new(format!(
@@ -934,11 +951,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             uuid::Uuid::now_v7()
         ))
         .unwrap(),
-        new_series_id: BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7()))
-            .unwrap(),
+        new_series_id,
         new_backups: vec![BackupObjectRef {
-            backup_id: backup("new"),
-            ciphertext_digest: hash("new-backup"),
+            backup_id: envelope.backup_id.clone(),
+            ciphertext_digest: envelope.ciphertext_digest.clone(),
         }],
         active_series_event_id: active_series.event_id.clone(),
         old_backups: vec![BackupObjectRef {
@@ -948,10 +964,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     };
     let rotation = BackupRotationPlan {
         binding,
-        encrypted_backup_material: CanonicalPublicMaterial::canonical_json(
-            serde_json::json!({"fixture":"ciphertext"}),
-        )
-        .unwrap(),
+        new_backup_envelopes: vec![envelope],
         active_series_unit: active_unit,
     };
     let request = SecurityRotationTransactionCreateRequest::from_prepared_rotations(
@@ -1130,23 +1143,13 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .await
         .unwrap()
         .unwrap();
-    let request_digest = accepted
-        .resource
-        .security_rotation_plan()
-        .unwrap()
-        .revoke_unit
-        .request_digest
-        .clone();
     accepted
         .resource
         .accepted_steps
         .push(AcceptedSecurityTransactionStep {
-            prepared_material_digest: request_digest,
             acceptor: SecurityTransactionAcceptor::Principal {
                 principal_id: station.clone(),
             },
-            output_ref: covering.commit_id.to_string(),
-            output_digest: hash("revoke-command-accepted"),
             accepted_at: at + chrono::TimeDelta::seconds(2),
         });
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
@@ -2227,6 +2230,15 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
     let covering = station_successor(&pointer_b_commit, &revoke, &station_did, 1);
     let rotation_series =
         BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let envelope = signed_backup(
+        &author_a,
+        &device_a,
+        &authorize_a,
+        &rotation_series,
+        0,
+        None,
+        author_a.seed,
+    );
     let rotation_pointer = author_a.event(
         author_a.record(
             &rotation_series,
@@ -2258,9 +2270,8 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
                 previous_series_id: series_one.clone(),
                 new_series_id: rotation_series.clone(),
                 new_backups: vec![BackupObjectRef {
-                    backup_id: BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7()))
-                        .unwrap(),
-                    ciphertext_digest: hash("rotated-backup"),
+                    backup_id: envelope.backup_id.clone(),
+                    ciphertext_digest: envelope.ciphertext_digest.clone(),
                 }],
                 active_series_event_id: rotation_pointer.event_id.clone(),
                 old_backups: vec![BackupObjectRef {
@@ -2269,10 +2280,7 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
                     ciphertext_digest: hash("old-backup"),
                 }],
             },
-            encrypted_backup_material: CanonicalPublicMaterial::canonical_json(
-                serde_json::json!({"fixture":"ciphertext"}),
-            )
-            .unwrap(),
+            new_backup_envelopes: vec![envelope],
             active_series_unit: PreparedEventUnit::new(
                 arkret_canonical::DigestSuite::Sha256,
                 PreparedEventBatchRequest {
@@ -2361,24 +2369,14 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         .await
         .unwrap()
         .unwrap();
-    let request_digest = accepted
-        .resource
-        .security_rotation_plan()
-        .unwrap()
-        .revoke_unit
-        .request_digest
-        .clone();
     let decided_at = pending_at + chrono::TimeDelta::seconds(1);
     accepted
         .resource
         .accepted_steps
         .push(AcceptedSecurityTransactionStep {
-            prepared_material_digest: request_digest,
             acceptor: SecurityTransactionAcceptor::Principal {
                 principal_id: station.clone(),
             },
-            output_ref: covering.commit_id.to_string(),
-            output_digest: hash("revoke-command-accepted"),
             accepted_at: decided_at,
         });
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
@@ -2573,24 +2571,23 @@ async fn rotation_footprint(
     (row.backups, row.outcomes, row.attempts)
 }
 
-/// Append the worker's evidence for `step` exactly as the Station does.
+/// Append the worker's accepted position exactly as the Station does.
 fn with_rotation_step(
     record: &SecurityTransactionRecord,
-    evidence: soland_storage::RotationStepEvidence,
     station: &DidCoreId,
     accepted_at: chrono::DateTime<chrono::Utc>,
     step: SecurityTransactionStep,
-) -> (SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord) {
+) -> (
+    SecurityTransactionRecord,
+    SecurityTransactionStepOutcomeRecord,
+) {
     let mut next = record.clone();
     next.resource
         .accepted_steps
         .push(AcceptedSecurityTransactionStep {
-            prepared_material_digest: evidence.prepared_material_digest,
             acceptor: SecurityTransactionAcceptor::Principal {
                 principal_id: station.clone(),
             },
-            output_ref: evidence.output_ref,
-            output_digest: evidence.output_digest,
             accepted_at,
         });
     let outcome = SecurityTransactionStepOutcomeRecord {
@@ -2610,8 +2607,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     };
     use soland_storage::{
         KeyBackupActiveSeriesCommitOutcome, KeyBackupActiveSeriesCommitWrite,
-        RotationPointerSwitchWrite, RotationUploadCommitWrite, rotation_switch_step_evidence,
-        rotation_upload_step_evidence,
+        RotationPointerSwitchWrite, RotationUploadCommitWrite,
     };
 
     let (pool, station) = contract_store().await;
@@ -2692,7 +2688,15 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     let series_one =
         BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
     let pointer_one = author_a.event(
-        author_a.record(&series_one, 1, vec![], &head.commit_id, &authorize_a, 1, author_a.seed),
+        author_a.record(
+            &series_one,
+            1,
+            vec![],
+            &head.commit_id,
+            &authorize_a,
+            1,
+            author_a.seed,
+        ),
         1,
     );
     let pointer_one_commit = station_successor(&head, &pointer_one, &station_did, 1);
@@ -2707,9 +2711,20 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         KeyBackupActiveSeriesCommitOutcome::Committed(_)
     ));
     head = pointer_one_commit;
-    let old = signed_backup(&author_a, &device_a, &authorize_a, &series_one, 0, None, author_a.seed);
+    let old = signed_backup(
+        &author_a,
+        &device_a,
+        &authorize_a,
+        &series_one,
+        0,
+        None,
+        author_a.seed,
+    );
     backups
-        .put(old.backup_id.to_string(), serde_json::to_value(&old).unwrap())
+        .put(
+            old.backup_id.to_string(),
+            serde_json::to_value(&old).unwrap(),
+        )
         .await
         .unwrap();
 
@@ -2740,7 +2755,15 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         let covering = station_successor(&head, &revoke, &station_did, 1);
         let series =
             BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
-        let first = signed_backup(&author_a, &device_a, &authorize_a, &series, 0, None, signing_seed);
+        let first = signed_backup(
+            &author_a,
+            &device_a,
+            &authorize_a,
+            &series,
+            0,
+            None,
+            signing_seed,
+        );
         let second = signed_backup(
             &author_a,
             &device_a,
@@ -2762,7 +2785,9 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
             ),
             nonce,
         );
-        let refs = [&first, &second]
+        let mut envelopes = vec![first, second];
+        envelopes.sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
+        let refs = envelopes
             .iter()
             .map(|backup| BackupObjectRef {
                 backup_id: backup.backup_id.clone(),
@@ -2794,10 +2819,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
                         ciphertext_digest: old.ciphertext_digest.clone(),
                     }],
                 },
-                encrypted_backup_material: CanonicalPublicMaterial::canonical_json(
-                    serde_json::json!({"backups": [first, second]}),
-                )
-                .unwrap(),
+                new_backup_envelopes: envelopes,
                 active_series_unit: PreparedEventUnit::new(
                     arkret_canonical::DigestSuite::Sha256,
                     PreparedEventBatchRequest {
@@ -2808,8 +2830,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
             }],
         )
         .unwrap();
-        let plan =
-            SecurityTransactionPreparedPlan::SecurityRotation(request.prepared_plan.clone());
+        let plan = SecurityTransactionPreparedPlan::SecurityRotation(request.prepared_plan.clone());
         let (initial, canonical_request) =
             SecurityTransactionCreateRequest::SecurityRotation(request)
                 .into_initial_resource(plan, now)
@@ -2841,18 +2862,9 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
             .resource
             .accepted_steps
             .push(AcceptedSecurityTransactionStep {
-                prepared_material_digest: accepted
-                    .resource
-                    .security_rotation_plan()
-                    .unwrap()
-                    .revoke_unit
-                    .request_digest
-                    .clone(),
                 acceptor: SecurityTransactionAcceptor::Principal {
                     principal_id: station.clone(),
                 },
-                output_ref: covering.commit_id.to_string(),
-                output_digest: hash("revoke-command-accepted"),
                 accepted_at: decided_at,
             });
         accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
@@ -2880,11 +2892,9 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
 
     // A rotation whose replacement envelopes are not signed by A's key is
     // refused by the upload unit with no envelope, step or attempt written.
-    let (forged, forged_series, _, _) = rotation(&device_c, [0x66; 32]).await;
-    let forged_plan = forged.resource.security_rotation_plan().unwrap().clone();
+    let (forged, forged_series, ..) = rotation(&device_c, [0x66; 32]).await;
     let (forged_next, forged_outcome) = with_rotation_step(
         &forged,
-        rotation_upload_step_evidence(&forged_plan).unwrap(),
         &station,
         now,
         SecurityTransactionStep::UploadNewMaterial,
@@ -2932,10 +2942,8 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     );
 
     // The generic accepted-step writer cannot stand in for the worker unit.
-    let evidence = rotation_upload_step_evidence(&plan).unwrap();
     let (upload_next, upload_outcome) = with_rotation_step(
         &decided,
-        evidence.clone(),
         &station,
         covering.committed_at,
         SecurityTransactionStep::UploadNewMaterial,
@@ -2950,7 +2958,6 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     let early = station_successor(&covering, &pointer, &station_did, 1);
     let (early_next, early_outcome) = with_rotation_step(
         &decided,
-        rotation_switch_step_evidence(&plan, &early).unwrap(),
         &station,
         covering.committed_at,
         SecurityTransactionStep::SwitchAuthoritativePointer,
@@ -2999,8 +3006,14 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         Some(soland_storage::ConflictCode::DuplicateConflict),
         "{squatted}"
     );
-    assert_eq!(rotation_footprint(&pool, &series, &transaction_id).await, before);
-    assert_eq!(backups.get(reserved_id.as_str()).await.unwrap(), Some(squatter));
+    assert_eq!(
+        rotation_footprint(&pool, &series, &transaction_id).await,
+        before
+    );
+    assert_eq!(
+        backups.get(reserved_id.as_str()).await.unwrap(),
+        Some(squatter)
+    );
     assert!(backups.delete(reserved_id.as_str()).await.unwrap());
 
     // Upload: both envelopes and accepted_steps[1] in one write.
@@ -3012,12 +3025,13 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .await
         .unwrap();
     assert_eq!(uploaded.resource.accepted_steps.len(), 2);
-    assert_eq!(uploaded.resource.accepted_steps[1].output_ref, evidence.output_ref);
-    assert_eq!(rotation_footprint(&pool, &series, &transaction_id).await, (2, 2, 2));
+    assert_eq!(
+        rotation_footprint(&pool, &series, &transaction_id).await,
+        (2, 2, 2)
+    );
     // An exact replay computed later reads the first stored result.
     let (replay_next, replay_outcome) = with_rotation_step(
         &decided,
-        evidence,
         &station,
         covering.committed_at + chrono::TimeDelta::seconds(9),
         SecurityTransactionStep::UploadNewMaterial,
@@ -3030,7 +3044,10 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .await
         .unwrap();
     assert_eq!(replayed.resource, uploaded.resource);
-    assert_eq!(rotation_footprint(&pool, &series, &transaction_id).await, (2, 2, 2));
+    assert_eq!(
+        rotation_footprint(&pool, &series, &transaction_id).await,
+        (2, 2, 2)
+    );
     // The pointer still names series_one: nothing switched yet.
     let before_switch = backups
         .confirmed_active_series_for_device(&account, &device_a, covering.committed_at)
@@ -3053,7 +3070,6 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     );
     let (stale_next, stale_outcome) = with_rotation_step(
         &uploaded,
-        rotation_switch_step_evidence(&plan, &stale).unwrap(),
         &station,
         covering.committed_at,
         SecurityTransactionStep::SwitchAuthoritativePointer,
@@ -3077,10 +3093,8 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
 
     // Switch: Event, Commit, pointer v2 and accepted_steps[2] together.
     let switch_commit = station_successor(&covering, &pointer, &station_did, 2);
-    let switch_evidence = rotation_switch_step_evidence(&plan, &switch_commit).unwrap();
     let (switch_next, switch_outcome) = with_rotation_step(
         &uploaded,
-        switch_evidence.clone(),
         &station,
         switch_commit.committed_at,
         SecurityTransactionStep::SwitchAuthoritativePointer,
@@ -3096,8 +3110,8 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .unwrap();
     assert_eq!(switched.resource.accepted_steps.len(), 3);
     assert_eq!(
-        switched.resource.accepted_steps[2].output_ref,
-        switch_commit.commit_id.to_string()
+        switched.resource.accepted_steps[2].accepted_at,
+        switch_commit.committed_at
     );
     let (events, commits, pointer_rows) = pointers;
     assert_eq!(
@@ -3172,12 +3186,9 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .resource
         .accepted_steps
         .push(AcceptedSecurityTransactionStep {
-            prepared_material_digest: plan.erase_confirmation_digest.clone(),
             acceptor: SecurityTransactionAcceptor::Principal {
                 principal_id: station.clone(),
             },
-            output_ref: plan.erase_confirmation_digest.to_string(),
-            output_digest: plan.erase_confirmation_digest.clone(),
             accepted_at: switched_record.resource.accepted_steps[2].accepted_at
                 + chrono::TimeDelta::seconds(1),
         });
@@ -3243,17 +3254,13 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         attestation.auth_data.signature =
             arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(signature))
                 .unwrap();
-        let digest = attestation.attestation_digest().unwrap();
         let mut next = erased.clone();
         next.resource
             .accepted_steps
             .push(AcceptedSecurityTransactionStep {
-                prepared_material_digest: digest.clone(),
                 acceptor: SecurityTransactionAcceptor::Principal {
                     principal_id: station.clone(),
                 },
-                output_ref: plan.local_commit_digest.to_string(),
-                output_digest: digest,
                 accepted_at: committed_at,
             });
         next.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Completed {
@@ -3346,7 +3353,10 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .await,
         Some(soland_storage::ConflictCode::DeviceRevoked)
     );
-    assert_eq!(rotation_footprint(&pool, &series, &transaction_id).await, footprint);
+    assert_eq!(
+        rotation_footprint(&pool, &series, &transaction_id).await,
+        footprint
+    );
 
     // The genuine local commit completes the rotation in one write.
     let completed = transactions

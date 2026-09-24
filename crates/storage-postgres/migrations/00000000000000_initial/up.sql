@@ -2365,7 +2365,7 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     WHERE member.key IN (
         'backup_id', 'actor_id', 'device_id', 'backup_kind', 'backup_version',
         'series_id', 'series_seq', 'supersedes_id', 'supersedes_digest',
-        'source_commit_ref', 'recovery_policy_ref', 'expires_at', 'created_at',
+        'expires_at', 'created_at',
         'updated_at', 'ciphertext_digest', 'encryption', 'retention'
     )
 $$;

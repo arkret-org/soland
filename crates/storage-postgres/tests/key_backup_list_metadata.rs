@@ -105,7 +105,7 @@ fn genesis(id: &str, actor: &ActorId, series: &str) -> Value {
     })
 }
 
-/// A successor carrying every optional `backup_metadata` member.
+/// A successor carrying envelope-only refs and the remaining optional metadata.
 fn successor(id: &str, actor: &ActorId, series: &str, prior: &str) -> Value {
     json!({
         "backup_id": id, "actor_id": actor, "device_id": DEVICE,
@@ -204,7 +204,14 @@ async fn stored_envelopes_list_as_the_closed_backup_metadata_projection() {
         })
     );
     let mut expected_successor = successor(&second, &actor, &series, &first);
-    for member in ["domain_separation", "contents", "ciphertext", "auth_data"] {
+    for member in [
+        "domain_separation",
+        "contents",
+        "ciphertext",
+        "auth_data",
+        "source_commit_ref",
+        "recovery_policy_ref",
+    ] {
         expected_successor.as_object_mut().unwrap().remove(member);
     }
     expected_successor["encryption"]
@@ -224,10 +231,8 @@ async fn stored_envelopes_list_as_the_closed_backup_metadata_projection() {
             .map(|id| id.to_string()),
         Some(first.clone())
     );
-    assert_eq!(
-        successor_summary.source_commit_ref.as_ref().unwrap()["device_generation_ref"],
-        3
-    );
+    assert!(page.payloads[1].get("source_commit_ref").is_none());
+    assert!(page.payloads[1].get("recovery_policy_ref").is_none());
 
     // The whole page is the closed `KeysBackupsList`.
     let wire = list_page(&account, page.payloads.clone());

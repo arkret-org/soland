@@ -639,18 +639,12 @@ async fn try_advance_rotation_revoke(
         result: SecurityRotationRevokeCommandResult::Accepted,
         decided_at,
     };
-    let output_digest =
-        Hash::new(crate::util::canonical_digest(&outcome).map_err(|e| internal(&e))?)
-            .map_err(|e| internal(&e))?;
     let mut decided = proposed;
     decided.resource.revoke_command_outcome = Some(outcome);
     decided.resource.accepted_steps.push(AcceptedStep {
-        prepared_material_digest: plan.revoke_unit.request_digest.clone(),
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: state.service_core_id(),
         },
-        output_ref: proposal.covering_commit_id.as_str().to_owned(),
-        output_digest,
         accepted_at: decided_at,
     });
     decided
@@ -764,22 +758,17 @@ fn worker_step_outcome(
     })
 }
 
-/// Append one Station-accepted worker step carrying its plan-derived
-/// evidence and return the candidate resource for its storage unit.
+/// Append one Station-accepted worker step for its atomic storage unit.
 fn with_worker_step(
     state: &AppState,
     transaction: &SecurityTransactionRecord,
-    evidence: soland_storage::RotationStepEvidence,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<SecurityTransactionRecord, soland_services::ServiceError> {
     let mut next = transaction.clone();
     next.resource.accepted_steps.push(AcceptedStep {
-        prepared_material_digest: evidence.prepared_material_digest,
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: state.service_core_id(),
         },
-        output_ref: evidence.output_ref,
-        output_digest: evidence.output_digest,
         accepted_at,
     });
     next.resource
@@ -843,9 +832,8 @@ async fn try_advance_rotation_upload(
     state: &AppState,
     transaction: SecurityTransactionRecord,
 ) -> Result<(), soland_services::ServiceError> {
-    let internal = |error: &dyn std::fmt::Display| {
-        soland_services::ServiceError::Internal(error.to_string())
-    };
+    let internal =
+        |error: &dyn std::fmt::Display| soland_services::ServiceError::Internal(error.to_string());
     let now = chrono::Utc::now();
     if transaction.resource.expires_at <= now {
         return stop_rotation(state, transaction, None).await;
@@ -854,18 +842,13 @@ async fn try_advance_rotation_upload(
         return Ok(());
     };
     for rotation in &plan.backup_rotations {
-        let Some(values) = rotation
-            .encrypted_backup_material
-            .value
-            .get("backups")
-            .and_then(Value::as_array)
-        else {
-            return stop_rotation(state, transaction, Some(Some("schema_violation".to_owned())))
-                .await;
-        };
-        for value in values {
+        for backup in &rotation.new_backup_envelopes {
+            let value = serde_json::to_value(backup).map_err(|error| internal(&error))?;
             if let Err(error) =
-                crate::routing::identity::key_backup::validate_rotation_replacement_backup(state, value).await
+                crate::routing::identity::key_backup::validate_rotation_replacement_backup(
+                    state, &value,
+                )
+                .await
             {
                 if error.http_status().is_server_error() {
                     return Err(internal(&error));
@@ -875,8 +858,7 @@ async fn try_advance_rotation_upload(
             }
         }
     }
-    let evidence = soland_storage::rotation_upload_step_evidence(&plan).map_err(|e| internal(&e))?;
-    let next = with_worker_step(state, &transaction, evidence, now)?;
+    let next = with_worker_step(state, &transaction, now)?;
     let step_outcome = worker_step_outcome(&next, SecurityTransactionStep::UploadNewMaterial)?;
     match state
         .security_transactions()
@@ -906,9 +888,8 @@ async fn try_advance_rotation_switch(
     state: &AppState,
     transaction: SecurityTransactionRecord,
 ) -> Result<(), soland_services::ServiceError> {
-    let internal = |error: &dyn std::fmt::Display| {
-        soland_services::ServiceError::Internal(error.to_string())
-    };
+    let internal =
+        |error: &dyn std::fmt::Display| soland_services::ServiceError::Internal(error.to_string());
     let now = chrono::Utc::now();
     if transaction.resource.expires_at <= now {
         return stop_rotation(state, transaction, None).await;
@@ -917,10 +898,20 @@ async fn try_advance_rotation_switch(
         return Ok(());
     };
     let [rotation] = plan.backup_rotations.as_slice() else {
-        return stop_rotation(state, transaction, Some(Some("schema_violation".to_owned()))).await;
+        return stop_rotation(
+            state,
+            transaction,
+            Some(Some("schema_violation".to_owned())),
+        )
+        .await;
     };
     let [event] = rotation.active_series_unit.request.events.as_slice() else {
-        return stop_rotation(state, transaction, Some(Some("schema_violation".to_owned()))).await;
+        return stop_rotation(
+            state,
+            transaction,
+            Some(Some("schema_violation".to_owned())),
+        )
+        .await;
     };
     let method = DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
@@ -938,9 +929,7 @@ async fn try_advance_rotation_switch(
             now,
         )
         .await?;
-    let evidence = soland_storage::rotation_switch_step_evidence(&plan, &commit.commit)
-        .map_err(|e| internal(&e))?;
-    let next = with_worker_step(state, &transaction, evidence, now)?;
+    let next = with_worker_step(state, &transaction, now)?;
     let step_outcome =
         worker_step_outcome(&next, SecurityTransactionStep::SwitchAuthoritativePointer)?;
     match state
@@ -1156,84 +1145,6 @@ fn refresh_backup_erase_completion(
         series: request.series.clone(),
     });
     complete
-}
-
-/// `erase_old_material` is coordinator-owned: only the Station's durable
-/// rotation worker builds the erase request from the saved plan and executes
-/// it (security-transactions.md §1.1, §3). A client can neither drive nor
-/// repeat the step here. The registered operation answers an exact
-/// canonical replay of the worker's own request with its durable outcome
-/// (partial progress or the complete confirmation); different bytes are a
-/// `duplicate_conflict`, and a request the worker has not begun is a
-/// `failed_precondition`.
-#[salvo::oapi::endpoint(
-    operation_id = "ak.self.keys.backup_series.command.erase",
-    tags("identity")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backup_series.command.erase.v1"))]
-pub(crate) async fn backup_series_erase_command(
-    aa: AuthArgs,
-    body: JsonBody<arkret_models_crypto::BackupSeriesEraseRequestBody>,
-    depot: &mut Depot,
-    res: &mut Response,
-    req: &mut Request,
-) -> JsonResult<arkret_models_crypto::BackupSeriesEraseOutcome> {
-    use arkret_models_crypto::BackupSeriesEraseOutcome;
-
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let request = body.into_inner();
-    request
-        .validate_structural()
-        .map_err(|error| AppError::schema_violation(error.to_string()))?;
-    let canonical_request = arkret_canonical::canonical_json_bytes(&request)
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    let transaction_id = request.transaction_id.as_str().to_owned();
-    load_owned_security_transaction(state, &session, &transaction_id).await?;
-
-    let recorded = match state
-        .security_transactions()
-        .step_outcome(&transaction_id, SecurityTransactionStep::EraseOldMaterial)
-        .await
-        .map_err(recovery_service_error)?
-    {
-        Some(stored) => Some((
-            stored.canonical_request,
-            stored.participant_outcome.ok_or_else(|| {
-                AppError::internal("stored backup-series erase outcome is unavailable")
-            })?,
-        )),
-        None => state
-            .security_transactions()
-            .backup_erase_progress(&transaction_id)
-            .await
-            .map_err(security_transaction_service_error)?
-            .map(|progress| {
-                serde_json::to_value(&progress.outcome)
-                    .map(|outcome| (progress.canonical_request, outcome))
-                    .map_err(|error| AppError::internal(error.to_string()))
-            })
-            .transpose()?,
-    };
-    let Some((recorded_request, outcome)) = recorded else {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "erase_old_material is executed only by the Station's durable rotation worker",
-        ));
-    };
-    if recorded_request != canonical_request {
-        return Err(AppError::conflict(
-            "backup-series erase was begun by the rotation worker with different canonical bytes",
-        )
-        .with_wire_code("duplicate_conflict"));
-    }
-    let outcome: BackupSeriesEraseOutcome =
-        serde_json::from_value(outcome).map_err(|error| AppError::internal(error.to_string()))?;
-    outcome
-        .validate_for_request(&request)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    res.status_code(StatusCode::OK);
-    json_ok(outcome)
 }
 
 /// Execute `erase_old_material` for the durable rotation worker
@@ -1545,12 +1456,9 @@ async fn execute_rotation_erase(
     }
 
     transaction.resource.accepted_steps.push(AcceptedStep {
-        prepared_material_digest: plan.erase_confirmation_digest.clone(),
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: state.service_core_id(),
         },
-        output_ref: plan.erase_confirmation_digest.as_str().to_owned(),
-        output_digest: plan.erase_confirmation_digest,
         accepted_at: chrono::Utc::now(),
     });
     transaction
@@ -1602,9 +1510,6 @@ async fn continue_rotation_local_commit(
             "local commit requires SecurityRotationLocalCommit",
         ));
     };
-    let attestation_digest = attestation
-        .attestation_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if commit.transaction_id != transaction.resource.transaction_id
         || commit.transaction_request_digest != transaction.resource.request_digest
         || commit.prepared_plan_digest != transaction.resource.prepared_plan_digest
@@ -1620,12 +1525,9 @@ async fn continue_rotation_local_commit(
         serde_json::to_value(commit).map_err(|error| AppError::internal(error.to_string()))?;
     let accepted_at = chrono::Utc::now();
     transaction.resource.accepted_steps.push(AcceptedStep {
-        prepared_material_digest: attestation_digest.clone(),
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: state.service_core_id(),
         },
-        output_ref: plan.local_commit_digest.as_str().to_owned(),
-        output_digest: attestation_digest,
         accepted_at,
     });
     transaction.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Completed {
@@ -1880,9 +1782,6 @@ async fn continue_commit_recovery_unit(
             stream_position: item.commit.stream_position,
         };
     let receipt_digest = canonical_digest(receipt)?;
-    let attestation_digest = attestation
-        .attestation_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let unsigned = arkret_wire::UnsignedRecoveryCompletionAttestation::new(
         arkret_wire::UnsignedRecoveryCompletionAttestationBody {
             transaction_id: transaction.resource.transaction_id.clone(),
@@ -1913,12 +1812,9 @@ async fn continue_commit_recovery_unit(
         )
         .map_err(|error| AppError::internal(error.to_string()))?;
     transaction.resource.accepted_steps.push(AcceptedStep {
-        prepared_material_digest: attestation_digest,
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: state.service_core_id(),
         },
-        output_ref: receipt.receipt_id.as_str().to_owned(),
-        output_digest: receipt_digest,
         accepted_at: committed_at,
     });
     transaction.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Completed {
