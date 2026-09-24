@@ -134,6 +134,12 @@ impl PersistenceStore for FaultInjectingStore {
     fn authority_commits(&self) -> &dyn soland_storage::AuthorityCommitStore {
         self.inner.authority_commits()
     }
+
+    fn account_device_signer_evidence(
+        &self,
+    ) -> &dyn soland_storage::AccountDeviceSignerEvidenceStore {
+        self.inner.account_device_signer_evidence()
+    }
 }
 
 #[async_trait]

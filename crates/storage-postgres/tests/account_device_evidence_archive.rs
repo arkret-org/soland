@@ -2,6 +2,7 @@
 mod device_history_fixture;
 mod support;
 
+use arkret_identity::build_authenticated_webvh_service_resolution;
 use arkret_models_collaboration::events_payloads::{
     DeviceAuthorizePayload, device_authorize_payload_digest,
 };
@@ -10,7 +11,6 @@ use arkret_models_crypto::{
     DeviceAuthorizationWindow, DeviceProjectionAttestationCore, DeviceStatus,
 };
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
-use arkret_identity::build_authenticated_webvh_service_resolution;
 use arkret_models_identity::{
     AccountDeviceSignerEvidence, IdentityBindingPurpose, IdentityCreationControlProofKind,
     PCR_GENESIS_UNIT_KINDS, UnsignedIdentityCreationControlProof,
@@ -21,9 +21,8 @@ use arkret_signatures::webvh::{
     ServiceRegistrationInceptionInput, prepare_service_registration_inception,
 };
 use arkret_wire::{
-    AccountId, CommittedEventRef, DeviceId, Did, DidCoreId, DidKey,
-    DidUrl, Hash, IdempotencyKey, NonEmptyString, PcrGenesisUnit, RealmCommitAuthorityRef,
-    ServiceKind, TrustDomainId, WebOrigin,
+    AccountId, CommittedEventRef, DeviceId, Did, DidCoreId, DidKey, DidUrl, Hash, IdempotencyKey,
+    NonEmptyString, PcrGenesisUnit, RealmCommitAuthorityRef, ServiceKind, TrustDomainId, WebOrigin,
 };
 use chrono::{Duration, Utc};
 use device_history_fixture::{DeviceHistoryFixture, DeviceHistoryFixtureOptions};
@@ -35,9 +34,8 @@ use rand_core::SeedableRng;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, PcrGenesisCommitUnit,
 };
-use soland_storage_postgres::{
-    PgAccountDeviceSignerEvidenceArchive, PgAuthorityCommitStore, test_database::TestDatabase,
-};
+use soland_storage_postgres::test_database::TestDatabase;
+use soland_storage_postgres::{PgAccountDeviceSignerEvidenceArchive, PgAuthorityCommitStore};
 
 fn hash(value: &str) -> Hash {
     Hash::new(arkret_canonical::sha256_digest(value.as_bytes())).unwrap()
@@ -228,6 +226,10 @@ async fn exact_signed_root_is_immutable_and_scoped_after_real_pcr_genesis() {
     };
     let archive = PgAccountDeviceSignerEvidenceArchive::new(pool);
     let reference = archive.retain(&evidence, &source).await.unwrap();
+    assert_eq!(
+        archive.retain_current(&evidence, &source).await.unwrap(),
+        reference
+    );
     assert_eq!(archive.retain(&evidence, &source).await.unwrap(), reference);
     let restored = archive
         .get(&fixture.account, &fixture.founding_device_id, &reference)
@@ -291,6 +293,13 @@ async fn exact_signed_root_is_immutable_and_scoped_after_real_pcr_genesis() {
         device_projection_attestation: wrong_key_attestation,
         service_resolution: evidence.service_resolution.clone(),
     };
-    let error = archive.retain(&wrong_key_evidence, &source).await.unwrap_err();
-    assert!(error.to_string().contains("differs from accepted authorization payload"));
+    let error = archive
+        .retain(&wrong_key_evidence, &source)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("differs from accepted authorization payload")
+    );
 }

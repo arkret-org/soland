@@ -13,6 +13,7 @@ use crate::*;
 /// restart and are shared across replicas.
 pub struct PgPersistenceStore {
     authority_commits: PgAuthorityCommitStore,
+    account_device_signer_evidence: PgAccountDeviceSignerEvidenceArchive,
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,
     agent_draft_pending_intents: PgAgentDraftPendingIntentStore,
@@ -95,6 +96,7 @@ impl PgPersistenceStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
             authority_commits: PgAuthorityCommitStore { pool: pool.clone() },
+            account_device_signer_evidence: PgAccountDeviceSignerEvidenceArchive::new(pool.clone()),
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
             agent_draft_pending_intents: PgAgentDraftPendingIntentStore { pool: pool.clone() },
@@ -493,5 +495,9 @@ impl ResolutionStoreRegistry for PgPersistenceStore {
 impl PersistenceStore for PgPersistenceStore {
     fn authority_commits(&self) -> &dyn AuthorityCommitStore {
         &self.authority_commits
+    }
+
+    fn account_device_signer_evidence(&self) -> &dyn AccountDeviceSignerEvidenceStore {
+        &self.account_device_signer_evidence
     }
 }

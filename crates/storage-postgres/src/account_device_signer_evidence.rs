@@ -5,19 +5,43 @@
 //! keys/query row additionally requires the live same-cut generation/status
 //! gate; this archive never upgrades an old root to current authority.
 
-use arkret_models_identity::AccountDeviceSignerEvidence;
 use arkret_models_collaboration::events_payloads::DeviceAuthorizePayload;
+use arkret_models_identity::AccountDeviceSignerEvidence;
 use arkret_wire::{AccountId, CommittedEventRef, DeviceId, SignerEvidenceRef};
 use diesel::sql_types::{Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::Value;
+use soland_storage::AccountDeviceSignerEvidenceStore;
 
+use crate::pcr_device_status_fold::PcrDeviceLifecycle;
+use crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection;
 use crate::{PersistenceError, PersistenceResult, PgPool, PgTransactionError, pg_conn};
 
 #[derive(Clone)]
 pub struct PgAccountDeviceSignerEvidenceArchive {
     pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl AccountDeviceSignerEvidenceStore for PgAccountDeviceSignerEvidenceArchive {
+    async fn retain_current(
+        &self,
+        evidence: &AccountDeviceSignerEvidence,
+        authorization_ref: &CommittedEventRef,
+    ) -> PersistenceResult<SignerEvidenceRef> {
+        PgAccountDeviceSignerEvidenceArchive::retain_current(self, evidence, authorization_ref)
+            .await
+    }
+
+    async fn get(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+        reference: &SignerEvidenceRef,
+    ) -> PersistenceResult<Option<AccountDeviceSignerEvidence>> {
+        PgAccountDeviceSignerEvidenceArchive::get(self, account, device, reference).await
+    }
 }
 
 #[derive(QueryableByName)]
@@ -49,6 +73,25 @@ impl PgAccountDeviceSignerEvidenceArchive {
         evidence: &AccountDeviceSignerEvidence,
         authorization_ref: &CommittedEventRef,
     ) -> PersistenceResult<SignerEvidenceRef> {
+        self.retain_inner(evidence, authorization_ref, false).await
+    }
+
+    /// Current issuance must prove one complete PCR status and authority cut
+    /// in the very transaction that retains its signed root.
+    pub async fn retain_current(
+        &self,
+        evidence: &AccountDeviceSignerEvidence,
+        authorization_ref: &CommittedEventRef,
+    ) -> PersistenceResult<SignerEvidenceRef> {
+        self.retain_inner(evidence, authorization_ref, true).await
+    }
+
+    async fn retain_inner(
+        &self,
+        evidence: &AccountDeviceSignerEvidence,
+        authorization_ref: &CommittedEventRef,
+        require_current: bool,
+    ) -> PersistenceResult<SignerEvidenceRef> {
         let core = &evidence.device_projection_attestation.attestation;
         let account = &core.account_id;
         let device = &core.device_id;
@@ -77,6 +120,9 @@ impl PgAccountDeviceSignerEvidenceArchive {
         })?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<(), PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                .execute(&mut *conn)
+                .await?;
             // The Event and Commit must be the exact accepted PCR source;
             // neither a caller-provided ref nor a devices mirror is enough.
             let accepted = sql_query(
@@ -123,6 +169,30 @@ impl PgAccountDeviceSignerEvidenceArchive {
                 return Err(PersistenceError::SchemaViolation(
                     "account-device attestation differs from accepted authorization payload".into(),
                 ).into());
+            }
+            if require_current {
+                let cut = confirmed_pcr_device_status_cut_in_connection(
+                    conn,
+                    account,
+                    device,
+                    core.attested_at,
+                )
+                .await?
+                .ok_or_else(|| PersistenceError::SchemaViolation(
+                    "account-device current PCR cut is unavailable".into(),
+                ))?;
+                if cut.lifecycle != PcrDeviceLifecycle::Active
+                    || cut.generation_conflicted
+                    || cut.authority.authorization.as_ref().is_none_or(|current| {
+                        current.source_commit_id.as_str() != authorization_ref.commit_id.as_str()
+                            || current.event_id != authorization_ref.event_id
+                    })
+                    || cut.authority.current_generation != Some(core.authorized_generation_ref)
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "account-device attestation is not current at the confirmed PCR cut".into(),
+                    ).into());
+                }
             }
             sql_query(
                 "INSERT INTO account_device_signer_evidence \

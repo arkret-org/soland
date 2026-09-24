@@ -31,6 +31,29 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn retain_current_account_device_signer_evidence(
+        &self,
+        evidence: &arkret_models_identity::AccountDeviceSignerEvidence,
+        authorization_ref: &arkret_wire::CommittedEventRef,
+    ) -> PersistenceResult<arkret_wire::SignerEvidenceRef> {
+        self.persistence
+            .account_device_signer_evidence()
+            .retain_current(evidence, authorization_ref)
+            .await
+    }
+
+    pub async fn account_device_signer_evidence(
+        &self,
+        account: &arkret_wire::AccountId,
+        device: &arkret_wire::DeviceId,
+        reference: &arkret_wire::SignerEvidenceRef,
+    ) -> PersistenceResult<Option<arkret_models_identity::AccountDeviceSignerEvidence>> {
+        self.persistence
+            .account_device_signer_evidence()
+            .get(account, device, reference)
+            .await
+    }
+
     pub(crate) fn authority_commit_store(&self) -> &dyn soland_storage::AuthorityCommitStore {
         self.persistence.authority_commits()
     }

@@ -28,6 +28,7 @@ pub use agent_membership_cascades::*;
 pub use agent_principal::{AgentPrincipalRecord, PendingAgentPairingCommitIntent};
 pub use records::*;
 
+mod account_device_signer_evidence;
 mod account_status;
 mod accounts;
 mod agents;
@@ -74,6 +75,7 @@ mod unit_of_work;
 mod websocket_auth;
 mod webvh;
 mod webvh_freshness;
+pub use account_device_signer_evidence::*;
 pub use account_status::*;
 pub use accounts::*;
 pub use agents::*;
@@ -455,6 +457,7 @@ pub trait PersistenceStore:
     + Sync
 {
     fn authority_commits(&self) -> &dyn AuthorityCommitStore;
+    fn account_device_signer_evidence(&self) -> &dyn AccountDeviceSignerEvidenceStore;
 }
 
 #[cfg(test)]
