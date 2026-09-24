@@ -2344,7 +2344,13 @@ CREATE TABLE public.key_backups (
     series_actor_id text GENERATED ALWAYS AS ((payload ->> 'actor_id')) STORED,
     series_id text GENERATED ALWAYS AS ((payload ->> 'series_id')) STORED,
     series_seq bigint GENERATED ALWAYS AS (((payload ->> 'series_seq'))::bigint) STORED,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    -- v1 registers exactly one backup class (key-management §7.5.0 / §7.6.1).
+    -- `mls_history`, private classes and envelopes without a class never
+    -- reach the metadata page that `KeysBackupsList` serves.
+    CONSTRAINT key_backups_backup_kind_check CHECK (
+        backup_kind IS NOT NULL AND backup_kind = 'secret_storage'
+    )
 );
 
 -- SOL-02-004: enforce series_seq monotonicity at the storage layer. A given
