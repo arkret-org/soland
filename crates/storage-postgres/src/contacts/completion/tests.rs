@@ -498,3 +498,58 @@ async fn different_completion_after_terminal_still_conflicts() {
         assert_terminal_once(&pool, &fixture).await;
     }
 }
+
+/// The HTTP replay lookup reads the durable terminal result back into the
+/// typed outcome. A detached-JWS receipt reads back and still verifies; the
+/// retired bare base64url signature of the same bytes is not a readable
+/// result, so the lookup fails closed instead of reinterpreting it.
+#[tokio::test]
+async fn request_lookup_reads_detached_jws_receipts_and_rejects_bare_signatures() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let fixture = fixture(false);
+    stage(&pool, &fixture).await;
+    assert!(run(&pool, &fixture).await.unwrap());
+    let binding = &fixture.ready.intent.plan.response_binding;
+    let read = || {
+        lookup(
+            &pool,
+            &binding.authenticated_actor,
+            &binding.idempotency_key,
+            &binding.request_hash,
+        )
+    };
+    let Some(ContactCompletionResult::Accepted {
+        outcome:
+            ContactAcceptedOutcome::Request {
+                request_acceptance_receipt,
+                ..
+            },
+    }) = read().await.unwrap().and_then(|state| state.result)
+    else {
+        panic!("the terminal request result is readable");
+    };
+    arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
+        &request_acceptance_receipt,
+        &request_acceptance_receipt.core.request_event_ref,
+        &SigningKey::from_bytes(&[41_u8; 32]).verifying_key(),
+    )
+    .unwrap();
+
+    let jws = &request_acceptance_receipt.signature.jws;
+    let bare = jws.rsplit('.').next().unwrap();
+    assert!(!bare.is_empty() && bare != jws);
+    let mut conn = pg_conn(&pool).await.unwrap();
+    sql_query(
+        "UPDATE contact_completion_intents SET result = jsonb_set(result, \
+         '{outcome,request_acceptance_receipt,signature,jws}', to_jsonb($1::text)) \
+         WHERE event_digest=$2",
+    )
+    .bind::<Text, _>(bare)
+    .bind::<Text, _>(fixture.ready.event_digest.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(read().await.is_err());
+}

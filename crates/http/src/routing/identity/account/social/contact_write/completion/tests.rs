@@ -8,7 +8,7 @@ use arkret_signatures::webvh::{
 };
 use arkret_wire::{Did, EventId};
 use chrono::{Duration, TimeZone as _};
-use ed25519_dalek::{Signature, SigningKey};
+use ed25519_dalek::SigningKey;
 
 use super::*;
 
@@ -144,24 +144,29 @@ fn confirmed_contact_receipt_uses_historical_key_after_rotation_and_keystore_reo
             Ok(ProtocolSignature {
                 verification_method: method,
                 created_at: rotated_at + Duration::seconds(2),
-                jws: arkret_canonical::base64url_encode(restored.sign(bytes).to_bytes()),
+                jws: contact_detached_jws(&restored, bytes).unwrap(),
             })
         },
     )
     .unwrap();
-    let bytes = receipt.canonical_signing_bytes().unwrap();
-    let signature = Signature::from_slice(
-        &arkret_canonical::base64url_decode(receipt.signature.jws.as_str()).unwrap(),
+    // The receipt carries the SDK compact detached JWS and verifies through
+    // the SDK Contact receipt verifier only under the historical key.
+    assert!(arkret_wire::is_compact_detached_jws(&receipt.signature.jws));
+    let persisted: RequestAcceptanceReceipt =
+        serde_json::from_value(serde_json::to_value(&receipt).unwrap()).unwrap();
+    arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
+        &persisted,
+        &persisted.core.request_event_ref,
+        &old.verifying_key(),
     )
     .unwrap();
-    old.verifying_key()
-        .verify_strict(&bytes, &signature)
-        .unwrap();
     assert!(
-        current
-            .verifying_key()
-            .verify_strict(&bytes, &signature)
-            .is_err()
+        arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
+            &persisted,
+            &persisted.core.request_event_ref,
+            &current.verifying_key(),
+        )
+        .is_err()
     );
     assert_eq!(receipt.core.accepted_at, accepted_at);
     assert!(receipt.signature.created_at > rotated_at);

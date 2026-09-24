@@ -157,7 +157,8 @@ async fn sign_outcome(
         Ok(ProtocolSignature {
             verification_method: method.clone(),
             created_at: now(),
-            jws: URL_SAFE_NO_PAD.encode(key.sign(bytes).to_bytes()),
+            jws: super::contact_detached_jws(key, bytes)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
         })
     };
     let sign_lineage = |bytes: &[u8]| {

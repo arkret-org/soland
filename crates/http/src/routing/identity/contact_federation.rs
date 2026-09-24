@@ -37,9 +37,6 @@ use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
 use arkret_wire::{AccountId, DidUrl, Event, IdempotencyKey, ProtocolSignature};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::Signer as _;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -2107,7 +2104,7 @@ fn sign_contact_evidence_bytes(
     created_at: chrono::DateTime<chrono::Utc>,
     signing_bytes: &[u8],
 ) -> Result<ProtocolSignature, AppError> {
-    let signature = state.notary_signing_key().sign(signing_bytes);
+    let jws = super::account::contact_detached_jws(&state.notary_signing_key(), signing_bytes)?;
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
             crate::routing::federation::federation_service_signature_key_id(
@@ -2116,7 +2113,7 @@ fn sign_contact_evidence_bytes(
         )
         .map_err(|error| AppError::internal(format!("service key id invalid: {error}")))?,
         created_at,
-        jws: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+        jws,
     })
 }
 
@@ -2272,8 +2269,7 @@ fn sign_contact_mirror_receipt(
         "issuer_id": issuer,
     }))
     .map_err(|error| AppError::internal(format!("Contact mirror receipt canonicalize: {error}")))?;
-    let signature = state.notary_signing_key().sign(&signing_bytes);
-    let jws = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    let jws = super::account::contact_detached_jws(&state.notary_signing_key(), &signing_bytes)?;
     Ok(PeerContactMirrorReceipt {
         domain: PeerContactMirrorReceiptDomain::V1,
         request_digest,
@@ -3214,8 +3210,7 @@ fn sign_contact_control_receipt(
     let signing_bytes = canonical::canonical_json_bytes(&signing_value).map_err(|error| {
         AppError::internal(format!("Contact control receipt canonicalize: {error}"))
     })?;
-    let signature = state.notary_signing_key().sign(&signing_bytes);
-    let jws = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+    let jws = super::account::contact_detached_jws(&state.notary_signing_key(), &signing_bytes)?;
     Ok(PeerContactControlReceipt {
         domain: PeerContactControlReceiptDomain::V1,
         request_kind,
@@ -4079,7 +4074,7 @@ mod tests {
                 ))
                 .unwrap(),
                 created_at: accepted_at,
-                jws: arkret_canonical::base64url_encode(source_key.sign(bytes).to_bytes()),
+                jws: arkret_signatures::sign_ed25519_detached_jws(&source_key, bytes).unwrap(),
             })
         })
         .unwrap();
@@ -4482,7 +4477,7 @@ mod tests {
                 "signature": {
                     "verification_method": "did:web:bob-service.example#federation-signing-key",
                     "created_at": "2026-08-09T00:00:00.000Z",
-                    "jws": "YWJj"
+                    "jws": format!("eyJhbGciOiJFZDI1NTE5In0..{}", "A".repeat(86))
                 }
             },
             "current_proof": {
@@ -4503,7 +4498,7 @@ mod tests {
                 "signature": {
                     "verification_method": "did:web:alice-service.example#federation-signing-key",
                     "created_at": "2026-08-09T00:00:00.000Z",
-                    "jws": "YWJj"
+                    "jws": format!("eyJhbGciOiJFZDI1NTE5In0..{}", "A".repeat(86))
                 }
             }
         }))

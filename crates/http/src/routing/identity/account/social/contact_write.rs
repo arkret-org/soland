@@ -23,7 +23,6 @@ use arkret_wire::{
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use completion::materialize_contact_completions;
-use ed25519_dalek::{Signature, Signer as _};
 use serde::de::DeserializeOwned;
 
 use super::*;
@@ -188,26 +187,32 @@ pub(crate) fn verify_contact_service_signature_bytes(
                 )
             })?
     };
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature.jws.as_str())
-        .ok()
-        .and_then(|bytes| Signature::from_slice(&bytes).ok())
-        .ok_or_else(|| {
-            crate::app_error!(
-                FailedPrecondition,
-                format!(
-                    "{evidence_field}.signature.jws must contain exactly 64 Ed25519 signature bytes"
-                ),
-            )
-        })?;
-    verifying_key
-        .verify_strict(signature_bytes, &signature)
+    // ProtocolSignature.jws is the SDK compact detached JWS over the exact
+    // canonical transcript; a bare base64url signature is not accepted.
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            signature.jws.as_str(),
+            signature_bytes,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: verifying_key.to_bytes().to_vec(),
+            },
+        )
         .map_err(|_| {
             crate::app_error!(
                 FailedPrecondition,
                 format!("{evidence_field}.signature verification failed"),
             )
         })
+}
+
+/// Produce the compact detached JWS carried by every Contact receipt,
+/// lineage, current proof and peer-service transcript `ProtocolSignature`.
+pub(crate) fn contact_detached_jws(
+    key: &ed25519_dalek::SigningKey,
+    signing_bytes: &[u8],
+) -> Result<String, AppError> {
+    arkret_signatures::sign_ed25519_detached_jws(key, signing_bytes)
+        .map_err(|error| AppError::internal(format!("Contact transcript signing failed: {error}")))
 }
 
 pub(crate) fn validate_request_receipt_cryptography(
@@ -1088,7 +1093,7 @@ fn sign_contact_transcript(state: &AppState, bytes: &[u8]) -> Result<ProtocolSig
         )
         .map_err(|error| AppError::internal(error.to_string()))?,
         created_at: now(),
-        jws: URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(bytes).to_bytes()),
+        jws: contact_detached_jws(&state.notary_signing_key(), bytes)?,
     })
 }
 
@@ -2655,7 +2660,7 @@ mod device_authorization_account_tests {
                     ))
                     .unwrap(),
                     created_at: accepted_at,
-                    jws: arkret_canonical::base64url_encode(source_key.sign(bytes).to_bytes()),
+                    jws: arkret_signatures::sign_ed25519_detached_jws(&source_key, bytes).unwrap(),
                 })
             })
             .unwrap();
@@ -3079,5 +3084,129 @@ mod device_authorization_account_tests {
                 .is_err()
             );
         }
+    }
+
+    /// Real PostgreSQL: a receipt signed by the production Contact transcript
+    /// signer is a compact detached JWS that survives the durable row and
+    /// verifies after lookup; the retired bare base64url signature neither
+    /// reads back from the row nor verifies.
+    #[tokio::test]
+    async fn production_contact_receipt_signature_is_detached_jws_through_postgres() {
+        use arkret_models_collaboration::contact_operations::{
+            ContactProducerSigner, RequestAcceptanceReceiptCore,
+        };
+        use arkret_wire::{Base64UrlString, DidUrl};
+        use base64::Engine as _;
+        use soland_storage::ContactStore as _;
+        use soland_storage_postgres::PgContactStore;
+        use soland_storage_postgres::test_database::TestDatabase;
+
+        use super::{RequestAcceptanceReceipt, validate_request_receipt_cryptography};
+
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let holder_key = ed25519_dalek::SigningKey::from_bytes(&[29; 32]);
+        let accepted_at = chrono::DateTime::parse_from_rfc3339("2026-09-09T00:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let core = RequestAcceptanceReceiptCore {
+            holder: ContactPeer::Human {
+                account_id: AccountId::new(
+                    DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    state.service_core_id(),
+                ),
+            },
+            peer: ContactPeer::Human {
+                account_id: AccountId::new(
+                    DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+                    DidCoreId::new("ak:did_core:web:remote.example").unwrap(),
+                ),
+            },
+            slot_version: 1,
+            slot_predecessor: None,
+            previous_terminal_contact_round_id: None,
+            request_event_ref: EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [9; 32]),
+            producer_signer: ContactProducerSigner::direct(
+                DidUrl::new("did:web:alice.example#device").unwrap(),
+                Base64UrlString::new(arkret_canonical::base64url_encode(
+                    holder_key.verifying_key().to_bytes(),
+                ))
+                .unwrap(),
+            )
+            .unwrap(),
+            source_checkpoint: hash('a'),
+            accepted_at,
+            issuer_id: state.service_core_id(),
+        };
+        let receipt = RequestAcceptanceReceipt::sign_with(core, |bytes| {
+            super::sign_contact_transcript(&state, bytes)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+        })
+        .unwrap();
+        assert!(arkret_wire::is_compact_detached_jws(&receipt.signature.jws));
+        arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
+            &receipt,
+            &receipt.core.request_event_ref,
+            &state.notary_verifying_key(),
+        )
+        .unwrap();
+
+        let record = |receipt: RequestAcceptanceReceipt| soland_storage::ContactRecord {
+            requester_id: receipt.core.holder.contact_actor_id(),
+            target_id: receipt.core.peer.contact_actor_id(),
+            contact_round_id: None,
+            version: None,
+            granted_to_target_scopes: Vec::new(),
+            granted_to_requester_scopes: Vec::new(),
+            status: "pending".to_owned(),
+            pending_incoming_admitted: false,
+            request_event_ref: Some(receipt.core.request_event_ref.clone()),
+            request_slot_states: Vec::new(),
+            request_receipts: vec![receipt.clone()],
+            request_mirror_receipts: Vec::new(),
+            contact_round_evidence: None,
+            contact_round_evidence_history: Vec::new(),
+            control_outcomes: Vec::new(),
+            response_event_ref: None,
+            tombstone_event_ref: None,
+            message: None,
+            peer_host_id: None,
+            peer_service_resolution: None,
+            created_at: receipt.core.accepted_at,
+            updated_at: receipt.core.accepted_at,
+        };
+        let database = TestDatabase::lease().await;
+        let contacts = PgContactStore {
+            pool: database.pool(),
+        };
+        let holder = receipt.core.holder.contact_actor_id();
+        let peer = receipt.core.peer.contact_actor_id();
+
+        contacts.put(&record(receipt.clone())).await.unwrap();
+        let stored = contacts.get(&holder, &peer).await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&stored.request_receipts).unwrap(),
+            serde_json::to_value([&receipt]).unwrap()
+        );
+        validate_request_receipt_cryptography(&state, &stored.request_receipts[0], "test.receipt")
+            .unwrap();
+
+        // The same Ed25519 bytes as a bare base64url string are the retired
+        // shape: the verifier rejects them and a durable row carrying them
+        // fails closed on lookup instead of being reinterpreted.
+        let signature = receipt
+            .signature
+            .jws
+            .rsplit('.')
+            .next()
+            .map(|segment| arkret_canonical::base64url_decode(segment).unwrap())
+            .unwrap();
+        let mut bare = receipt;
+        bare.signature.jws = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature);
+        assert!(validate_request_receipt_cryptography(&state, &bare, "test.receipt").is_err());
+        contacts.put(&record(bare)).await.unwrap();
+        assert!(contacts.get(&holder, &peer).await.is_err());
     }
 }
