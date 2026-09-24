@@ -53,9 +53,12 @@ async fn agent_draft_pending_intent_projects_live_and_terminal_redacted_versions
         .unwrap();
     let agent = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
     let digest = |byte: char| format!("sha256:{}", byte.to_string().repeat(64));
-    let event_id =
-        arkret_wire::EventId::from_event_digest(&arkret_wire::Hash::new(digest('4')).unwrap())
-            .unwrap();
+    // The source Event id is unique per accepted proposal, and this contract
+    // database outlives a run, so the id derives from this run's controller.
+    let event_id = arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(controller_key.as_bytes()),
+    );
     let created_at = "2026-09-20T00:00:00Z"
         .parse::<chrono::DateTime<chrono::Utc>>()
         .unwrap();
@@ -144,7 +147,7 @@ async fn agent_draft_pending_intent_projects_live_and_terminal_redacted_versions
     assert!(terminal[0].payload.get("content_handoff").is_none());
     assert_eq!(
         terminal[0].payload["expired_at"],
-        serde_json::json!(expires_at)
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(expires_at))
     );
 
     let deletion = diesel::sql_query(

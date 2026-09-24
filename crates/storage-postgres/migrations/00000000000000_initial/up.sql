@@ -3902,6 +3902,8 @@ $$;
 -- Publish the Station-private source row only through the dedicated
 -- controller-holder account-subscribe channel. Live rows carry the HPKE
 -- handoff; terminal rows are projected only after ciphertext redaction.
+-- Instants use the canonical `timestamp` form (UTC, three millisecond digits,
+-- `Z`), never jsonb's session-TimeZone-dependent offset rendering.
 CREATE FUNCTION project_agent_draft_pending_intent() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     actor_key TEXT;
@@ -3927,11 +3929,11 @@ BEGIN
         'content_handoff', NEW.content_handoff,
         'canonical_event_digest', NEW.canonical_event_digest,
         'accepted_event_id', NEW.accepted_event_id,
-        'expires_at', NEW.expires_at,
-        'created_at', NEW.created_at,
+        'expires_at', to_char(NEW.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'created_at', to_char(NEW.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         'state', NEW.state,
         'consumption', NEW.consumption,
-        'expired_at', NEW.expired_at
+        'expired_at', to_char(NEW.expired_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
     ));
     PERFORM project_account_global_value(
         actor_key,

@@ -3781,15 +3781,19 @@ pub async fn assert_federation_outbox_store_contract(
     );
 }
 
+/// The Station Account that owns the contract KeyPackages.
+///
+/// A human KeyPackage binds one confirmed device authorization, so the owner
+/// is exactly the Account that authorization names.
 async fn mls_keypackage_contract_account(
     accounts: &dyn super::AccountStore,
-    namespace: &str,
+    device: &DeviceRevocationGateSelector,
 ) -> AccountPk {
     accounts
         .put(&super::AccountRecord {
             pk: AccountPk(0),
-            principal_id: DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
-            station_id: DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+            principal_id: device.principal_id.clone(),
+            station_id: device.station_id.clone(),
             localpart: String::new(),
             display_name: None,
             bio: None,
@@ -3804,6 +3808,7 @@ fn mls_keypackage_contract_row(
     namespace: &str,
     suffix: &str,
     owner_account_pk: AccountPk,
+    device: &DeviceRevocationGateSelector,
 ) -> MlsKeyPackageRow {
     MlsKeyPackageRow {
         id: format!("{namespace}-keypackage-{suffix}"),
@@ -3813,8 +3818,8 @@ fn mls_keypackage_contract_row(
         owner_account_pk,
         // The KeyPackage wire binds the cryptographic endpoint principal;
         // the exact Station Account is carried by owner_account_pk above.
-        actor_id: format!("ak:did_core:web:{namespace}.example"),
-        device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
+        actor_id: device.principal_id.to_string(),
+        device_id: Some(device.device_id.clone()),
         endpoint_verification_method: None,
         intended_realm_id: None,
         key_package_bytes: vec![1, 2, 3],
@@ -3826,9 +3831,7 @@ fn mls_keypackage_contract_row(
         lifetime_not_before: 1,
         lifetime_not_after: 100,
         claimed_by_mls_group_id: None,
-        device_authorize_event_id: Some(
-            "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
-        ),
+        device_authorize_event_id: Some(device.authorization_ref.event_id.to_string()),
         agent_key_authorize_event_id: None,
         claimed_at: None,
         claim_expires_at_unix_ms: None,
@@ -3837,65 +3840,67 @@ fn mls_keypackage_contract_row(
     }
 }
 
-/// The committed device-authorization the KeyPackage fixtures name.
+/// The canonical MLS group id of a contract Realm named by `label`.
 ///
-/// The revocation gate compares the whole reference, so the authorize Event id
-/// and the commit that ordered it travel together instead of as an Event id
-/// plus a separate generation counter.
-fn contract_device_authorization_ref() -> arkret_wire::CommittedEventRef {
-    let event_id =
-        arkret_wire::EventId::new("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD")
-            .expect("contract device authorize Event id");
-    arkret_wire::CommittedEventRef {
-        commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-            event_id.as_str().as_bytes(),
-        )),
-        stream_ref: arkret_wire::CommitStreamRef::Realm {
-            realm_id: arkret_wire::RealmId::new(contract_realm_id("device-authorization"))
-                .expect("contract device authorization Realm id"),
-        },
-        stream_position: 1,
-        event_id,
+/// A group id is derived from its effective scope, never authored, so a
+/// contract group is the one its Realm scope derives.
+fn contract_mls_group_id(label: &str) -> String {
+    arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_identifiers::RealmId::new(contract_realm_id(label))
+            .expect("contract MLS Realm id"),
     }
+    .canonical_mls_group_id()
+    .expect("contract Realm scope derives an MLS group id")
+    .as_str()
+    .to_owned()
 }
 
-fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPackageClaim<'a> {
+/// A claim of one contract KeyPackage under its owner's device authorization.
+///
+/// The revocation gate compares the whole committed reference, so the claim
+/// carries the exact selector of the device that published the KeyPackage.
+fn mls_claim<'a>(
+    id: &'a str,
+    target: MlsKeyPackageClaimTarget<'a>,
+    device: &'a DeviceRevocationGateSelector,
+) -> MlsKeyPackageClaim<'a> {
     MlsKeyPackageClaim {
         id,
         target,
         intended_realm_id: None,
-        device_authorize_event_id: Some("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"),
+        device_authorize_event_id: Some(device.authorization_ref.event_id.as_str()),
         agent_key_authorize_event_id: None,
-        device_revocation_gate: Some(DeviceRevocationGateSelector {
-            principal_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:contract.example")
-                .unwrap(),
-            station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example")
-                .unwrap(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
-            authorization_ref: contract_device_authorization_ref(),
-        }),
+        device_revocation_gate: Some(device.clone()),
         claimed_at: 10,
         claim_expires_at_unix_ms: Some(20_500),
     }
 }
 
+/// `device` is a confirmed, unrevoked device authorization the adapter's
+/// current device inventory already carries; every KeyPackage here is
+/// published and claimed under it.
 pub async fn assert_mls_keypackage_retirement_contract(
     store: &dyn MlsKeyPackageStore,
     accounts: &dyn super::AccountStore,
     namespace: &str,
+    device: &DeviceRevocationGateSelector,
 ) {
-    let owner_account_pk = mls_keypackage_contract_account(accounts, namespace).await;
-    let published = mls_keypackage_contract_row(namespace, "published", owner_account_pk);
-    let claimed = mls_keypackage_contract_row(namespace, "claimed", owner_account_pk);
-    let consumed = mls_keypackage_contract_row(namespace, "consumed", owner_account_pk);
-    let late = mls_keypackage_contract_row(namespace, "late-consume", owner_account_pk);
-    let revoked = mls_keypackage_contract_row(namespace, "revoked", owner_account_pk);
+    let owner_account_pk = mls_keypackage_contract_account(accounts, device).await;
+    let published = mls_keypackage_contract_row(namespace, "published", owner_account_pk, device);
+    let claimed = mls_keypackage_contract_row(namespace, "claimed", owner_account_pk, device);
+    let consumed = mls_keypackage_contract_row(namespace, "consumed", owner_account_pk, device);
+    let late = mls_keypackage_contract_row(namespace, "late-consume", owner_account_pk, device);
+    let revoked = mls_keypackage_contract_row(namespace, "revoked", owner_account_pk, device);
     for row in [&published, &claimed, &consumed, &late, &revoked] {
         assert!(store.put(row).await.expect("publish KeyPackage"));
     }
 
     let retired = store
-        .try_claim(mls_claim(&published.id, MlsKeyPackageClaimTarget::Retire))
+        .try_claim(mls_claim(
+            &published.id,
+            MlsKeyPackageClaimTarget::Retire,
+            device,
+        ))
         .await
         .expect("retire published KeyPackage")
         .expect("published KeyPackage must retire");
@@ -3903,29 +3908,36 @@ pub async fn assert_mls_keypackage_retirement_contract(
     assert!(retired.claimed_at.is_none());
     assert!(retired.claim_expires_at_unix_ms.is_none());
     assert!(retired.consumed_at.is_none());
+    let group_after_retirement = contract_mls_group_id(&format!("{namespace}:after-retirement"));
     assert!(
         store
             .try_claim(mls_claim(
                 &published.id,
-                MlsKeyPackageClaimTarget::Group("group-after-retirement"),
+                MlsKeyPackageClaimTarget::Group(&group_after_retirement),
+                device,
             ))
             .await
             .expect("query retired KeyPackage")
             .is_none()
     );
 
-    let group_id = format!("group-{namespace}");
+    let group_id = contract_mls_group_id(namespace);
     store
         .try_claim(mls_claim(
             &claimed.id,
             MlsKeyPackageClaimTarget::Group(&group_id),
+            device,
         ))
         .await
         .expect("claim ordinary KeyPackage")
         .expect("ordinary KeyPackage must be claimable");
     assert!(
         store
-            .try_claim(mls_claim(&claimed.id, MlsKeyPackageClaimTarget::Retire,))
+            .try_claim(mls_claim(
+                &claimed.id,
+                MlsKeyPackageClaimTarget::Retire,
+                device
+            ))
             .await
             .expect("attempt to retire claimed KeyPackage")
             .is_none()
@@ -3935,6 +3947,7 @@ pub async fn assert_mls_keypackage_retirement_contract(
         .try_claim(mls_claim(
             &consumed.id,
             MlsKeyPackageClaimTarget::Group(&group_id),
+            device,
         ))
         .await
         .expect("claim KeyPackage before consume")
@@ -3948,6 +3961,7 @@ pub async fn assert_mls_keypackage_retirement_contract(
         .try_claim(mls_claim(
             &late.id,
             MlsKeyPackageClaimTarget::Group(&group_id),
+            device,
         ))
         .await
         .expect("claim KeyPackage for subsecond deadline check")
@@ -3973,20 +3987,32 @@ pub async fn assert_mls_keypackage_retirement_contract(
     );
     assert!(
         store
-            .try_claim(mls_claim(&consumed.id, MlsKeyPackageClaimTarget::Retire,))
+            .try_claim(mls_claim(
+                &consumed.id,
+                MlsKeyPackageClaimTarget::Retire,
+                device
+            ))
             .await
             .expect("attempt to retire consumed KeyPackage")
             .is_none()
     );
 
     store
-        .try_claim(mls_claim(&revoked.id, MlsKeyPackageClaimTarget::Revoke))
+        .try_claim(mls_claim(
+            &revoked.id,
+            MlsKeyPackageClaimTarget::Revoke,
+            device,
+        ))
         .await
         .expect("revoke published KeyPackage")
         .expect("published KeyPackage must be revocable");
     assert!(
         store
-            .try_claim(mls_claim(&revoked.id, MlsKeyPackageClaimTarget::Retire,))
+            .try_claim(mls_claim(
+                &revoked.id,
+                MlsKeyPackageClaimTarget::Retire,
+                device
+            ))
             .await
             .expect("attempt to retire revoked KeyPackage")
             .is_none()
@@ -4044,13 +4070,17 @@ pub async fn assert_mls_keypackage_retirement_contract(
     );
 }
 
+/// `device` is a confirmed, unrevoked device authorization the adapter's
+/// current device inventory already carries.
 pub async fn assert_last_resort_claim_ledger_contract(
     store: &dyn MlsKeyPackageStore,
     accounts: &dyn super::AccountStore,
     namespace: &str,
+    device: &DeviceRevocationGateSelector,
 ) {
-    let owner_account_pk = mls_keypackage_contract_account(accounts, namespace).await;
-    let mut keypackage = mls_keypackage_contract_row(namespace, "last-resort", owner_account_pk);
+    let owner_account_pk = mls_keypackage_contract_account(accounts, device).await;
+    let mut keypackage =
+        mls_keypackage_contract_row(namespace, "last-resort", owner_account_pk, device);
     keypackage.last_resort = true;
     let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
     keypackage.last_resort_realm_id = Some(realm_id.to_owned());

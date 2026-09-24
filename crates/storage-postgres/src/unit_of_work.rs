@@ -863,7 +863,7 @@ async fn commit_relation_current_result_in_connection(
             "Relation primary conflict domain serialization failed: {error}"
         ))
     })?;
-    let lock_key = format!("relation\u{0}{}\u{0}{domain_key}", event.realm_id);
+    let lock_key = format!("relation:{}:{domain_key}", event.realm_id);
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0)) IS NULL AS accepted")
         .bind::<Text, _>(&lock_key)
         .get_result::<DevicePairingCasRow>(&mut *conn)
@@ -965,13 +965,13 @@ async fn commit_relation_current_result_in_connection(
                     ))
                 })?,
             );
+            // The current value carries the canonical `timestamp` form, the
+            // same one the typed create and tombstone values serialize to.
             object.insert(
                 "updated_at".to_owned(),
-                serde_json::to_value(lifecycle_time).map_err(|error| {
-                    PersistenceError::Internal(format!(
-                        "Relation timestamp serialization failed: {error}"
-                    ))
-                })?,
+                serde_json::Value::String(arkret_canonical::format_timestamp_canonical(
+                    lifecycle_time,
+                )),
             );
             serde_json::from_value(post).map_err(|error| {
                 PersistenceError::SchemaViolation(format!(
@@ -2406,9 +2406,17 @@ async fn commit_one_in_connection(
         commit_consent_projection(conn, commit).await?;
     }
 
-    outcome.projections_inserted += request.projections.len();
+    // Like the outbox count below, this reports rows this attempt wrote: an
+    // exact replay finds every projection row already present.
     if !request.projections.is_empty() {
-        append_projection_batch_in_connection(conn, request.projections).await?;
+        outcome.projections_inserted +=
+            append_projection_batch_in_connection(conn, request.projections)
+                .await?
+                .into_iter()
+                .filter(|appended| {
+                    *appended == soland_storage::ProjectionEventAppendOutcome::Inserted
+                })
+                .count();
     }
     for record in &request.outbox {
         if enqueue_federation_outbox_in_connection(conn, record).await? {
@@ -2663,7 +2671,9 @@ mod agent_draft_consumption_tests {
              VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,'committed',$9)",
         )
         .bind::<Binary, _>(event.event_id.token_bytes().to_vec())
-        .bind::<Binary, _>(arkret_canonical::sha256_bytes(event.event_id.as_str().as_bytes()).to_vec())
+        // The id is the suite code followed by the Event digest, so the row
+        // stores exactly those digest bytes.
+        .bind::<Binary, _>(event.event_id.digest_bytes().to_vec())
         .bind::<Text, _>(event.actor_id.to_string())
         .bind::<Nullable<Text>, _>(realm_id)
         .bind::<Jsonb, _>(serde_json::to_value(&event.scope_ref).unwrap())

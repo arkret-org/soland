@@ -292,7 +292,9 @@ impl EventStore for PgEventStore {
              ORDER BY received_at ASC, id ASC"
         ))
         .bind::<Text, _>(realm_id)
-        .bind::<Text, _>(received_by.as_str())
+        // A proof is authored by the receiving service, and `actor_id` stores
+        // the canonical key of the complete ActorId.
+        .bind::<Text, _>(arkret_wire::ActorId::service(received_by.clone()).to_string())
         .bind::<Text, _>(arkret_wire::EventKind::ModerationFrankingProof.as_str())
         .bind::<Text, _>(target_event_id)
         .load::<CanonicalEventRow>(&mut *conn)

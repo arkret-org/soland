@@ -347,6 +347,17 @@ mod capability_grant_current_result_tests {
                 "kind":"grant",
                 "grant_id":"ak:grant:AU1_A5a8MMz_OdxEleQlWPFn-ljdJteaJv3ZZ9APkcrZ"
             }],
+            // Reducer-derived: a re-grant under one root controller grant.
+            "authority_depth": 2,
+            "authority_root_refs": [{
+                "kind":"realm_root",
+                "realm_id":REALM_ID,
+                "authority_event_ref":arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x55; 32],
+                ),
+                "authority_generation":0
+            }],
             "issued_at": "2026-09-21T00:00:00.000Z",
             "status": status.as_str()
         });

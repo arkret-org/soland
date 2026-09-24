@@ -263,7 +263,7 @@ pub(crate) async fn mark_agent_draft_consumed(
         "account_data_set_event_id": consuming_event_id,
         "account_data_key": account_data_key,
         "accepted_revision": accepted_revision,
-        "consumed_at": consumed_at,
+        "consumed_at": arkret_canonical::format_timestamp_canonical(consumed_at),
     });
     let affected = sql_query(
         "UPDATE agent_draft_pending_intents \
@@ -624,7 +624,9 @@ mod tests {
         assert!(terminal_delta[0].payload.get("content_handoff").is_none());
         assert_eq!(
             terminal_delta[0].payload["expired_at"],
-            serde_json::json!(commit.record.expires_at)
+            serde_json::json!(arkret_canonical::format_timestamp_canonical(
+                commit.record.expires_at
+            ))
         );
 
         let deletion = diesel::sql_query(

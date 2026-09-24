@@ -11,7 +11,7 @@ use arkret_wire::{
 };
 
 use super::{
-    AsyncPgConnection, BigInt, Bool, CapabilityGrantCurrentResultRecord,
+    AsyncPgConnection, BigInt, CapabilityGrantCurrentResultRecord,
     CapabilityGrantCurrentResultStore, CapabilityGrantCurrentStatus, Jsonb, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
     async_trait, pg_conn, sql_query,
@@ -786,23 +786,14 @@ pub(crate) async fn commit_capability_grant_current_result_in_connection(
         CapabilityGrantCurrentMutation::Create { grant_id, .. }
         | CapabilityGrantCurrentMutation::Close { grant_id, .. } => grant_id.clone(),
     };
-    let lock_key = format!("capability-grant\u{0}{}\u{0}{}", event.realm_id, grant_id);
-    #[derive(QueryableByName)]
-    struct AdvisoryLockRow {
-        #[diesel(sql_type = Bool)]
-        acquired: bool,
-    }
-    let lock =
-        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0)) IS NULL AS acquired")
-            .bind::<Text, _>(&lock_key)
-            .get_result::<AdvisoryLockRow>(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
-    if !lock.acquired {
-        return Err(PersistenceError::Internal(
-            "Capability Grant transaction lock was not acquired".to_owned(),
-        ));
-    }
+    let lock_key = format!("capability-grant:{}:{}", event.realm_id, grant_id);
+    // `pg_advisory_xact_lock` waits until it holds the lock (or the statement
+    // fails), and returns `void`, so there is no "not acquired" result to test.
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind::<Text, _>(&lock_key)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
 
     let current = sql_query(
         "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,\
@@ -1004,7 +995,11 @@ mod tests {
         let exact_strand = selector(serde_json::json!({
             "kind":"strand",
             "realm_id":REALM_ID,
-            "strand_id":"ak:strand:0198f02a-288c-7000-8000-000000000001"
+            // A Strand id retypes its creating Event's id.
+            "strand_id":arkret_wire::StrandId::from_event_id(&EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0x51; 32],
+            )),
         }));
         assert!(selector_covers(&any_strand, &exact_strand));
         assert!(!selector_covers(&exact_strand, &any_strand));

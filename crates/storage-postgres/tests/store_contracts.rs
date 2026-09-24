@@ -1,5 +1,7 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
 mod device_history_fixture;
+#[path = "support/ordinary_realm.rs"]
+mod ordinary_realm;
 mod support;
 
 use soland_storage::contract_tests::{
@@ -102,6 +104,54 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
         &selectors[1],
     )
     .await;
+}
+
+/// One confirmed, unrevoked human device authorization in this Station's
+/// current device inventory.
+///
+/// The authorization is real signed PCR material from the device-history
+/// fixture, committed under the local inventory Station. The WebVH local id
+/// carries the run's namespace so every run owns its own principal (and so its
+/// own Account) in the shared contract database.
+async fn confirmed_contract_device(
+    pool: &PgPool,
+    namespace: &str,
+) -> soland_storage::DeviceRevocationGateSelector {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+    use soland_storage::DeviceInventoryStore;
+    #[derive(diesel::QueryableByName)]
+    struct Station {
+        #[diesel(sql_type = Text)]
+        station_id: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,'ak:did_core:web:storage-contract.example') ON CONFLICT(singleton) DO NOTHING")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let station =
+        diesel::sql_query("SELECT station_id FROM device_inventory_station WHERE singleton")
+            .get_result::<Station>(&mut *conn)
+            .await
+            .unwrap();
+    drop(conn);
+    let source = device_history_fixture::DeviceHistoryFixture::new_with(
+        device_history_fixture::did_web_station(&station.station_id.parse().unwrap()),
+        device_history_fixture::DeviceHistoryFixtureOptions {
+            local_id: namespace.replace('-', ""),
+            ..Default::default()
+        },
+    );
+    let inventory = PgDeviceInventoryStore { pool: pool.clone() };
+    for device in source.device_inventory_records() {
+        inventory.seed_test_record(&device).await.unwrap();
+    }
+    source
+        .gate_selectors()
+        .into_iter()
+        .next()
+        .expect("the fixture commits its founding device authorization")
 }
 
 static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
@@ -777,7 +827,10 @@ async fn postgres_key_backup_pages_are_ordered_bounded_and_revisioned() {
     reopened.delete(&ids[4]).await.unwrap();
     assert_eq!(reopened.list_page(&query).await.unwrap().revision, 6);
     let mut replacement = reopened.get(&ids[3]).await.unwrap().unwrap();
-    replacement["contents"][0]["secret_id"] = "s".repeat(910_000).into();
+    // Only the closed `backup_metadata` projection reaches a list row
+    // (decision 0095 keeps `contents` out of it), so the page grows through a
+    // listed member.
+    replacement["encryption"]["recipient_key_ref"] = "k".repeat(910_000).into();
     reopened.put(ids[3].clone(), replacement).await.unwrap();
     let bounded = reopened.list_page(&query).await.unwrap();
     assert_eq!(bounded.revision, 7);
@@ -1144,52 +1197,45 @@ async fn postgres_self_producer_guard_rejects_before_event_and_commit_writes() {
 
 #[tokio::test]
 async fn postgres_oversized_realm_snapshot_rejects_the_commit_without_writes() {
-    use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+    use diesel::sql_types::{BigInt, Text};
     use diesel_async::RunQueryDsl;
     use soland_storage::{EventCommitUnitOfWork, PersistenceError};
 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let namespace = format!("snapshot-capacity:{}", uuid::Uuid::now_v7());
-    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
-        .expect("fixture Realm id");
-    let station_id =
-        arkret_wire::DidCoreId::new("ak:did_core:web:snapshot-station.example").unwrap();
-    let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:snapshot-author.example").unwrap();
-    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
-    stream.install(&pool).await;
-    let now =
-        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    let discussion = ordinary_realm::open_discussion(
+        &pool,
+        &format!("snapshot-capacity:{}", uuid::Uuid::now_v7()),
+    )
+    .await;
+    let realm_id = discussion.realm_id();
 
-    // Seed an already-authoritative typed row whose closed signed snapshot is
-    // necessarily larger than 8 MiB. The next admission must measure the full
-    // post-commit durable cut and roll the whole transaction back.
-    let oversized_value = serde_json::json!({"payload": "x".repeat(8 * 1024 * 1024)});
+    // Grow an already-authoritative typed row -- the bootstrap Realm profile,
+    // still covered by the RealmCommit that installed it -- until the closed
+    // signed snapshot is necessarily larger than 8 MiB. The next admission
+    // must measure the full post-commit durable cut and roll the whole
+    // transaction back.
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query(
-        "INSERT INTO realm_policy_bundle_current_results \
-         (realm_id,current_commit_id,current_stream_position,value,updated_at) \
-         VALUES($1,$2,$3,$4,$5)",
+    let grown = diesel::sql_query(
+        "UPDATE realm_bootstrap_current_results \
+         SET value = jsonb_set(value, '{name}', to_jsonb(repeat('x', $2::int))) \
+         WHERE realm_id = $1 AND result_family = 'realm_profile'",
     )
     .bind::<Text, _>(realm_id.as_str())
-    .bind::<Text, _>(arkret_wire::RealmCommitId::from_digest([0x61; 32]).as_str())
-    .bind::<BigInt, _>(0_i64)
-    .bind::<Jsonb, _>(oversized_value)
-    .bind::<Timestamptz, _>(now)
+    .bind::<BigInt, _>(8 * 1024 * 1024_i64)
     .execute(&mut *conn)
     .await
     .unwrap();
+    assert_eq!(
+        grown, 1,
+        "the bootstrap unit installs the Realm profile row"
+    );
     drop(conn);
 
-    let request = franking_event_request(
-        &mut stream,
-        FixtureCommitSettlement::RolledBack,
-        &realm_id,
-        actor_id,
-        &station_id,
-        arkret_wire::EventKind::MessageCreate.as_str(),
-        serde_json::json!({"body": "must roll back"}),
-        now,
+    let request = discussion.message_after(
+        &discussion.head.authority_commit,
+        "must roll back",
+        discussion.committed_at(),
     );
     let event_id = request.authority_commit.event.event_id.clone();
     let commit_id = request.authority_commit.commit.commit_id.clone();
@@ -1197,7 +1243,7 @@ async fn postgres_oversized_realm_snapshot_rejects_the_commit_without_writes() {
         .commit_event(request)
         .await
         .expect_err("an oversized maximal snapshot must reject admission");
-    assert!(matches!(error, PersistenceError::Conflict(_)));
+    assert!(matches!(error, PersistenceError::Conflict(_)), "{error:?}");
     assert_eq!(
         error.conflict_code(),
         Some(soland_storage::ConflictCode::SnapshotCapacityExceeded)
@@ -1289,7 +1335,9 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     assert_eq!(row.current_stream_position, 0);
     assert_eq!(
         row.value["created_at"],
-        serde_json::to_value(create_lifecycle_time).unwrap()
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(
+            create_lifecycle_time
+        ))
     );
 
     // A lost response may replay the byte-identical authority transaction.
@@ -1424,11 +1472,15 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     assert_eq!(row.state, "tombstoned");
     assert_eq!(
         row.value["state_changed_at"],
-        serde_json::to_value(tombstone_lifecycle_time).unwrap()
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(
+            tombstone_lifecycle_time
+        ))
     );
     assert_eq!(
         row.value["updated_at"],
-        serde_json::to_value(tombstone_lifecycle_time).unwrap()
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(
+            tombstone_lifecycle_time
+        ))
     );
 
     let replacement = request(
@@ -1581,45 +1633,58 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     use diesel::sql_types::{BigInt, Text, Timestamptz};
     use diesel_async::RunQueryDsl;
     use soland_storage::{
-        EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, FrankingReplayNonceCommit,
-        PersistenceError,
+        AuthorityCommitTransaction, EventBatchCommitRequest, EventCommitUnitOfWork, EventStore,
+        FrankingReplayNonceCommit, PersistenceError,
     };
 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
-        format!("franking-ledger:{}", uuid::Uuid::now_v7()).as_bytes(),
-    ))
-    .unwrap();
-    let received_by =
-        arkret_wire::DidCoreId::new("ak:did_core:web:franking-ledger.example".to_owned()).unwrap();
-    // Every report in this ledger belongs to one Realm, so they share one
-    // authority and one chained commit stream; the nonce binding requires the
-    // report and its nonce commit to name the same Realm.
-    let mut stream = FixtureCommitStream::new(&realm_id, &received_by);
-    stream.install(&pool).await;
-    let make_request = |stream: &mut FixtureCommitStream,
-                        settlement: FixtureCommitSettlement,
-                        marker: u64,
+    // Every report in this ledger belongs to one ordinary Realm, so they share
+    // one authority and one chained Realm stream; the nonce binding requires
+    // the report and its nonce commit to name the same Realm. The reporter is
+    // the Realm's confirmed joined founder and every report targets one
+    // committed discussion Message.
+    let discussion = ordinary_realm::open_discussion(
+        &pool,
+        &format!("franking-ledger:{}", uuid::Uuid::now_v7()),
+    )
+    .await;
+    let realm_id = discussion.realm_id();
+    let received_by = ordinary_realm::station();
+    let reporter = ordinary_realm::founder();
+    let target = discussion.message_after(
+        &discussion.head.authority_commit,
+        "franking ledger target",
+        discussion.committed_at(),
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(target.clone())
+        .await
+        .expect("commit the reported Message");
+    let target_event_id = target.authority_commit.event.event_id.clone();
+    let target_received_at = target.authority_commit.commit.committed_at;
+    // Only an accepted report advances the Realm stream head; a refused one
+    // leaves it where it is, and the next report reuses that position.
+    let mut head: AuthorityCommitTransaction = target.authority_commit.clone();
+    let make_request = |head: &AuthorityCommitTransaction,
                         replay_nonce: &str,
                         consumed_at: chrono::DateTime<chrono::Utc>| {
-        let actor_id = arkret_wire::DidCoreId::new(format!(
-            "ak:did_core:web:franking-reporter-{marker}.example"
-        ))
-        .unwrap();
-        let event = franking_event_request(
-            stream,
-            settlement,
-            &realm_id,
-            actor_id,
-            &received_by,
-            arkret_wire::EventKind::SelfModerationReport.as_str(),
-            serde_json::json!({
-                "franking_proof": {
-                    "received_by": received_by.as_str(),
-                    "replay_nonce": replay_nonce,
-                }
-            }),
+        let mut payload =
+            ordinary_realm::report_payload(&realm_id, target_event_id.as_str(), &reporter);
+        payload["franking_proof"] = serde_json::json!({
+            "realm_id": realm_id,
+            "event_id": target_event_id,
+            "received_by": received_by,
+            "verification_method": "did:web:ordinary-station.example#notary-key",
+            "received_at": target_received_at,
+            "replay_nonce": replay_nonce,
+            "signature": "c2lnbmF0dXJl"
+        });
+        let event = ordinary_realm::next_request(
+            head,
+            arkret_wire::EventKind::SelfModerationReport,
+            &reporter,
+            payload,
             consumed_at,
         );
         let event_id = event.event.event_id.clone();
@@ -1644,25 +1709,19 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     let consumed_at =
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
     let replay_nonce = "shared_nonce_0123456789";
-    let (first_event, first_nonce) = make_request(
-        &mut stream,
-        FixtureCommitSettlement::Accepted,
-        1,
-        replay_nonce,
-        consumed_at,
-    );
+    let (first_event, first_nonce) = make_request(&head, replay_nonce, consumed_at);
     let first_event_id = first_event.event.event_id.clone();
+    let first_head = first_event.authority_commit.clone();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event_batch(commit(first_event, first_nonce))
         .await
         .unwrap();
+    head = first_head;
 
     // Treat the successful write above as a lost response: reconstruct the
     // adapter and retry the same durable nonce with a competing Event.
     let (replay_event, replay_commit) = make_request(
-        &mut stream,
-        FixtureCommitSettlement::RolledBack,
-        2,
+        &head,
         replay_nonce,
         consumed_at + chrono::TimeDelta::seconds(1),
     );
@@ -1695,9 +1754,7 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     assert_eq!(stored_expiry, expires_at);
 
     let (just_before_event, just_before_nonce) = make_request(
-        &mut stream,
-        FixtureCommitSettlement::RolledBack,
-        5,
+        &head,
         replay_nonce,
         expires_at - chrono::TimeDelta::microseconds(1),
     );
@@ -1712,18 +1769,14 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     ));
     assert!(!event_store.contains(&just_before_event_id).await.unwrap());
 
-    let (at_expiry_event, at_expiry_nonce) = make_request(
-        &mut stream,
-        FixtureCommitSettlement::Accepted,
-        6,
-        replay_nonce,
-        expires_at,
-    );
+    let (at_expiry_event, at_expiry_nonce) = make_request(&head, replay_nonce, expires_at);
     let at_expiry_event_id = at_expiry_event.event.event_id.clone();
+    let at_expiry_head = at_expiry_event.authority_commit.clone();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event_batch(commit(at_expiry_event, at_expiry_nonce))
         .await
         .unwrap();
+    head = at_expiry_head;
     assert!(event_store.contains(&at_expiry_event_id).await.unwrap());
 
     diesel::sql_query(
@@ -1741,16 +1794,16 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     .unwrap();
     drop(conn);
     let (after_expiry_event, after_expiry_nonce) = make_request(
-        &mut stream,
-        FixtureCommitSettlement::Accepted,
-        3,
+        &head,
         "after_expiry_nonce_0123456789",
         consumed_at + chrono::TimeDelta::seconds(2),
     );
+    let after_expiry_head = after_expiry_event.authority_commit.clone();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event_batch(commit(after_expiry_event, after_expiry_nonce))
         .await
         .unwrap();
+    head = after_expiry_head;
     let mut conn = pool.get().await.unwrap();
     let expired_count = diesel::sql_query(
         "SELECT COUNT(*) AS value FROM moderation_franking_replay_nonces \
@@ -1789,9 +1842,7 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     .unwrap();
     drop(conn);
     let (overflow_event, overflow_nonce) = make_request(
-        &mut stream,
-        FixtureCommitSettlement::RolledBack,
-        4,
+        &head,
         "overflow_nonce_0123456789",
         consumed_at + chrono::TimeDelta::seconds(3),
     );
@@ -1830,36 +1881,30 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
-        format!("franking-target-proof:{}", uuid::Uuid::now_v7()).as_bytes(),
-    ))
-    .unwrap();
-    let received_by =
-        arkret_wire::DidCoreId::new("ak:did_core:web:franking-service.example".to_owned()).unwrap();
+    let discussion = ordinary_realm::open_discussion(
+        &pool,
+        &format!("franking-target-proof:{}", uuid::Uuid::now_v7()),
+    )
+    .await;
+    let realm_id = discussion.realm_id();
+    let received_by = ordinary_realm::station();
     let created_at =
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
     // Both Events belong to one Realm, so the batch orders them at consecutive
-    // positions on that Realm's single commit stream.
-    let mut stream = FixtureCommitStream::new(&realm_id, &received_by);
-    stream.install(&pool).await;
-    let target = franking_event_request(
-        &mut stream,
-        FixtureCommitSettlement::Accepted,
-        &realm_id,
-        arkret_wire::DidCoreId::new("ak:did_core:web:franking-sender.example".to_owned()).unwrap(),
-        &received_by,
-        arkret_wire::EventKind::MessageCreate.as_str(),
-        serde_json::json!({"encrypted_content": {"ciphertext": "fixture"}}),
+    // positions on that Realm's single commit stream: the founder's
+    // discussion Message, then the notary's franking proof over it.
+    let target = discussion.message_after(
+        &discussion.head.authority_commit,
+        "franking proof target",
         created_at,
     );
     let target_event_id = target.event.event_id.clone();
-    let mut proof = franking_event_request(
-        &mut stream,
-        FixtureCommitSettlement::Accepted,
-        &realm_id,
-        received_by.clone(),
-        &received_by,
-        arkret_wire::EventKind::ModerationFrankingProof.as_str(),
+    // The franking notary is the receiving Station itself, authoring as a
+    // service rather than as an Account.
+    let mut proof = ordinary_realm::next_request_for_actor(
+        &target.authority_commit,
+        arkret_wire::EventKind::ModerationFrankingProof,
+        arkret_wire::ActorId::service(received_by.clone()),
         serde_json::json!({"event_id": target_event_id}),
         created_at,
     );
@@ -1886,7 +1931,10 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
         .commit_event_batch(failing_batch)
         .await
         .unwrap_err();
-    assert!(matches!(database_error, PersistenceError::Database(_)));
+    assert!(
+        matches!(database_error, PersistenceError::Database(_)),
+        "{database_error:?}"
+    );
     let event_store = PgEventStore { pool: pool.clone() };
     assert!(!event_store.contains(&target_event_id).await.unwrap());
     assert!(!event_store.contains(&proof_event_id).await.unwrap());
@@ -1943,33 +1991,13 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
 
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
-        format!("event-id-collision:{}", uuid::Uuid::now_v7()).as_bytes(),
-    ))
-    .unwrap();
-    let station_id =
-        arkret_wire::DidCoreId::new("ak:did_core:web:collision-station.example".to_owned())
-            .unwrap();
-    let actor_id =
-        arkret_wire::DidCoreId::new("ak:did_core:web:collision-producer.example".to_owned())
-            .unwrap();
-    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
-    stream.install(&pool).await;
+    let discussion = ordinary_realm::open_discussion(
+        &pool,
+        &format!("event-id-collision:{}", uuid::Uuid::now_v7()),
+    )
+    .await;
     let created_at =
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
-    let payload = serde_json::json!({"encrypted_content": {"ciphertext": "collision-fixture"}});
-    let build = |stream: &mut FixtureCommitStream, settlement: FixtureCommitSettlement| {
-        franking_event_request(
-            stream,
-            settlement,
-            &realm_id,
-            actor_id.clone(),
-            &station_id,
-            arkret_wire::EventKind::MessageCreate.as_str(),
-            payload.clone(),
-            created_at,
-        )
-    };
     let batch = |event| EventBatchCommitRequest {
         events: vec![event],
         franking_replay_nonce: None,
@@ -1978,11 +2006,15 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
         agent_membership_cascade: None,
     };
 
-    let admitted = build(&mut stream, FixtureCommitSettlement::Accepted);
+    let admitted = discussion.message_after(
+        &discussion.head.authority_commit,
+        "collision fixture",
+        created_at,
+    );
     let event_id = admitted.event.event_id.clone();
     let admitted_envelope = serde_json::to_value(&admitted.authority_commit.event).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
-        .commit_event_batch(batch(admitted))
+        .commit_event_batch(batch(admitted.clone()))
         .await
         .unwrap();
 
@@ -1990,7 +2022,8 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
     // second element can carry the same id under a different envelope. The
     // queued row is the one durable body for that id: the adapter must refuse
     // the second envelope as a hash collision instead of replacing it.
-    let mut rebound = build(&mut stream, FixtureCommitSettlement::RolledBack);
+    let mut rebound =
+        discussion.message_after(&admitted.authority_commit, "collision fixture", created_at);
     assert_eq!(
         rebound.event.event_id, event_id,
         "a different proof set must not change the content-bound Event id"
@@ -2001,8 +2034,11 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
         .producer_proof
         .as_mut()
         .expect("producer proof")
-        .verification_method =
-        arkret_wire::DidUrl::new(format!("{}#rebound-device", fixture_did(&actor_id))).unwrap();
+        .verification_method = arkret_wire::DidUrl::new(format!(
+        "{}#rebound-device",
+        fixture_did(&ordinary_realm::founder())
+    ))
+    .unwrap();
     rebound.event.envelope = serde_json::to_value(&rebound.authority_commit.event).unwrap();
     assert_ne!(rebound.event.envelope, admitted_envelope);
     let collision = PgEventCommitUnitOfWork::new(pool.clone())
@@ -2616,7 +2652,8 @@ async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract() {
     let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
     let accounts = soland_storage_postgres::PgAccountStore { pool: pool.clone() };
-    assert_mls_keypackage_retirement_contract(&store, &accounts, &namespace).await;
+    let device = confirmed_contract_device(&pool, &namespace).await;
+    assert_mls_keypackage_retirement_contract(&store, &accounts, &namespace, &device).await;
 
     let restarted_store = PgMlsKeyPackageStore { pool };
     let retired_id = format!("{namespace}-keypackage-published");
@@ -2635,7 +2672,8 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract() {
     let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
     let accounts = soland_storage_postgres::PgAccountStore { pool: pool.clone() };
-    assert_last_resort_claim_ledger_contract(&store, &accounts, &namespace).await;
+    let device = confirmed_contract_device(&pool, &namespace).await;
+    assert_last_resort_claim_ledger_contract(&store, &accounts, &namespace, &device).await;
 
     let restarted_store = PgMlsKeyPackageStore { pool };
     let claim_request_id = format!("local-last-resort:{namespace}-01");
