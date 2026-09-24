@@ -22,9 +22,8 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::audit::append_audit_log;
-use super::require_admin_principal;
+use super::{AdminAuth, require_admin_principal};
 use crate::routing::identity::account::{AccountLifecycleChange, set_account_lifecycle_state};
-use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -87,13 +86,9 @@ pub(super) fn router() -> Router {
     tags("soland_admin")
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_status"))]
-async fn get_server_status(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AdminServerStatus> {
+async fn get_server_status(admin: AdminAuth, depot: &mut Depot) -> JsonResult<AdminServerStatus> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let account_count = state
         .identities()
@@ -134,13 +129,9 @@ async fn get_server_status(
     tags("soland_admin")
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_info"))]
-async fn get_server_info(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AdminServerInfo> {
+async fn get_server_info(admin: AdminAuth, depot: &mut Depot) -> JsonResult<AdminServerInfo> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let _ = require_admin_principal(state, session)?;
     json_ok(AdminServerInfo {
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -160,13 +151,9 @@ async fn get_server_info(
     tags("soland_admin")
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_stats"))]
-async fn get_server_stats(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AdminServerStats> {
+async fn get_server_stats(admin: AdminAuth, depot: &mut Depot) -> JsonResult<AdminServerStats> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let _ = require_admin_principal(state, session)?;
 
     let accounts = state.identities().accounts().await.unwrap_or_default();
@@ -220,14 +207,13 @@ async fn get_server_stats(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.update_account_status"))]
 async fn update_account_status(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<SolandAdminAccountStatusRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let account_id = account_id.into_inner();
     let body = body.into_inner();
@@ -245,13 +231,12 @@ async fn update_account_status(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.lock_account"))]
 async fn lock_account(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStateActionRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    admin_account_state_action(aa, depot, req, account_id, body, "locked").await
+    admin_account_state_action(admin, depot, account_id, body, "locked").await
 }
 
 #[endpoint(
@@ -260,13 +245,12 @@ async fn lock_account(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.unlock_account"))]
 async fn unlock_account(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStateActionRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    admin_account_state_action(aa, depot, req, account_id, body, "active").await
+    admin_account_state_action(admin, depot, account_id, body, "active").await
 }
 
 #[endpoint(
@@ -275,13 +259,12 @@ async fn unlock_account(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.suspend_account"))]
 async fn suspend_account(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStateActionRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    admin_account_state_action(aa, depot, req, account_id, body, "suspended").await
+    admin_account_state_action(admin, depot, account_id, body, "suspended").await
 }
 
 #[endpoint(
@@ -290,13 +273,12 @@ async fn suspend_account(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.unsuspend_account"))]
 async fn unsuspend_account(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStateActionRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    admin_account_state_action(aa, depot, req, account_id, body, "active").await
+    admin_account_state_action(admin, depot, account_id, body, "active").await
 }
 
 #[endpoint(
@@ -305,25 +287,23 @@ async fn unsuspend_account(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.deactivate_account"))]
 async fn deactivate_account(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStateActionRequestBody>,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
-    admin_account_state_action(aa, depot, req, account_id, body, "deactivated").await
+    admin_account_state_action(admin, depot, account_id, body, "deactivated").await
 }
 
 async fn admin_account_state_action(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     account_id: PathParam<String>,
     body: JsonBody<AdminAccountStateActionRequestBody>,
     next_state: &str,
 ) -> JsonResult<AdminAccountLifecycleOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     admin_set_account_status(
         state,
@@ -447,12 +427,11 @@ fn account_lifecycle_change_response(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_moderation_queue"))]
 async fn get_moderation_queue(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminModerationQueueOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let items = crate::routing::interop::moderation::moderation_queue_for_session(
         state,

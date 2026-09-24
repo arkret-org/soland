@@ -156,14 +156,14 @@ fn admin_grant_from_introspection_outcome(
     })
 }
 
-/// Pull the raw bearer token from the request's `Authorization` header.
-fn bearer_token_from_request(req: &Request) -> Option<String> {
-    let header = req.headers().get(salvo::http::header::AUTHORIZATION)?;
-    let value = header.to_str().ok()?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))?;
-    Some(token.trim().to_owned())
+/// Pull the presented session credential from the request's `Authorization`
+/// header: a `DPoP`-scheme SessionGrant or a `Bearer` token. The admin scope
+/// introspection names the exact credential the request authenticated with;
+/// its DPoP proof was already verified (and consumed) by `RequireAdmin`.
+fn session_credential_from_request(req: &Request) -> Option<String> {
+    soland_http::util::dpop_token(req)
+        .or_else(|| soland_http::util::bearer_token(req))
+        .map(|token| token.trim().to_owned())
 }
 
 /// Synthetic introspection used in development mode when no upstream IdP
@@ -228,7 +228,7 @@ pub(crate) async fn introspect_admin_scopes(
         return Ok(grant);
     }
 
-    let token = bearer_token_from_request(req).ok_or_else(|| {
+    let token = session_credential_from_request(req).ok_or_else(|| {
         crate::app_error!(
             Unauthenticated,
             "missing or malformed Authorization header for admin scope check".to_owned(),

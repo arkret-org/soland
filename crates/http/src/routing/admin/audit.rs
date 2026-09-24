@@ -21,9 +21,8 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::query_param;
 
-use super::{now, realm_has_member};
+use super::{AdminAuth, now, realm_has_member};
 use crate::ids;
-use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -75,15 +74,14 @@ pub(super) fn ops_router() -> Router {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.erasure_receipts.list"))]
 async fn audit_erasure_receipts(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AuditErasureReceiptsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     // Authenticate the session so the endpoint isn't usable
     // unauthenticated; we don't restrict cross-actor reads because the
     // receipt list is the auditable surface (see method doc above).
-    let _session = aa.authenticated_session(state, req).await?;
+    let _session = admin.session()?;
     let receipts = state
         .event_queries()
         .canonical_events()
@@ -129,7 +127,7 @@ fn audit_erasure_receipt_item(
 #[salvo::oapi::endpoint(operation_id = "org.arkret.soland.audit.events", tags("soland_admin"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.events"))]
 async fn audit_events(
-    aa: AuthArgs,
+    admin: AdminAuth,
     actor: QueryParam<String, false>,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
@@ -137,7 +135,7 @@ async fn audit_events(
     req: &mut Request,
 ) -> JsonResult<AuditEventsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let realm_id_filter = query_param(req, "realm_id");
     let kind_filter = query_param(req, "kind");
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);

@@ -15,9 +15,9 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::governance::{RetentionPolicyRecord, RetentionTombstoneRecord};
 
+use super::AdminAuth;
 use super::audit::append_audit_log;
 use crate::routing::events::projection::retention_ttl_seconds_from_value;
-use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, EventNotification, EventNotificationKind};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -88,13 +88,12 @@ pub(super) fn router() -> Router {
     fields(op = "org.arkret.soland.admin.retention.policy.configure")
 )]
 async fn configure_retention_policy(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     body: JsonBody<ConfigureRetentionPolicyRequestBody>,
 ) -> JsonResult<RetentionPolicyOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let body = body.into_inner();
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
     let ttl_seconds = ttl_seconds_from_configure_body(&body)?;
@@ -132,13 +131,12 @@ async fn configure_retention_policy(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.retention.sweep"))]
 async fn sweep_retention_policy(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     body: JsonBody<SweepRetentionPolicyRequestBody>,
 ) -> JsonResult<RetentionSweepOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let body = body.into_inner();
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
     let now = optional_now(body.now.as_deref())?.unwrap_or_else(Utc::now);

@@ -981,26 +981,30 @@ pub(crate) async fn account_viewer(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AccountView> {
-    account_viewer_impl(aa, depot, req).await
+    let session = {
+        let state = depot.get_typed::<AppState>().expect("state injected");
+        aa.authenticated_session(state, req).await?
+    };
+    account_viewer_impl(session, depot).await
 }
 
 #[salvo::handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.account.query.viewer"))]
 pub(crate) async fn admin_account_viewer(
-    aa: AuthArgs,
+    admin: crate::routing::admin::AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AccountView> {
-    account_viewer_impl(aa, depot, req).await
+    let session = admin.session()?;
+    account_viewer_impl(session, depot).await
 }
 
+/// `session` is the caller already authenticated by the wrapping handler
+/// (the self bearer path or the `RequireAdmin` gate).
 async fn account_viewer_impl(
-    aa: AuthArgs,
+    session: soland_services::identity::SessionIdentityState,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AccountView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
     let account = state
         .identities()
         .account(&arkret_wire::AccountId::new(

@@ -35,11 +35,10 @@ use soland_services::events::{
 use soland_services::operation_semantics as kinds;
 
 use super::{
-    append_audit_log, discussion_track_for_projection_event, policy_document_to_response,
-    projection_event_from_operation, strand_id_for_projection_event, strand_id_from_realm_id,
-    strand_projection_for_realm,
+    AdminAuth, append_audit_log, discussion_track_for_projection_event,
+    policy_document_to_response, projection_event_from_operation, strand_id_for_projection_event,
+    strand_id_from_realm_id, strand_projection_for_realm,
 };
-use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -61,7 +60,7 @@ pub(super) struct AdminCollectionOutcome {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.collection"))]
 pub(super) async fn admin_collection(
-    aa: AuthArgs,
+    admin: AdminAuth,
     resource: PathParam<String>,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
@@ -69,7 +68,7 @@ pub(super) async fn admin_collection(
     req: &mut Request,
 ) -> JsonResult<AdminCollectionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     if !state.config().development_mode && !state.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
             "admin collection API requires the caller principal ID to be listed in SOLAND_ADMIN_PRINCIPAL_IDS",
@@ -197,13 +196,10 @@ pub(super) struct AdminCreateRealmRequestBody {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.create"))]
 pub(super) async fn admin_create_realm(
-    aa: AuthArgs,
+    admin: AdminAuth,
     body: JsonBody<AdminCreateRealmRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminRealmItem> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let body = body.into_inner();
     let title = body.title.trim();
     if title.is_empty() {

@@ -39,7 +39,7 @@ use soland_contracts::admin::{
 use soland_http::error::AppError;
 use util::query_param;
 
-use super::{AuthArgs, append_audit_log, require_admin_principal, util};
+use super::{AdminAuth, append_audit_log, require_admin_principal, util};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -236,14 +236,14 @@ fn realm_membership_counts(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.query"))]
 pub(super) async fn admin_list_actors(
-    aa: AuthArgs,
+    admin: AdminAuth,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminActorList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let limit = clamp_limit(state, limit.into_inner());
     let cursor = cursor.into_inner();
@@ -378,14 +378,14 @@ fn parse_time_bound(raw: &str, name: &str) -> Result<chrono::DateTime<chrono::Ut
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.audit.query"))]
 pub(super) async fn admin_query_audit(
-    aa: AuthArgs,
+    admin: AdminAuth,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminAuditList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let limit = clamp_limit(state, limit.into_inner());
     let cursor = cursor.into_inner();
@@ -542,14 +542,14 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.capabilities.query"))]
 pub(super) async fn admin_list_capabilities(
-    aa: AuthArgs,
+    admin: AdminAuth,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminCapabilityList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let limit = clamp_limit(state, limit.into_inner());
     let cursor = cursor.into_inner();
@@ -651,14 +651,14 @@ fn admin_device_row(device: &soland_services::identity::DeviceIdentity) -> Admin
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.devices.query"))]
 pub(super) async fn admin_list_devices(
-    aa: AuthArgs,
+    admin: AdminAuth,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AdminDeviceList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let limit = clamp_limit(state, limit.into_inner());
     let cursor = cursor.into_inner();

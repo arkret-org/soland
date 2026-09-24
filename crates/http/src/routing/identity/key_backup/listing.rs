@@ -22,14 +22,17 @@ pub(crate) async fn list_key_backups(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsList> {
+    let session = {
+        let state = depot.get_typed::<AppState>().expect("state injected");
+        aa.authenticated_session(state, req).await?
+    };
     list(
-        aa,
+        session,
         cursor,
         series_id,
         backup_kind,
         limit,
         depot,
-        req,
         "ak.self.keys.backups.read.list.v1",
     )
     .await
@@ -40,40 +43,39 @@ pub(crate) async fn list_key_backups(
     tags("admin")
 )]
 pub(crate) async fn list_key_backups_admin(
-    aa: AuthArgs,
+    admin: crate::routing::admin::AdminAuth,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
     backup_kind: QueryParam<String, false>,
     limit: QueryParam<u32, false>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<KeysBackupsList> {
+    let session = admin.session()?;
     list(
-        aa,
+        session,
         cursor,
         series_id,
         backup_kind,
         limit,
         depot,
-        req,
         "org.arkret.soland.admin.key_backups.query.list",
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `session` is the caller already authenticated by the wrapping endpoint
+/// (the self bearer path or the `RequireAdmin` gate).
 async fn list(
-    aa: AuthArgs,
+    session: soland_services::identity::SessionIdentityState,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
     backup_kind: QueryParam<String, false>,
     limit: QueryParam<u32, false>,
     depot: &mut Depot,
-    req: &mut Request,
     operation: &str,
 ) -> JsonResult<KeysBackupsList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
     crate::routing::events::require_agent_session_scope(
         &session,
         arkret_wire::ServiceOperationId::SELF_KEYS_BACKUPS_READ_LIST_V1,

@@ -26,9 +26,14 @@ use super::{
 use crate::state::AppState;
 
 /// Salvo middleware that gates an admin route on an OAuth-style admin
-/// scope. The middleware performs the bearer session lookup, introspects
-/// the session grant through `require_admin_scope`, and only then lets
-/// the endpoint handler run.
+/// scope. The middleware is the only place an admin request is
+/// authenticated: it performs the session lookup (for a DPoP session this
+/// verifies and consumes the request's single DPoP proof), introspects the
+/// session grant through `require_admin_scope`, and stores the resulting
+/// [`AdminPrincipal`] in the request [`Depot`] before the endpoint handler
+/// runs. Handlers read that principal through [`AdminAuth`] and never
+/// authenticate the request a second time, so a request-scoped proof is
+/// consumed exactly once.
 #[derive(Clone, Debug)]
 pub(super) struct RequireAdmin {
     scope: &'static str,
@@ -38,6 +43,16 @@ impl RequireAdmin {
     pub(super) fn scope(scope: &'static str) -> Self {
         Self { scope }
     }
+}
+
+/// The admin principal authenticated by [`RequireAdmin`] for this request.
+///
+/// Only [`RequireAdmin`] constructs it, and only after authentication and
+/// the admin-scope check both succeeded; it lives in the per-request
+/// [`Depot`], never in client-controlled request data.
+#[derive(Clone, Debug)]
+pub(crate) struct AdminPrincipal {
+    session: SessionRecord,
 }
 
 #[async_trait]
@@ -50,20 +65,91 @@ impl Handler for RequireAdmin {
         ctrl: &mut FlowCtrl,
     ) {
         let result = match depot.get_typed::<AppState>() {
-            Ok(state) => match AuthArgs.authenticated_session(state, req).await {
-                Ok(session) => require_admin_scope(state, req, &session, self.scope)
-                    .await
-                    .map(|_| ()),
-                Err(error) => Err(error),
-            },
+            Ok(state) => {
+                // A nested gate reuses the principal an outer gate already
+                // authenticated for this request instead of verifying (and
+                // replaying) the request's credential again.
+                let authenticated = match depot.get_typed::<AdminPrincipal>() {
+                    Ok(principal) => Ok(principal.session.clone()),
+                    Err(_) => AuthArgs.authenticated_session(state, req).await,
+                };
+                match authenticated {
+                    Ok(session) => require_admin_scope(state, req, &session, self.scope)
+                        .await
+                        .map(|_| session),
+                    Err(error) => Err(error),
+                }
+            }
             Err(_) => Err(AppError::internal("state not injected")),
         };
 
-        if let Err(error) = result {
-            error.write(req, depot, res).await;
-            return;
+        match result {
+            Ok(session) => {
+                depot.insert_typed(AdminPrincipal { session });
+                ctrl.call_next(req, depot, res).await;
+            }
+            Err(error) => {
+                error.write(req, depot, res).await;
+                ctrl.skip_rest();
+            }
         }
-        ctrl.call_next(req, depot, res).await;
+    }
+}
+
+/// Endpoint argument that yields the admin principal [`RequireAdmin`]
+/// authenticated for this request.
+///
+/// It never reads credentials from the request itself. A handler reached
+/// without passing through [`RequireAdmin`] (for example one mounted
+/// outside the gated admin routers) finds no principal and fails closed.
+#[derive(Clone, Debug)]
+pub(crate) struct AdminAuth(Option<SessionRecord>);
+
+impl<'ex> salvo::extract::Extractible<'ex> for AdminAuth {
+    fn metadata() -> &'static salvo::extract::Metadata {
+        static METADATA: salvo::extract::Metadata = salvo::extract::Metadata::new("");
+        &METADATA
+    }
+
+    #[allow(refining_impl_trait)]
+    async fn extract(
+        _req: &'ex mut Request,
+        depot: &'ex mut Depot,
+    ) -> Result<Self, salvo::http::ParseError> {
+        Ok(Self::from_depot(depot))
+    }
+}
+
+/// Same bearer-session security requirement as [`AuthArgs`]: the credential
+/// is the request's `Authorization` header, validated once by
+/// [`RequireAdmin`].
+impl salvo::oapi::EndpointArgRegister for AdminAuth {
+    fn register(
+        components: &mut salvo::oapi::Components,
+        operation: &mut salvo::oapi::Operation,
+        arg: &str,
+    ) {
+        <AuthArgs as salvo::oapi::EndpointArgRegister>::register(components, operation, arg);
+    }
+}
+
+impl AdminAuth {
+    /// Read the principal [`RequireAdmin`] stored in this request's depot.
+    pub(crate) fn from_depot(depot: &Depot) -> Self {
+        Self(
+            depot
+                .get_typed::<AdminPrincipal>()
+                .ok()
+                .map(|principal| principal.session.clone()),
+        )
+    }
+
+    /// The session authenticated by [`RequireAdmin`] for this request.
+    pub(crate) fn session(self) -> Result<SessionRecord, AppError> {
+        self.0.ok_or_else(|| {
+            tracing::error!("admin handler reached without the RequireAdmin gate");
+            AppError::internal("admin handler reached without the RequireAdmin gate")
+        })
     }
 }
 
@@ -151,4 +237,114 @@ pub fn admin_router() -> Router {
         // `RequireAdmin` gate (SOL-NAME-02 — client ingest lives at
         // `/_soland/self/audit/*` instead of a second mount of this tree).
         .push(audit::ops_router())
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use salvo::affix_state;
+    use salvo::test::TestClient;
+
+    use super::*;
+
+    fn state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        )
+    }
+
+    /// Admin handler stand-in: records whether its body ran with a principal.
+    struct Probe(Arc<AtomicBool>);
+
+    #[async_trait]
+    impl Handler for Probe {
+        async fn handle(
+            &self,
+            req: &mut Request,
+            depot: &mut Depot,
+            res: &mut Response,
+            _ctrl: &mut FlowCtrl,
+        ) {
+            match AdminAuth::from_depot(depot).session() {
+                Ok(_) => {
+                    self.0.store(true, Ordering::SeqCst);
+                    res.render("reached");
+                }
+                Err(error) => error.write(req, depot, res).await,
+            }
+        }
+    }
+
+    async fn status(router: Router, authorization: Option<&str>) -> StatusCode {
+        let mut request = TestClient::get("http://server/admin/probe");
+        if let Some(value) = authorization {
+            request = request.add_header("authorization", value, true);
+        }
+        request
+            .send(&Service::new(router))
+            .await
+            .status_code
+            .expect("status")
+    }
+
+    /// A handler reached without `RequireAdmin` finds no principal in the
+    /// depot and fails closed; it never falls back to reading credentials.
+    #[tokio::test]
+    async fn admin_handler_without_the_gate_fails_closed() {
+        let reached = Arc::new(AtomicBool::new(false));
+        let router = Router::new()
+            .hoop(affix_state::inject(state()))
+            .push(Router::with_path("admin/probe").get(Probe(reached.clone())));
+        assert_eq!(
+            status(router, Some("Bearer anything")).await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(!reached.load(Ordering::SeqCst));
+    }
+
+    /// The gate rejects a request without credentials before the handler
+    /// runs and stores no principal for it.
+    #[tokio::test]
+    async fn gate_rejects_missing_authentication_before_the_handler() {
+        let reached = Arc::new(AtomicBool::new(false));
+        let router = Router::new().hoop(affix_state::inject(state())).push(
+            Router::with_path("admin/probe")
+                .hoop(RequireAdmin::scope(
+                    arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
+                ))
+                .get(Probe(reached.clone())),
+        );
+        assert_eq!(status(router, None).await, StatusCode::UNAUTHORIZED);
+        assert!(!reached.load(Ordering::SeqCst));
+    }
+
+    /// `AdminAuth` yields exactly the principal the gate stored for this
+    /// request, and nothing when the gate stored none.
+    #[test]
+    fn admin_auth_reads_only_the_gate_principal() {
+        let mut depot = Depot::new();
+        assert!(AdminAuth::from_depot(&depot).session().is_err());
+        depot.insert_typed(AdminPrincipal {
+            session: SessionRecord {
+                token_hash: "gate".into(),
+                account_pk: None,
+                actor: "ak:did_core:web:op.example".into(),
+                device_id: "ak:device:0196419b-0000-7000-8000-000000000001".into(),
+                audience: "ak:did_core:web:server.example".into(),
+                session_public_key: None,
+                agent_session: None,
+                session_grant: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                created_at: chrono::Utc::now(),
+                revoked_at: None,
+            },
+        });
+        assert_eq!(
+            AdminAuth::from_depot(&depot).session().unwrap().actor,
+            "ak:did_core:web:op.example"
+        );
+    }
 }

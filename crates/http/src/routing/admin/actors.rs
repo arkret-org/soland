@@ -9,7 +9,7 @@ use salvo::prelude::*;
 use serde_json::json;
 use soland_contracts::admin::AdminActor;
 
-use super::{AuthArgs, append_audit_log, queries, require_admin_principal};
+use super::{AdminAuth, append_audit_log, queries, require_admin_principal};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -25,13 +25,12 @@ pub(super) fn router() -> Router {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.get"))]
 async fn get_actor(
-    aa: AuthArgs,
+    admin: AdminAuth,
     actor_id: PathParam<String>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminActor> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let actor_id = actor_id.into_inner();
     let principal_id = arkret_wire::DidCoreId::new(actor_id.clone()).map_err(|_| {

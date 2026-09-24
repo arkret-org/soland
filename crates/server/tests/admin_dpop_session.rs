@@ -1,0 +1,292 @@
+//! Admin routes behind the `RequireAdmin` gate authenticate a DPoP
+//! SessionGrant exactly once per request.
+//!
+//! The gate verifies the request's DPoP proof (consuming its single-use
+//! `jti`) and hands the authenticated principal to the handler through the
+//! request depot. The handler must not verify the proof a second time: that
+//! second verification is what used to turn every DPoP admin request into a
+//! `jti` replay 401. The single-use rule itself stays intact — presenting the
+//! same proof on a second request is still rejected.
+
+use std::sync::{Arc, Mutex};
+
+use ed25519_dalek::SigningKey;
+use salvo::http::StatusCode;
+use salvo::test::{ResponseExt, TestClient};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use soland_http::config::AppConfig;
+use soland_http::service;
+use soland_http::state::AppState;
+use soland_test_support::AppStateTestExt as _;
+use soland_test_support::pcr_genesis::PcrGenesisFixture;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const QUEUE_PATH: &str = "/_soland/admin/moderation/queue";
+const INTROSPECTION_PATH: &str = "/_coauth/internal/session-grants/introspect";
+
+/// Serve every introspection request with the outcome currently in `slot`.
+async fn spawn_introspection_mock(slot: Arc<Mutex<Value>>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("introspection mock binds");
+    let address = listener.local_addr().expect("introspection mock address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let slot = slot.clone();
+            tokio::spawn(async move {
+                read_http_request(&mut stream).await;
+                let body = serde_json::to_vec(&*slot.lock().unwrap()).expect("serialize outcome");
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            });
+        }
+    });
+    format!("http://{address}")
+}
+
+async fn read_http_request(stream: &mut tokio::net::TcpStream) {
+    let mut request = Vec::new();
+    let mut expected = None;
+    loop {
+        let mut chunk = [0_u8; 2048];
+        let read = stream.read(&mut chunk).await.expect("read request");
+        assert!(read > 0, "introspection request ended early");
+        request.extend_from_slice(&chunk[..read]);
+        if expected.is_none()
+            && let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n")
+        {
+            let headers = String::from_utf8_lossy(&request[..index]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            expected = Some(index + 4 + length);
+        }
+        if expected.is_some_and(|total| request.len() >= total) {
+            return;
+        }
+    }
+}
+
+struct GrantSession {
+    state: AppState,
+    principal_id: arkret_identifiers::DidCoreId,
+    grant_jwt: String,
+    holder_key: SigningKey,
+}
+
+/// A founding-device DPoP SessionGrant for an accepted PCR, vouched for by a
+/// loopback Account Authority introspection mock.
+async fn grant_session(slug: &str, configure: impl FnOnce(&mut AppConfig)) -> GrantSession {
+    let holder_key = SigningKey::from_bytes(&Sha256::digest(slug.as_bytes()).into());
+    let grant_jwt = format!("admin-dpop-grant.{slug}.{}", uuid::Uuid::now_v7().simple());
+
+    let slot = Arc::new(Mutex::new(Value::Null));
+    let origin = spawn_introspection_mock(slot.clone()).await;
+    let mut config = AppConfig {
+        development_mode: true,
+        jws_replay_window_seconds: 0,
+        session_grant_introspection_url: Some(format!("{origin}{INTROSPECTION_PATH}")),
+        account_authority_url: Some(origin),
+        ..soland_test_support::app_config()
+    };
+    config.register_test_internal_authority_channel(format!("admin-dpop-{slug}"));
+    configure(&mut config);
+    let state = soland_test_support::app_state(config);
+    let fixture = PcrGenesisFixture::new(state.service_did());
+    fixture.admit(&state).await.expect("durable PCR genesis");
+    // The Account row the grant's account binding resolves to at this Station.
+    state
+        .test_persistence()
+        .accounts()
+        .put(&soland_storage::AccountRecord {
+            pk: soland_storage::AccountPk(0),
+            principal_id: fixture.history.account.principal_id.clone(),
+            station_id: state.service_core_id(),
+            localpart: format!("admin-dpop-{slug}"),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("seed the grant's Account");
+
+    let device_id = fixture.history.founding_device_id.clone();
+    let authorization_event_id = fixture.history.events[1].event_id.clone();
+    let holder_jwk =
+        arkret_signatures::JsonWebKey::from_ed25519_verifying_key(&holder_key.verifying_key());
+    let cnf_jkt = arkret_signatures::dpop::dpop_jwk_thumbprint(&holder_jwk).expect("holder jkt");
+    *slot.lock().unwrap() = json!({
+        "active": true,
+        "status": "active",
+        "proof_required": false,
+        "one_time_use_consumed": false,
+        "grant": {
+            "id": arkret_identifiers::SessionGrantId::from_issuance_digest(
+                Sha256::digest(grant_jwt.as_bytes()).into(),
+            ),
+            "issuer_id": "ak:did_core:web:coauth.example",
+            "account_id": {
+                "principal_id": fixture.history.account.principal_id,
+                "station_id": state.service_id(),
+            },
+            "device_id": device_id,
+            "audience_id": state.service_id(),
+            "scopes": [arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ],
+            "expires_at": arkret_canonical::format_timestamp_canonical(
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            ),
+            "revocation_ref": format!("ak:session:{}", uuid::Uuid::now_v7().simple()),
+            "session_public_key": format!(
+                "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+                arkret_canonical::base64url_encode(holder_key.verifying_key().to_bytes()),
+            ),
+            "cnf_jkt": cnf_jkt,
+            "credential_class": "standard",
+            "holder_binding": {"kind": "human_device", "device_binding": device_id},
+            "device_binding": {
+                "device_id": device_id,
+                "authorization_event_id": authorization_event_id,
+                "model_generation_ref": 1,
+            },
+        }
+    });
+    GrantSession {
+        state,
+        principal_id: fixture.history.account.principal_id.clone(),
+        grant_jwt,
+        holder_key,
+    }
+}
+
+impl GrantSession {
+    /// A fresh `Authorization`/`DPoP` header pair for one request.
+    fn headers(&self, method: &str, path: &str) -> (String, String) {
+        let htu = format!(
+            "{}{}",
+            self.state.config().public_base_url.trim_end_matches('/'),
+            path
+        );
+        let proof = arkret_signatures::dpop::build_dpop_proof(
+            &arkret_signatures::dpop::DpopProofRequest::new(method, htu)
+                .access_token(self.grant_jwt.clone()),
+            &self.holder_key,
+        )
+        .expect("DPoP proof builds");
+        (format!("DPoP {}", self.grant_jwt), proof.header_value)
+    }
+
+    async fn get(&self, path: &str, headers: Option<&(String, String)>) -> (StatusCode, Value) {
+        let mut request = TestClient::get(format!("http://server{path}"));
+        if let Some((authorization, dpop)) = headers {
+            request = request
+                .add_header("authorization", authorization.clone(), true)
+                .add_header("dpop", dpop.clone(), true);
+        }
+        let mut response = request.send(&service(self.state.clone())).await;
+        let status = response.status_code.expect("status");
+        let body = response.take_json().await.unwrap_or(Value::Null);
+        (status, body)
+    }
+}
+
+fn problem_code(body: &Value) -> &str {
+    body["type"]
+        .as_str()
+        .and_then(|problem_type| problem_type.rsplit('/').next())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn dpop_session_reaches_admin_route_once_and_replay_is_rejected() {
+    let session = grant_session("dev", |_| {}).await;
+
+    // One proof, one authentication: the gate consumes the proof and the
+    // handler reads the authenticated principal instead of re-verifying it.
+    let headers = session.headers("GET", QUEUE_PATH);
+    let (status, body) = session.get(QUEUE_PATH, Some(&headers)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["items"].is_array(), "{body}");
+
+    // The exact same proof on a second request is a replay.
+    let (status, body) = session.get(QUEUE_PATH, Some(&headers)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(problem_code(&body), "unauthenticated", "{body}");
+
+    // A fresh proof for the same grant is admitted again.
+    let fresh = session.headers("GET", QUEUE_PATH);
+    let (status, body) = session.get(QUEUE_PATH, Some(&fresh)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // No credential at all never reaches the handler.
+    let (status, body) = session.get(QUEUE_PATH, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(problem_code(&body), "unauthenticated", "{body}");
+}
+
+#[tokio::test]
+async fn dpop_session_reaches_every_admin_router_once() {
+    let session = grant_session("routers", |_| {}).await;
+    // Routes from each gated admin router: server ops, the operator surface
+    // (including a handler that shares its body with a self-path endpoint),
+    // and the collection/retention/settings branch.
+    for path in [
+        "/_soland/admin/server/status",
+        "/_soland/admin/actors",
+        "/_soland/admin/capabilities",
+        "/_soland/admin/key-backups",
+        "/_soland/admin/realms",
+    ] {
+        let headers = session.headers("GET", path);
+        let (status, body) = session.get(path, Some(&headers)).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        let (status, body) = session.get(path, Some(&headers)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} replay: {body}");
+    }
+}
+
+/// Outside development mode the admin gate also introspects the presented
+/// SessionGrant for its admin scopes. It must name the DPoP-scheme credential
+/// the request authenticated with, and still consume the proof only once.
+#[tokio::test]
+async fn production_dpop_session_is_scope_checked_and_authenticated_once() {
+    // The loopback Account Authority mock is a private address; production
+    // egress refuses it unless the process policy allows it explicitly.
+    soland_http::security::install_egress_policy(soland_http::security::EgressPolicy {
+        allow_private_networks: Some(true),
+        ..Default::default()
+    });
+    let session = grant_session("production", |config| {
+        config.development_mode = false;
+    })
+    .await;
+
+    // Not yet an admin principal: authenticated, then denied by the gate.
+    let headers = session.headers("GET", QUEUE_PATH);
+    let (status, body) = session.get(QUEUE_PATH, Some(&headers)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let mut settings = (*session.state.settings()).clone();
+    settings.admin_principal_ids = vec![session.principal_id.clone()];
+    session.state.replace_settings(settings);
+
+    let headers = session.headers("GET", QUEUE_PATH);
+    let (status, body) = session.get(QUEUE_PATH, Some(&headers)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = session.get(QUEUE_PATH, Some(&headers)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(problem_code(&body), "unauthenticated", "{body}");
+}

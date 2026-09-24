@@ -14,7 +14,7 @@ use soland_contracts::admin::{
 use soland_http::error::AppError;
 use soland_services::delivery::BlobState as BlobRecord;
 
-use super::{AuthArgs, append_audit_log, require_admin_principal};
+use super::{AdminAuth, append_audit_log, require_admin_principal};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -69,13 +69,12 @@ fn response_from_media_cell(
     fields(op = "org.arkret.soland.admin.realms.media_service.get")
 )]
 async fn admin_get_realm_media_service(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
     realm_id: PathParam<String>,
 ) -> JsonResult<AdminRealmMediaService> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let realm_id = realm_id.into_inner();
     if RealmId::new(realm_id.clone()).is_err() {
@@ -114,12 +113,11 @@ async fn admin_get_realm_media_service(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.media.statistics"))]
 async fn get_media_statistics(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminMediaStatistics> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let blobs = media_snapshot(state).await;
     let by_actor = media_by_actor_rows(state, &blobs).await;
@@ -169,12 +167,11 @@ async fn get_media_statistics(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.media.by_actor"))]
 async fn get_media_by_actor(
-    aa: AuthArgs,
+    admin: AdminAuth,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminMediaByActorList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let blobs = media_snapshot(state).await;
     let rows = media_by_actor_rows(state, &blobs).await;

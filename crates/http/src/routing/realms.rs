@@ -67,7 +67,11 @@ pub(crate) async fn list_realm_links(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkList> {
-    list_realm_links_impl(aa, realm_id, direction, link_kind_allow, depot, req).await
+    let session = {
+        let state = depot.get_typed::<AppState>().expect("state injected");
+        aa.authenticated_session(state, req).await?
+    };
+    list_realm_links_impl(session, realm_id, direction, link_kind_allow, depot).await
 }
 
 #[endpoint(
@@ -77,26 +81,26 @@ pub(crate) async fn list_realm_links(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm_link.query.list"))]
 pub(crate) async fn admin_list_realm_links(
-    aa: AuthArgs,
+    admin: super::admin::AdminAuth,
     realm_id: PathParam<String>,
     direction: QueryParam<String, false>,
     link_kind_allow: QueryParam<String, false>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<RealmLinkList> {
-    list_realm_links_impl(aa, realm_id, direction, link_kind_allow, depot, req).await
+    let session = admin.session()?;
+    list_realm_links_impl(session, realm_id, direction, link_kind_allow, depot).await
 }
 
+/// `_session` is the caller already authenticated by the wrapping endpoint
+/// (the self bearer path or the `RequireAdmin` gate).
 async fn list_realm_links_impl(
-    aa: AuthArgs,
+    _session: soland_services::identity::SessionIdentityState,
     realm_id: PathParam<String>,
     direction: QueryParam<String, false>,
     link_kind_allow: QueryParam<String, false>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<RealmLinkList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     let direction_str = direction.into_inner().unwrap_or_else(|| "both".to_owned());

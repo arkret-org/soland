@@ -20,7 +20,7 @@ use salvo::prelude::*;
 use serde_json::{Map, Value};
 use soland_http::error::AppError;
 
-use super::AuthArgs;
+use super::AdminAuth;
 use crate::runtime_settings::RuntimeSettings;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -35,9 +35,9 @@ pub(super) fn router() -> Router {
     operation_id = "org.arkret.soland.admin.settings.get",
     tags("soland_admin")
 )]
-async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
+async fn get_settings(depot: &mut Depot) -> JsonResult<RuntimeSettings> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = AuthArgs.authenticated_session(state, req).await?;
+    let _session = AdminAuth::from_depot(depot).session()?;
     json_ok((*state.settings()).clone())
 }
 
@@ -47,7 +47,7 @@ async fn get_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
 )]
 async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<RuntimeSettings> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = AuthArgs.authenticated_session(state, req).await?;
+    let session = AdminAuth::from_depot(depot).session()?;
 
     let patch: Map<String, Value> = req.parse_json().await.map_err(|error| {
         crate::app_error!(

@@ -32,7 +32,7 @@ use soland_contracts::admin::handles::{
 };
 use soland_http::error::AppError;
 
-use super::{AuthArgs, append_audit_log, require_admin_principal};
+use super::{AdminAuth, append_audit_log, require_admin_principal};
 use crate::state::AppState;
 
 const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;
@@ -153,15 +153,14 @@ async fn handle_record_by_id(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.list"))]
 async fn list_handles(
-    aa: AuthArgs,
+    admin: AdminAuth,
     page: QueryParam<u64, false>,
     per_page: QueryParam<u64, false>,
     search: QueryParam<String, false>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminHandleListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let _ = require_admin_principal(state, session)?;
 
     let page = page.into_inner().unwrap_or(1).max(1);
@@ -206,13 +205,12 @@ async fn list_handles(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.get"))]
 async fn get_handle(
-    aa: AuthArgs,
+    admin: AdminAuth,
     handle_id: PathParam<String>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminHandleRecord> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let _ = require_admin_principal(state, session)?;
     json_ok(handle_record_by_id(state, &handle_id.into_inner()).await?)
 }
@@ -223,13 +221,12 @@ async fn get_handle(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.audit"))]
 async fn get_handle_audit(
-    aa: AuthArgs,
+    admin: AdminAuth,
     handle_id: PathParam<String>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminHandleAuditListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let _ = require_admin_principal(state, session)?;
     let handle_id = handle_id.into_inner();
     // Confirm the handle exists so the operator gets a clean 404 rather
@@ -309,14 +306,13 @@ fn audit_entry_to_handle_event(entry: Value) -> AdminHandleAuditEvent {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.revoke"))]
 async fn revoke_handle(
-    aa: AuthArgs,
+    admin: AdminAuth,
     handle_id: PathParam<String>,
     body: JsonBody<AdminHandleRevokeBody>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminHandleRecord> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let handle_id = handle_id.into_inner();
     let reason = body.into_inner().reason;
@@ -368,14 +364,13 @@ async fn revoke_handle(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.reassign"))]
 async fn reassign_handle(
-    aa: AuthArgs,
+    admin: AdminAuth,
     handle_id: PathParam<String>,
     body: JsonBody<AdminHandleReassignBody>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminHandleRecord> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+    let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
     let handle_id = handle_id.into_inner();
     let body = body.into_inner();

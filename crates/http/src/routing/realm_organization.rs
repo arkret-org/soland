@@ -58,7 +58,11 @@ pub(crate) async fn list_realm_organizations(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmOrganizationRelationshipList> {
-    list_realm_organizations_impl(aa, realm_id, depot, req).await
+    let session = {
+        let state = depot.get_typed::<AppState>().expect("state injected");
+        aa.authenticated_session(state, req).await?
+    };
+    list_realm_organizations_impl(session, realm_id, depot).await
 }
 
 #[endpoint(
@@ -71,22 +75,22 @@ pub(crate) async fn list_realm_organizations(
     fields(op = "org.arkret.soland.admin.realm_organization.query.list")
 )]
 pub(crate) async fn admin_list_realm_organizations(
-    aa: AuthArgs,
+    admin: super::admin::AdminAuth,
     realm_id: PathParam<String>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<RealmOrganizationRelationshipList> {
-    list_realm_organizations_impl(aa, realm_id, depot, req).await
+    let session = admin.session()?;
+    list_realm_organizations_impl(session, realm_id, depot).await
 }
 
+/// `session` is the caller already authenticated by the wrapping endpoint
+/// (the self bearer path or the `RequireAdmin` gate).
 async fn list_realm_organizations_impl(
-    aa: AuthArgs,
+    session: soland_services::identity::SessionIdentityState,
     realm_id: PathParam<String>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<RealmOrganizationRelationshipList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     if !crate::routing::realm_has_member(
         state,

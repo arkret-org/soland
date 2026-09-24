@@ -17,7 +17,7 @@ use soland_contracts::admin::{
 use soland_http::error::AppError;
 use soland_storage::ServiceRouteStoredKey;
 
-use super::{AuthArgs, append_audit_log, require_admin_principal};
+use super::{AdminAuth, append_audit_log, require_admin_principal};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -203,14 +203,13 @@ fn summary(detail: &AdminServiceRouteDetail) -> AdminServiceRouteSummary {
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.service_routes.list"))]
 async fn admin_list_service_routes(
-    aa: AuthArgs,
+    admin: AdminAuth,
     limit: QueryParam<usize, false>,
     cursor: QueryParam<String, false>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminServiceRouteList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
+    let session = require_admin_principal(state, admin.session()?)?;
     let limit = limit
         .into_inner()
         .unwrap_or(state.config().admin_default_page_limit)
@@ -257,14 +256,13 @@ async fn admin_list_service_routes(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.service_routes.get"))]
 async fn admin_get_service_route(
-    aa: AuthArgs,
+    admin: AdminAuth,
     service_id: PathParam<String>,
     service_kind: PathParam<String>,
     depot: &mut Depot,
-    req: &mut Request,
 ) -> JsonResult<AdminServiceRouteDetail> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = require_admin_principal(state, aa.authenticated_session(state, req).await?)?;
+    let session = require_admin_principal(state, admin.session()?)?;
     let service_id = arkret_wire::DidCoreId::new(service_id.into_inner())
         .map_err(|_| AppError::param_invalid("invalid service_id core"))?;
     let service_kind = validate_service_kind(service_kind.into_inner())?;
