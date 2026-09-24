@@ -29,8 +29,8 @@ use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, DeviceRevocationStore,
-    KeyBackupListQuery, KeyBackupStore, PcrGenesisCommitOutcome, PcrGenesisCommitUnit,
-    PersistenceError, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
+    KeyBackupListPosition, KeyBackupListQuery, KeyBackupStore, PcrGenesisCommitOutcome,
+    PcrGenesisCommitUnit, PersistenceError, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
     SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
 };
 use soland_storage_postgres::{
@@ -168,6 +168,36 @@ async fn contract_store() -> (PgPool, DidCoreId) {
             .unwrap();
     drop(conn);
     (pool, DidCoreId::new(station.station_id).unwrap())
+}
+
+fn page_fixture(
+    id: &str,
+    actor: &arkret_wire::ActorId,
+    series: &str,
+    seq: u64,
+    previous: Option<&str>,
+) -> serde_json::Value {
+    let mut page = serde_json::json!({
+        "backup_id":id, "actor_id":actor, "backup_kind":"secret_storage", "backup_version":"kb_1",
+        "created_at":"2026-09-09T00:00:00.000Z", "series_id":series, "series_seq":seq,
+        "encryption":{"recipient_method":"secret_storage_key", "recipient_key_ref":"backup-key", "aead":{"name":"xchacha20_poly1305", "nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+        "domain_separation":{"subdomain":"secret_storage"},
+        "contents":[{"item_kind":"recovery_key_share", "secret_id":"share"}],
+        "ciphertext":"AAAA", "ciphertext_digest":"sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+        "auth_data":{
+            "device_id":"ak:device:01904100-0000-7000-8000-000000000001",
+            "verification_method":"did:web:backup.example#device-signer",
+            "signature_algorithm":"Ed25519", "signature":"AAAA",
+            "device_authorize_event_id":"ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
+        }
+    });
+    if let Some(previous) = previous {
+        page["supersedes_id"] = serde_json::json!(previous);
+        page["supersedes_digest"] = serde_json::json!(
+            "sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c"
+        );
+    }
+    page
 }
 
 fn hash(value: &str) -> Hash {
@@ -773,6 +803,49 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .await
             .is_err()
     );
+
+    let actor = arkret_wire::ActorId::account(account.clone());
+    let series = format!("ak:backup_series:{}", uuid::Uuid::now_v7());
+    let first_id = format!("ak:backup:{}", uuid::Uuid::now_v7());
+    let second_id = format!("ak:backup:{}", uuid::Uuid::now_v7());
+    backups
+        .put(
+            first_id.clone(),
+            page_fixture(&first_id, &actor, &series, 0, None),
+        )
+        .await
+        .unwrap();
+    backups
+        .put(
+            second_id.clone(),
+            page_fixture(&second_id, &actor, &series, 1, Some(&first_id)),
+        )
+        .await
+        .unwrap();
+    let mut first_query = list_query.clone();
+    first_query.limit = 1;
+    let first_page = backups
+        .confirmed_list_page_for_device(&account, &authorizer, at, &first_query)
+        .await
+        .unwrap();
+    assert_eq!(first_page.active_series, initial_pointer);
+    assert_eq!(first_page.page.revision, 2);
+    assert_eq!(first_page.page.payloads.len(), 1);
+    assert_eq!(first_page.page.payloads[0]["backup_id"], first_id);
+    first_query.after = Some(KeyBackupListPosition {
+        backup_kind: "secret_storage".to_owned(),
+        series_id: series,
+        series_seq: 0,
+        backup_id: first_id,
+    });
+    let second_page = backups
+        .confirmed_list_page_for_device(&account, &authorizer, at, &first_query)
+        .await
+        .unwrap();
+    assert_eq!(second_page.active_series, initial_pointer);
+    assert_eq!(second_page.page.revision, first_page.page.revision);
+    assert_eq!(second_page.page.payloads.len(), 1);
+    assert_eq!(second_page.page.payloads[0]["backup_id"], second_id);
 
     let target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
     let payload = serde_json::json!({
