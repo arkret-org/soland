@@ -183,12 +183,11 @@ pub(crate) async fn project_revoke_proposal_in_connection(
 
 /// One SQL statement fixes the head, accepted revoke count and canonical dot
 /// set at one MVCC snapshot. An accepted revoke without its dot is unavailable.
-pub(crate) async fn confirmed_pcr_device_cut(
-    pool: &PgPool,
+pub(crate) async fn confirmed_pcr_device_cut_in_connection(
+    conn: &mut AsyncPgConnection,
     account: &AccountId,
     device_id: &DeviceId,
 ) -> PersistenceResult<Option<ConfirmedPcrDeviceCut>> {
-    let mut conn = pg_conn(pool).await?;
     let row = sql_query(
         "SELECT p.pcr_realm_id, h.commit_id AS head_commit_id, \
            g.current_commit_id AS generation_commit_id, g.value AS generation_value, \
@@ -248,7 +247,7 @@ pub(crate) async fn confirmed_pcr_device_cut(
     .bind::<Text, _>(account.principal_id.as_str())
     .bind::<Text, _>(account.station_id.as_str())
     .bind::<Text, _>(device_id.as_str())
-    .get_result::<SnapshotRow>(&mut conn)
+    .get_result::<SnapshotRow>(&mut *conn)
     .await
     .optional()
     .map_err(PersistenceError::database)?;
@@ -327,6 +326,15 @@ pub(crate) async fn confirmed_pcr_device_cut(
         authorization,
         proposals,
     }))
+}
+
+pub(crate) async fn confirmed_pcr_device_cut(
+    pool: &PgPool,
+    account: &AccountId,
+    device_id: &DeviceId,
+) -> PersistenceResult<Option<ConfirmedPcrDeviceCut>> {
+    let mut conn = pg_conn(pool).await?;
+    confirmed_pcr_device_cut_in_connection(&mut conn, account, device_id).await
 }
 
 pub(crate) async fn confirmed_revocation_proposals(

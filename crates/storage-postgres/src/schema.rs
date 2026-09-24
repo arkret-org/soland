@@ -1416,6 +1416,8 @@ diesel::table! {
         prepared_plan -> Jsonb,
         prepared_plan_digest -> Text,
         accepted_steps -> Jsonb,
+        revoke_proposal -> Nullable<Jsonb>,
+        revoke_command_outcome -> Nullable<Jsonb>,
         terminal_outcome -> Nullable<Jsonb>,
         canonical_request -> Binary,
     }

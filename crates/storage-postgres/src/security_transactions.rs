@@ -41,6 +41,10 @@ struct SecurityTransactionRow {
     #[diesel(sql_type = Jsonb)]
     accepted_steps: Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
+    revoke_proposal: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    revoke_command_outcome: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
     terminal_outcome: Option<Value>,
     #[diesel(sql_type = Binary)]
     canonical_request: Vec<u8>,
@@ -140,6 +144,14 @@ impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
             prepared_plan_digest: Hash::new(row.prepared_plan_digest)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             accepted_steps: parse_stored("accepted_steps", row.accepted_steps)?,
+            revoke_proposal: row
+                .revoke_proposal
+                .map(|value| parse_stored("revoke_proposal", value))
+                .transpose()?,
+            revoke_command_outcome: row
+                .revoke_command_outcome
+                .map(|value| parse_stored("revoke_command_outcome", value))
+                .transpose()?,
             terminal_outcome: row
                 .terminal_outcome
                 .map(|result| parse_stored("terminal_outcome", result))
@@ -165,9 +177,9 @@ fn parse_stored<T: serde::de::DeserializeOwned>(name: &str, value: Value) -> Per
 
 const COLUMNS: &str = "id, kind, principal_id, station_id, authorizing_device_id, expires_at, created_at, \
     request_digest, prepared_plan, prepared_plan_digest, accepted_steps, \
-    terminal_outcome, canonical_request";
+    revoke_proposal, revoke_command_outcome, terminal_outcome, canonical_request";
 
-async fn load_one(
+pub(crate) async fn load_one(
     conn: &mut AsyncPgConnection,
     transaction_id: &str,
     for_update: bool,
@@ -226,8 +238,8 @@ async fn insert_one(
         "INSERT INTO security_transactions \
          (id, kind, principal_id, station_id, authorizing_device_id, expires_at, created_at, request_digest, \
            prepared_plan, prepared_plan_digest, accepted_steps, \
-           terminal_outcome, canonical_request) \
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+           revoke_proposal, revoke_command_outcome, terminal_outcome, canonical_request) \
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         resource.transaction_id.as_str(),
@@ -254,6 +266,22 @@ async fn insert_one(
     .bind::<Text, _>(resource.prepared_plan_digest.as_str())
     .bind::<Jsonb, _>(
         serde_json::to_value(&resource.accepted_steps)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .bind::<Nullable<Jsonb>, _>(
+        resource
+            .revoke_proposal
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .bind::<Nullable<Jsonb>, _>(
+        resource
+            .revoke_command_outcome
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
     .bind::<Nullable<Jsonb>, _>(
@@ -327,13 +355,32 @@ async fn update_mutable_fields(
 ) -> PersistenceResult<()> {
     sql_query(
         "UPDATE security_transactions SET accepted_steps = $2, \
-         terminal_outcome = $3 WHERE id = $1",
+         revoke_proposal = $3, revoke_command_outcome = $4, \
+         terminal_outcome = $5 WHERE id = $1",
     )
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         record.resource.transaction_id.as_str(),
     ))
     .bind::<Jsonb, _>(
         serde_json::to_value(&record.resource.accepted_steps)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .bind::<Nullable<Jsonb>, _>(
+        record
+            .resource
+            .revoke_proposal
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .bind::<Nullable<Jsonb>, _>(
+        record
+            .resource
+            .revoke_command_outcome
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
     .bind::<Nullable<Jsonb>, _>(

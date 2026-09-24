@@ -1599,6 +1599,11 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     )),
                 )
                 .await?;
+                crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(
+                    conn,
+                    &transaction.commit,
+                )
+                .await?;
             }
             let resolution_inserted = sql_query(
                 "WITH inserted AS ( \

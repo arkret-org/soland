@@ -343,6 +343,12 @@ mod tests {
             .bind::<Jsonb,_>(serde_json::to_value(&genesis_commit.authority_ref).unwrap())
             .execute(&mut conn).await.unwrap();
         insert_accepted(&mut conn, &genesis, &genesis_commit).await;
+        crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(
+            &mut conn,
+            &genesis_commit,
+        )
+        .await
+        .unwrap();
         sql_query("INSERT INTO principal_resolutions \
             (principal_id,station_id,pcr_realm_id,genesis_event_id,current_event_id,projection,updated_at) \
             VALUES($1,$2,$3,$4,$4,'{}'::jsonb,now())")
@@ -388,6 +394,11 @@ mod tests {
                 Some(&account),
             )
             .await?;
+            crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(
+                conn,
+                &authorize_commit,
+            )
+            .await?;
             Ok(())
         })
         .await
@@ -408,6 +419,46 @@ mod tests {
         assert_eq!(authorization.payload.device_id, device_id);
         assert_eq!(authorization.payload.authorized_generation_ref, 1);
         assert!(cut.proposals.is_empty());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let status_cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut(
+            &pool, &account, &device_id, now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            status_cut.authority.authority_commit_id,
+            authorize_commit.commit_id
+        );
+        assert_eq!(
+            status_cut.lifecycle,
+            crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
+        );
+        assert!(!status_cut.generation_conflicted);
+        sql_query(
+            "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=1 WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert!(
+            crate::pcr_device_status_reader::confirmed_pcr_device_status_cut(
+                &pool, &account, &device_id, now,
+            )
+            .await
+            .is_err(),
+            "a stale conflict index marker cannot prove active"
+        );
+        sql_query(
+            "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=0 WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
         sql_query(
             "UPDATE pcr_device_authorization_current_results \
                    SET value=jsonb_set(value,'{authorized_generation_ref}','2'::jsonb) \
