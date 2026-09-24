@@ -1289,6 +1289,22 @@ pub async fn hydrate_projections_from_persistence(
     // a process restart from their canonical durable source. Poll responses
     // are replayed from the Event log into PollState and deliberately do not
     // create standalone MessageState timeline rows.
+    let default_strand_realms = events
+        .iter()
+        .filter(|event| event.kind == arkret_wire::EventKind::RealmSetDefaultStrand.as_str())
+        .map(|event| {
+            let realm_id = event.realm_id.as_ref().ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "confirmed default Strand Event has no Realm".to_owned(),
+                )
+            })?;
+            RealmId::new(realm_id.clone()).map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "confirmed default Strand Realm is invalid: {error}"
+                ))
+            })
+        })
+        .collect::<soland_storage::PersistenceResult<BTreeSet<_>>>()?;
     let replay_events = events
         .into_iter()
         .filter(|event| {
@@ -1313,6 +1329,79 @@ pub async fn hydrate_projections_from_persistence(
             &hydration_hlc,
             "accepted-event-reducer",
         )?;
+    }
+    // The default pointer is a singleton last-write-wins result. Replaying
+    // reception order would let an older Event overwrite a later Commit, so
+    // restore the exact typed current row after Strand projection hydration.
+    for realm_id in default_strand_realms {
+        let material = persistence
+            .authority_commits()
+            .realm_state_snapshot_material(&realm_id)
+            .await?
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "confirmed default Strand Realm has no snapshot".to_owned(),
+                )
+            })?;
+        let result = material
+            .current_state_entries
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry,
+                    arkret_wire::TypedCurrentResult::Value {
+                        selector: arkret_wire::CurrentSelector::RealmSetDefaultStrand,
+                        ..
+                    }
+                )
+            })
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "confirmed default Strand Event has no typed current result".to_owned(),
+                )
+            })?;
+        let arkret_wire::TypedCurrentResult::Value { value, .. } = result else {
+            unreachable!();
+        };
+        let object = value
+            .as_object()
+            .filter(|object| object.len() == 1)
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "default Strand current value is malformed".to_owned(),
+                )
+            })?;
+        let strand_id: arkret_wire::StrandId =
+            serde_json::from_value(object.get("default_strand_id").cloned().ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "default Strand current value has no pointer".to_owned(),
+                )
+            })?)
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "default Strand current pointer is invalid: {error}"
+                ))
+            })?;
+        let strand = proj.strands.get(strand_id.as_str()).ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "default Strand current pointer is dangling".to_owned(),
+            )
+        })?;
+        if strand.realm_id != realm_id.as_str()
+            || strand.state == soland_domain::reducer::ObjectLifecycleState::Redacted
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "default Strand current pointer targets a redacted or foreign Strand".to_owned(),
+            ));
+        }
+        proj.realm_states
+            .get_mut(realm_id.as_str())
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "default Strand Realm projection is missing".to_owned(),
+                )
+            })?
+            .default_strand_id = Some(strand_id.to_string());
     }
     // Relation admission serializes one authoritative current row per typed
     // primary domain in the RealmCommit transaction. Hydrate that same row,

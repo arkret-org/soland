@@ -73,21 +73,24 @@ struct JoinedMemberRow {
     member_id: String,
 }
 
-/// A local-only Strand has no federation targets. The Realm authority row is
+/// These local-only Realm operations have no federation targets. The Realm authority row is
 /// already locked by the just-installed Commit, so every concurrent member
 /// transition targeting the same Realm waits until this transaction finishes.
-async fn ensure_local_only_strand_source_cut(
+async fn ensure_local_only_realm_source_cut(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     authority_station: &arkret_wire::DidCoreId,
     outbox: &[soland_storage::FederationOutboxRecord],
 ) -> soland_storage::PersistenceResult<()> {
-    if event.kind != arkret_wire::EventKind::StrandCreate {
+    if !matches!(
+        event.kind,
+        arkret_wire::EventKind::StrandCreate | arkret_wire::EventKind::RealmSetDefaultStrand
+    ) {
         return Ok(());
     }
     if !outbox.is_empty() {
         return Err(PersistenceError::Conflict(
-            "StrandCreate federation target planning is unavailable".to_owned(),
+            "local Realm Event federation target planning is unavailable".to_owned(),
         ));
     }
     let rows = sql_query(
@@ -103,7 +106,7 @@ async fn ensure_local_only_strand_source_cut(
     .map_err(PersistenceError::database)?;
     if rows.is_empty() {
         return Err(PersistenceError::Conflict(
-            "StrandCreate has no confirmed joined source member".to_owned(),
+            "local Realm Event has no confirmed joined source member".to_owned(),
         ));
     }
     for row in rows {
@@ -118,7 +121,7 @@ async fn ensure_local_only_strand_source_cut(
             .is_none_or(|account| &account.station_id != authority_station)
         {
             return Err(PersistenceError::Conflict(
-                "StrandCreate remote delivery target set is not planned".to_owned(),
+                "local Realm Event remote delivery target set is not planned".to_owned(),
             ));
         }
     }
@@ -2338,7 +2341,7 @@ async fn commit_one_in_connection(
     }
 
     let commit = &request.authority_commit.commit;
-    ensure_local_only_strand_source_cut(
+    ensure_local_only_realm_source_cut(
         conn,
         event,
         &request.authority_commit.expected_authority.service_id,
@@ -2351,6 +2354,10 @@ async fn commit_one_in_connection(
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
         commit_parent_membership_current_results(conn, event, commit).await?;
         crate::strand_current_results::commit_strand_create_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
             conn, event, commit,
         )
         .await?;

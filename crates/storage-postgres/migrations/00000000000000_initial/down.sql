@@ -189,6 +189,7 @@ DROP TABLE IF EXISTS projection_events CASCADE;
 DROP TABLE IF EXISTS projection_strand_watches CASCADE;
 DROP TABLE IF EXISTS projection_strands CASCADE;
 DROP TABLE IF EXISTS strand_current_results CASCADE;
+DROP TABLE IF EXISTS realm_set_default_strand_current_results CASCADE;
 DROP TABLE IF EXISTS projection_morphs CASCADE;
 DROP TABLE IF EXISTS projection_spaces CASCADE;
 DROP TABLE IF EXISTS push_devices CASCADE;

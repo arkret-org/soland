@@ -373,6 +373,51 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
     }
 }
 
+fn set_default_strand_request(
+    previous: &EventCommitRequest,
+    strand_id: &arkret_wire::StrandId,
+    expected: Option<&arkret_wire::StrandId>,
+) -> EventCommitRequest {
+    let mut request = previous.clone();
+    let previous_commit = &previous.authority_commit.commit;
+    let previous_event = &previous.authority_commit.event;
+    let realm_id = previous_event.realm_id.clone();
+    let actor = previous_event.actor_id.as_account_id().unwrap();
+    let event = event(
+        arkret_wire::EventKind::RealmSetDefaultStrand,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        &actor.principal_id,
+        &actor.station_id,
+        serde_json::json!({
+            "realm_id": realm_id,
+            "strand_id": strand_id,
+            "expected_default_strand_id": expected,
+        }),
+        previous_commit.committed_at,
+    );
+    request.authority_commit.event = event.clone();
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("default:{}", event.event_id).as_bytes()),
+    );
+    request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
+    request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
+    request.event.event_id = event.event_id.to_string();
+    request.event.kind = event.kind.as_str().to_owned();
+    request.event.envelope = serde_json::to_value(&event).unwrap();
+    request.event.canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+    request.projections[0].event_kind = event.kind.as_str().to_owned();
+    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request
+}
+
 #[tokio::test]
 async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_returns_same_commits()
 {
@@ -766,4 +811,90 @@ async fn strand_create_writes_registered_current_result_and_rejects_remote_unpla
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn default_strand_writes_exact_current_at_commit_and_rejects_dangling_and_stale_pointer() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let missing = arkret_wire::StrandId::from_event_id(&unit.transactions[0].event.event_id);
+    let dangling = set_default_strand_request(&strand, &missing, None);
+    assert!(uow.commit_event(dangling.clone()).await.is_err());
+    assert!(
+        store
+            .committed_event(&dangling.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let request = set_default_strand_request(&strand, &strand_id, None);
+    let outcome = uow.commit_event(request.clone()).await.unwrap();
+    assert!(outcome.event_inserted);
+    assert_eq!(outcome.projections_inserted, 1);
+    assert_eq!(outcome.outbox_inserted, 0);
+    let realm_id = &unit.transactions[0].event.realm_id;
+    let snapshot = store
+        .realm_state_snapshot_material(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.current_state_entries.iter().any(|entry| {
+        matches!(entry, arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::RealmSetDefaultStrand,
+            source_stream_ref,
+            revision,
+            value,
+        } if source_stream_ref == &request.authority_commit.commit.stream_ref
+            && revision.commit_id == request.authority_commit.commit.commit_id
+            && value == &serde_json::json!({"default_strand_id": strand_id}))
+    }));
+    assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
+    let restarted = ProjectionService::new("default-strand-current-restart-test");
+    restarted
+        .hydrate_from_persistence(
+            &soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
+            &BootstrapHydrationAdapter,
+            [realm_id.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted
+            .snapshot()
+            .realm_states
+            .get(realm_id.as_str())
+            .and_then(|realm| realm.default_strand_id.as_deref()),
+        Some(strand_id.as_str())
+    );
+
+    let stale = set_default_strand_request(&request, &strand_id, Some(&missing));
+    assert!(uow.commit_event(stale.clone()).await.is_err());
+    assert!(
+        store
+            .committed_event(&stale.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let snapshot_after = store
+        .realm_state_snapshot_material(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        snapshot.current_state_entries,
+        snapshot_after.current_state_entries
+    );
+    assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
 }

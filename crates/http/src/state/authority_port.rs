@@ -159,26 +159,30 @@ impl AuthorityProtocolPort for AppState {
         let producer_guard =
             super::authority_producer_validation::verify_self_event_producer(self, session, event)
                 .await?;
-        if event.kind != arkret_wire::EventKind::StrandCreate {
+        if !matches!(
+            event.kind,
+            arkret_wire::EventKind::StrandCreate | arkret_wire::EventKind::RealmSetDefaultStrand
+        ) {
             return Err(ServiceError::Internal(
                 "self Event current-result authority cut is unavailable for this kind".to_owned(),
             ));
         }
         if request.approval_signatures.is_some() {
             return Err(ServiceError::Conflict(
-                "StrandCreate approval signatures are not verified".to_owned(),
+                "self Event approval signatures are not verified".to_owned(),
             ));
         }
         if !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. }) {
             return Err(ServiceError::Conflict(
-                "only Realm-scope StrandCreate has a source target cut".to_owned(),
+                "only Realm-scope self Event has a source target cut".to_owned(),
             ));
         }
-        if event
-            .payload
-            .get("object")
-            .and_then(|object| object.get("scope_circle_id"))
-            .is_some()
+        if event.kind == arkret_wire::EventKind::StrandCreate
+            && event
+                .payload
+                .get("object")
+                .and_then(|object| object.get("scope_circle_id"))
+                .is_some()
         {
             return Err(ServiceError::Conflict(
                 "Circle-bound StrandCreate needs a Circle-scope authority cut".to_owned(),
@@ -206,7 +210,7 @@ impl AuthorityProtocolPort for AppState {
             event.event_id.as_str(),
         )
         .ok_or_else(|| {
-            ServiceError::SchemaViolation("StrandCreate projection id is invalid".to_owned())
+            ServiceError::SchemaViolation("self Event projection id is invalid".to_owned())
         })?;
         let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
             operation_id,

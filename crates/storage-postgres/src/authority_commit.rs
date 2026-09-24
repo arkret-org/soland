@@ -579,6 +579,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'realm_set_default_strand'::text AS selector_kind, NULL::jsonb AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM realm_set_default_strand_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
@@ -613,6 +617,9 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 ("realm_alias", None) => arkret_wire::CurrentSelector::RealmAlias,
                 ("realm_plaintext_visible_services", None) => {
                     arkret_wire::CurrentSelector::RealmPlaintextVisibleServices
+                }
+                ("realm_set_default_strand", None) => {
+                    arkret_wire::CurrentSelector::RealmSetDefaultStrand
                 }
                 ("member_state", Some(actor_id)) => arkret_wire::CurrentSelector::MemberState {
                     actor_id: serde_json::from_value(actor_id).map_err(|error| {
