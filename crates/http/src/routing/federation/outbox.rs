@@ -461,8 +461,8 @@ fn peer_event_application_failure(
         return None;
     }
     use arkret_models_collaboration::authority_commit::{
-        PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationRecord,
-        PeerRegisteredAtomicUnitOutcomeValue,
+        PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
+        PeerCommittedReplicationOutcomeRecord, PeerRegisteredAtomicUnitOutcomeValue,
     };
     use arkret_wire::AuthoritySubmitOutcome;
 
@@ -513,16 +513,16 @@ fn peer_event_application_failure(
             AuthoritySubmitOutcome::Rejected { .. } => Some("peer_event_rejected"),
         },
         PeerAuthoritySubmitOutcome::CommittedReplication(value) => {
-            if value.results.iter().all(|result| {
+            if value.replication_outcomes.iter().all(|record| {
                 matches!(
-                    result,
-                    PeerCommittedReplicationRecord::Stored { .. }
-                        | PeerCommittedReplicationRecord::Duplicate { .. }
+                    record,
+                    PeerCommittedReplicationOutcomeRecord::Stored {}
+                        | PeerCommittedReplicationOutcomeRecord::Duplicate {}
                 )
             }) {
                 None
-            } else if value.results.iter().all(|result| {
-                !matches!(result, PeerCommittedReplicationRecord::Rejected { reason_code, .. }
+            } else if value.replication_outcomes.iter().all(|record| {
+                !matches!(record, PeerCommittedReplicationOutcomeRecord::Rejected { reason_code }
                     if reason_code != error_code::DEPENDENCY_MISSING)
             }) {
                 Some(error_code::DEPENDENCY_MISSING)
@@ -601,7 +601,8 @@ fn peer_event_partial_retry(
         return None;
     }
     use arkret_models_collaboration::authority_commit::{
-        PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationRecord,
+        PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
+        PeerCommittedReplicationOutcomeRecord,
     };
     let mut request: PeerAuthoritySubmitRequest = serde_json::from_str(request_body).ok()?;
     let outcome: PeerAuthoritySubmitOutcome = serde_json::from_str(response_body).ok()?;
@@ -613,31 +614,29 @@ fn peer_event_partial_retry(
     else {
         return None;
     };
-    let retry_indices = outcome
-        .results
+    // `replication_outcomes[]` is same-order with `replications[]`; the array
+    // position is the only row identity (no index or coordinate echo).
+    let retry = outcome
+        .replication_outcomes
         .iter()
-        .filter_map(|result| match result {
-            PeerCommittedReplicationRecord::Rejected {
-                index, reason_code, ..
-            } if reason_code == error_code::DEPENDENCY_MISSING => Some(usize::from(*index)),
-            _ => None,
+        .map(|record| {
+            matches!(record, PeerCommittedReplicationOutcomeRecord::Rejected { reason_code }
+                if reason_code == error_code::DEPENDENCY_MISSING)
         })
-        .collect::<std::collections::BTreeSet<_>>();
-    if retry_indices.is_empty()
-        || outcome.results.iter().any(|result| {
-            matches!(result, PeerCommittedReplicationRecord::Rejected { reason_code, .. }
+        .collect::<Vec<_>>();
+    if !retry.contains(&true)
+        || outcome.replication_outcomes.iter().any(|record| {
+            matches!(record, PeerCommittedReplicationOutcomeRecord::Rejected { reason_code }
             if reason_code != error_code::DEPENDENCY_MISSING)
         })
     {
         return None;
     }
-    let mut index = 0usize;
-    request.submissions.retain(|_| {
-        let keep = retry_indices.contains(&index);
-        index += 1;
-        keep
-    });
-    if request.submissions.is_empty() {
+    let mut retry = retry.into_iter();
+    request
+        .replications
+        .retain(|_| retry.next().unwrap_or(false));
+    if request.replications.is_empty() {
         return None;
     }
     let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
@@ -2306,6 +2305,121 @@ mod tests {
             .is_none()
         );
     }
+
+    fn replication_item() -> serde_json::Value {
+        let fixture_path = arkret_schema_conformance::default_spec_artifacts_dir()
+            .expect("arkret-spec artifacts checkout")
+            .join("fixtures/approval-signature-kat-fixture.json");
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+        let submission = fixture["event_id_invariance"]["submission_with_evidence"].clone();
+        let event = &submission["event"];
+        let source_commit = serde_json::json!({
+            "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+            "realm_id": event["realm_id"],
+            "stream_ref": event["scope_ref"],
+            "stream_position": 0,
+            "previous_commit_ref": null,
+            "event_ref": event["event_id"],
+            "governance_generation": 0,
+            "authority_ref": event["event_id"],
+            "committed_at": "2026-09-20T00:00:00.000Z",
+            "signature": {
+                "context": "ak.realm_commit_signature.v1",
+                "signature_algorithm": "Ed25519",
+                "verification_method": "did:web:station.example#authority",
+                "signed_digest": format!("sha256:{}", "4".repeat(64)),
+                "created_at": "2026-09-20T00:00:00.000Z",
+                "sig": "A".repeat(86)
+            }
+        });
+        serde_json::json!({"event_submission": submission, "source_commit": source_commit})
+    }
+
+    #[test]
+    fn replication_retry_resends_only_same_order_dependency_missing_rows() {
+        let item = replication_item();
+        let mut second = item.clone();
+        second["source_commit"]["committed_at"] = serde_json::json!("2026-09-20T00:00:01.000Z");
+        let request = serde_json::json!({
+            "branch": "committed_replication",
+            "replications": [item, second.clone()]
+        })
+        .to_string();
+        let partial = serde_json::json!({
+            "branch": "committed_replication",
+            "replication_outcomes": [
+                {"status": "stored"},
+                {"status": "rejected", "reason_code": "dependency_missing"}
+            ]
+        })
+        .to_string();
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/events", &request, &partial),
+            Some(error_code::DEPENDENCY_MISSING)
+        );
+        let retry =
+            peer_event_partial_retry("/_arkret/peer/events", &request, &partial, "old-key", 1)
+                .expect("dependency-missing row is resubmitted");
+        let resent: serde_json::Value = serde_json::from_str(&retry.payload_json).unwrap();
+        assert_eq!(resent["branch"], "committed_replication");
+        assert_eq!(resent["replications"], serde_json::json!([second]));
+        assert_ne!(retry.idempotency_key, "old-key");
+
+        let stored = serde_json::json!({
+            "branch": "committed_replication",
+            "replication_outcomes": [{"status": "stored"}, {"status": "duplicate"}]
+        })
+        .to_string();
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/events", &request, &stored),
+            None
+        );
+
+        // A retired echo row (index / committed_ref) or a length mismatch is
+        // not a valid outcome for this request and never drives a retry.
+        let echoed = serde_json::json!({
+            "branch": "committed_replication",
+            "results": [
+                {"status": "stored", "index": 0},
+                {"status": "rejected", "index": 1, "reason_code": "dependency_missing"}
+            ]
+        })
+        .to_string();
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/events", &request, &echoed),
+            Some("invalid_peer_event_outcome")
+        );
+        assert!(
+            peer_event_partial_retry("/_arkret/peer/events", &request, &echoed, "old-key", 1)
+                .is_none()
+        );
+        let short = serde_json::json!({
+            "branch": "committed_replication",
+            "replication_outcomes": [{"status": "rejected", "reason_code": "dependency_missing"}]
+        })
+        .to_string();
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/events", &request, &short),
+            Some("invalid_peer_event_outcome")
+        );
+        assert!(
+            peer_event_partial_retry("/_arkret/peer/events", &request, &short, "old-key", 1)
+                .is_none()
+        );
+
+        let legacy_request = serde_json::json!({
+            "branch": "committed_replication",
+            "processing": "per_item",
+            "submissions": [{"committed_event": replication_item(), "recipient_witnesses": []}]
+        })
+        .to_string();
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/events", &legacy_request, &partial),
+            Some("invalid_peer_event_request")
+        );
+    }
+
     #[test]
     fn excerpt_truncates_at_one_kib_on_char_boundary() {
         let body = "a".repeat(2048);
