@@ -353,6 +353,88 @@ pub(crate) async fn relay_signal_once(
     outcome.validate().map_err(|error| error.to_string())
 }
 
+/// One governance Station answer to a synchronous `authority_forward`.
+#[derive(Debug)]
+pub(crate) struct PeerSubmitResponse {
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
+}
+
+/// Transport attempts for one `authority_forward` whose response was lost.
+const AUTHORITY_FORWARD_TRANSPORT_ATTEMPTS: usize = 3;
+
+/// Send one `authority_forward` to the governance Station and return its
+/// answer. The self response relays the governance outcome, so the forward
+/// is synchronous and never queued in the outbox.
+///
+/// Only a lost response is retried, and it resends the byte-identical body
+/// with its original `producer_device_evidence` (device-lifecycle §8.2.2);
+/// every new forwarding attempt is a new call with freshly signed evidence.
+pub(crate) async fn submit_authority_forward(
+    state: &AppState,
+    peer_id: &str,
+    body: &[u8],
+) -> Result<PeerSubmitResponse, String> {
+    let peer_target = super::resolved_peer_target(state, peer_id, "station", false).await?;
+    let target = format!("{}/_arkret/peer/events", peer_target.base_url);
+    let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        &target,
+        "authority_forward",
+        state.config().development_mode,
+        REQUEST_TIMEOUT,
+    )?;
+    let mut last_error = String::from("authority_forward was not sent");
+    for _ in 0..AUTHORITY_FORWARD_TRANSPORT_ATTEMPTS {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        insert_header_if_valid(
+            &mut headers,
+            "content-digest",
+            &content_digest_header_value(body),
+        );
+        insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
+        insert_header_if_valid(&mut headers, "destination-service-id", peer_id);
+        insert_header_if_valid(
+            &mut headers,
+            "source-trust-domain",
+            state.config().trust_domain.as_str(),
+        );
+        insert_header_if_valid(
+            &mut headers,
+            "destination-trust-domain",
+            &peer_target.trust_domain,
+        );
+        let headers = rfc9421_sign(state, headers, "POST", &target);
+        let response = match client
+            .post(parsed_url.clone())
+            .headers(headers)
+            .body(body.to_vec())
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = error.to_string();
+                continue;
+            }
+        };
+        let status = response.status().as_u16();
+        match response.bytes().await {
+            Ok(bytes) => {
+                return Ok(PeerSubmitResponse {
+                    status,
+                    body: bytes.to_vec(),
+                });
+            }
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    Err(format!("authority_forward response lost: {last_error}"))
+}
+
 fn authority_from_target_url(target_url: &str) -> String {
     let Ok(url) = reqwest::Url::parse(target_url) else {
         return String::new();
@@ -464,54 +546,24 @@ fn peer_event_application_failure(
         PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
         PeerCommittedReplicationOutcomeRecord, PeerRegisteredAtomicUnitOutcomeValue,
     };
-    use arkret_wire::AuthoritySubmitOutcome;
 
     let Ok(request) = serde_json::from_str::<PeerAuthoritySubmitRequest>(request_body) else {
         return Some("invalid_peer_event_request");
     };
+    // `authority_forward` is synchronous and every new attempt carries freshly
+    // signed producer evidence (device-lifecycle §8.2.2); a queued forward
+    // could only be resent with stale evidence, so it is never delivered here.
+    if is_authority_forward(&request) {
+        return Some(AUTHORITY_FORWARD_NOT_QUEUED);
+    }
     let Ok(outcome) = serde_json::from_str::<PeerAuthoritySubmitOutcome>(response_body) else {
         return Some("invalid_peer_event_outcome");
     };
     if outcome.validate_for_request(&request).is_err() {
         return Some("invalid_peer_event_outcome");
     }
-    // The SDK peer union checks the response branch but does not bind an
-    // authority-forward acceptance to the exact Event carried by this request.
-    if let PeerAuthoritySubmitOutcome::AuthorityForward(value) = &outcome {
-        let event = match &request {
-            PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
-                &request.event_submission.event
-            }
-            PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
-                &request.mls_submission.commit_event
-            }
-            _ => return Some("invalid_peer_event_outcome"),
-        };
-        if let AuthoritySubmitOutcome::Accepted { commit, .. } = &value.outcome {
-            let Ok(stream_ref) = arkret_wire::CommitStreamRef::from_scope(
-                &event.scope_ref,
-                Some(event.realm_id.clone()),
-            ) else {
-                return Some("invalid_peer_event_outcome");
-            };
-            if commit.event_ref != event.event_id
-                || commit.realm_id != event.realm_id
-                || commit.stream_ref != stream_ref
-            {
-                return Some("invalid_peer_event_outcome");
-            }
-        }
-    }
     match outcome {
-        PeerAuthoritySubmitOutcome::AuthorityForward(value) => match value.outcome {
-            AuthoritySubmitOutcome::Accepted { .. } => None,
-            AuthoritySubmitOutcome::Rejected { reason_code, .. }
-                if reason_code == error_code::DEPENDENCY_MISSING =>
-            {
-                Some(error_code::DEPENDENCY_MISSING)
-            }
-            AuthoritySubmitOutcome::Rejected { .. } => Some("peer_event_rejected"),
-        },
+        PeerAuthoritySubmitOutcome::AuthorityForward(_) => Some("invalid_peer_event_outcome"),
         PeerAuthoritySubmitOutcome::CommittedReplication(value) => {
             if value.replication_outcomes.iter().all(|record| {
                 matches!(
@@ -540,6 +592,29 @@ fn peer_event_application_failure(
             _ => None,
         },
     }
+}
+
+const AUTHORITY_FORWARD_NOT_QUEUED: &str = "authority_forward_not_queued";
+
+fn is_authority_forward(
+    request: &arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest,
+) -> bool {
+    use arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest;
+    matches!(
+        request,
+        PeerAuthoritySubmitRequest::AuthorityForwardEvent(_)
+            | PeerAuthoritySubmitRequest::AuthorityForwardMls(_)
+    )
+}
+
+/// Whether an outbox row carries an `authority_forward`, which is never
+/// resubmitted: its evidence belongs to the attempt that signed it.
+fn is_queued_authority_forward(endpoint: &str, payload_json: &str) -> bool {
+    endpoint == "/_arkret/peer/events"
+        && serde_json::from_str::<
+            arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest,
+        >(payload_json)
+        .is_ok_and(|request| is_authority_forward(&request))
 }
 
 /// A rebuilt request that replaces a finished transport identity.
@@ -1755,7 +1830,9 @@ impl FederationDispatcher {
                         )
                     })
                 })
-        } else if causal_dependencies_pending(body_text) {
+        } else if causal_dependencies_pending(body_text)
+            && !is_queued_authority_forward(&row.delivery.endpoint, &row.delivery.payload_json)
+        {
             Some(dependency_resubmission(
                 &row.delivery.idempotency_key,
                 semantic_attempts,
@@ -2290,6 +2367,44 @@ mod tests {
             peer_event_application_failure("/_arkret/peer/contacts", "{}", "{}"),
             None
         );
+    }
+
+    #[test]
+    fn authority_forward_is_never_delivered_or_resubmitted_from_the_outbox() {
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x44; 32],
+        ));
+        let mut event = crate::test_event::raw_event_at(
+            arkret_wire::EventKind::RealmProfile.as_str(),
+            arkret_wire::ScopeRef::Realm { realm_id },
+            arkret_wire::DidCoreId::new("ak:did_core:web:queued-producer.example").unwrap(),
+            0,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            serde_json::json!({"name": "queued"}),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        crate::test_event::attach_structural_only_producer_proof(
+            &mut event,
+            arkret_wire::DidUrl::new("did:web:queued-producer.example#key-1").unwrap(),
+        );
+        let body = serde_json::to_string(
+            &arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest::AuthorityForwardEvent(
+                arkret_models_collaboration::authority_commit::PeerAuthorityForwardEventRequest::new(
+                    arkret_wire::EventAdmissionSubmission::new(event),
+                    None,
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/events", &body, "{}"),
+            Some(AUTHORITY_FORWARD_NOT_QUEUED)
+        );
+        assert!(is_queued_authority_forward("/_arkret/peer/events", &body));
+        assert!(!is_queued_authority_forward("/_arkret/peer/events", "{}"));
     }
 
     #[test]

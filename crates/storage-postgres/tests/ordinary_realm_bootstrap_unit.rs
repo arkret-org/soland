@@ -793,6 +793,7 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
             recipient_queue_capacity: 0,
         },
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         event: record,
         parent_membership_admission: None,
         device_pairing_authorization: None,

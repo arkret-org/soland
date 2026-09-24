@@ -2302,6 +2302,12 @@ async fn commit_one_in_connection(
         .into());
     }
     let event = &request.authority_commit.event;
+    if request.self_producer_guard.is_some() && request.forwarded_producer_evidence.is_some() {
+        return Err(PersistenceError::SchemaViolation(
+            "an Event producer is either local or forwarded, never both".to_owned(),
+        )
+        .into());
+    }
 
     if let Some(guard) = request.self_producer_guard.as_ref() {
         crate::authority_commit::check_self_producer_guard_in_connection(
@@ -2352,6 +2358,12 @@ async fn commit_one_in_connection(
     )
     .await?;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
+        if let Some(retained) = request.forwarded_producer_evidence.as_ref() {
+            crate::account_device_signer_evidence::retain_forwarded_producer_evidence_in_connection(
+                conn, event, commit, retained,
+            )
+            .await?;
+        }
         commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;

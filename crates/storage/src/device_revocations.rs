@@ -150,16 +150,44 @@ pub struct DeviceRevocationCleanupIntent {
     pub mls_obligation_completed_at: Option<DateTime<Utc>>,
 }
 
+/// Human-device admission state folded from one confirmed PCR cut: the
+/// accepted `device_authorization`, `device_generation`, revoke proposals and
+/// the verified conflict index, all read under the same snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PcrDeviceAdmission {
+    Active,
+    Revoked,
+    RevocationPending,
+    /// The authorization generation is no longer current or is conflicted.
+    GenerationFenced,
+    /// The instant lies outside the accepted authorization window.
+    OutsideAuthorizationWindow,
+}
+
+impl PcrDeviceAdmission {
+    /// Registered code refusing a producer in this state; `None` when active.
+    #[must_use]
+    pub const fn refusal_code(self) -> Option<crate::ConflictCode> {
+        match self {
+            Self::Active => None,
+            Self::Revoked => Some(crate::ConflictCode::DeviceRevoked),
+            Self::RevocationPending => Some(crate::ConflictCode::DeviceRevocationPending),
+            Self::GenerationFenced => Some(crate::ConflictCode::DeviceGenerationFenced),
+            Self::OutsideAuthorizationWindow => Some(crate::ConflictCode::DeviceUnauthorized),
+        }
+    }
+}
+
 #[async_trait]
 pub trait DeviceRevocationStore: Send + Sync {
-    /// Authoritative PCR human-device admission. Missing or incomplete typed
-    /// current is an error, never an implicit active device.
-    async fn pcr_device_active(
+    /// Authoritative PCR human-device admission at `now`. Missing or
+    /// incomplete typed current is an error, never an implicit active device.
+    async fn pcr_device_admission(
         &self,
         _account: &arkret_wire::AccountId,
         _device_id: &arkret_wire::DeviceId,
         _now: DateTime<Utc>,
-    ) -> PersistenceResult<bool> {
+    ) -> PersistenceResult<PcrDeviceAdmission> {
         Err(PersistenceError::SchemaViolation(
             "PCR device status provider is unavailable".to_owned(),
         ))

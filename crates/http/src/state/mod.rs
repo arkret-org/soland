@@ -7,6 +7,7 @@ pub mod did_resolver_chain;
 mod account_authority_device_pairing;
 mod app_state;
 mod authority_bootstrap_validation;
+mod authority_forward;
 mod authority_key_backup_pointer;
 mod authority_port;
 mod authority_producer_validation;
@@ -23,6 +24,8 @@ pub use app_state::{
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
     getrandom_seed, realm_genesis_payload,
 };
+#[cfg(feature = "test-support")]
+pub(crate) use authority_forward::{admit_forwarded_event, fresh_producer_device_evidence};
 pub(crate) use authority_key_backup_pointer::mirror_committed_key_backup_pointer;
 pub(crate) use authority_producer_validation::verify_self_event_producer;
 pub(crate) use authority_self_event_unit::submit_self_moderation_report;

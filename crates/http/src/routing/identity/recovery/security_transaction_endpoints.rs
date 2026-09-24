@@ -106,8 +106,9 @@ async fn authorizing_device_active(
 ) -> Result<bool, AppError> {
     state
         .persistence()
-        .pcr_device_active(account_id, device_id, chrono::Utc::now())
+        .pcr_device_admission(account_id, device_id, chrono::Utc::now())
         .await
+        .map(|admission| admission == soland_storage::PcrDeviceAdmission::Active)
         .map_err(|error| {
             tracing::warn!(%error, "PCR device status unavailable for security rotation");
             crate::app_error!(
@@ -999,10 +1000,11 @@ async fn try_advance_rotation_erase(
                 )
                 .await;
             };
-            if !state
+            if state
                 .persistence()
-                .pcr_device_active(&resource.account_id, &authorizer, now)
+                .pcr_device_admission(&resource.account_id, &authorizer, now)
                 .await?
+                != soland_storage::PcrDeviceAdmission::Active
             {
                 return stop_rotation(
                     state,

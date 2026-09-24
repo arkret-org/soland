@@ -977,49 +977,22 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
             return;
         }
     };
-    if let Err(error) = submission.validate() {
-        render_app_error(
-            res,
-            schema_violation(format!(
-                "invalid ak.peer.events.command.submit.v1 request body: {error}"
-            )),
-        );
-        return;
-    }
-    // The current carrier is source-committed Event/RealmCommit material or a
-    // registered atomic unit. The old Seal transport is not an alternate lane.
-    let outcome = match state
-        .authority()
-        .submit_peer(&peer, submission.clone())
-        .await
-    {
-        Ok(outcome) => outcome,
-        Err(soland_services::ServiceError::SchemaViolation(detail)) => {
-            render_app_error(res, schema_violation(detail));
-            return;
-        }
+    // The authority port validates each closed branch in its own order and
+    // checks the outcome it returns: an `authority_forward` answers an exact
+    // duplicate Event before its evidence rule (device-lifecycle §8.2.2).
+    match state.authority().submit_peer(&peer, submission).await {
+        Ok(outcome) => res.render(Json(outcome)),
         Err(error) => {
-            tracing::warn!(?error, "peer authority submission unavailable");
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "peer authority submission is unavailable",
-            );
-            return;
+            if matches!(
+                error,
+                soland_services::ServiceError::Internal(_)
+                    | soland_services::ServiceError::Database(_)
+            ) {
+                tracing::warn!(?error, "peer authority submission unavailable");
+            }
+            crate::routing::authority_commit::render_service_error(res, error);
         }
-    };
-    if let Err(error) = outcome.validate_for_request(&submission) {
-        tracing::error!(?error, "peer authority port returned an invalid outcome");
-        render_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "peer authority response is invalid",
-        );
-        return;
     }
-    res.render(Json(outcome));
 }
 
 #[derive(Clone, Debug)]

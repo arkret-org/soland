@@ -12,11 +12,14 @@ use diesel::sql_types::{Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::Value;
-use soland_storage::AccountDeviceSignerEvidenceStore;
+use soland_storage::{
+    AccountDeviceSignerEvidenceStore, ConflictCode, ForwardedProducerDeviceEvidence,
+};
 
-use crate::pcr_device_status_fold::PcrDeviceLifecycle;
 use crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection;
-use crate::{PersistenceError, PersistenceResult, PgPool, PgTransactionError, pg_conn};
+use crate::{
+    AsyncPgConnection, PersistenceError, PersistenceResult, PgPool, PgTransactionError, pg_conn,
+};
 
 #[derive(Clone)]
 pub struct PgAccountDeviceSignerEvidenceArchive {
@@ -178,20 +181,25 @@ impl PgAccountDeviceSignerEvidenceArchive {
                     core.attested_at,
                 )
                 .await?
-                .ok_or_else(|| PersistenceError::SchemaViolation(
-                    "account-device current PCR cut is unavailable".into(),
-                ))?;
-                if cut.lifecycle != PcrDeviceLifecycle::Active
-                    || cut.generation_conflicted
-                    || cut.authority.authorization.as_ref().is_none_or(|current| {
+                .ok_or_else(|| PersistenceError::Conflict(format!(
+                    "{}: account-device current PCR cut is unavailable",
+                    ConflictCode::TemporarilyUnavailable,
+                )))?;
+                if let Some(code) = cut.admission().refusal_code() {
+                    return Err(PersistenceError::Conflict(format!(
+                        "{code}: account-device is not active at the confirmed PCR cut",
+                    )).into());
+                }
+                if cut.authority.authorization.as_ref().is_none_or(|current| {
                         current.source_commit_id.as_str() != authorization_ref.commit_id.as_str()
                             || current.event_id != authorization_ref.event_id
                     })
                     || cut.authority.current_generation != Some(core.authorized_generation_ref)
                 {
-                    return Err(PersistenceError::SchemaViolation(
-                        "account-device attestation is not current at the confirmed PCR cut".into(),
-                    ).into());
+                    return Err(PersistenceError::Conflict(format!(
+                        "{}: account-device attestation is not current at the confirmed PCR cut",
+                        ConflictCode::TemporarilyUnavailable,
+                    )).into());
                 }
             }
             sql_query(
@@ -282,4 +290,59 @@ impl PgAccountDeviceSignerEvidenceArchive {
         })
         .transpose()
     }
+}
+
+/// Retain the verified `producer_device_evidence` of a cross-Station
+/// human-device producer in the transaction that writes the Event's first
+/// `RealmCommit`. The row is audit material only; the object is re-bound to
+/// the exact producer and its content address before it is written.
+pub(crate) async fn retain_forwarded_producer_evidence_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    retained: &ForwardedProducerDeviceEvidence,
+) -> PersistenceResult<()> {
+    let invalid = |message: &str| PersistenceError::SchemaViolation(message.to_owned());
+    let producer = event
+        .human_device_producer()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+        .ok_or_else(|| invalid("forwarded producer evidence requires a human-device producer"))?;
+    let core = &retained.evidence.device_projection_attestation.attestation;
+    if core.account_id != producer.account_id || core.device_id != producer.device_id {
+        return Err(invalid(
+            "forwarded producer evidence attests another Account or device",
+        ));
+    }
+    if commit.event_ref != event.event_id
+        || !retained
+            .evidence
+            .matches_ref(&retained.evidence_ref)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+    {
+        return Err(invalid(
+            "forwarded producer evidence does not bind its Commit or ref",
+        ));
+    }
+    let reference_json =
+        serde_json::to_value(&retained.evidence_ref).map_err(PersistenceError::database)?;
+    let reference_text = reference_json
+        .as_str()
+        .ok_or_else(|| invalid("signer evidence ref is not a string"))?;
+    let body = serde_json::to_value(&retained.evidence).map_err(PersistenceError::database)?;
+    sql_query(
+        "INSERT INTO forwarded_producer_device_evidence \
+         (commit_id,evidence_ref,principal_id,station_id,device_id,attested_at,evidence_json) \
+         VALUES($1,$2,$3,$4,$5,$6,$7)",
+    )
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<Text, _>(reference_text)
+    .bind::<Text, _>(core.account_id.principal_id.as_str())
+    .bind::<Text, _>(core.account_id.station_id.as_str())
+    .bind::<Text, _>(core.device_id.as_str())
+    .bind::<Timestamptz, _>(core.attested_at)
+    .bind::<Jsonb, _>(&body)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
 }

@@ -1,0 +1,673 @@
+//! `authority_forward` producer device evidence (device-lifecycle §8.2.2) on
+//! real Stations over PostgreSQL, following
+//! `ak.vector.federation.authority_forward_producer_device_evidence.v1`.
+//!
+//! The governance Station runs its whole check sequence through the same
+//! admission function its peer ingress calls, with the service clock instant
+//! passed explicitly. The forwarding Station signs and retains evidence from
+//! an accepted PCR genesis.
+
+use arkret_models_collaboration::authority_commit::{
+    AuthorityForwardBranch, PeerAuthorityForwardEventRequest,
+};
+use arkret_models_crypto::{
+    DeviceAuthorizationWindow, DeviceProjectionAttestation, DeviceProjectionAttestationCore,
+    DeviceStatus,
+};
+use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
+use arkret_models_identity::{AccountDeviceSignerEvidence, AuthenticatedServiceResolution};
+use arkret_signatures::webvh::{
+    ServiceRegistrationInceptionInput, prepare_service_registration_inception,
+};
+use arkret_wire::{
+    AccountId, AuthorityCommitStatus, AuthoritySubmitOutcome, DeviceId, Did, DidCoreId, DidKey,
+    DidUrl, Event, EventAdmissionSubmission, EventId, EventKind, NonEmptyString, ProtocolSignature,
+    RealmId, ScopeRef, ServiceKind,
+};
+use chrono::{DateTime, Duration, Utc};
+use ed25519_dalek::SigningKey;
+use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::SeedableRng;
+use soland_http::state::AppState;
+use soland_services::ServiceError;
+use soland_services::authority_commit::AuthenticatedPeerContext;
+use soland_storage::{AuthorityCommitTransaction, CurrentRealmAuthority};
+use soland_test_support::AppStateTestExt as _;
+use soland_test_support::device_authorization_history::sign_event;
+use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
+const PRINCIPAL_DID: &str = "did:web:forwarded-alice.example";
+const DEVICE: &str = "ak:device:0196419b-0000-7000-8000-00000000f0a1";
+const OTHER_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-00000000f0a2";
+const DEVICE_SEED: [u8; 32] = [0x51; 32];
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+fn now() -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap()
+}
+
+/// A registered Station that is *not* the governance Station: its WebVH
+/// inception and the key its attestations are signed with.
+struct Station {
+    service_id: DidCoreId,
+    method: DidUrl,
+    signing_key: SigningKey,
+    log_entry: serde_json::Value,
+    registered_at: DateTime<Utc>,
+}
+
+impl Station {
+    fn new(seed: u8, host: &str, registered_at: DateTime<Utc>) -> Self {
+        let mut rng = ChaCha20Rng::from_seed([seed; 32]);
+        let registration = ServiceRegistrationKey::new(
+            ServiceKind::Station,
+            CanonicalServiceUrl::new(format!("https://{host}/")).unwrap(),
+        )
+        .unwrap();
+        let inception = prepare_service_registration_inception(
+            &mut rng,
+            &ServiceRegistrationInceptionInput {
+                provider_endpoint: &"https://identity.example/".parse().unwrap(),
+                registration_key: &registration,
+                also_known_as: &[],
+                version_time: registered_at,
+                did_key_fragment: None,
+            },
+        )
+        .unwrap();
+        let did = Did::new(inception.did.clone()).unwrap();
+        Self {
+            service_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
+            method: DidUrl::new(inception.did_key_id.clone()).unwrap(),
+            signing_key: SigningKey::from_bytes(&inception.did_key_seed),
+            log_entry: inception.log_entry.clone(),
+            registered_at,
+        }
+    }
+
+    fn resolution(&self, at: DateTime<Utc>) -> AuthenticatedServiceResolution {
+        arkret_identity::build_authenticated_webvh_service_resolution(
+            self.service_id.clone(),
+            "station".into(),
+            serde_json::from_value(self.log_entry["state"].clone()).unwrap(),
+            vec![self.log_entry.clone()],
+            vec![],
+            at,
+        )
+        .unwrap()
+    }
+
+    fn account(&self) -> AccountId {
+        AccountId::new(
+            arkret_wire::project_did_to_core_id(&Did::new(PRINCIPAL_DID).unwrap()).unwrap(),
+            self.service_id.clone(),
+        )
+    }
+}
+
+fn device_key_did(seed: [u8; 32]) -> DidKey {
+    let public = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+    DidKey::new(format!(
+        "did:key:{}",
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(&public)
+    ))
+    .unwrap()
+}
+
+/// The attestation core a healthy forwarding Station signs at `now`.
+fn core(station: &Station, now: DateTime<Utc>) -> DeviceProjectionAttestationCore {
+    let attested_at = now - Duration::seconds(30);
+    DeviceProjectionAttestationCore {
+        account_id: station.account(),
+        device_id: DeviceId::new(DEVICE).unwrap(),
+        device_signing_key_did: device_key_did(DEVICE_SEED),
+        hpke_key: NonEmptyString::new("hpke-forwarded").unwrap(),
+        device_authorize_event_id: EventId::new(
+            "ak:event:AfAnsJqSlM9bHVI7P1QBMOEW3p5P1PNQu7BBMpiSnD_e",
+        )
+        .unwrap(),
+        authorized_generation_ref: 1,
+        device_status: DeviceStatus::Active,
+        authorization_window: DeviceAuthorizationWindow {
+            not_before: now - Duration::days(30),
+            expires_at: None,
+        },
+        attested_at,
+        expires_at: attested_at + Duration::minutes(5),
+    }
+}
+
+/// Sign any core with any Station key, the way a buggy or compromised origin
+/// could, so the governance Station's checks are exercised independently.
+fn sign_raw(
+    core: DeviceProjectionAttestationCore,
+    method: &DidUrl,
+    key: &SigningKey,
+) -> DeviceProjectionAttestation {
+    let mut attestation = DeviceProjectionAttestation {
+        proof: ProtocolSignature {
+            verification_method: method.clone(),
+            created_at: core.attested_at,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
+        },
+        attestation: core,
+    };
+    attestation.proof.jws = arkret_signatures::sign_ed25519_detached_jws(
+        key,
+        &attestation.proof_signing_bytes().unwrap(),
+    )
+    .unwrap();
+    attestation
+}
+
+fn evidence(
+    station: &Station,
+    core: DeviceProjectionAttestationCore,
+    resolved_at: DateTime<Utc>,
+) -> AccountDeviceSignerEvidence {
+    AccountDeviceSignerEvidence {
+        device_projection_attestation: sign_raw(core, &station.method, &station.signing_key),
+        service_resolution: station.resolution(resolved_at),
+    }
+}
+
+/// A Control Event (`ak.realm.profile`) produced on `station` by the human
+/// device named by `fragment`.
+fn producer_event(
+    station: &Station,
+    realm_id: &RealmId,
+    fragment: &str,
+    created_at: DateTime<Utc>,
+    name: &str,
+) -> Event {
+    let account = station.account();
+    let event = arkret_wire::test_support::raw_event_at(
+        EventKind::RealmProfile.as_str(),
+        ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        account.principal_id,
+        account.station_id,
+        serde_json::json!({"name": name}),
+        created_at,
+    )
+    .unwrap();
+    sign_event(
+        event,
+        DidUrl::new(format!("{PRINCIPAL_DID}#{fragment}")).unwrap(),
+        DEVICE_SEED,
+    )
+}
+
+fn forward(
+    event: Event,
+    evidence: Option<AccountDeviceSignerEvidence>,
+) -> PeerAuthorityForwardEventRequest {
+    PeerAuthorityForwardEventRequest {
+        branch: AuthorityForwardBranch::AuthorityForward,
+        event_submission: EventAdmissionSubmission::new(event),
+        producer_device_evidence: evidence,
+    }
+}
+
+fn peer(source: &DidCoreId) -> AuthenticatedPeerContext {
+    AuthenticatedPeerContext {
+        source_service_id: source.clone(),
+    }
+}
+
+fn refusal_code(result: Result<AuthoritySubmitOutcome, ServiceError>) -> String {
+    match result.expect_err("the forward must be refused") {
+        ServiceError::SchemaViolation(_) => "schema_violation".to_owned(),
+        ServiceError::UnsupportedEventKind(_) => "unsupported_event_kind".to_owned(),
+        error => error
+            .conflict_code()
+            .map(|code| code.as_str().to_owned())
+            .unwrap_or_else(|| format!("{error:?}")),
+    }
+}
+
+/// A governance Station over its own leased database, governing one Realm.
+async fn governance_station() -> (AppState, RealmId) {
+    let state =
+        soland_test_support::app_state_with_postgres_governance(soland_test_support::app_config());
+    let realm_id = RealmId::from_event_id(&EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
+    ));
+    state
+        .test_persistence()
+        .authority_commits()
+        .install_genesis_authority(&CurrentRealmAuthority {
+            realm_id: realm_id.clone(),
+            generation: 0,
+            service_id: state.service_core_id(),
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                realm_id.event_id(),
+            ),
+            last_handoff_ref: None,
+        })
+        .await
+        .unwrap();
+    (state, realm_id)
+}
+
+async fn assert_nothing_written(state: &AppState, event: &Event) {
+    let store = state.test_persistence();
+    assert!(
+        store
+            .authority_commits()
+            .committed_event(&event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .authority_commits()
+            .queued_event(&event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn governance_station_refuses_every_evidence_negative_with_zero_writes() {
+    runtime().block_on(async {
+        let (state, realm_id) = governance_station().await;
+        let at = now();
+        let a = Station::new(0x61, "forwarder.example", at - Duration::hours(1));
+        let c = Station::new(0x62, "elsewhere.example", at - Duration::hours(1));
+        let created_at = at - Duration::seconds(60);
+        let human = |name: &str| producer_event(&a, &realm_id, DEVICE, created_at, name);
+        let source = peer(&a.service_id);
+
+        let cases: Vec<(
+            &str,
+            Event,
+            Option<AccountDeviceSignerEvidence>,
+            AuthenticatedPeerContext,
+            DateTime<Utc>,
+            &str,
+        )> = vec![
+            (
+                "human_producer_without_evidence",
+                human("no evidence"),
+                None,
+                source.clone(),
+                at,
+                "schema_violation",
+            ),
+            (
+                "service_producer_carries_evidence",
+                producer_event(&a, &realm_id, "key-1", created_at, "service"),
+                Some(evidence(&a, core(&a, at), at)),
+                source.clone(),
+                at,
+                "schema_violation",
+            ),
+            (
+                "source_station_differs_from_attested_account_station",
+                human("wrong source"),
+                Some(evidence(&a, core(&a, at), at)),
+                peer(&c.service_id),
+                at,
+                "signature_invalid",
+            ),
+            (
+                "attestation_signed_by_non_account_station_key",
+                human("foreign key"),
+                Some(AccountDeviceSignerEvidence {
+                    device_projection_attestation: sign_raw(
+                        core(&a, at),
+                        &c.method,
+                        &c.signing_key,
+                    ),
+                    service_resolution: a.resolution(at),
+                }),
+                source.clone(),
+                at,
+                "signature_invalid",
+            ),
+            (
+                "service_history_lacks_method_at_attested_at",
+                human("before registration"),
+                Some(evidence(
+                    &a,
+                    DeviceProjectionAttestationCore {
+                        attested_at: a.registered_at - Duration::minutes(10),
+                        expires_at: at + Duration::minutes(1),
+                        ..core(&a, at)
+                    },
+                    at,
+                )),
+                source.clone(),
+                at,
+                "signature_invalid",
+            ),
+            (
+                "proof_fragment_differs_from_attested_device",
+                human("other device"),
+                Some(evidence(
+                    &a,
+                    DeviceProjectionAttestationCore {
+                        device_id: DeviceId::new(OTHER_DEVICE).unwrap(),
+                        ..core(&a, at)
+                    },
+                    at,
+                )),
+                source.clone(),
+                at,
+                "signature_invalid",
+            ),
+            (
+                "attested_key_does_not_verify_producer_proof",
+                human("other key"),
+                Some(evidence(
+                    &a,
+                    DeviceProjectionAttestationCore {
+                        device_signing_key_did: device_key_did([0x52; 32]),
+                        ..core(&a, at)
+                    },
+                    at,
+                )),
+                source.clone(),
+                at,
+                "signature_invalid",
+            ),
+            (
+                "evidence_expired",
+                human("expired"),
+                Some(evidence(&a, core(&a, at), at)),
+                source.clone(),
+                core(&a, at).expires_at,
+                "device_unauthorized",
+            ),
+            (
+                "authorization_window_not_yet_valid",
+                human("not yet"),
+                Some(evidence(
+                    &a,
+                    DeviceProjectionAttestationCore {
+                        authorization_window: DeviceAuthorizationWindow {
+                            not_before: created_at + Duration::seconds(1),
+                            expires_at: None,
+                        },
+                        ..core(&a, at)
+                    },
+                    at,
+                )),
+                source.clone(),
+                at,
+                "device_unauthorized",
+            ),
+            (
+                "authorization_window_expired_before_now",
+                human("window over"),
+                Some(evidence(
+                    &a,
+                    DeviceProjectionAttestationCore {
+                        authorization_window: DeviceAuthorizationWindow {
+                            not_before: at - Duration::days(30),
+                            expires_at: Some(at - Duration::seconds(1)),
+                        },
+                        ..core(&a, at)
+                    },
+                    at,
+                )),
+                source.clone(),
+                at,
+                "device_unauthorized",
+            ),
+            (
+                "attested_device_revoked",
+                human("revoked"),
+                Some(evidence(
+                    &a,
+                    DeviceProjectionAttestationCore {
+                        device_status: DeviceStatus::Revoked,
+                        ..core(&a, at)
+                    },
+                    at,
+                )),
+                source.clone(),
+                at,
+                "device_revoked",
+            ),
+        ];
+        for (name, event, carried, peer, instant, expected) in cases {
+            let result = soland_http::test_admit_authority_forward(
+                &state,
+                &peer,
+                forward(event.clone(), carried),
+                instant,
+            )
+            .await;
+            assert_eq!(refusal_code(result), expected, "variant {name}");
+            assert_nothing_written(&state, &event).await;
+        }
+
+        // Valid fresh evidence passes every §8.2.2 check; the Event then
+        // meets the ordinary admission, which still judges its kind here.
+        let valid = human("valid");
+        let result = soland_http::test_admit_authority_forward(
+            &state,
+            &source,
+            forward(valid.clone(), Some(evidence(&a, core(&a, at), at))),
+            at,
+        )
+        .await;
+        assert_eq!(refusal_code(result), "unsupported_event_kind");
+        assert_nothing_written(&state, &valid).await;
+    });
+}
+
+#[test]
+fn exact_replay_returns_the_original_outcome_before_evidence_freshness() {
+    runtime().block_on(async {
+        let (state, realm_id) = governance_station().await;
+        let at = now();
+        let a = Station::new(0x63, "replayer.example", at - Duration::hours(1));
+        let event = producer_event(
+            &a,
+            &realm_id,
+            DEVICE,
+            at - Duration::seconds(60),
+            "accepted once",
+        );
+        let store = state.test_persistence();
+        let authority = store
+            .authority_commits()
+            .current_authority(&realm_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let stream_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let commit = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                format!("forwarded:{}", event.event_id).as_bytes(),
+            )),
+            realm_id: realm_id.clone(),
+            stream_ref: stream_ref.clone(),
+            stream_position: 0,
+            previous_commit_ref: None,
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: authority.authority_ref.clone(),
+            committed_at: at,
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: state.service_verification_method("notary-key").unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                    .unwrap(),
+                created_at: at,
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+            },
+        };
+        store
+            .authority_commits()
+            .admit_event_transaction(
+                &AuthorityCommitTransaction {
+                    expected_authority: authority,
+                    event: event.clone(),
+                    commit: commit.clone(),
+                    mls_state: None,
+                    welcomes: Vec::new(),
+                    recipient_queue_capacity: 0,
+                },
+                at,
+            )
+            .await
+            .unwrap();
+        let original = AuthoritySubmitOutcome::Accepted {
+            status: AuthorityCommitStatus::Duplicate,
+            commit: commit.clone(),
+        };
+
+        // The byte-identical body arrives long after its evidence expired.
+        let late = at + Duration::hours(1);
+        let replay = soland_http::test_admit_authority_forward(
+            &state,
+            &peer(&a.service_id),
+            forward(event.clone(), Some(evidence(&a, core(&a, at), at))),
+            late,
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay, original);
+
+        // A new attempt with freshly signed evidence gets the same outcome.
+        let fresh = soland_http::test_admit_authority_forward(
+            &state,
+            &peer(&a.service_id),
+            forward(event.clone(), Some(evidence(&a, core(&a, late), late))),
+            late,
+        )
+        .await
+        .unwrap();
+        assert_eq!(fresh, original);
+        let head = store
+            .authority_commits()
+            .stream_head(&stream_ref)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(head.commit_id, commit.commit_id, "no second RealmCommit");
+    });
+}
+
+#[test]
+fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verifies() {
+    runtime().block_on(async {
+        let forwarder = soland_test_support::app_state_with_postgres_governance(
+            soland_test_support::app_config(),
+        );
+        let fixture = PcrGenesisFixture::new(forwarder.service_did());
+        fixture
+            .admit(&forwarder)
+            .await
+            .expect("accepted PCR genesis");
+        let account = fixture.history.account.clone();
+        let device = fixture.history.founding_device_id.clone();
+        let (governance, realm_id) = governance_station().await;
+        let signed = |name: &str, method: DidUrl| {
+            let event = arkret_wire::test_support::raw_event_at(
+                EventKind::RealmProfile.as_str(),
+                ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                account.principal_id.clone(),
+                account.station_id.clone(),
+                serde_json::json!({"name": name}),
+                now() - Duration::seconds(1),
+            )
+            .unwrap();
+            sign_event(event, method, fixture.history.founding_device_signing_seed)
+        };
+        let event = signed(
+            "forwarded Control Event",
+            fixture.history.device_verification_method.clone(),
+        );
+
+        // Every forwarding attempt signs its own evidence and retains the
+        // complete object and ref before anything could be sent.
+        let first = soland_http::test_fresh_producer_device_evidence(&forwarder, &event)
+            .await
+            .unwrap()
+            .expect("a human-device producer carries evidence");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = soland_http::test_fresh_producer_device_evidence(&forwarder, &event)
+            .await
+            .unwrap()
+            .expect("a human-device producer carries evidence");
+        assert!(
+            second.device_projection_attestation.attestation.attested_at
+                > first.device_projection_attestation.attestation.attested_at
+        );
+        for issued in [&first, &second] {
+            let reference = issued.signer_evidence_ref().unwrap();
+            let retained = forwarder
+                .test_persistence()
+                .account_device_signer_evidence()
+                .get(&account, &device, &reference)
+                .await
+                .unwrap()
+                .expect("forwarded evidence is retained before sending");
+            assert_eq!(&retained, issued);
+        }
+
+        // The governance Station accepts exactly that evidence from the
+        // producer's Station: every §8.2.2 check passes and the Event reaches
+        // the ordinary admission, which still judges its kind.
+        let result = soland_http::test_admit_authority_forward(
+            &governance,
+            &peer(&account.station_id),
+            PeerAuthorityForwardEventRequest::new(
+                EventAdmissionSubmission::new(event.clone()),
+                Some(second),
+            )
+            .unwrap(),
+            now(),
+        )
+        .await;
+        assert_eq!(refusal_code(result), "unsupported_event_kind");
+        assert_nothing_written(&governance, &event).await;
+
+        // A non-device producer method carries no evidence at all.
+        let service_signed = signed(
+            "non-device producer",
+            DidUrl::new(format!("{}#key-1", fixture.history.did)).unwrap(),
+        );
+        assert!(
+            soland_http::test_fresh_producer_device_evidence(&forwarder, &service_signed)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // A device the forwarding Station has no PCR material for is not
+        // forwarded: the Station cannot obtain its evidence.
+        let unknown = signed(
+            "unknown device",
+            DidUrl::new(format!("{}#{OTHER_DEVICE}", fixture.history.did)).unwrap(),
+        );
+        let refused = soland_http::test_fresh_producer_device_evidence(&forwarder, &unknown)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.conflict_code(),
+            Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+            "{refused:?}"
+        );
+    });
+}

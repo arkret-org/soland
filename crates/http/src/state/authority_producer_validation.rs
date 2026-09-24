@@ -1,8 +1,11 @@
 //! Producer proof preflight for the current self authority endpoint.
 //!
 //! This resolves live local signer material from accepted PCR/Agent state.
-//! The authority transaction still has to freeze and recheck the same
-//! authorization cut before the Event becomes committed.
+//! A human-device producer follows the single rule of device-lifecycle
+//! §8.2.2 for every Event kind: its Station reads the local PCR
+//! `device_authorization`/`device_generation`, and a refusal carries the
+//! registered device code. The authority transaction still has to freeze and
+//! recheck the same authorization cut before the Event becomes committed.
 
 use arkret_models_identity::session_credential::{
     SessionGrantCredentialClass, SessionGrantHolderBinding,
@@ -209,15 +212,25 @@ async fn human_producer_key(
             "human grant is stale against current device authorization",
         ));
     }
-    if state
+    match state
         .persistence()
         .device_revocation_gate_status(&selector)
         .await?
-        != soland_storage::DeviceRevocationGateStatus::Active
     {
-        return Err(rejected(
-            "Event producer device revocation gate is not active",
-        ));
+        soland_storage::DeviceRevocationGateStatus::Active => {}
+        soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
+            return Err(rejected(format!(
+                "{}: Event producer device is revoked",
+                soland_storage::ConflictCode::DeviceRevoked
+            )));
+        }
+        soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
+        | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
+            return Err(rejected(format!(
+                "{}: Event producer device gate names another generation",
+                soland_storage::ConflictCode::DeviceGenerationFenced
+            )));
+        }
     }
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(

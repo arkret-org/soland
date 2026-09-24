@@ -191,6 +191,30 @@ pub(crate) mod test_event {
     }
 }
 
+/// Sign and retain the fresh `producer_device_evidence` that one forwarding
+/// attempt of `event` carries (device-lifecycle §8.2.2).
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn test_fresh_producer_device_evidence(
+    state: &crate::state::AppState,
+    event: &arkret_wire::Event,
+) -> soland_services::ServiceResult<Option<arkret_models_identity::AccountDeviceSignerEvidence>> {
+    crate::state::fresh_producer_device_evidence(state, event).await
+}
+
+/// Governance-Station admission of one `authority_forward` at an explicit
+/// service clock instant (device-lifecycle §8.2.2).
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn test_admit_authority_forward(
+    state: &crate::state::AppState,
+    peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+    request: arkret_models_collaboration::authority_commit::PeerAuthorityForwardEventRequest,
+    now: chrono::DateTime<chrono::Utc>,
+) -> soland_services::ServiceResult<arkret_wire::AuthoritySubmitOutcome> {
+    crate::state::admit_forwarded_event(state, peer, request, now).await
+}
+
 /// Produce a portable Agent context through the real verifier for SDK regression fixtures.
 #[cfg(feature = "test-support")]
 #[doc(hidden)]

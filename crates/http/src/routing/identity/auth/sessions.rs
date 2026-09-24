@@ -571,9 +571,9 @@ async fn enforce_session_device_revocation_gate(
             "session device is invalid",
         )
     })?;
-    let active = state
+    let admission = state
         .persistence()
-        .pcr_device_active(&account, &device_id, now())
+        .pcr_device_admission(&account, &device_id, now())
         .await
         .map_err(|error| {
             tracing::warn!(%error, "PCR device status unavailable at session admission");
@@ -583,7 +583,7 @@ async fn enforce_session_device_revocation_gate(
                 "PCR device status is unavailable",
             )
         })?;
-    if !active {
+    if admission != soland_storage::PcrDeviceAdmission::Active {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",

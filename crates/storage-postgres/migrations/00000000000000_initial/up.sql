@@ -4617,3 +4617,17 @@ CREATE TABLE account_device_signer_evidence (
 );
 CREATE INDEX account_device_signer_evidence_subject_idx
  ON account_device_signer_evidence(principal_id,station_id,device_id,attested_at);
+
+-- Complete producer_device_evidence a governance Station verified for a
+-- cross-Station human-device producer (device-lifecycle 8.2.2). One row per
+-- accepted Event, written in the transaction that writes its RealmCommit;
+-- audit only, never read back as device authority.
+CREATE TABLE forwarded_producer_device_evidence (
+ commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
+ evidence_ref TEXT NOT NULL CHECK(evidence_ref ~ '^ak:signer_evidence:sha256:[0-9a-f]{64}$'),
+ principal_id TEXT NOT NULL,
+ station_id TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ attested_at TIMESTAMPTZ NOT NULL,
+ evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
+);

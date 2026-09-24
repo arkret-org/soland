@@ -20,7 +20,7 @@ pub(crate) mod device_pairing_open;
 pub(crate) mod device_signing;
 pub(super) mod did;
 pub(in crate::routing) mod key_backup;
-mod keys;
+pub(crate) mod keys;
 pub(crate) use keys::{device_signature_kid_points_to_device_key, peer_router as peer_keys_router};
 pub(crate) mod agent_pcr;
 mod organization_registration;
@@ -38,8 +38,8 @@ pub(crate) mod webvh_validation;
 use super::system::describe;
 use super::{
     AuthArgs, SyncCursorError, append_audit_log, bearer_token, dpop_token, handle_for_did,
-    normalize_localpart, now, query_param, render_error, sha256_hex,
-    validate_device_id, validate_did,
+    normalize_localpart, now, query_param, render_error, sha256_hex, validate_device_id,
+    validate_did,
 };
 
 pub fn router() -> Router {

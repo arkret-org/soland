@@ -763,9 +763,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     let device_status = PgDeviceRevocationStore { pool: pool.clone() };
     assert!(
         device_status
-            .pcr_device_active(&account, &authorizer, at)
+            .pcr_device_admission(&account, &authorizer, at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
     let backups = PgKeyBackupStore { pool: pool.clone() };
     let initial_pointer = backups
@@ -1212,9 +1213,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     // A decided proposal for another target does not revoke the authorizer.
     assert!(
         device_status
-            .pcr_device_active(&account, &authorizer, at)
+            .pcr_device_admission(&account, &authorizer, at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
 
     let reject_target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
@@ -1381,9 +1383,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     assert_eq!(rejected_rows.count, 0);
     assert!(
         device_status
-            .pcr_device_active(&account, &authorizer, at)
+            .pcr_device_admission(&account, &authorizer, at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
 }
 
@@ -1928,9 +1931,10 @@ async fn key_backup_active_series_pointer_unit_commits_only_at_the_active_device
     );
     assert!(
         PgDeviceRevocationStore { pool: pool.clone() }
-            .pcr_device_active(&author.account, &device, at)
+            .pcr_device_admission(&author.account, &device, at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
 
     // The account-scoped read that freezes delete/unlock bases names the same
@@ -2163,15 +2167,17 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
     let now = commit_b.committed_at;
     assert!(
         status
-            .pcr_device_active(&account, &device_a, now)
+            .pcr_device_admission(&account, &device_a, now)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
     assert!(
         status
-            .pcr_device_active(&account, &device_b, now)
+            .pcr_device_admission(&account, &device_b, now)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
     let author_b = PointerAuthor {
         account: account.clone(),
@@ -2323,16 +2329,18 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
     // Pending: B stops authenticating and cannot move the pointer; A goes on.
     let pending_at = covering.committed_at;
     assert!(
-        !status
-            .pcr_device_active(&account, &device_b, pending_at)
+        status
+            .pcr_device_admission(&account, &device_b, pending_at)
             .await
             .unwrap()
+            != soland_storage::PcrDeviceAdmission::Active
     );
     assert!(
         status
-            .pcr_device_active(&account, &device_a, pending_at)
+            .pcr_device_admission(&account, &device_a, pending_at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
     assert!(
         backups
@@ -2399,16 +2407,18 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         .await
         .unwrap();
     assert!(
-        !status
-            .pcr_device_active(&account, &device_b, decided_at)
+        status
+            .pcr_device_admission(&account, &device_b, decided_at)
             .await
             .unwrap()
+            != soland_storage::PcrDeviceAdmission::Active
     );
     assert!(
         status
-            .pcr_device_active(&account, &device_a, decided_at)
+            .pcr_device_admission(&account, &device_a, decided_at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
     assert!(
         backups
@@ -2480,16 +2490,18 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         .unwrap();
     let restarted_status = PgDeviceRevocationStore { pool: restarted };
     assert!(
-        !restarted_status
-            .pcr_device_active(&account, &device_b, decided_at)
+        restarted_status
+            .pcr_device_admission(&account, &device_b, decided_at)
             .await
             .unwrap()
+            != soland_storage::PcrDeviceAdmission::Active
     );
     assert!(
         restarted_status
-            .pcr_device_active(&account, &device_a, decided_at)
+            .pcr_device_admission(&account, &device_a, decided_at)
             .await
             .unwrap()
+            == soland_storage::PcrDeviceAdmission::Active
     );
 }
 
@@ -2935,10 +2947,11 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     let transaction_id = decided.resource.transaction_id.clone();
     let plan = decided.resource.security_rotation_plan().unwrap().clone();
     assert!(
-        !status
-            .pcr_device_active(&account, &device_b, covering.committed_at)
+        status
+            .pcr_device_admission(&account, &device_b, covering.committed_at)
             .await
             .unwrap()
+            != soland_storage::PcrDeviceAdmission::Active
     );
 
     // The generic accepted-step writer cannot stand in for the worker unit.

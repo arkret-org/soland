@@ -1682,6 +1682,7 @@ fn contract_applet_event_request(
     EventCommitRequest {
         authority_commit: stream.accept(&event),
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -2571,6 +2572,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let request = EventCommitRequest {
         authority_commit: stream.accept(&event),
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -2737,6 +2739,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let pairing_commit = EventCommitRequest {
         authority_commit: stream.accept(&pairing_event),
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
             device_pairing_request_id: pairing_request_id.clone(),
@@ -2905,6 +2908,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let contact_commit = EventCommitRequest {
         authority_commit: stream.accept(&contact_event),
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
@@ -3000,6 +3004,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .commit_event(EventCommitRequest {
             authority_commit: stream.accept(&failed_contact_event),
             self_producer_guard: None,
+            forwarded_producer_evidence: None,
             parent_membership_admission: None,
             device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
@@ -3065,6 +3070,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let failed = EventCommitRequest {
         authority_commit: stream.order(&rollback_event),
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,
@@ -5267,6 +5273,7 @@ fn consent_commit_request(
     EventCommitRequest {
         authority_commit,
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,

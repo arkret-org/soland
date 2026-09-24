@@ -1087,6 +1087,7 @@ fn franking_event_request(
     soland_storage::EventCommitRequest {
         authority_commit,
         self_producer_guard: None,
+        forwarded_producer_evidence: None,
         parent_membership_admission: None,
         device_pairing_authorization: None,
         contact_projection: None,

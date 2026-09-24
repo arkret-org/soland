@@ -217,7 +217,12 @@ pub async fn active_device_revocation_gate_selector(
     let generation = current_device_generation(state, principal_id.as_str())
         .await?
         .filter(|generation| generation.status == DeviceGenerationStatus::Active)
-        .ok_or_else(|| ServiceError::Conflict("device generation is not active".to_owned()))?;
+        .ok_or_else(|| {
+            ServiceError::Conflict(format!(
+                "{}: device generation is not active",
+                soland_storage::ConflictCode::DeviceGenerationFenced
+            ))
+        })?;
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
@@ -258,17 +263,17 @@ pub async fn active_device_revocation_gate_selector(
         // The confirmed history names the authorization instance; whether
         // that device is still usable (not pending, revoked, fenced or
         // conflicted) is the same-cut PCR device status, and nothing else.
-        let active = state
+        let admission = state
             .persistence()
-            .pcr_device_active(&account, &device_id, chrono::Utc::now())
+            .pcr_device_admission(&account, &device_id, chrono::Utc::now())
             .await
             .map_err(|error| {
                 ServiceError::Conflict(format!("PCR device status unavailable: {error}"))
             })?;
-        if !active {
-            return Err(ServiceError::Conflict(
-                "device is not active at the PCR cut".into(),
-            ));
+        if let Some(code) = admission.refusal_code() {
+            return Err(ServiceError::Conflict(format!(
+                "{code}: device is not active at the PCR cut"
+            )));
         }
     } else {
         let bootstrap = accepted_bootstrap_device_binding(state, &account)
@@ -289,9 +294,10 @@ pub async fn active_device_revocation_gate_selector(
     }
     let target_device_generation_ref = generation.current_ref;
     if authorized_generation_ref != target_device_generation_ref {
-        return Err(ServiceError::Conflict(
-            "device authorization is outside the current generation".to_owned(),
-        ));
+        return Err(ServiceError::Conflict(format!(
+            "{}: device authorization is outside the current generation",
+            soland_storage::ConflictCode::DeviceGenerationFenced
+        )));
     }
     let accepted = state
         .persistence()

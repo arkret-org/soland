@@ -89,6 +89,7 @@ fn persistence_event_commit_request(
     soland_storage::EventCommitRequest {
         authority_commit: command.authority_commit,
         self_producer_guard: command.self_producer_guard,
+        forwarded_producer_evidence: command.forwarded_producer_evidence,
         event: command.event,
         parent_membership_admission: command.parent_membership_admission,
         device_pairing_authorization: command.device_pairing_authorization,

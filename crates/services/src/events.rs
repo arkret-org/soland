@@ -778,6 +778,9 @@ pub struct CommitAcceptedEventCommand {
     /// so the signed commit travels with the Event it admits.
     pub authority_commit: soland_storage::AuthorityCommitTransaction,
     pub self_producer_guard: Option<soland_storage::SelfProducerCommitGuard>,
+    /// Verified `producer_device_evidence` of a cross-Station human-device
+    /// producer, retained for audit with the Event's first Commit.
+    pub forwarded_producer_evidence: Option<soland_storage::ForwardedProducerDeviceEvidence>,
     pub event: AcceptedEvent,
     pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
@@ -2288,6 +2291,7 @@ mod tests {
             .commit_accepted_event(CommitAcceptedEventCommand {
                 authority_commit,
                 self_producer_guard: None,
+                forwarded_producer_evidence: None,
                 parent_membership_admission: None,
                 device_pairing_authorization: None,
                 contact_projection: None,

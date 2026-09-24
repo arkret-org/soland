@@ -102,7 +102,7 @@ fn render_result<T: Serialize + Send>(res: &mut Response, result: ServiceResult<
     }
 }
 
-fn render_service_error(res: &mut Response, error: ServiceError) {
+pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
     if error.conflict_code() == Some(soland_storage::ConflictCode::SnapshotCapacityExceeded) {
         return crate::error::render_error_with_reason_code(
             res,
@@ -151,7 +151,37 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
                     None,
                 );
             }
-            _ => {}
+            // Producer device and signature refusals (device-lifecycle
+            // §8.2.2) keep their registered codes on both Event submit
+            // operations, including an outcome relayed from the governance
+            // Station.
+            Some(code) => {
+                let registered = match code {
+                    soland_storage::ConflictCode::DeviceRevoked => {
+                        Some(arkret_wire::ErrorCode::DeviceRevoked)
+                    }
+                    soland_storage::ConflictCode::DeviceRevocationPending => {
+                        Some(arkret_wire::ErrorCode::DeviceRevocationPending)
+                    }
+                    soland_storage::ConflictCode::DeviceGenerationFenced => {
+                        Some(arkret_wire::ErrorCode::DeviceGenerationFenced)
+                    }
+                    soland_storage::ConflictCode::DeviceUnauthorized => {
+                        Some(arkret_wire::ErrorCode::DeviceUnauthorized)
+                    }
+                    soland_storage::ConflictCode::SignatureInvalid => {
+                        Some(arkret_wire::ErrorCode::SignatureInvalid)
+                    }
+                    soland_storage::ConflictCode::SchemaViolation => {
+                        Some(arkret_wire::ErrorCode::SchemaViolation)
+                    }
+                    _ => None,
+                };
+                if let Some(registered) = registered {
+                    return crate::error::render_error_code(registered, res, detail);
+                }
+            }
+            None => {}
         }
     }
     let (status, code) = match &error {

@@ -192,10 +192,9 @@ async fn keys_upload(
 /// This is the **origin** shape of `device-lifecycle.md` §8.2: the signed
 /// `device_projection_attestation` plus the `signer_evidence_ref` that locates
 /// the immutable `account_device` evidence retaining it. It is what the
-/// Station-to-Station surface (§8.2.1) returns verbatim and what
-/// `current_signer_evidence` carries; it is **never** handed to a client. The
-/// client-facing row is produced from a *verified* attestation by
-/// [`PeerQueryDeviceRecord::project_verified_row`].
+/// Station-to-Station surface (§8.2.1) returns verbatim; it is **never**
+/// handed to a client. The client-facing row is produced from a *verified*
+/// attestation by [`PeerQueryDeviceRecord::project_verified_row`].
 ///
 /// Returns `None` when the device is not currently usable. §8.2 makes that the
 /// only two outcomes: the surface returns a fully attested row, or it returns
@@ -209,18 +208,63 @@ pub(crate) async fn attested_device_record(
     facet: crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
     algorithms: arkret_models_crypto::AlgorithmKeyRecords,
 ) -> Result<Option<PeerQueryDeviceRecord>, AppError> {
+    use arkret_wire::NonEmptyString;
+
+    let Some((evidence, signer_evidence_ref)) =
+        issue_current_account_device_signer_evidence(state, account_id, device_id, &facet)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let trust_algorithms = facet
+        .trust_algorithms
+        .unwrap_or_default()
+        .into_iter()
+        .map(NonEmptyString::new)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(Some(PeerQueryDeviceRecord {
+        signer_evidence_ref,
+        algorithms,
+        trust_algorithms,
+        device_projection_attestation: evidence.device_projection_attestation,
+    }))
+}
+
+/// Sign a fresh `account_device_signer_evidence` for one local device and
+/// retain the complete object and its ref before returning either.
+///
+/// The attestation is signed from the current accepted authorization, and the
+/// retention transaction re-proves the same PCR status and authority cut at
+/// `attested_at`, refusing with the device's registered code when it is no
+/// longer active. The keys/query row and the `producer_device_evidence` of
+/// every `authority_forward` attempt (device-lifecycle §8.2.2) are issued
+/// here; neither reuses an earlier object. `None` means the current device
+/// material is not available at all.
+pub(crate) async fn issue_current_account_device_signer_evidence(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+    device_id: &arkret_wire::DeviceId,
+    facet: &crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
+) -> soland_services::ServiceResult<
+    Option<(
+        arkret_models_identity::AccountDeviceSignerEvidence,
+        arkret_wire::SignerEvidenceRef,
+    )>,
+> {
     use arkret_models_crypto::{DeviceAuthorizationWindow, DeviceProjectionAttestationCore};
     use arkret_models_identity::AccountDeviceSignerEvidence;
-    use arkret_wire::{ActorId, DidKey, NonEmptyString};
+    use arkret_wire::{ActorId, DidKey};
+    use soland_services::ServiceError;
 
     if account_id.station_id != state.service_core_id() || facet.status != DeviceStatus::Active {
         return Ok(None);
     }
     let actor = ActorId::account(account_id.clone());
     let Some(authorization) =
-        super::device_signing::current_device_authorization(state, &actor, device_id, &facet)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
+        super::device_signing::current_device_authorization(state, &actor, device_id, facet)
+            .await?
     else {
         return Ok(None);
     };
@@ -229,8 +273,7 @@ pub(crate) async fn attested_device_record(
         account_id.principal_id.as_str(),
         device_id.as_str(),
     )
-    .await
-    .map_err(|error| AppError::internal(error.to_string()))?;
+    .await?;
     let (Some(facet_event), Some(facet_generation)) = (
         facet.device_authorize_event_id.as_ref(),
         facet.authorized_generation_ref,
@@ -245,9 +288,9 @@ pub(crate) async fn attested_device_record(
         return Ok(None);
     }
     let attested_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-        chrono::Utc::now().timestamp_millis(),
+        crate::wire::now().timestamp_millis(),
     )
-    .ok_or_else(|| AppError::internal("current attestation time is invalid"))?;
+    .ok_or_else(|| ServiceError::internal("current attestation time is invalid"))?;
     let expires_at = (attested_at + chrono::Duration::minutes(5)).min(
         authorization
             .expires_at
@@ -259,13 +302,20 @@ pub(crate) async fn attested_device_record(
     }
     let service_resolution =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
-            .await?;
+            .await
+            .map_err(|error| {
+                ServiceError::Conflict(format!(
+                    "{}: current Service resolution is unavailable: {}",
+                    soland_storage::ConflictCode::TemporarilyUnavailable,
+                    error.message
+                ))
+            })?;
     let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
         DeviceProjectionAttestationCore {
             account_id: account_id.clone(),
             device_id: device_id.clone(),
             device_signing_key_did: DidKey::new(authorization.device_public_key_did.to_string())
-                .map_err(|error| AppError::internal(error.to_string()))?,
+                .map_err(|error| ServiceError::internal(error.to_string()))?,
             hpke_key: authorization.hpke_key.clone(),
             device_authorize_event_id: selector.authorization_ref.event_id.clone(),
             authorized_generation_ref: authorization.authorized_generation_ref,
@@ -279,32 +329,19 @@ pub(crate) async fn attested_device_record(
         },
         state
             .service_verification_method("notary-key")
-            .map_err(|error| AppError::internal(error.to_string()))?,
+            .map_err(|error| ServiceError::internal(error.to_string()))?,
         state.notary_signing_key().as_ref(),
     )
-    .map_err(|error| AppError::internal(error.to_string()))?;
+    .map_err(|error| ServiceError::internal(error.to_string()))?;
     let evidence = AccountDeviceSignerEvidence {
-        device_projection_attestation: attestation.clone(),
+        device_projection_attestation: attestation,
         service_resolution,
     };
     let signer_evidence_ref = state
         .persistence()
         .retain_current_account_device_signer_evidence(&evidence, &selector.authorization_ref)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let trust_algorithms = facet
-        .trust_algorithms
-        .unwrap_or_default()
-        .into_iter()
-        .map(NonEmptyString::new)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(Some(PeerQueryDeviceRecord {
-        signer_evidence_ref,
-        algorithms,
-        trust_algorithms,
-        device_projection_attestation: attestation,
-    }))
+        .await?;
+    Ok(Some((evidence, signer_evidence_ref)))
 }
 
 /// `device-lifecycle.md` §8.2 check 3 / check 4 applied to one attested row

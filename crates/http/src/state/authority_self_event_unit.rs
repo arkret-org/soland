@@ -1,15 +1,18 @@
-//! The guarded self-authored Event unit of work.
+//! The guarded producer-signed Event unit of work.
 //!
-//! One caller-signed Event is admitted by the current governing Station in a
-//! single PostgreSQL transaction: the queued Event, its Station-signed
+//! One producer-signed Event is admitted by the current governing Station in
+//! a single PostgreSQL transaction: the queued Event, its Station-signed
 //! `RealmCommit` at the exact per-stream head, the kind's registered typed
 //! current result, the source outbox (empty for the supported local-only
 //! Realm kinds), the projection event and any kind-specific effect such as the
-//! consumed franking replay nonce. The producer guard and the stream head are
-//! rechecked inside that transaction, so a failure leaves zero writes.
+//! consumed franking replay nonce. A same-Station producer guard is rechecked
+//! against the local PCR, and a cross-Station producer's verified
+//! `producer_device_evidence` is retained, inside that transaction together
+//! with the stream head, so a failure leaves zero writes.
 //!
 //! Only kinds with a registered same-cut current writer enter this unit. The
-//! generic `/_arkret/self/events` route and dedicated operations such as
+//! generic `/_arkret/self/events` route, `authority_forward` on
+//! `/_arkret/peer/events` and dedicated operations such as
 //! `ak.self.moderation.command.report.v1` share it; every other kind stays
 //! closed at its caller.
 
@@ -21,6 +24,17 @@ use soland_storage::SelfProducerCommitGuard;
 
 use super::AppState;
 
+/// How the Event's human-device or Agent producer was resolved
+/// (device-lifecycle §8.2.2): locally at this Station's PCR, or from the
+/// evidence an `authority_forward` carried from the producer's Station.
+pub(super) enum AdmittedProducer {
+    /// Same-Station producer; the guard is rechecked in the unit.
+    Local(SelfProducerCommitGuard),
+    /// Cross-Station human device; the verified evidence is retained with
+    /// the Event's first Commit.
+    Forwarded(soland_storage::ForwardedProducerDeviceEvidence),
+}
+
 /// Kind-specific durable effects committed atomically with the Event.
 #[derive(Default)]
 pub(super) struct SelfEventUnitEffects {
@@ -29,7 +43,9 @@ pub(super) struct SelfEventUnitEffects {
     pub(super) franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
 }
 
-async fn exact_replay(
+/// The original outcome of an exact duplicate Event, before any producer,
+/// evidence freshness or admission check runs again.
+pub(super) async fn exact_replay(
     state: &AppState,
     event: &Event,
 ) -> ServiceResult<Option<AuthoritySubmitOutcome>> {
@@ -52,11 +68,11 @@ async fn exact_replay(
     }))
 }
 
-/// Admit one verified self-authored Event through the guarded unit.
-pub(super) async fn commit_self_event_unit(
+/// Admit one producer-verified Event through the guarded unit.
+pub(super) async fn commit_event_unit(
     state: &AppState,
     event: &Event,
-    producer_guard: SelfProducerCommitGuard,
+    producer: AdmittedProducer,
     effects: SelfEventUnitEffects,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     if let Some(outcome) = exact_replay(state, event).await? {
@@ -135,9 +151,14 @@ pub(super) async fn commit_self_event_unit(
         envelope,
         received_at: committed_at,
     };
+    let (self_producer_guard, forwarded_producer_evidence) = match producer {
+        AdmittedProducer::Local(guard) => (Some(guard), None),
+        AdmittedProducer::Forwarded(evidence) => (None, Some(evidence)),
+    };
     let command = soland_services::events::CommitAcceptedEventCommand {
         authority_commit: transaction.clone(),
-        self_producer_guard: Some(producer_guard),
+        self_producer_guard,
+        forwarded_producer_evidence,
         event: record,
         parent_membership_admission: None,
         device_pairing_authorization: None,
@@ -273,10 +294,10 @@ pub(crate) async fn submit_self_moderation_report(
                 report_event_id: event.event_id.to_string(),
                 consumed_at: Utc::now(),
             });
-    commit_self_event_unit(
+    commit_event_unit(
         state,
         event,
-        producer_guard,
+        AdmittedProducer::Local(producer_guard),
         SelfEventUnitEffects {
             franking_replay_nonce,
         },

@@ -189,10 +189,15 @@ pub enum ConflictCode {
     DependencyMissing,
     /// The device pairing request the Event refers to does not exist.
     DevicePairingNotFound,
+    /// The exact device generation is no longer current or is conflicted.
+    DeviceGenerationFenced,
     /// The exact device generation has an unresolved revoke proposal.
     DeviceRevocationPending,
     /// The exact device generation has a covering revoke Seal.
     DeviceRevoked,
+    /// The device is not authorized at the admission instant, or its
+    /// forwarded authorization evidence has expired.
+    DeviceUnauthorized,
     /// The same identity already exists with different canonical bytes.
     DuplicateConflict,
     /// An encrypted application Event freezes an MLS epoch or group state
@@ -257,14 +262,16 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 37] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
         Self::DependencyMissing,
         Self::DevicePairingNotFound,
+        Self::DeviceGenerationFenced,
         Self::DeviceRevocationPending,
         Self::DeviceRevoked,
+        Self::DeviceUnauthorized,
         Self::DuplicateConflict,
         Self::EpochMismatch,
         Self::EpochUpdateRequired,
@@ -303,8 +310,10 @@ impl ConflictCode {
             Self::CasConflict => "cas_conflict",
             Self::DependencyMissing => "dependency_missing",
             Self::DevicePairingNotFound => "device_pairing_not_found",
+            Self::DeviceGenerationFenced => arkret_wire::ErrorCode::DEVICE_GENERATION_FENCED,
             Self::DeviceRevocationPending => "device_revocation_pending",
             Self::DeviceRevoked => "device_revoked",
+            Self::DeviceUnauthorized => arkret_wire::ErrorCode::DEVICE_UNAUTHORIZED,
             Self::DuplicateConflict => "duplicate_conflict",
             Self::EpochMismatch => arkret_wire::ErrorCode::EPOCH_MISMATCH,
             Self::EpochUpdateRequired => arkret_wire::ReasonCode::EPOCH_UPDATE_REQUIRED,

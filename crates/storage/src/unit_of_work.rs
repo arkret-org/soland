@@ -88,6 +88,9 @@ pub struct EventCommitRequest {
     /// Current producer authorization rechecked under this same Event/Commit,
     /// projection and CAS transaction for self submissions.
     pub self_producer_guard: Option<crate::SelfProducerCommitGuard>,
+    /// Cross-Station human-device producer evidence verified from an
+    /// `authority_forward`; retained only with the Event's first Commit.
+    pub forwarded_producer_evidence: Option<crate::ForwardedProducerDeviceEvidence>,
     pub event: CanonicalEventRecord,
     /// Internal result of projection-owned join-gate validation.  It is not
     /// authority: PostgreSQL must lock the exact policy named by the digest

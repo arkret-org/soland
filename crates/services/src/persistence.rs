@@ -351,16 +351,16 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn pcr_device_active(
+    pub async fn pcr_device_admission(
         &self,
         account: &arkret_wire::AccountId,
         device_id: &arkret_wire::DeviceId,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<bool> {
+    ) -> crate::ServiceResult<soland_storage::PcrDeviceAdmission> {
         Ok(self
             .persistence
             .device_revocations()
-            .pcr_device_active(account, device_id, now)
+            .pcr_device_admission(account, device_id, now)
             .await?)
     }
 
@@ -1079,15 +1079,15 @@ impl PersistenceHandle {
 
 #[async_trait::async_trait]
 impl soland_storage::DeviceRevocationStore for PersistenceHandle {
-    async fn pcr_device_active(
+    async fn pcr_device_admission(
         &self,
         account: &arkret_wire::AccountId,
         device_id: &arkret_wire::DeviceId,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<bool> {
+    ) -> PersistenceResult<soland_storage::PcrDeviceAdmission> {
         self.persistence
             .device_revocations()
-            .pcr_device_active(account, device_id, now)
+            .pcr_device_admission(account, device_id, now)
             .await
     }
     async fn gate_status(

@@ -1,12 +1,14 @@
 //! Current governance-Station application boundary.
 
 use arkret_models_collaboration::authority_commit::{
-    DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingFederationSubmission,
-    DirectConversationFoundingUnitSubmission, MembershipCompensationAcceptanceOutcome,
-    MembershipCompensationFederationSubmission, MembershipCompensationUnitSubmission,
-    OrdinaryRealmBootstrapAcceptanceOutcome, OrdinaryRealmBootstrapUnitSubmission,
-    PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome,
-    PeerCommittedReplicationRequest, PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
+    AuthorityForwardBranch, DirectConversationFoundingAcceptanceOutcome,
+    DirectConversationFoundingFederationSubmission, DirectConversationFoundingUnitSubmission,
+    MembershipCompensationAcceptanceOutcome, MembershipCompensationFederationSubmission,
+    MembershipCompensationUnitSubmission, OrdinaryRealmBootstrapAcceptanceOutcome,
+    OrdinaryRealmBootstrapUnitSubmission, PeerAuthorityForwardEventRequest,
+    PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome, PeerAuthoritySubmitOutcome,
+    PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome, PeerCommittedReplicationRequest,
+    PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
     PeerRegisteredAtomicUnitOutcomeValue, SelfAuthoritySubmitOutcome, SelfAuthoritySubmitRequest,
 };
 use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput;
@@ -1261,6 +1263,22 @@ impl AuthorityCommitApplication {
     }
 }
 
+/// Wrap one `authority_forward` admission result in its closed branch.
+fn authority_forward_outcome(
+    outcome: AuthoritySubmitOutcome,
+) -> ServiceResult<PeerAuthoritySubmitOutcome> {
+    let outcome = PeerAuthoritySubmitOutcome::AuthorityForward(PeerAuthorityForwardOutcome {
+        branch: AuthorityForwardBranch::AuthorityForward,
+        outcome,
+    });
+    outcome.validate().map_err(|error| {
+        ServiceError::Internal(format!(
+            "authority_forward produced an invalid outcome: {error}"
+        ))
+    })?;
+    Ok(outcome)
+}
+
 /// HTTP-facing protocol port.
 ///
 /// The concrete Station implementation performs authorization and signing.
@@ -1369,6 +1387,34 @@ pub trait AuthorityProtocolPort: Send + Sync {
         Ok(outcome)
     }
 
+    /// `authority_forward` of one ordinary Event to this governance Station.
+    ///
+    /// The implementation owns the whole branch order: an exact duplicate
+    /// Event returns its original outcome first, then the Event-decided
+    /// `producer_device_evidence` rule is enforced, then a cross-Station
+    /// human-device producer is verified from that evidence before admission.
+    async fn submit_peer_authority_forward_event(
+        &self,
+        _peer: &AuthenticatedPeerContext,
+        _request: PeerAuthorityForwardEventRequest,
+    ) -> ServiceResult<AuthoritySubmitOutcome> {
+        Err(crate::ServiceError::internal(
+            "authority_forward admission is not connected to this Station",
+        ))
+    }
+
+    /// `authority_forward` of one MLS Commit submission; the Commit Event's
+    /// producer decides the evidence rule exactly as for an ordinary Event.
+    async fn submit_peer_authority_forward_mls(
+        &self,
+        _peer: &AuthenticatedPeerContext,
+        _request: PeerAuthorityForwardMlsRequest,
+    ) -> ServiceResult<AuthoritySubmitOutcome> {
+        Err(crate::ServiceError::internal(
+            "authority_forward MLS admission is not connected to this Station",
+        ))
+    }
+
     async fn submit_peer_committed_replication(
         &self,
         _peer: &AuthenticatedPeerContext,
@@ -1399,14 +1445,31 @@ pub trait AuthorityProtocolPort: Send + Sync {
         ))
     }
 
-    /// Dispatch the closed peer carrier. Canonical Station-to-own-Account-
-    /// Authority forwarding has been retired; the enum branches remain only
-    /// until the shared SDK carrier is cleaned up and always fail closed here.
+    /// Dispatch the closed peer carrier.
+    ///
+    /// `authority_forward` validates inside its branch, because an exact
+    /// duplicate Event answers with its original outcome before the evidence
+    /// rule and freshness are judged (device-lifecycle §8.2.2). Its outcome is
+    /// therefore checked for shape and branch only. The other branches are
+    /// validated as a whole before any work.
     async fn submit_peer(
         &self,
         peer: &AuthenticatedPeerContext,
         request: PeerAuthoritySubmitRequest,
     ) -> ServiceResult<PeerAuthoritySubmitOutcome> {
+        match request {
+            PeerAuthoritySubmitRequest::AuthorityForwardEvent(value) => {
+                let outcome = self
+                    .submit_peer_authority_forward_event(peer, value)
+                    .await?;
+                return authority_forward_outcome(outcome);
+            }
+            PeerAuthoritySubmitRequest::AuthorityForwardMls(value) => {
+                let outcome = self.submit_peer_authority_forward_mls(peer, value).await?;
+                return authority_forward_outcome(outcome);
+            }
+            _ => {}
+        }
         request.validate().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!(
                 "invalid peer authority submission: {error}"
@@ -1415,9 +1478,8 @@ pub trait AuthorityProtocolPort: Send + Sync {
         let outcome = match request.clone() {
             PeerAuthoritySubmitRequest::AuthorityForwardEvent(_)
             | PeerAuthoritySubmitRequest::AuthorityForwardMls(_) => {
-                return Err(crate::ServiceError::SchemaViolation(
-                    "canonical authority-forward submission is retired; use the product-private Account Authority adapter"
-                        .to_owned(),
+                return Err(crate::ServiceError::internal(
+                    "authority_forward is dispatched before whole-request validation",
                 ));
             }
             PeerAuthoritySubmitRequest::CommittedReplication(value) => {

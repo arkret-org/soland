@@ -44,6 +44,28 @@ pub(crate) struct ConfirmedPcrDeviceStatusCut {
     pub generation_conflicted: bool,
 }
 
+impl ConfirmedPcrDeviceStatusCut {
+    /// Fold this cut into the admission state shared by every human-device
+    /// producer gate; a conflicted generation fences an otherwise active device.
+    pub(crate) fn admission(&self) -> soland_storage::PcrDeviceAdmission {
+        use soland_storage::PcrDeviceAdmission;
+        match self.lifecycle {
+            PcrDeviceLifecycle::Active if self.generation_conflicted => {
+                PcrDeviceAdmission::GenerationFenced
+            }
+            PcrDeviceLifecycle::Active => PcrDeviceAdmission::Active,
+            PcrDeviceLifecycle::Revoked => PcrDeviceAdmission::Revoked,
+            PcrDeviceLifecycle::RevocationPending => PcrDeviceAdmission::RevocationPending,
+            PcrDeviceLifecycle::GenerationFenced | PcrDeviceLifecycle::Conflicted => {
+                PcrDeviceAdmission::GenerationFenced
+            }
+            PcrDeviceLifecycle::Expired | PcrDeviceLifecycle::NotYetEffective => {
+                PcrDeviceAdmission::OutsideAuthorizationWindow
+            }
+        }
+    }
+}
+
 fn incomplete(message: impl Into<String>) -> PersistenceError {
     PersistenceError::SchemaViolation(message.into())
 }

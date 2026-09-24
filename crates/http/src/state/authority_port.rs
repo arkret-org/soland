@@ -1,12 +1,16 @@
 //! Adapter from the public authority protocol to this Station's durable store.
 //!
-//! Stream reads and guarded ordinary Realm bootstrap are live. Other mutation
-//! branches remain closed until the serving layer can prove the producer and
-//! current authorization at the authority transaction cut.
+//! Stream reads, guarded ordinary Realm bootstrap and the guarded Event unit
+//! are live. A self Event whose Realm another Station governs is forwarded
+//! with fresh producer device evidence, and a forwarded Event is admitted
+//! here from that evidence (device-lifecycle §8.2.2). Other mutation branches
+//! remain closed until the serving layer can prove the producer and current
+//! authorization at the authority transaction cut.
 
 use arkret_models_collaboration::authority_commit::{
     AggregateAcceptanceStatus, OrdinaryRealmBootstrapAcceptanceOutcome,
-    OrdinaryRealmBootstrapUnitSubmission,
+    OrdinaryRealmBootstrapUnitSubmission, PeerAuthorityForwardEventRequest,
+    PeerAuthorityForwardMlsRequest,
 };
 use arkret_wire::{
     AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome,
@@ -51,6 +55,55 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
             other.as_str()
         ))),
     }
+}
+
+/// Preconditions shared by every Event admitted through the guarded unit,
+/// whether its producer was resolved locally or from a forward.
+pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> ServiceResult<()> {
+    let event = &request.event;
+    if self_event_route(&event.kind)? != SelfEventRoute::GuardedUnit {
+        return Err(ServiceError::UnsupportedEventKind(format!(
+            "{} is admitted only on its producer's own Station",
+            event.kind.as_str()
+        )));
+    }
+    if request.approval_signatures.is_some() {
+        return Err(ServiceError::Conflict(
+            "Event approval signatures are not verified".to_owned(),
+        ));
+    }
+    if !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. }) {
+        return Err(ServiceError::Conflict(
+            "only a Realm-scope Event has a source target cut".to_owned(),
+        ));
+    }
+    if event.kind == arkret_wire::EventKind::StrandCreate
+        && event
+            .payload
+            .get("object")
+            .and_then(|object| object.get("scope_circle_id"))
+            .is_some()
+    {
+        return Err(ServiceError::Conflict(
+            "Circle-bound StrandCreate needs a Circle-scope authority cut".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The other Station that currently governs `realm_id`, if any. Only a
+/// durable current-authority record names it; a Realm this Station knows
+/// nothing about has no forwarding target.
+async fn remote_governance(
+    state: &AppState,
+    realm_id: &arkret_wire::RealmId,
+) -> ServiceResult<Option<arkret_wire::DidCoreId>> {
+    Ok(state
+        .authority_commits()
+        .current_authority(realm_id)
+        .await?
+        .map(|authority| authority.service_id)
+        .filter(|service_id| service_id != &state.service_core_id()))
 }
 
 #[async_trait::async_trait]
@@ -192,37 +245,20 @@ impl AuthorityProtocolPort for AppState {
         let producer_guard =
             super::authority_producer_validation::verify_self_event_producer(self, session, event)
                 .await?;
+        if let Some(governance) = remote_governance(self, &event.realm_id).await? {
+            return super::authority_forward::forward_self_event(self, &governance, request).await;
+        }
         if self_event_route(&event.kind)? == SelfEventRoute::KeyBackupPointer {
             return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
                 self, &request,
             )
             .await;
         }
-        if request.approval_signatures.is_some() {
-            return Err(ServiceError::Conflict(
-                "self Event approval signatures are not verified".to_owned(),
-            ));
-        }
-        if !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. }) {
-            return Err(ServiceError::Conflict(
-                "only Realm-scope self Event has a source target cut".to_owned(),
-            ));
-        }
-        if event.kind == arkret_wire::EventKind::StrandCreate
-            && event
-                .payload
-                .get("object")
-                .and_then(|object| object.get("scope_circle_id"))
-                .is_some()
-        {
-            return Err(ServiceError::Conflict(
-                "Circle-bound StrandCreate needs a Circle-scope authority cut".to_owned(),
-            ));
-        }
-        super::authority_self_event_unit::commit_self_event_unit(
+        require_guarded_unit_event(&request)?;
+        super::authority_self_event_unit::commit_event_unit(
             self,
             event,
-            producer_guard,
+            super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
             super::authority_self_event_unit::SelfEventUnitEffects::default(),
         )
         .await
@@ -230,12 +266,38 @@ impl AuthorityProtocolPort for AppState {
 
     async fn submit_self_mls(
         &self,
-        _session: &SessionIdentityState,
-        _request: MlsCommitSubmission,
+        session: &SessionIdentityState,
+        request: MlsCommitSubmission,
     ) -> ServiceResult<AuthoritySubmitOutcome> {
+        request
+            .validate()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let event = &request.commit_event;
+        super::authority_producer_validation::verify_self_event_producer(self, session, event)
+            .await?;
+        if let Some(governance) = remote_governance(self, &event.realm_id).await? {
+            return super::authority_forward::forward_self_mls(self, &governance, request).await;
+        }
         Err(ServiceError::Internal(
             "self MLS authority cut and atomic group installation are unavailable".to_owned(),
         ))
+    }
+
+    async fn submit_peer_authority_forward_event(
+        &self,
+        peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+        request: PeerAuthorityForwardEventRequest,
+    ) -> ServiceResult<AuthoritySubmitOutcome> {
+        super::authority_forward::admit_forwarded_event(self, peer, request, crate::wire::now())
+            .await
+    }
+
+    async fn submit_peer_authority_forward_mls(
+        &self,
+        peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+        request: PeerAuthorityForwardMlsRequest,
+    ) -> ServiceResult<AuthoritySubmitOutcome> {
+        super::authority_forward::admit_forwarded_mls(self, peer, request, crate::wire::now()).await
     }
 
     async fn scan_stream_for_account(
