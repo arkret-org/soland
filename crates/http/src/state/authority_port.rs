@@ -11,7 +11,7 @@ use arkret_models_collaboration::authority_commit::{
 use arkret_wire::{
     AuthorityBundleRequest, AuthorityCommitStatus, AuthorityHandoffRequest, AuthoritySubmitOutcome,
     EventAdmissionSubmission, MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff,
-    StreamScanOutcome, StreamScanRequest,
+    StreamScanRequest,
 };
 use chrono::Utc;
 use soland_services::authority_commit::AuthorityProtocolPort;
@@ -348,17 +348,48 @@ impl AuthorityProtocolPort for AppState {
         ))
     }
 
-    async fn scan_stream(&self, request: StreamScanRequest) -> ServiceResult<StreamScanOutcome> {
-        self.authority_commits().scan_stream(&request).await
+    async fn scan_stream_for_account(
+        &self,
+        account: &arkret_wire::AccountId,
+        request: StreamScanRequest,
+    ) -> ServiceResult<soland_storage::AccountStreamScan> {
+        self.authority_commits()
+            .scan_stream_for_account(&request, account, &self.service_core_id())
+            .await
     }
 
+    /// The nonce-bound genesis-to-current chain, signed by this Station's
+    /// notary method and carrying its current authenticated service route.
     async fn authority_bundle(
         &self,
-        _request: AuthorityBundleRequest,
+        request: AuthorityBundleRequest,
     ) -> ServiceResult<RealmAuthorityBundle> {
-        Err(ServiceError::Internal(
-            "verified current service route for the authority bundle is unavailable".to_owned(),
-        ))
+        let route =
+            crate::routing::system::service_resolution::current_authenticated_service_resolution(
+                self,
+            )
+            .await
+            .map_err(|error| {
+                ServiceError::Internal(format!(
+                    "current authenticated service route is unavailable: {}",
+                    error.message
+                ))
+            })?;
+        let route = serde_json::to_value(route)
+            .map_err(|error| ServiceError::Internal(error.to_string()))?;
+        let verification_method = self
+            .service_verification_method("notary-key")
+            .map_err(|error| ServiceError::Internal(error.to_string()))?;
+        self.authority_commits()
+            .authority_bundle(
+                &request,
+                &self.service_core_id(),
+                route,
+                verification_method,
+                self.notary_signing_key().as_ref(),
+                crate::wire::now(),
+            )
+            .await
     }
 
     async fn install_authority_handoff(

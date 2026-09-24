@@ -1965,3 +1965,208 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
     assert_eq!(reclaimed.window.preview_only, Some(true));
     assert!(reclaimed.window.window_start_basis.is_none());
 }
+
+fn scan_request(
+    realm_id: &arkret_wire::RealmId,
+    direction: arkret_wire::StreamScanDirection,
+    limit: u16,
+) -> arkret_wire::StreamScanRequest {
+    arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction,
+        limit,
+    }
+}
+
+fn scanned_page(scan: soland_storage::AccountStreamScan) -> arkret_wire::StreamScanOutcome {
+    match scan {
+        soland_storage::AccountStreamScan::Page(page) => page,
+        other => panic!("expected a proved page, got {other:?}"),
+    }
+}
+
+fn positions(page: &arkret_wire::StreamScanOutcome) -> Vec<u64> {
+    page.committed_events
+        .iter()
+        .map(|item| item.commit().stream_position)
+        .collect()
+}
+
+#[tokio::test]
+async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
+    use arkret_wire::StreamScanDirection::{After, Before};
+    use soland_storage::AccountStreamScan;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap();
+    let stranger = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let genesis_commit = unit.transactions[0].commit.commit_id.clone();
+    let scan = |request: arkret_wire::StreamScanRequest, account: arkret_wire::AccountId| {
+        let store = store.clone();
+        let station = station.clone();
+        async move {
+            store
+                .scan_stream_for_account(&request, &account, &station)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Forward pages walk the whole founding chain, bound to the genesis floor.
+    let first = scanned_page(scan(scan_request(&realm_id, After(None), 3), creator.clone()).await);
+    assert_eq!(positions(&first), [0, 1, 2]);
+    assert!(first.truncated);
+    let floor = first
+        .readable_floor
+        .clone()
+        .expect("the lower end carries its floor");
+    assert_eq!(floor.oldest_position, 0);
+    assert_eq!(floor.floor_commit_id, genesis_commit);
+    assert_eq!(
+        floor.floor_reason,
+        arkret_wire::ReadableFloorReason::StreamStart
+    );
+    let second =
+        scanned_page(scan(scan_request(&realm_id, After(Some(2)), 3), creator.clone()).await);
+    assert_eq!(positions(&second), [3, 4, 5]);
+    assert!(second.truncated);
+    let last =
+        scanned_page(scan(scan_request(&realm_id, After(Some(5)), 3), creator.clone()).await);
+    assert_eq!(positions(&last), [6]);
+    assert!(!last.truncated);
+    let mut previous = None;
+    for (index, item) in first
+        .committed_events
+        .iter()
+        .chain(&second.committed_events)
+        .chain(&last.committed_events)
+        .enumerate()
+    {
+        let arkret_wire::CommittedEventView::Full(view) = item else {
+            panic!("the founder's own rows are disclosed in full");
+        };
+        assert_eq!(view.commit, unit.transactions[index].commit);
+        assert_eq!(view.event, unit.transactions[index].event);
+        assert_eq!(view.commit.previous_commit_ref, previous);
+        previous = Some(view.commit.commit_id.clone());
+    }
+    let beyond =
+        scanned_page(scan(scan_request(&realm_id, After(Some(6)), 3), creator.clone()).await);
+    assert!(beyond.committed_events.is_empty() && !beyond.truncated);
+
+    // Backward backfill stops at the floor without reporting truncation.
+    let newest =
+        scanned_page(scan(scan_request(&realm_id, Before(None), 2), creator.clone()).await);
+    assert_eq!(positions(&newest), [6, 5]);
+    assert!(newest.truncated);
+    let oldest =
+        scanned_page(scan(scan_request(&realm_id, Before(Some(2)), 5), creator.clone()).await);
+    assert_eq!(positions(&oldest), [1, 0]);
+    assert!(!oldest.truncated);
+    assert_eq!(oldest.readable_floor, Some(floor));
+
+    // No readable interval: another Account, or a Realm not governed here.
+    assert_eq!(
+        scan(scan_request(&realm_id, After(None), 3), stranger.clone()).await,
+        AccountStreamScan::NotAuthorized
+    );
+    let unknown = arkret_wire::RealmId::from_event_id(&unit.transactions[1].event.event_id);
+    assert_eq!(
+        scan(scan_request(&unknown, After(None), 3), creator.clone()).await,
+        AccountStreamScan::NotAuthorized
+    );
+    // Authorized in principle, but not provable here: another issuer, a
+    // Circle stream, or a second membership row.
+    let other_station =
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+    assert!(matches!(
+        store
+            .scan_stream_for_account(
+                &scan_request(&realm_id, After(None), 3),
+                &creator,
+                &other_station
+            )
+            .await
+            .unwrap(),
+        AccountStreamScan::Unproved(_)
+    ));
+    let mut circle = scan_request(&realm_id, After(None), 3);
+    circle.stream_ref = arkret_wire::CommitStreamRef::Circle {
+        realm_id: realm_id.clone(),
+        circle_id: arkret_wire::CircleId::new(
+            "ak:circle:AdP2S6y0Ms7yp9-GNvXZ3sVfvTEo8mtnV3G_RfApIOn0".to_owned(),
+        )
+        .unwrap(),
+    };
+    assert!(matches!(
+        scan(circle, creator.clone()).await,
+        AccountStreamScan::Unproved(_)
+    ));
+    let stranger_actor = arkret_wire::ActorId::account(stranger.clone()).to_string();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES ($1,$2,'knock',$3,6,'{\"membership\":\"knock\"}'::jsonb,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(&stranger_actor)
+    .bind::<Text, _>(unit.transactions[6].commit.commit_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(matches!(
+        scan(scan_request(&realm_id, After(None), 3), creator.clone()).await,
+        AccountStreamScan::Unproved(_)
+    ));
+    assert_eq!(
+        scan(scan_request(&realm_id, After(None), 3), stranger.clone()).await,
+        AccountStreamScan::NotAuthorized
+    );
+    diesel::sql_query(
+        "DELETE FROM member_state_current_results WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(&stranger_actor)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    // A founder who left no longer has a readable interval.
+    diesel::sql_query(
+        "UPDATE member_state_current_results \
+         SET membership='leave', value='{\"membership\":\"leave\"}'::jsonb WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        scan(scan_request(&realm_id, After(None), 3), creator.clone()).await,
+        AccountStreamScan::NotAuthorized
+    );
+}
+
+/// Real PostgreSQL: the Account Realm detail carries the frozen window, its
+/// rows, and the typed current of the same proved cut. The basis reservation
+/// expires exactly at the window's consumable deadline, which is the deadline
+/// the Account cursor that carries the window is bounded by.

@@ -114,11 +114,22 @@ fn is_tus_operation_path(method: &str, path: &str) -> bool {
             || path.starts_with("/_arkret/self/blob/resumable/"))
 }
 
+/// Core-tier operations that the formal registry places in no operation
+/// bundle: claiming v1 support implies them, so they are selectable without
+/// a bundle advertisement. Only operations this Station mounts belong here.
+const MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE: &[arkret_wire::ServiceOperationId] =
+    &[arkret_wire::ServiceOperationId::OpenRealmAuthorityReadBundleV1];
+
 fn locally_advertises(
     state: &AppState,
     operation: arkret_wire::ServiceOperationId,
     binding_kind: arkret_wire::BindingKind,
 ) -> bool {
+    if binding_kind == arkret_wire::BindingKind::HttpJson
+        && MOUNTED_CORE_OPERATIONS_WITHOUT_BUNDLE.contains(&operation)
+    {
+        return true;
+    }
     if crate::routing::system::describe::build_server_description(state)
         .supports_operation_binding(operation, binding_kind)
     {
@@ -346,6 +357,8 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(spaces::router())
                 // self/events/*.
                 .push(events::router())
+                // self/streams/scan (ak.self.committed_event.read.scan.v1).
+                .push(authority_commit::self_router())
                 // self/authz/*. (Owner-scoped policy
                 // document CRUD lives on the product surface at
                 // `/_soland/self/policies*`, see `soland_local_router`.)
@@ -381,7 +394,9 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(system::open_router())
                 .push(invites::open_router())
                 .push(identity::agents::open_router())
-                .push(identity::device_pairing_open::open_router()),
+                .push(identity::device_pairing_open::open_router())
+                // open/realm-authority/bundle (ak.open.realm_authority.read.bundle.v1).
+                .push(authority_commit::open_router()),
         )
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))

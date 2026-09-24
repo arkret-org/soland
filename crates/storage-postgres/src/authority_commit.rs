@@ -502,6 +502,107 @@ pub(crate) fn stream_key(stream_ref: &arkret_wire::CommitStreamRef) -> Persisten
     .map_err(PersistenceError::database)
 }
 
+/// One physical keyset page of a single commit stream on the caller's
+/// connection (and therefore its read cut). This is not an authorization
+/// decision; public callers go through the Account-scoped scan.
+pub(crate) async fn stream_page_in_connection(
+    conn: &mut AsyncPgConnection,
+    request: &arkret_wire::StreamScanRequest,
+) -> PersistenceResult<arkret_wire::StreamScanOutcome> {
+    request.validate().map_err(invalid)?;
+    let key = stream_key(&request.stream_ref)?;
+    let limit = i64::from(request.limit) + 1;
+    let floor = sql_query(
+        "SELECT commit_json FROM realm_commits WHERE stream_key = $1 \
+         ORDER BY stream_position ASC LIMIT 1",
+    )
+    .bind::<Text, _>(&key)
+    .get_result::<CommitRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let readable_floor = floor
+        .map(|row| {
+            let commit: arkret_wire::RealmCommit =
+                decode_json(row.commit_json, "first RealmCommit")?;
+            if commit.stream_position != 0 {
+                return Err(invalid("stored stream has no genesis RealmCommit"));
+            }
+            Ok(arkret_wire::ReadableFloor {
+                oldest_position: 0,
+                floor_commit_id: commit.commit_id,
+                floor_reason: arkret_wire::ReadableFloorReason::StreamStart,
+            })
+        })
+        .transpose()?;
+    let rows = match request.direction {
+        arkret_wire::StreamScanDirection::After(after) => {
+            let after = after
+                .map(|position| to_i64(position, "stream cursor"))
+                .transpose()?
+                .unwrap_or(-1);
+            sql_query(
+                "SELECT c.commit_json, e.envelope FROM realm_commits c \
+                 JOIN canonical_events e ON e.pk = c.event_pk \
+                 WHERE c.stream_key = $1 AND c.stream_position > $2 \
+                 ORDER BY c.stream_position ASC LIMIT $3",
+            )
+            .bind::<Text, _>(&key)
+            .bind::<BigInt, _>(after)
+            .bind::<BigInt, _>(limit)
+            .load::<CommitStreamRow>(&mut *conn)
+            .await
+        }
+        arkret_wire::StreamScanDirection::Before(Some(before)) => {
+            let before = to_i64(before, "stream cursor")?;
+            sql_query(
+                "SELECT c.commit_json, e.envelope FROM realm_commits c \
+                 JOIN canonical_events e ON e.pk = c.event_pk \
+                 WHERE c.stream_key = $1 AND c.stream_position < $2 \
+                 ORDER BY c.stream_position DESC LIMIT $3",
+            )
+            .bind::<Text, _>(&key)
+            .bind::<BigInt, _>(before)
+            .bind::<BigInt, _>(limit)
+            .load::<CommitStreamRow>(&mut *conn)
+            .await
+        }
+        arkret_wire::StreamScanDirection::Before(None) => {
+            sql_query(
+                "SELECT c.commit_json, e.envelope FROM realm_commits c \
+                 JOIN canonical_events e ON e.pk = c.event_pk \
+                 WHERE c.stream_key = $1 \
+                 ORDER BY c.stream_position DESC LIMIT $2",
+            )
+            .bind::<Text, _>(&key)
+            .bind::<BigInt, _>(limit)
+            .load::<CommitStreamRow>(&mut *conn)
+            .await
+        }
+    }
+    .map_err(PersistenceError::database)?;
+    let truncated = rows.len() > usize::from(request.limit);
+    let committed_events = rows
+        .into_iter()
+        .take(usize::from(request.limit))
+        .map(|row| {
+            Ok(arkret_wire::CommittedEventView::Full(
+                arkret_wire::CommittedEventFullView {
+                    commit: decode_json(row.commit_json, "RealmCommit")?,
+                    event: decode_json(row.envelope, "committed Event")?,
+                },
+            ))
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    let outcome = arkret_wire::StreamScanOutcome {
+        committed_events,
+        readable_floor,
+        truncated,
+    };
+    outcome.validate_for_request(request).map_err(invalid)?;
+    Ok(outcome)
+}
+
 fn authority_from_row(row: AuthorityRow) -> PersistenceResult<CurrentRealmAuthority> {
     Ok(CurrentRealmAuthority {
         realm_id: decode_text(row.realm_id, "authority Realm id")?,
@@ -2230,99 +2331,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         &self,
         request: &arkret_wire::StreamScanRequest,
     ) -> PersistenceResult<arkret_wire::StreamScanOutcome> {
-        request.validate().map_err(invalid)?;
-        let key = stream_key(&request.stream_ref)?;
-        let limit = i64::from(request.limit) + 1;
         let mut conn = pg_conn(&self.pool).await?;
-        let floor = sql_query(
-            "SELECT commit_json FROM realm_commits WHERE stream_key = $1 \
-             ORDER BY stream_position ASC LIMIT 1",
-        )
-        .bind::<Text, _>(&key)
-        .get_result::<CommitRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        let readable_floor = floor
-            .map(|row| {
-                let commit: arkret_wire::RealmCommit =
-                    decode_json(row.commit_json, "first RealmCommit")?;
-                if commit.stream_position != 0 {
-                    return Err(invalid("stored stream has no genesis RealmCommit"));
-                }
-                Ok(arkret_wire::ReadableFloor {
-                    oldest_position: 0,
-                    floor_commit_id: commit.commit_id,
-                    floor_reason: arkret_wire::ReadableFloorReason::StreamStart,
-                })
-            })
-            .transpose()?;
-        let rows = match request.direction {
-            arkret_wire::StreamScanDirection::After(after) => {
-                let after = after
-                    .map(|position| to_i64(position, "stream cursor"))
-                    .transpose()?
-                    .unwrap_or(-1);
-                sql_query(
-                    "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                     JOIN canonical_events e ON e.pk = c.event_pk \
-                     WHERE c.stream_key = $1 AND c.stream_position > $2 \
-                     ORDER BY c.stream_position ASC LIMIT $3",
-                )
-                .bind::<Text, _>(&key)
-                .bind::<BigInt, _>(after)
-                .bind::<BigInt, _>(limit)
-                .load::<CommitStreamRow>(&mut *conn)
-                .await
-            }
-            arkret_wire::StreamScanDirection::Before(Some(before)) => {
-                let before = to_i64(before, "stream cursor")?;
-                sql_query(
-                    "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                     JOIN canonical_events e ON e.pk = c.event_pk \
-                     WHERE c.stream_key = $1 AND c.stream_position < $2 \
-                     ORDER BY c.stream_position DESC LIMIT $3",
-                )
-                .bind::<Text, _>(&key)
-                .bind::<BigInt, _>(before)
-                .bind::<BigInt, _>(limit)
-                .load::<CommitStreamRow>(&mut *conn)
-                .await
-            }
-            arkret_wire::StreamScanDirection::Before(None) => {
-                sql_query(
-                    "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                     JOIN canonical_events e ON e.pk = c.event_pk \
-                     WHERE c.stream_key = $1 \
-                     ORDER BY c.stream_position DESC LIMIT $2",
-                )
-                .bind::<Text, _>(&key)
-                .bind::<BigInt, _>(limit)
-                .load::<CommitStreamRow>(&mut *conn)
-                .await
-            }
-        }
-        .map_err(PersistenceError::database)?;
-        let truncated = rows.len() > usize::from(request.limit);
-        let committed_events = rows
-            .into_iter()
-            .take(usize::from(request.limit))
-            .map(|row| {
-                Ok(arkret_wire::CommittedEventView::Full(
-                    arkret_wire::CommittedEventFullView {
-                        commit: decode_json(row.commit_json, "RealmCommit")?,
-                        event: decode_json(row.envelope, "committed Event")?,
-                    },
-                ))
-            })
-            .collect::<PersistenceResult<Vec<_>>>()?;
-        let outcome = arkret_wire::StreamScanOutcome {
-            committed_events,
-            readable_floor,
-            truncated,
-        };
-        outcome.validate_for_request(request).map_err(invalid)?;
-        Ok(outcome)
+        stream_page_in_connection(&mut conn, request).await
+    }
+
+    async fn scan_stream_for_account(
+        &self,
+        request: &arkret_wire::StreamScanRequest,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::AccountStreamScan> {
+        crate::account_stream_scan::scan_stream_for_account(&self.pool, request, account, issuer)
+            .await
     }
 
     async fn install_handoff(

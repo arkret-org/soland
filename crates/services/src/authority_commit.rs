@@ -1034,6 +1034,30 @@ impl AuthorityCommitApplication {
         Ok(outcome)
     }
 
+    /// `ak.self.committed_event.read.scan.v1`: authorization, readable
+    /// interval, and page at one governing read cut. See
+    /// [`soland_storage::AuthorityCommitStore::scan_stream_for_account`].
+    pub async fn scan_stream_for_account(
+        &self,
+        request: &StreamScanRequest,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::AccountStreamScan> {
+        request.validate().map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!("invalid stream scan request: {error}"))
+        })?;
+        let scan = self
+            .store()
+            .scan_stream_for_account(request, account, issuer)
+            .await?;
+        if let soland_storage::AccountStreamScan::Page(outcome) = &scan {
+            outcome.validate_for_request(request).map_err(|error| {
+                crate::ServiceError::Internal(format!("invalid stream scan outcome: {error}"))
+            })?;
+        }
+        Ok(scan)
+    }
+
     pub async fn install_handoff(&self, request: &AuthorityHandoffRequest) -> ServiceResult<()> {
         request.validate_shape().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid authority handoff: {error}"))
@@ -1372,7 +1396,12 @@ pub trait AuthorityProtocolPort: Send + Sync {
         Ok(outcome)
     }
 
-    async fn scan_stream(&self, request: StreamScanRequest) -> ServiceResult<StreamScanOutcome>;
+    /// `ak.self.committed_event.read.scan.v1` for the authenticated Account.
+    async fn scan_stream_for_account(
+        &self,
+        account: &arkret_wire::AccountId,
+        request: StreamScanRequest,
+    ) -> ServiceResult<soland_storage::AccountStreamScan>;
 
     async fn authority_bundle(
         &self,

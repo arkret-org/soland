@@ -14,6 +14,19 @@ use chrono::{DateTime, Utc};
 
 use crate::PersistenceResult;
 
+/// Result of an Account-scoped stream scan at one governing read cut.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AccountStreamScan {
+    /// A page inside the caller's proved readable interval.
+    Page(arkret_wire::StreamScanOutcome),
+    /// The Realm is not governed here or the Account is not a currently
+    /// joined member: the caller has no readable interval on this stream.
+    NotAuthorized,
+    /// The caller may be authorized, but this Station cannot prove its exact
+    /// readable interval and disclosure at this cut.
+    Unproved(&'static str),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueuedEventStatus {
     Queued,
@@ -624,6 +637,20 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         request: &arkret_wire::StreamScanRequest,
     ) -> PersistenceResult<arkret_wire::StreamScanOutcome>;
+
+    /// `ak.self.committed_event.read.scan.v1` for one authenticated Account.
+    ///
+    /// Authorization, the readable interval, and the returned page come from
+    /// one read cut at which `issuer` holds the Realm's governing tenure.
+    /// Only intervals this Station can prove are served; every other shape
+    /// fails closed as [`AccountStreamScan::Unproved`], never as a physical
+    /// page that could disclose rows outside the caller's permission.
+    async fn scan_stream_for_account(
+        &self,
+        request: &arkret_wire::StreamScanRequest,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<AccountStreamScan>;
 
     async fn install_handoff(
         &self,

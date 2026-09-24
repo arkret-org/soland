@@ -24,6 +24,7 @@ pub use db::{Db, PgPool, PoolTuning};
 pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 
 mod account_status;
+mod account_stream_scan;
 mod account_device_signer_evidence;
 mod accounts;
 mod agent_current_results;
