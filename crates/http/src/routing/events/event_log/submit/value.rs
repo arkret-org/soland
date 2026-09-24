@@ -206,6 +206,10 @@ fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
     let (status, code) = match &error {
         ServiceError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         ServiceError::SchemaViolation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "schema_violation"),
+        ServiceError::UnsupportedEventKind(_) => (
+            StatusCode::NOT_IMPLEMENTED,
+            arkret_wire::ErrorCode::UNSUPPORTED_EVENT_KIND,
+        ),
         ServiceError::Conflict(_) => match error.conflict_code() {
             Some(ConflictCode::DuplicateConflict) => (StatusCode::CONFLICT, "duplicate_conflict"),
             Some(ConflictCode::SnapshotCapacityExceeded) => (

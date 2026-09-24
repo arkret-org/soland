@@ -39,6 +39,11 @@ pub enum ServiceError {
     SchemaViolation(String),
     #[error("internal error: {0}")]
     Internal(String),
+    /// A registered, active standard Event kind this Station does not admit
+    /// on the requested path. Nothing was read for authority or written; the
+    /// wire code is the universal `unsupported_event_kind`.
+    #[error("unsupported event kind: {0}")]
+    UnsupportedEventKind(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +53,7 @@ pub enum ServiceErrorKind {
     Database,
     SchemaViolation,
     Internal,
+    UnsupportedEventKind,
 }
 
 impl ServiceError {
@@ -59,6 +65,7 @@ impl ServiceError {
             Self::Database(_) => ServiceErrorKind::Database,
             Self::SchemaViolation(_) => ServiceErrorKind::SchemaViolation,
             Self::Internal(_) => ServiceErrorKind::Internal,
+            Self::UnsupportedEventKind(_) => ServiceErrorKind::UnsupportedEventKind,
         }
     }
 
@@ -84,7 +91,8 @@ impl ServiceError {
             | Self::Conflict(detail)
             | Self::Database(detail)
             | Self::SchemaViolation(detail)
-            | Self::Internal(detail) => detail,
+            | Self::Internal(detail)
+            | Self::UnsupportedEventKind(detail) => detail,
         }
     }
 

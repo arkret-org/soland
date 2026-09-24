@@ -76,6 +76,12 @@ pub(super) async fn admit_event(
             ServiceErrorKind::SchemaViolation => {
                 return Err(AppError::param_invalid(error.detail()));
             }
+            ServiceErrorKind::UnsupportedEventKind => {
+                return Err(AppError::new(
+                    arkret_wire::ErrorCode::UnsupportedEventKind,
+                    error.detail(),
+                ));
+            }
             ServiceErrorKind::NotFound
             | ServiceErrorKind::Database
             | ServiceErrorKind::Internal => {

@@ -20,6 +20,39 @@ use soland_services::{ServiceError, ServiceResult};
 
 use super::AppState;
 
+/// The self Event admission unit a kind reaches on this Station.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelfEventRoute {
+    /// `ak.key_backup.active_series`: the same-cut pointer unit.
+    KeyBackupPointer,
+    /// Realm-scope kinds with a guarded current-result authority cut.
+    GuardedUnit,
+}
+
+/// Select the self Event unit for `kind` before any authority cut is read.
+///
+/// Every other active standard kind has no current-result authority cut here
+/// and is refused with the universal `unsupported_event_kind`, never an
+/// internal failure, so the refusal is a stable wire code and nothing is
+/// written. A kind outside the registry cannot pass envelope validation; if
+/// one did, it is a closed-schema violation, not an unsupported active kind.
+fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRoute> {
+    use arkret_wire::EventKind;
+    match kind {
+        EventKind::KeyBackupActiveSeries => Ok(SelfEventRoute::KeyBackupPointer),
+        EventKind::StrandCreate | EventKind::RealmSetDefaultStrand | EventKind::MessageCreate => {
+            Ok(SelfEventRoute::GuardedUnit)
+        }
+        EventKind::Unknown(raw) => Err(ServiceError::SchemaViolation(format!(
+            "self Event kind {raw} is not registered"
+        ))),
+        other => Err(ServiceError::UnsupportedEventKind(format!(
+            "this Station has no self Event authority cut for {}",
+            other.as_str()
+        ))),
+    }
+}
+
 #[async_trait::async_trait]
 impl AuthorityProtocolPort for AppState {
     async fn submit_self_ordinary_realm_bootstrap(
@@ -159,21 +192,11 @@ impl AuthorityProtocolPort for AppState {
         let producer_guard =
             super::authority_producer_validation::verify_self_event_producer(self, session, event)
                 .await?;
-        if event.kind == arkret_wire::EventKind::KeyBackupActiveSeries {
+        if self_event_route(&event.kind)? == SelfEventRoute::KeyBackupPointer {
             return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
                 self, &request,
             )
             .await;
-        }
-        if !matches!(
-            event.kind,
-            arkret_wire::EventKind::StrandCreate
-                | arkret_wire::EventKind::RealmSetDefaultStrand
-                | arkret_wire::EventKind::MessageCreate
-        ) {
-            return Err(ServiceError::Internal(
-                "self Event current-result authority cut is unavailable for this kind".to_owned(),
-            ));
         }
         if request.approval_signatures.is_some() {
             return Err(ServiceError::Conflict(
@@ -276,5 +299,63 @@ impl AuthorityProtocolPort for AppState {
         Err(ServiceError::Internal(
             "peer handoff authentication and fencing are unavailable".to_owned(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_wire::EventKind;
+    use soland_services::ServiceError;
+
+    use super::{SelfEventRoute, self_event_route};
+
+    #[test]
+    fn only_kinds_with_a_self_authority_cut_are_routed() {
+        assert_eq!(
+            self_event_route(&EventKind::KeyBackupActiveSeries).unwrap(),
+            SelfEventRoute::KeyBackupPointer
+        );
+        for kind in [
+            EventKind::StrandCreate,
+            EventKind::RealmSetDefaultStrand,
+            EventKind::MessageCreate,
+        ] {
+            assert_eq!(
+                self_event_route(&kind).unwrap(),
+                SelfEventRoute::GuardedUnit
+            );
+        }
+    }
+
+    #[test]
+    fn every_other_active_kind_is_unsupported_event_kind_not_internal() {
+        let routed = [
+            EventKind::KeyBackupActiveSeries,
+            EventKind::StrandCreate,
+            EventKind::RealmSetDefaultStrand,
+            EventKind::MessageCreate,
+        ];
+        let mut refused = 0;
+        for kind in EventKind::ALL.iter().filter(|kind| !routed.contains(kind)) {
+            match self_event_route(kind) {
+                Err(ServiceError::UnsupportedEventKind(detail)) => {
+                    assert!(detail.contains(kind.as_str()), "{detail}");
+                }
+                other => panic!(
+                    "{} must be unsupported_event_kind, got {other:?}",
+                    kind.as_str()
+                ),
+            }
+            refused += 1;
+        }
+        assert_eq!(refused, EventKind::ALL.len() - routed.len());
+    }
+
+    #[test]
+    fn an_unregistered_kind_is_a_schema_violation() {
+        assert!(matches!(
+            self_event_route(&EventKind::Unknown("ak.example.unregistered".to_owned())),
+            Err(ServiceError::SchemaViolation(_))
+        ));
     }
 }

@@ -167,6 +167,10 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
             crate::error::error_http_status(ErrorCode::SchemaViolation),
             ErrorCode::SCHEMA_VIOLATION,
         ),
+        ServiceError::UnsupportedEventKind(_) => (
+            crate::error::error_http_status(ErrorCode::UnsupportedEventKind),
+            ErrorCode::UNSUPPORTED_EVENT_KIND,
+        ),
         ServiceError::Database(_) | ServiceError::Internal(_) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
         }
