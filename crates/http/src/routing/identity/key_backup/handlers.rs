@@ -536,6 +536,10 @@ pub(super) async fn delete_key_backup(
                 "ak.self.keys.backups.resource.delete.v1 request body is invalid: {error}"
             ))
         })?;
+    // The closed `keys_backups_delete_proof` admits only the three high-risk
+    // branches; reject the ordinary device branch as a body defect before any
+    // idempotency, challenge or pointer read.
+    super::delete::require_high_risk_delete_proof(&body)?;
 
     // key-management.md §7.8.1 step 4. The ledger is keyed on
     // `(principal_id, backup_id, request_id)`, so an identical network retry

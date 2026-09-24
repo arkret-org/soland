@@ -221,17 +221,21 @@ async fn list(
     json_ok(result)
 }
 
+/// The account's confirmed `secret_storage` pointer and the PCR head that
+/// covers it, read by one PostgreSQL statement from the durable typed current
+/// result. A missing, lagging or unverifiable cut is unavailable, never
+/// `Absent`; destructive callers freeze this basis and recheck it in their own
+/// storage transaction.
 pub(super) async fn active_pointers(
-    _state: &AppState,
-    _account: &arkret_wire::AccountId,
+    state: &AppState,
+    account: &arkret_wire::AccountId,
 ) -> Result<BackupActiveSeriesState, AppError> {
-    // The old Cell/Seal projection cannot establish the confirmed RealmCommit
-    // basis required for this current result. A durable same-cut provider must
-    // return the pointer and authority_commit_id together before listing,
-    // unlocking, or deleting backup data can be served.
-    Err(unavailable(
-        "confirmed key-backup pointer result is unavailable",
-    ))
+    state
+        .key_backups()
+        .confirmed_active_series(account)
+        .await
+        .map_err(unavailable)?
+        .ok_or_else(|| unavailable("confirmed PCR pointer cut is absent"))
 }
 
 async fn active_pointers_for_device(

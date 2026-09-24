@@ -171,6 +171,26 @@ async fn require_owned_backup(
         .ok_or_else(|| AppError::not_found("key backup not found"))
 }
 
+/// `keys_backups_delete_proof` is exactly one of `recovery_unlock`,
+/// `device_quorum` or `trusted_recovery_service` (key-management.md §7.8.1);
+/// an ordinary current-device proof is not a fourth branch.
+pub(super) fn require_high_risk_delete_proof(
+    body: &KeysBackupsDeleteRequestBody,
+) -> Result<(), AppError> {
+    match body.proof {
+        KeyBackupDeleteProof::CurrentDevice { .. } => Err(current_device_delete_proof_rejected()),
+        KeyBackupDeleteProof::RecoverySession { .. }
+        | KeyBackupDeleteProof::DeviceQuorum { .. } => Ok(()),
+    }
+}
+
+fn current_device_delete_proof_rejected() -> AppError {
+    AppError::param_invalid(
+        "key backup delete proof must be recovery_unlock, device_quorum or \
+         trusted_recovery_service; current_device is not a delete authority",
+    )
+}
+
 /// The verified challenge a DELETE is authorized against.
 pub(super) struct AuthorizedKeyBackupDelete {
     pub(super) challenge_id: String,
@@ -206,9 +226,7 @@ pub(super) async fn authorize_key_backup_delete(
     let mut expected_policy = None;
     let proof_branch = match &body.proof {
         KeyBackupDeleteProof::CurrentDevice { .. } => {
-            return Err(AppError::capability_denied(
-                "current-device backup deletion requires a confirmed device authorization provider",
-            ));
+            return Err(current_device_delete_proof_rejected());
         }
         KeyBackupDeleteProof::RecoverySession {
             recovery_session_id,

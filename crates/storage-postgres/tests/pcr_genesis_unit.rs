@@ -1916,6 +1916,51 @@ async fn key_backup_active_series_pointer_unit_commits_only_at_the_active_device
             .await
             .unwrap()
     );
+
+    // The account-scoped read that freezes delete/unlock bases names the same
+    // durable pointer and PCR head.
+    assert_eq!(
+        backups
+            .confirmed_active_series(&author.account)
+            .await
+            .unwrap()
+            .unwrap(),
+        reread
+    );
+    // A typed row that lags the latest accepted pointer Commit, or is missing
+    // while one exists, is unavailable -- never the older pointer or Absent.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE key_backup_active_series_current_results \
+         SET current_commit_id=$2,current_event_id=$3,current_stream_position=$4 \
+         WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(author.realm_id.as_str())
+    .bind::<Text, _>(first_commit.commit_id.as_str())
+    .bind::<Text, _>(first.event_id.as_str())
+    .bind::<BigInt, _>(first_commit.stream_position as i64)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    assert!(
+        backups
+            .confirmed_active_series(&author.account)
+            .await
+            .is_err(),
+        "a lagging typed pointer must not be served"
+    );
+    diesel::sql_query("DELETE FROM key_backup_active_series_current_results WHERE realm_id=$1")
+        .bind::<Text, _>(author.realm_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        backups
+            .confirmed_active_series(&author.account)
+            .await
+            .is_err(),
+        "a missing typed pointer after an accepted pointer Commit is not Absent"
+    );
 }
 
 fn author_with_method(author: &PointerAuthor, method: DidUrl) -> PointerAuthor {
