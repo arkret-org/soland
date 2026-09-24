@@ -31,7 +31,8 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
         .authority_commits()
         .realm_state_snapshot_material_for_account(&realm_id, account)
         .await
-        .map_err(|_| {
+        .map_err(|error| {
+            tracing::warn!(%error, realm_id=%realm_id, "snapshot disclosure gate rejected material");
             crate::app_error!(
                 RealmStateSnapshotUnavailable,
                 "complete Account disclosure cannot be proved at this cut",
