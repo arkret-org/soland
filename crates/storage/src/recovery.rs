@@ -162,6 +162,18 @@ pub struct RotationPointerSwitchWrite {
     pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// SecurityRotation `local_commit`: the client-attested terminal step. The
+/// attesting device's `client_attestation` is re-verified inside the unit
+/// against that device's current accepted PCR authorization key at the locked
+/// PCR cut (never a device mirror), and `accepted_steps[4]` commits together
+/// with the `completed` terminal outcome and the first response.
+#[derive(Clone, Debug)]
+pub struct RotationLocalCommitWrite {
+    pub transaction: SecurityTransactionRecord,
+    pub step_outcome: SecurityTransactionStepOutcomeRecord,
+    pub attestation: arkret_models_crypto::ClientStepAttestation,
+}
+
 /// The accepted-step evidence of a coordinator-owned rotation step, derived
 /// only from the frozen plan and the step's own durable output.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,6 +289,84 @@ impl RotationUploadCommitWrite {
             1,
             &rotation_upload_step_evidence(plan)?,
         )
+    }
+}
+
+impl RotationLocalCommitWrite {
+    /// Structural binding of the attestation to the frozen plan and to the
+    /// appended step. Signature and device status are durable-state checks
+    /// and belong to the unit.
+    pub fn validate(&self) -> PersistenceResult<()> {
+        use arkret_models_crypto::{
+            ClientStepAttestationArtifact, SecurityTransactionStep,
+            SecurityTransactionTerminalOutcome,
+        };
+        let invalid = |reason: &str| PersistenceError::SchemaViolation(reason.to_owned());
+        let resource = &self.transaction.resource;
+        resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let plan = resource
+            .security_rotation_plan()
+            .ok_or_else(|| invalid("rotation local commit requires SecurityRotation"))?;
+        self.attestation
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let ClientStepAttestationArtifact::SecurityRotation(artifact) = &self.attestation.artifact
+        else {
+            return Err(invalid("local commit requires SecurityRotationLocalCommit"));
+        };
+        let attestation_digest = self
+            .attestation
+            .attestation_digest()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let accepted = resource.accepted_steps.get(4);
+        if resource.accepted_steps.len() != 5
+            || resource.step_order().ok().and_then(|order| order.get(4).copied())
+                != Some(SecurityTransactionStep::LocalCommit)
+            || !matches!(
+                resource.terminal_outcome,
+                Some(SecurityTransactionTerminalOutcome::Completed {
+                    receipt_id: None,
+                    completion_attestation: None,
+                    ..
+                })
+            )
+            || self.attestation.step != SecurityTransactionStep::LocalCommit
+            || self.attestation.output_ref != plan.local_commit_digest.as_str()
+            || self.attestation.transaction_id != resource.transaction_id
+            || self.attestation.transaction_request_digest != resource.request_digest
+            || self.attestation.prepared_plan_digest != resource.prepared_plan_digest
+            || artifact.transaction_id != resource.transaction_id
+            || artifact.transaction_request_digest != resource.request_digest
+            || artifact.prepared_plan_digest != resource.prepared_plan_digest
+            || artifact.local_commit_digest != plan.local_commit_digest
+            || self.step_outcome.step != SecurityTransactionStep::LocalCommit
+            || self.step_outcome.transaction_id != resource.transaction_id.as_str()
+            || self.step_outcome.participant_outcome
+                != Some(
+                    serde_json::to_value(artifact)
+                        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+                )
+            || self.step_outcome.response
+                != serde_json::to_value(resource)
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+            || accepted.is_none_or(|accepted| {
+                accepted.prepared_material_digest != attestation_digest
+                    || accepted.output_ref != plan.local_commit_digest.as_str()
+                    || accepted.output_digest != attestation_digest
+                    || !matches!(
+                        accepted.acceptor,
+                        arkret_models_crypto::SecurityTransactionAcceptor::Principal { ref principal_id }
+                            if *principal_id == resource.account_id.station_id
+                    )
+            })
+        {
+            return Err(invalid(
+                "rotation local commit differs from its frozen plan, attestation or resource",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -476,7 +566,7 @@ pub trait SecurityTransactionStore: Send + Sync {
     async fn update(&self, record: SecurityTransactionRecord) -> PersistenceResult<()>;
     /// Live SecurityRotation transactions whose next step is one the durable
     /// rotation worker owns (`revoke`, `upload_new_material`,
-    /// `switch_authoritative_pointer`), oldest first. The list carries no
+    /// `switch_authoritative_pointer`, `erase_old_material`), oldest first. The list carries no
     /// authority; every transition rechecks its own preconditions.
     async fn rotations_awaiting_worker(&self, limit: u32) -> PersistenceResult<Vec<String>>;
     /// Stores the planned replacement envelopes, re-verified against the
@@ -492,6 +582,14 @@ pub trait SecurityTransactionStore: Send + Sync {
     async fn commit_rotation_pointer_switch(
         &self,
         write: RotationPointerSwitchWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord>;
+    /// Re-verifies the client attestation against the attesting device's
+    /// current accepted PCR authorization key at the locked PCR cut and
+    /// accepts `local_commit` with the `completed` terminal outcome in one
+    /// PostgreSQL transaction.
+    async fn commit_rotation_local_commit(
+        &self,
+        write: RotationLocalCommitWrite,
     ) -> PersistenceResult<SecurityTransactionRecord>;
     async fn step_outcome(
         &self,

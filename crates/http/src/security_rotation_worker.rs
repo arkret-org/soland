@@ -1,8 +1,8 @@
 //! Durable SecurityRotation coordinator worker.
 //!
-//! `revoke`, `upload_new_material` and `switch_authoritative_pointer` are
-//! coordinator-owned steps (security-transactions.md §3): the Station
-//! advances them, never a client `continue`. Every transition is a
+//! `revoke`, `upload_new_material`, `switch_authoritative_pointer` and
+//! `erase_old_material` are coordinator-owned steps (security-transactions.md
+//! §1.1, §3): the Station advances them, never a client request. Every transition is a
 //! registered storage unit, so a sweep that finds a transaction mid-way only
 //! resumes it; the process holds no rotation state of its own.
 

@@ -1757,8 +1757,8 @@ impl RecoverySessionService {
 
 pub use soland_storage::{
     BackupSeriesEraseProgressRecord as BackupSeriesEraseProgressState, RecoveryUnitCommitWrite,
-    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, RotationPointerSwitchWrite,
-    RotationUploadCommitWrite, SecurityTransactionRecord,
+    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, RotationLocalCommitWrite,
+    RotationPointerSwitchWrite, RotationUploadCommitWrite, SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord as SecurityTransactionStepAttemptState,
     SecurityTransactionStepOutcomeRecord as SecurityTransactionStepOutcomeState,
 };
@@ -1790,6 +1790,10 @@ pub trait SecurityTransactionPort: Send + Sync {
     async fn commit_rotation_pointer_switch(
         &self,
         write: RotationPointerSwitchWrite,
+    ) -> ServiceResult<SecurityTransactionRecord>;
+    async fn commit_rotation_local_commit(
+        &self,
+        write: RotationLocalCommitWrite,
     ) -> ServiceResult<SecurityTransactionRecord>;
     async fn step_outcome(
         &self,
@@ -1870,6 +1874,13 @@ impl SecurityTransactionService {
         write: RotationPointerSwitchWrite,
     ) -> ServiceResult<SecurityTransactionRecord> {
         self.transactions.commit_rotation_pointer_switch(write).await
+    }
+
+    pub async fn commit_rotation_local_commit(
+        &self,
+        write: RotationLocalCommitWrite,
+    ) -> ServiceResult<SecurityTransactionRecord> {
+        self.transactions.commit_rotation_local_commit(write).await
     }
 
     pub async fn create(

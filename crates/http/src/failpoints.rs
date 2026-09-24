@@ -28,7 +28,7 @@ pub const FAILPOINTS_ENV: &str = "SOLAND_FAILPOINTS";
 /// matching consumer in the workflow it names.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum FailpointId {
-    /// `POST /_arkret/self/keys/backup-series/erase` — each successfully
+    /// The rotation worker's `erase_old_material` — each successfully
     /// deleted old backup is one durable step.
     BackupSeriesEraseDurableStep,
 }

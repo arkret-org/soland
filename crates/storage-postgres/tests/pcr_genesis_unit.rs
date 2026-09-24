@@ -2604,7 +2604,7 @@ fn with_rotation_step(
 }
 
 #[tokio::test]
-async fn security_rotation_upload_and_pointer_switch_are_atomic_worker_units() {
+async fn security_rotation_worker_units_and_local_commit_are_atomic() {
     use arkret_models_collaboration::events_payloads::{
         DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
     };
@@ -3142,6 +3142,258 @@ async fn security_rotation_upload_and_pointer_switch_are_atomic_worker_units() {
             .next_required_step()
             .unwrap(),
         Some(SecurityTransactionStep::EraseOldMaterial)
+    );
+
+    // Erase, as the worker accepts it once the old series is gone.
+    let switched_record = transactions
+        .get(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let erase_request = arkret_models_crypto::BackupSeriesEraseRequestBody {
+        transaction_id: transaction_id.clone(),
+        transaction_request_digest: switched_record.resource.request_digest.clone(),
+        prepared_plan_digest: switched_record.resource.prepared_plan_digest.clone(),
+        erase_confirmation_digest: plan.erase_confirmation_digest.clone(),
+        series: vec![plan.backup_rotations[0].binding.clone()],
+        authority_commit_id: after.authority_commit_id.clone(),
+    };
+    let erase_bytes = arkret_canonical::canonical_json_bytes(&erase_request).unwrap();
+    transactions
+        .begin_step(soland_storage::SecurityTransactionStepAttemptRecord {
+            transaction_id: transaction_id.to_string(),
+            step: SecurityTransactionStep::EraseOldMaterial,
+            canonical_request: erase_bytes.clone(),
+        })
+        .await
+        .unwrap();
+    let mut erased = switched_record.clone();
+    erased
+        .resource
+        .accepted_steps
+        .push(AcceptedSecurityTransactionStep {
+            prepared_material_digest: plan.erase_confirmation_digest.clone(),
+            acceptor: SecurityTransactionAcceptor::Principal {
+                principal_id: station.clone(),
+            },
+            output_ref: plan.erase_confirmation_digest.to_string(),
+            output_digest: plan.erase_confirmation_digest.clone(),
+            accepted_at: switched_record.resource.accepted_steps[2].accepted_at
+                + chrono::TimeDelta::seconds(1),
+        });
+    transactions
+        .accept_step(
+            erased.clone(),
+            SecurityTransactionStepOutcomeRecord {
+                transaction_id: transaction_id.to_string(),
+                step: SecurityTransactionStep::EraseOldMaterial,
+                canonical_request: erase_bytes,
+                response: serde_json::to_value(&erased.resource).unwrap(),
+                participant_outcome: None,
+            },
+        )
+        .await
+        .unwrap();
+    let erased = transactions
+        .get(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        erased.resource.next_required_step().unwrap(),
+        Some(SecurityTransactionStep::LocalCommit)
+    );
+
+    // local_commit: the attestation is verified only against the attesting
+    // device's current accepted PCR authorization key, under a DID URL of the
+    // Account's principal DID whose fragment is exactly that device.
+    let (did, _) = author_a.method.as_str().rsplit_once('#').unwrap();
+    let method_of = |device: &DeviceId| DidUrl::new(format!("{did}#{device}")).unwrap();
+    let local_commit = |device: &DeviceId,
+                        method: DidUrl,
+                        seed: [u8; 32],
+                        committed_at: chrono::DateTime<chrono::Utc>| {
+        let artifact = arkret_models_crypto::SecurityRotationLocalCommit {
+            schema: arkret_wire::SchemaId::SECURITY_ROTATION_LOCAL_COMMIT_V1.to_owned(),
+            transaction_id: transaction_id.clone(),
+            transaction_request_digest: erased.resource.request_digest.clone(),
+            prepared_plan_digest: erased.resource.prepared_plan_digest.clone(),
+            local_commit_digest: plan.local_commit_digest.clone(),
+            device_id: device.clone(),
+            committed_at,
+        };
+        let mut attestation = arkret_models_crypto::ClientStepAttestation {
+            step: SecurityTransactionStep::LocalCommit,
+            output_ref: plan.local_commit_digest.to_string(),
+            transaction_id: transaction_id.clone(),
+            transaction_request_digest: erased.resource.request_digest.clone(),
+            prepared_plan_digest: erased.resource.prepared_plan_digest.clone(),
+            artifact: arkret_models_crypto::ClientStepAttestationArtifact::SecurityRotation(
+                artifact.clone(),
+            ),
+            auth_data: arkret_models_crypto::ClientStepAttestationAuthData {
+                verification_method: method,
+                signature_algorithm: "Ed25519".to_owned(),
+                signature: arkret_wire::Base64UrlString::new("AA").unwrap(),
+            },
+        };
+        let signature = SigningKey::from_bytes(&seed)
+            .sign(&attestation.signing_bytes().unwrap())
+            .to_bytes();
+        attestation.auth_data.signature =
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(signature))
+                .unwrap();
+        let digest = attestation.attestation_digest().unwrap();
+        let mut next = erased.clone();
+        next.resource
+            .accepted_steps
+            .push(AcceptedSecurityTransactionStep {
+                prepared_material_digest: digest.clone(),
+                acceptor: SecurityTransactionAcceptor::Principal {
+                    principal_id: station.clone(),
+                },
+                output_ref: plan.local_commit_digest.to_string(),
+                output_digest: digest,
+                accepted_at: committed_at,
+            });
+        next.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Completed {
+            completed_at: committed_at,
+            receipt_id: None,
+            completion_attestation: None,
+        });
+        let continue_request = arkret_models_crypto::SecurityTransactionContinueRequest {
+            request_digest: erased.resource.request_digest.clone(),
+            prepared_plan_digest: erased.resource.prepared_plan_digest.clone(),
+            expected_accepted_step_count: 4,
+            client_attestation: attestation.clone(),
+        };
+        soland_storage::RotationLocalCommitWrite {
+            step_outcome: SecurityTransactionStepOutcomeRecord {
+                transaction_id: transaction_id.to_string(),
+                step: SecurityTransactionStep::LocalCommit,
+                canonical_request: arkret_canonical::canonical_json_bytes(&continue_request)
+                    .unwrap(),
+                response: serde_json::to_value(&next.resource).unwrap(),
+                participant_outcome: Some(serde_json::to_value(&artifact).unwrap()),
+            },
+            transaction: next,
+            attestation,
+        }
+    };
+    let committed_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let footprint = rotation_footprint(&pool, &series, &transaction_id).await;
+    let refused_with = async |write: soland_storage::RotationLocalCommitWrite| {
+        let error = transactions
+            .commit_rotation_local_commit(write)
+            .await
+            .unwrap_err();
+        let unchanged = transactions
+            .get(transaction_id.as_str())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.resource, erased.resource, "{error}");
+        error.conflict_code()
+    };
+    // The generic accepted-step writer cannot accept a local commit.
+    let genuine = local_commit(&device_a, method_of(&device_a), author_a.seed, committed_at);
+    assert!(
+        transactions
+            .accept_step(genuine.transaction.clone(), genuine.step_outcome.clone())
+            .await
+            .is_err()
+    );
+    // A key that is not the device's accepted authorization key.
+    assert_eq!(
+        refused_with(local_commit(
+            &device_a,
+            method_of(&device_a),
+            [0x66; 32],
+            committed_at
+        ))
+        .await,
+        Some(soland_storage::ConflictCode::SignatureInvalid)
+    );
+    // A method naming another device, or not a DID of this principal.
+    assert_eq!(
+        refused_with(local_commit(
+            &device_a,
+            method_of(&device_c),
+            author_a.seed,
+            committed_at
+        ))
+        .await,
+        Some(soland_storage::ConflictCode::SignatureInvalid)
+    );
+    assert_eq!(
+        refused_with(local_commit(
+            &device_a,
+            DidUrl::new(format!("did:web:other.example#{device_a}")).unwrap(),
+            author_a.seed,
+            committed_at
+        ))
+        .await,
+        Some(soland_storage::ConflictCode::SignatureInvalid)
+    );
+    // The revoked device B, even with its own authorized key and method.
+    assert_eq!(
+        refused_with(local_commit(
+            &device_b,
+            method_of(&device_b),
+            [97; 32],
+            committed_at
+        ))
+        .await,
+        Some(soland_storage::ConflictCode::DeviceRevoked)
+    );
+    assert_eq!(rotation_footprint(&pool, &series, &transaction_id).await, footprint);
+
+    // The genuine local commit completes the rotation in one write.
+    let completed = transactions
+        .commit_rotation_local_commit(genuine.clone())
+        .await
+        .unwrap();
+    assert_eq!(completed.resource, genuine.transaction.resource);
+    assert!(matches!(
+        completed.resource.terminal_outcome,
+        Some(SecurityTransactionTerminalOutcome::Completed { .. })
+    ));
+    let (backups_n, outcomes, attempts) = footprint;
+    assert_eq!(
+        rotation_footprint(&pool, &series, &transaction_id).await,
+        (backups_n, outcomes + 1, attempts + 1)
+    );
+    // Exact replay reads the first result; other bytes are a conflict.
+    assert_eq!(
+        transactions
+            .commit_rotation_local_commit(genuine)
+            .await
+            .unwrap()
+            .resource,
+        completed.resource
+    );
+    let other = local_commit(
+        &device_a,
+        method_of(&device_a),
+        author_a.seed,
+        committed_at + chrono::TimeDelta::seconds(1),
+    );
+    assert_eq!(
+        transactions
+            .commit_rotation_local_commit(other)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(soland_storage::ConflictCode::DuplicateConflict)
+    );
+    assert_eq!(
+        transactions
+            .get(transaction_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .resource,
+        completed.resource
     );
 }
 

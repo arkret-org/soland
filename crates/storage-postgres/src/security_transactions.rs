@@ -5,7 +5,8 @@ use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     QueryableByName, RecoveryUnitCommitWrite, RevokeCommandTerminalWrite,
-    RevokeProposalCommitWrite, RotationPointerSwitchWrite, RotationUploadCommitWrite, RunQueryDsl,
+    RevokeProposalCommitWrite, RotationLocalCommitWrite, RotationPointerSwitchWrite,
+    RotationUploadCommitWrite, RunQueryDsl,
     SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
     SecurityTransactionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
@@ -646,6 +647,19 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn commit_rotation_local_commit(
+        &self,
+        write: RotationLocalCommitWrite,
+    ) -> PersistenceResult<SecurityTransactionRecord> {
+        write.validate()?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            rotation_units::commit_rotation_local_commit_in_connection(conn, write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn rotations_awaiting_worker(&self, limit: u32) -> PersistenceResult<Vec<String>> {
         #[derive(QueryableByName)]
         struct AwaitingRow {
@@ -655,7 +669,7 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "SELECT id FROM security_transactions WHERE kind='security_rotation' \
-             AND terminal_outcome IS NULL AND jsonb_array_length(accepted_steps) < 3 \
+             AND terminal_outcome IS NULL AND jsonb_array_length(accepted_steps) < 4 \
              ORDER BY created_at, id LIMIT $1",
         )
         .bind::<sql_types::BigInt, _>(i64::from(limit))
@@ -908,9 +922,10 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             SecurityTransactionStep::Revoke
                 | SecurityTransactionStep::UploadNewMaterial
                 | SecurityTransactionStep::SwitchAuthoritativePointer
+                | SecurityTransactionStep::LocalCommit
         ) {
             return Err(PersistenceError::Conflict(format!(
-                "rotation {:?} accepted step requires its guarded worker unit",
+                "rotation {:?} accepted step requires its guarded unit",
                 outcome.step
             )));
         }

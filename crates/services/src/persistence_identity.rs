@@ -1562,6 +1562,17 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .await?)
     }
 
+    async fn commit_rotation_local_commit(
+        &self,
+        write: crate::identity::RotationLocalCommitWrite,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionRecord> {
+        Ok(self
+            .0
+            .security_transactions()
+            .commit_rotation_local_commit(write)
+            .await?)
+    }
+
     async fn step_outcome(
         &self,
         transaction_id: &str,

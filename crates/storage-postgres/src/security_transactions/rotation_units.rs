@@ -1,9 +1,11 @@
-//! The coordinator-owned SecurityRotation steps after `revoke`
-//! (security-transactions.md §3): `upload_new_material` and
-//! `switch_authoritative_pointer`. Each is one PostgreSQL transaction that
-//! rechecks its durable dependencies at the locked PCR cut and appends its
-//! accepted step together with the effect, so a refusal leaves no backup,
-//! Event, Commit, pointer or step behind and a replay reads the first result.
+//! The SecurityRotation steps after `revoke` that carry a durable effect
+//! (security-transactions.md §3): the coordinator-owned
+//! `upload_new_material` and `switch_authoritative_pointer`, and the
+//! client-attested terminal `local_commit`. Each is one PostgreSQL
+//! transaction that rechecks its durable dependencies at the locked PCR cut
+//! and appends its accepted step together with the effect, so a refusal
+//! leaves no backup, Event, Commit, pointer or step behind and a replay reads
+//! the first result.
 
 use arkret_models_collaboration::events_payloads::KeyBackupActiveSeries;
 use arkret_models_crypto::{
@@ -16,8 +18,8 @@ use diesel_async::RunQueryDsl;
 use serde_json::Value;
 use soland_storage::{
     ConflictCode, KeyBackupActiveSeriesCommitOutcome, KeyBackupActiveSeriesCommitWrite,
-    PersistenceError, RotationPointerSwitchWrite, RotationUploadCommitWrite,
-    SecurityTransactionRecord,
+    PersistenceError, RotationLocalCommitWrite, RotationPointerSwitchWrite,
+    RotationUploadCommitWrite, SecurityTransactionRecord,
 };
 
 use super::{
@@ -168,7 +170,9 @@ async fn lock_pcr(
     Ok(())
 }
 
-/// The authorizing device must still be `active` at the locked cut.
+/// The rotation's signing device (the authorizing device for the worker
+/// steps, the attesting device for `local_commit`) must still be `active` at
+/// the locked cut.
 async fn active_authorizer_cut(
     conn: &mut AsyncPgConnection,
     account: &AccountId,
@@ -181,13 +185,13 @@ async fn active_authorizer_cut(
         .ok_or_else(|| {
             rejected(
                 ConflictCode::TemporarilyUnavailable,
-                "rotation authorizing device has no confirmed PCR cut",
+                "rotation signing device has no confirmed PCR cut",
             )
         })?;
     if &cut.authority.realm_id != realm_id {
         return Err(rejected(
             ConflictCode::FailedPrecondition,
-            "rotation authorizing device belongs to another PCR",
+            "rotation signing device belongs to another PCR",
         ));
     }
     if cut.generation_conflicted || cut.lifecycle != PcrDeviceLifecycle::Active {
@@ -198,7 +202,7 @@ async fn active_authorizer_cut(
         };
         return Err(rejected(
             code,
-            "rotation authorizing device is not active at the PCR cut",
+            "rotation signing device is not active at the PCR cut",
         ));
     }
     Ok(cut)
@@ -633,6 +637,149 @@ pub(super) async fn commit_rotation_pointer_switch_in_connection(
                 "rotation vanished after pointer switch",
             )
         })
+}
+
+/// The Ed25519 public key of `cut`'s device, taken only from its current
+/// accepted PCR authorization (`device_public_key_did`, a `did:key`).
+fn authorized_device_key(
+    cut: &ConfirmedPcrDeviceStatusCut,
+) -> Result<[u8; 32], PgTransactionError> {
+    let authorization = cut.authority.authorization.as_ref().ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation signing device has no accepted authorization",
+        )
+    })?;
+    let did_key = authorization
+        .payload
+        .device_public_key_did
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::FailedPrecondition,
+                "current device authorization has no did:key key",
+            )
+        })?;
+    arkret_canonical::multibase::decode_ed25519_multibase(did_key).map_err(|_| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "current device authorization key is invalid",
+        )
+    })
+}
+
+/// `local_commit`: the client-attested terminal step. Under the PCR share
+/// lock the attesting device must be `active` at the confirmed cut, the
+/// attestation's verification method must be the DID URL of the Account's
+/// principal DID with the exact `device_id` fragment, and the outer
+/// signature must verify against that device's current accepted
+/// authorization key. The step, the `completed` terminal outcome and the
+/// first response then commit together.
+pub(super) async fn commit_rotation_local_commit_in_connection(
+    conn: &mut AsyncPgConnection,
+    write: RotationLocalCommitWrite,
+) -> Result<SecurityTransactionRecord, PgTransactionError> {
+    use arkret_models_crypto::ClientStepAttestationArtifact;
+
+    write.validate()?;
+    let resource = &write.transaction.resource;
+    let transaction_id = resource.transaction_id.as_str();
+    let existing = load_one(conn, transaction_id, true)
+        .await?
+        .ok_or_else(|| rejected(ConflictCode::FailedPrecondition, "rotation is absent"))?;
+    if existing.canonical_request != write.transaction.canonical_request {
+        return Err(rejected(
+            ConflictCode::DuplicateConflict,
+            "local commit changed the rotation's original canonical request",
+        ));
+    }
+    if let Some(stored) =
+        load_step_outcome(conn, transaction_id, SecurityTransactionStep::LocalCommit).await?
+    {
+        if stored.canonical_request != write.step_outcome.canonical_request {
+            return Err(rejected(
+                ConflictCode::DuplicateConflict,
+                "local commit was accepted for different canonical bytes",
+            ));
+        }
+        return Ok(existing);
+    }
+    let next = existing
+        .resource
+        .next_required_step()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if next != Some(SecurityTransactionStep::LocalCommit) {
+        return Err(rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation is not ready for its local commit",
+        ));
+    }
+    let mut prior = resource.clone();
+    prior.accepted_steps.pop();
+    prior.terminal_outcome = None;
+    if existing.resource != prior {
+        return Err(rejected(
+            ConflictCode::DuplicateConflict,
+            "local commit does not extend the durable resource by exactly its terminal step",
+        ));
+    }
+    let ClientStepAttestationArtifact::SecurityRotation(artifact) = &write.attestation.artifact
+    else {
+        return Err(rejected(
+            ConflictCode::SchemaViolation,
+            "local commit requires SecurityRotationLocalCommit",
+        ));
+    };
+    let account = &resource.account_id;
+    let accepted_at = resource
+        .accepted_steps
+        .last()
+        .expect("validated local commit step")
+        .accepted_at;
+    let realm_id = pcr_realm(conn, account).await?;
+    lock_pcr(conn, &realm_id, false).await?;
+    let cut =
+        active_authorizer_cut(conn, account, &artifact.device_id, &realm_id, accepted_at).await?;
+    if verification_method_device(&write.attestation.auth_data.verification_method, account)
+        .as_ref()
+        != Some(&artifact.device_id)
+    {
+        return Err(rejected(
+            ConflictCode::SignatureInvalid,
+            "local commit verification method is not the attesting device of this Account",
+        ));
+    }
+    let public_key = authorized_device_key(&cut)?;
+    let signed = write
+        .attestation
+        .signing_bytes()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if !arkret_signatures::verify_detached_ed25519_signature(
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: public_key.to_vec(),
+        },
+        &signed,
+        write.attestation.auth_data.signature.as_str(),
+    ) {
+        return Err(rejected(
+            ConflictCode::SignatureInvalid,
+            "local commit signature does not match the attesting device's authorized key",
+        ));
+    }
+    accept_step_in_transaction(
+        conn,
+        write.transaction.clone(),
+        write.step_outcome,
+        StepAttemptSource::CoCommittedWithOutcome,
+    )
+    .await?;
+    load_one(conn, transaction_id, false).await?.ok_or_else(|| {
+        rejected(
+            ConflictCode::FailedPrecondition,
+            "rotation vanished after its local commit",
+        )
+    })
 }
 
 /// The pointer unit speaks in reason codes (`backup_revision_stale`, the
