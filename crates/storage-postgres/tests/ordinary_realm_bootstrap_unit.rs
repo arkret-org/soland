@@ -8,7 +8,7 @@ use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority,
-    OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
+    OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit, SelfProducerCommitGuard,
 };
 use soland_storage_postgres::{Db, PgAuthorityCommitStore};
 
@@ -25,6 +25,21 @@ async fn authority_root_count(
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "SELECT COUNT(*) AS count FROM realm_authority_root_current_results WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap()
+    .count
+}
+
+async fn bootstrap_singleton_count(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM realm_bootstrap_current_results WHERE realm_id=$1",
     )
     .bind::<Text, _>(realm_id.as_str())
     .get_result::<CountRow>(&mut *conn)
@@ -101,7 +116,8 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
     );
     let realm_id = genesis.realm_id.clone();
     let mut events = vec![genesis];
-    for (index, kind) in [
+    let creator = events[0].actor_id.clone();
+    for kind in [
         arkret_wire::EventKind::RealmProfile,
         arkret_wire::EventKind::RealmPolicyBundle,
         arkret_wire::EventKind::RealmJoinRule,
@@ -110,8 +126,20 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
         arkret_wire::EventKind::MemberState,
     ]
     .into_iter()
-    .enumerate()
     {
+        let payload = match kind {
+            arkret_wire::EventKind::RealmProfile => serde_json::json!({"name":"Test Realm"}),
+            arkret_wire::EventKind::RealmPolicyBundle => serde_json::json!({"policy_revision":1}),
+            arkret_wire::EventKind::RealmJoinRule => serde_json::json!({"value":"invite"}),
+            arkret_wire::EventKind::RealmHistoryAccess => {
+                serde_json::json!({"from":null,"to":"since_join"})
+            }
+            arkret_wire::EventKind::RealmDiscovery => serde_json::json!({"value":"private"}),
+            arkret_wire::EventKind::MemberState => {
+                serde_json::json!({"member_id":creator,"membership":"join"})
+            }
+            _ => unreachable!(),
+        };
         events.push(event(
             kind,
             arkret_wire::ScopeRef::Realm {
@@ -119,7 +147,7 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
             },
             &actor,
             &station,
-            serde_json::json!({"fixture_slot":index}),
+            payload,
             at,
         ));
     }
@@ -201,6 +229,40 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
     let first_event_id = unit.transactions[0].event.event_id.clone();
     let at = unit.transactions[0].commit.committed_at;
 
+    let producer = unit.transactions[0].event.actor_id.as_account_id().unwrap();
+    let first_commit = &unit.transactions[0].commit;
+    let unaccepted_guard =
+        SelfProducerCommitGuard::HumanDevice(soland_storage::DeviceRevocationGateSelector {
+            principal_id: producer.principal_id.clone(),
+            station_id: producer.station_id.clone(),
+            device_id: "key".to_owned(),
+            authorization_ref: arkret_wire::CommittedEventRef {
+                event_id: first_event_id.clone(),
+                commit_id: first_commit.commit_id.clone(),
+                stream_ref: first_commit.stream_ref.clone(),
+                stream_position: first_commit.stream_position,
+            },
+        });
+    assert!(
+        store
+            .admit_self_ordinary_realm_bootstrap_unit(&unit, &[], at)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .admit_self_ordinary_realm_bootstrap_unit(
+                &unit,
+                &vec![unaccepted_guard; unit.transactions.len()],
+                at,
+            )
+            .await
+            .is_err()
+    );
+    assert!(store.current_authority(&realm_id).await.unwrap().is_none());
+    assert_eq!(authority_root_count(&pool, &realm_id).await, 0);
+    assert_eq!(bootstrap_singleton_count(&pool, &realm_id).await, 0);
+
     let mut failing = unit.clone();
     failing.transactions[1].commit.signature.verification_method =
         arkret_wire::DidUrl::new("did:web:wrong-station.example#authority").unwrap();
@@ -230,6 +292,33 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
     };
     assert_eq!(commits.len(), 7);
     assert_eq!(authority_root_count(&pool, &realm_id).await, 1);
+    assert_eq!(bootstrap_singleton_count(&pool, &realm_id).await, 5);
+    let snapshot = store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.current_state_entries.len(), 8);
+    assert_eq!(
+        snapshot.retention_and_history_floor.history_access,
+        arkret_wire::HistoryAccess::SinceJoin
+    );
+    for selector in [
+        arkret_wire::CurrentSelector::RealmGenesis,
+        arkret_wire::CurrentSelector::RealmAuthorityRoot,
+        arkret_wire::CurrentSelector::RealmProfile,
+        arkret_wire::CurrentSelector::RealmPolicyBundle,
+        arkret_wire::CurrentSelector::RealmJoinRule,
+        arkret_wire::CurrentSelector::RealmHistoryAccess,
+        arkret_wire::CurrentSelector::RealmDiscovery,
+        arkret_wire::CurrentSelector::MemberState {
+            actor_id: unit.transactions[0].event.actor_id.clone(),
+        },
+    ] {
+        assert!(snapshot.current_state_entries.iter().any(|entry| {
+            matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: found, .. } if found == &selector)
+        }));
+    }
     assert!(
         store
             .committed_event(&first_event_id)

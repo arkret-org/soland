@@ -419,11 +419,7 @@ fn member_state_mutation(
             (
                 member.to_string(),
                 membership.to_owned(),
-                serde_json::to_value(&event.payload).map_err(|error| {
-                    PersistenceError::Internal(format!(
-                        "member_state payload serialization failed: {error}"
-                    ))
-                })?,
+                serde_json::json!({"membership": membership}),
             )
         }
         arkret_wire::EventKind::InviteAccept => (
@@ -1003,7 +999,7 @@ async fn commit_relation_current_result_in_connection(
     Ok(())
 }
 
-async fn commit_parent_membership_current_results(
+pub(crate) async fn commit_parent_membership_current_results(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,

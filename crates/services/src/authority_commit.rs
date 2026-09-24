@@ -422,6 +422,28 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Commit a self bootstrap only while every signed Event still has its
+    /// preflight producer authorization at the durable admission cut.
+    pub async fn admit_self_ordinary_realm_bootstrap_unit(
+        &self,
+        unit: &OrdinaryRealmBootstrapCommitUnit,
+        producer_guards: &[SelfProducerCommitGuard],
+        queued_at: DateTime<Utc>,
+    ) -> ServiceResult<OrdinaryRealmBootstrapCommitOutcome> {
+        unit.validate().map_err(|error| {
+            ServiceError::SchemaViolation(format!("invalid ordinary Realm bootstrap unit: {error}"))
+        })?;
+        if producer_guards.len() != unit.transactions.len() {
+            return Err(ServiceError::SchemaViolation(
+                "ordinary Realm bootstrap requires one producer guard per Event".to_owned(),
+            ));
+        }
+        Ok(self
+            .store()
+            .admit_self_ordinary_realm_bootstrap_unit(unit, producer_guards, queued_at)
+            .await?)
+    }
+
     /// Atomically publish both PCR genesis Events and Commits, the identity
     /// resolution current result and the founding device current result.
     pub async fn admit_pcr_genesis_unit(

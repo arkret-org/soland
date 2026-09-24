@@ -390,6 +390,15 @@ pub trait AuthorityCommitStore: Send + Sync {
         queued_at: DateTime<Utc>,
     ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome>;
 
+    /// Self bootstrap admission rechecks every exact producer binding in the
+    /// same transaction as the Realm authority, Events and Commits.
+    async fn admit_self_ordinary_realm_bootstrap_unit(
+        &self,
+        unit: &OrdinaryRealmBootstrapCommitUnit,
+        producer_guards: &[SelfProducerCommitGuard],
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome>;
+
     /// Install the complete PCR genesis, founding device current, and exact
     /// idempotency receipt in one durable transaction.
     async fn admit_pcr_genesis_unit(
