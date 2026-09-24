@@ -38,7 +38,7 @@ use events::strand::{
     strand_projection_for_realm,
 };
 use events::sync::SyncCursorError;
-use identity::auth::{auth_or_render, authenticated_session, is_device_revoked};
+use identity::auth::{auth_or_render, authenticated_session};
 use identity::device_messages::device_message_envelopes_after;
 use soland_http::util::{
     bearer_token, dpop_token, handle_for_did, is_valid_discoverability, is_valid_hash_digest,

@@ -1,5 +1,3 @@
-use soland_services::identity::FindDeviceQuery;
-
 use super::*;
 
 /// Revoke every active bearer session for an actor.
@@ -29,26 +27,6 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
         .revoke_local_devices(actor, now())
         .await
         .map_err(|error| error.to_string())
-}
-
-/// Returns true if the persistent device record has a `revoked_at` timestamp,
-/// or if the device cannot be located at all.
-pub async fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -> bool {
-    match state
-        .identities()
-        .find_device(FindDeviceQuery {
-            actor_id: actor.to_owned(),
-            device_id: device_id.to_owned(),
-        })
-        .await
-    {
-        Ok(Some(record)) => record.revoked_at.is_some(),
-        Ok(None) => match state.identities().devices_for_actor(actor).await {
-            Ok(devices) => !devices.iter().any(|record| record.device_id == device_id),
-            Err(_) => true,
-        },
-        Err(_) => true,
-    }
 }
 
 // ── Development Session Credential Derivation ───────────────────────────────

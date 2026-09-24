@@ -18,7 +18,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
 
-use super::{bearer_token, is_device_revoked, now, sha256_hex};
+use super::{bearer_token, now, sha256_hex};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -57,10 +57,9 @@ async fn keys_upload(
     req: &mut Request,
 ) -> JsonResult<KeysUploadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    // Session admission already required the device to be `active` at the
+    // PCR status cut; the device mirror is not a revocation authority.
     let session = aa.authenticated_session(state, req).await?;
-    if is_device_revoked(state, &session.actor, &session.device_id).await {
-        return Err(AppError::unauthenticated("device revoked"));
-    }
 
     let body = body.into_inner();
     let unsigned = body.unsigned();

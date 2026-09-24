@@ -38,7 +38,7 @@ pub(crate) mod webvh_validation;
 use super::system::describe;
 use super::{
     AuthArgs, SyncCursorError, append_audit_log, bearer_token, dpop_token, handle_for_did,
-    is_device_revoked, normalize_localpart, now, query_param, render_error, sha256_hex,
+    normalize_localpart, now, query_param, render_error, sha256_hex,
     validate_device_id, validate_did,
 };
 

@@ -128,14 +128,9 @@ pub async fn authenticated_session(
             "session revoked",
         ));
     }
-    let is_agent = classify_agent_session(&session)?;
-    if !is_agent && is_device_revoked(state, &session.actor, &session.device_id).await {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
-            "device revoked",
-        ));
-    }
+    // Device lifecycle is decided only by the PCR same-cut status fold in
+    // `enforce_session_device_revocation_gate`, never by the device mirror.
+    classify_agent_session(&session)?;
     if session.expires_at <= now() {
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
     }
@@ -225,9 +220,6 @@ pub(crate) async fn revalidate_stream_session(
     let original_is_agent = classify_agent_session(original)?;
     let current_is_agent = classify_agent_session(&current)?;
     if original_is_agent != current_is_agent {
-        return Err(rejected);
-    }
-    if !current_is_agent && is_device_revoked(state, &current.actor, &current.device_id).await {
         return Err(rejected);
     }
     enforce_session_device_revocation_gate(state, &current).await?;
@@ -547,7 +539,7 @@ async fn enforce_session_device_revocation_gate(
                     )
                 })?;
             if persisted_binding.is_none()
-                && device.is_none_or(|device| {
+                && device.is_some_and(|device| {
                     device.revoked_at.is_none()
                         && device.verification_state == "unverified"
                         && !device
