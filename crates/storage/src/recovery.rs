@@ -274,6 +274,7 @@ pub fn validate_security_transaction_update(
         || current.transaction_id != next.transaction_id
         || current.kind != next.kind
         || current.account_id != next.account_id
+        || current.authorizing_device_id != next.authorizing_device_id
         || current.expires_at != next.expires_at
         || current.created_at != next.created_at
         || current.request_digest != next.request_digest
@@ -290,6 +291,14 @@ pub fn validate_security_transaction_update(
     if current.terminal_outcome.is_some() {
         return Err(PersistenceError::Conflict(
             "terminal security transaction cannot change".to_owned(),
+        ));
+    }
+    if (current.revoke_proposal.is_some() && current.revoke_proposal != next.revoke_proposal)
+        || (current.revoke_command_outcome.is_some()
+            && current.revoke_command_outcome != next.revoke_command_outcome)
+    {
+        return Err(PersistenceError::Conflict(
+            "security rotation revoke proposal and command result are immutable".to_owned(),
         ));
     }
     if next.accepted_steps.len() < current.accepted_steps.len()
