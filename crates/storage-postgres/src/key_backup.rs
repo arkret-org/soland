@@ -66,6 +66,18 @@ pub struct PgKeyBackupStore {
 }
 #[async_trait]
 impl KeyBackupStore for PgKeyBackupStore {
+    async fn confirmed_active_series_for_device(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+        now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Option<arkret_models_crypto::BackupActiveSeriesState>> {
+        crate::key_backup_current_results::confirmed_key_backup_pointer_for_active_device(
+            &self.pool, account_id, device_id, now,
+        )
+        .await
+    }
+
     async fn confirmed_active_series(
         &self,
         account_id: &arkret_wire::AccountId,

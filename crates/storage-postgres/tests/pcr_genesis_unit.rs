@@ -7,9 +7,9 @@ use arkret_models_collaboration::events_payloads::{
 };
 use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput;
 use arkret_models_crypto::{
-    AcceptedSecurityTransactionStep, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
-    BackupRotationPlan, PreparedEventBatchRequest, PreparedEventUnit,
-    SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+    AcceptedSecurityTransactionStep, BackupActiveSeriesPointer, BackupObjectRef,
+    BackupRotationBinding, BackupRotationKind, BackupRotationPlan, PreparedEventBatchRequest,
+    PreparedEventUnit, SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
     SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
     SecurityTransactionAcceptor, SecurityTransactionCreateRequest, SecurityTransactionPreparedPlan,
     SecurityTransactionStep, SecurityTransactionTerminalOutcome,
@@ -29,12 +29,13 @@ use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, DeviceRevocationStore,
-    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError, RevokeCommandTerminalWrite,
-    RevokeProposalCommitWrite, SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
-    SecurityTransactionStore,
+    KeyBackupStore, PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError,
+    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, SecurityTransactionRecord,
+    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
 };
 use soland_storage_postgres::{
-    Db, PgAuthorityCommitStore, PgDeviceRevocationStore, PgPool, PgSecurityTransactionStore,
+    Db, PgAuthorityCommitStore, PgDeviceRevocationStore, PgKeyBackupStore, PgPool,
+    PgSecurityTransactionStore,
 };
 
 #[derive(diesel::QueryableByName)]
@@ -736,6 +737,20 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .await
             .unwrap()
     );
+    let backups = PgKeyBackupStore { pool: pool.clone() };
+    let initial_pointer = backups
+        .confirmed_active_series_for_device(&account, &authorizer, at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        initial_pointer.authority_commit_id,
+        genesis.transactions[1].commit.commit_id
+    );
+    assert!(matches!(
+        initial_pointer.secret_storage,
+        BackupActiveSeriesPointer::Absent {}
+    ));
 
     let target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
     let payload = serde_json::json!({
@@ -893,6 +908,12 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     .execute(&mut *conn)
     .await
     .unwrap();
+    assert!(
+        backups
+            .confirmed_active_series_for_device(&account, &authorizer, at)
+            .await
+            .is_err()
+    );
     assert!(
         transactions
             .commit_revoke_proposal(write.clone())

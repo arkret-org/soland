@@ -8,13 +8,15 @@ use arkret_models_crypto::{
     BackupActiveSeriesPointer, BackupActiveSeriesState, BackupKind,
     derive_key_backup_active_series_current_key,
 };
-use arkret_wire::{AccountId, ActorId, CommitStreamRef, Event, RealmCommit};
+use arkret_wire::{AccountId, ActorId, CommitStreamRef, DeviceId, Event, RealmCommit};
 use diesel::sql_types::{BigInt, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::Value;
 
-use crate::{AsyncPgConnection, PersistenceError, PersistenceResult, PgPool, pg_conn};
+use crate::{
+    AsyncPgConnection, PersistenceError, PersistenceResult, PgPool, PgTransactionError, pg_conn,
+};
 
 #[derive(QueryableByName)]
 struct CurrentRow {
@@ -168,11 +170,57 @@ pub(crate) async fn confirmed_key_backup_pointer(
     pool: &PgPool,
     account_id: &AccountId,
 ) -> PersistenceResult<Option<BackupActiveSeriesState>> {
+    let mut conn = pg_conn(pool).await?;
+    confirmed_key_backup_pointer_in_connection(&mut conn, account_id).await
+}
+
+/// The caller owns a repeatable-read snapshot. Device status and the pointer
+/// must name the same accepted PCR head before a self-service read is served.
+pub(crate) async fn confirmed_key_backup_pointer_for_active_device(
+    pool: &PgPool,
+    account_id: &AccountId,
+    device_id: &DeviceId,
+    now: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Option<BackupActiveSeriesState>> {
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<Option<BackupActiveSeriesState>, PgTransactionError, _>(async |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+            conn, account_id, device_id, now,
+        )
+        .await?
+        .ok_or_else(|| invalid("KeyBackup device has no confirmed PCR status"))?;
+        if cut.generation_conflicted
+            || cut.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
+        {
+            return Err(invalid("KeyBackup device is not active at the PCR cut").into());
+        }
+        let pointer = confirmed_key_backup_pointer_in_connection(conn, account_id)
+            .await?
+            .ok_or_else(|| invalid("KeyBackup pointer has no confirmed PCR head"))?;
+        if pointer.authority_commit_id != cut.authority.authority_commit_id
+            || pointer.control_realm_id != cut.authority.realm_id
+        {
+            return Err(
+                invalid("KeyBackup pointer and device status name different PCR cuts").into(),
+            );
+        }
+        Ok(Some(pointer))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+async fn confirmed_key_backup_pointer_in_connection(
+    conn: &mut AsyncPgConnection,
+    account_id: &AccountId,
+) -> PersistenceResult<Option<BackupActiveSeriesState>> {
     let actor = ActorId::account(account_id.clone());
     let current_key =
         derive_key_backup_active_series_current_key(&actor, BackupKind::SecretStorage)
             .map_err(|error| invalid(error.to_string()))?;
-    let mut conn = pg_conn(pool).await?;
     let row = sql_query(
         "SELECT p.pcr_realm_id, h.commit_id AS head_commit_id, \
                 h.stream_position AS head_position, \
@@ -202,7 +250,7 @@ pub(crate) async fn confirmed_key_backup_pointer(
     .bind::<Text, _>(account_id.principal_id.as_str())
     .bind::<Text, _>(account_id.station_id.as_str())
     .bind::<Text, _>(&current_key)
-    .get_result::<ConfirmedPointerRow>(&mut conn)
+    .get_result::<ConfirmedPointerRow>(&mut *conn)
     .await
     .optional()
     .map_err(PersistenceError::database)?;

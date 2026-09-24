@@ -69,6 +69,17 @@ pub trait KeyBackupStore: Send + Sync {
         &self,
         account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<arkret_models_crypto::BackupActiveSeriesState>>;
+    /// Resolve the human device lifecycle and pointer from one PCR snapshot.
+    async fn confirmed_active_series_for_device(
+        &self,
+        _account_id: &arkret_wire::AccountId,
+        _device_id: &arkret_wire::DeviceId,
+        _now: chrono::DateTime<Utc>,
+    ) -> PersistenceResult<Option<arkret_models_crypto::BackupActiveSeriesState>> {
+        Err(crate::PersistenceError::SchemaViolation(
+            "same-cut KeyBackup device authority is unavailable".to_owned(),
+        ))
+    }
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,
