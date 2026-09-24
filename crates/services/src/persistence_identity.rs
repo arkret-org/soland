@@ -1451,6 +1451,27 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
 
 #[async_trait::async_trait]
 impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransactions {
+    async fn commit_revoke_proposal(
+        &self,
+        write: crate::identity::RevokeProposalCommitWrite,
+    ) -> crate::ServiceResult<arkret_wire::RealmCommit> {
+        Ok(self
+            .0
+            .security_transactions()
+            .commit_revoke_proposal(write)
+            .await?)
+    }
+
+    async fn commit_revoke_command_terminal(
+        &self,
+        write: crate::identity::RevokeCommandTerminalWrite,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionRecord> {
+        Ok(self
+            .0
+            .security_transactions()
+            .commit_revoke_command_terminal(write)
+            .await?)
+    }
     async fn create(
         &self,
         transaction: crate::identity::SecurityTransactionRecord,

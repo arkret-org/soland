@@ -1757,13 +1757,21 @@ impl RecoverySessionService {
 
 pub use soland_storage::{
     BackupSeriesEraseProgressRecord as BackupSeriesEraseProgressState, RecoveryUnitCommitWrite,
-    SecurityTransactionRecord,
+    RevokeCommandTerminalWrite, RevokeProposalCommitWrite, SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord as SecurityTransactionStepAttemptState,
     SecurityTransactionStepOutcomeRecord as SecurityTransactionStepOutcomeState,
 };
 
 #[async_trait]
 pub trait SecurityTransactionPort: Send + Sync {
+    async fn commit_revoke_proposal(
+        &self,
+        write: RevokeProposalCommitWrite,
+    ) -> ServiceResult<arkret_wire::RealmCommit>;
+    async fn commit_revoke_command_terminal(
+        &self,
+        write: RevokeCommandTerminalWrite,
+    ) -> ServiceResult<SecurityTransactionRecord>;
     async fn create(
         &self,
         transaction: SecurityTransactionRecord,
@@ -1818,6 +1826,22 @@ pub struct SecurityTransactionService {
 impl SecurityTransactionService {
     pub fn new(transactions: Arc<dyn SecurityTransactionPort>) -> Self {
         Self { transactions }
+    }
+
+    pub async fn commit_revoke_proposal(
+        &self,
+        write: RevokeProposalCommitWrite,
+    ) -> ServiceResult<arkret_wire::RealmCommit> {
+        self.transactions.commit_revoke_proposal(write).await
+    }
+
+    pub async fn commit_revoke_command_terminal(
+        &self,
+        write: RevokeCommandTerminalWrite,
+    ) -> ServiceResult<SecurityTransactionRecord> {
+        self.transactions
+            .commit_revoke_command_terminal(write)
+            .await
     }
 
     pub async fn create(
