@@ -869,7 +869,7 @@ async fn complete_resumable_upload(
         return;
     }
     if let Err(message) = enforce_blob_quota(state, actor, realm_id.as_deref(), size_bytes).await {
-        render_error(res, StatusCode::FORBIDDEN, "quota_exceeded", message);
+        render_error(res, StatusCode::FORBIDDEN, "blob_quota_exceeded", message);
         return;
     }
     let sha256 = match sha256_file_hex(&staged_data_path).await {
@@ -893,7 +893,7 @@ async fn complete_resumable_upload(
         render_error(
             res,
             StatusCode::UNPROCESSABLE_ENTITY,
-            "digest_mismatch",
+            "blob_digest_mismatch",
             "provided content_digest does not match blob content",
         );
         return;
