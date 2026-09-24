@@ -4315,6 +4315,23 @@ CREATE TABLE pcr_device_authorization_current_results (
  CHECK(value ? 'authorized_generation_ref'),
  CHECK(NOT value ? 'device_id')
 );
+-- One immutable canonical dot per accepted ak.device.revoke. The read-side
+-- typed keyed set is assembled in dot order from these rows; terminal state
+-- remains a fold against each proposal's covering command result.
+CREATE TABLE pcr_device_revocation_proposals (
+ realm_id TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ tag_id TEXT NOT NULL,
+ event_id TEXT NOT NULL,
+ commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ stream_position BIGINT NOT NULL CHECK(stream_position BETWEEN 0 AND 9007199254740991),
+ payload JSONB NOT NULL CHECK(jsonb_typeof(payload)='object'),
+ PRIMARY KEY(realm_id,device_id,tag_id),
+ UNIQUE(event_id),
+ CHECK(tag_id = event_id || ':0')
+);
+CREATE INDEX pcr_device_revocation_proposals_commit
+ ON pcr_device_revocation_proposals(commit_id);
 
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.

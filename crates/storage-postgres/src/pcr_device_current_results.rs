@@ -288,6 +288,31 @@ mod tests {
         }
     }
 
+    async fn insert_accepted(conn: &mut AsyncPgConnection, event: &Event, commit: &RealmCommit) {
+        let token = crate::ids::event_token_part_expect_internal(event.event_id.as_str(), "event");
+        sql_query("INSERT INTO canonical_events (id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,received_at,committed_at) VALUES($1,1,$2,$3,$4,$5,$6,'\\x00'::bytea,$7,'committed',$8,$8)")
+            .bind::<Binary,_>(token.to_vec())
+            .bind::<Binary,_>(token[1..].to_vec())
+            .bind::<Text,_>(event.actor_id.to_string())
+            .bind::<Text,_>(event.realm_id.as_str())
+            .bind::<Jsonb,_>(serde_json::to_value(&event.scope_ref).unwrap())
+            .bind::<Text,_>(event.kind.as_str())
+            .bind::<Jsonb,_>(serde_json::to_value(event).unwrap())
+            .bind::<Timestamptz,_>(commit.committed_at)
+            .execute(&mut *conn).await.unwrap();
+        sql_query("INSERT INTO realm_commits (commit_id,realm_id,stream_key,stream_ref,stream_position,previous_commit_ref,event_pk,governance_generation,commit_json,committed_at) SELECT $1,$2,$3,$4,$5,$6,pk,0,$7,$8 FROM canonical_events WHERE id=$9")
+            .bind::<Text,_>(commit.commit_id.as_str())
+            .bind::<Text,_>(event.realm_id.as_str())
+            .bind::<Text,_>(arkret_canonical::canonical_json_string(&commit.stream_ref).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(&commit.stream_ref).unwrap())
+            .bind::<BigInt,_>(commit.stream_position as i64)
+            .bind::<Nullable<Text>,_>(commit.previous_commit_ref.as_ref().map(|id| id.as_str()))
+            .bind::<Jsonb,_>(serde_json::to_value(commit).unwrap())
+            .bind::<Timestamptz,_>(commit.committed_at)
+            .bind::<Binary,_>(token.to_vec())
+            .execute(&mut *conn).await.unwrap();
+    }
+
     #[tokio::test]
     async fn generation_cas_rejects_stale_and_rolls_back() {
         let database = crate::test_database::TestDatabase::lease().await;
@@ -405,5 +430,124 @@ mod tests {
             write_generation(&mut conn, &commit, Some(1), 2).await,
             Err(PersistenceError::Conflict(_))
         ));
+
+        let account = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        sql_query("INSERT INTO principal_resolutions \
+            (principal_id,station_id,pcr_realm_id,genesis_event_id,current_event_id,projection,updated_at) \
+            VALUES($1,$2,$3,$4,$4,'{}'::jsonb,now())")
+            .bind::<Text,_>(account.principal_id.as_str())
+            .bind::<Text,_>(account.station_id.as_str())
+            .bind::<Text,_>(realm_id.as_str())
+            .bind::<Text,_>(event.event_id.as_str())
+            .execute(&mut conn).await.unwrap();
+        let device_id =
+            arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-000000000001").unwrap();
+        let proposal = arkret_wire::test_support::raw_event(
+            EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            json!({"device_id":device_id,"revoked_by":account.principal_id,
+                "revoked_at":"2026-09-24T00:00:00.000Z","reason":"device_lost"}),
+        )
+        .unwrap();
+        let mut proposal_commit = self::commit(&proposal);
+        proposal_commit.commit_id = arkret_wire::RealmCommitId::from_digest([78; 32]);
+        proposal_commit.stream_position = 1;
+        proposal_commit.previous_commit_ref = Some(commit.commit_id.clone());
+        proposal_commit.authority_ref = commit.authority_ref.clone();
+        let before = crate::pcr_device_revocation_proposals::confirmed_revocation_proposals(
+            &pool, &account, &device_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(before.authority_commit_id, commit.commit_id);
+        assert!(before.proposals.is_empty());
+        let rollback = conn
+            .transaction::<(), PgTransactionError, _>(async |conn| {
+                insert_accepted(conn, &proposal, &proposal_commit).await;
+                crate::pcr_device_revocation_proposals::project_revoke_proposal_in_connection(
+                    conn,
+                    &proposal,
+                    &proposal_commit,
+                )
+                .await?;
+                Err(PersistenceError::Conflict("abort proposal transaction".to_owned()).into())
+            })
+            .await;
+        assert!(rollback.is_err());
+        assert!(
+            crate::pcr_device_revocation_proposals::confirmed_revocation_proposals(
+                &pool, &account, &device_id
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .proposals
+            .is_empty()
+        );
+        conn.transaction::<(), PgTransactionError, _>(async |conn| {
+            insert_accepted(conn, &proposal, &proposal_commit).await;
+            crate::pcr_device_revocation_proposals::project_revoke_proposal_in_connection(
+                conn,
+                &proposal,
+                &proposal_commit,
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+        .unwrap();
+        crate::pcr_device_revocation_proposals::project_revoke_proposal_in_connection(
+            &mut conn,
+            &proposal,
+            &proposal_commit,
+        )
+        .await
+        .unwrap();
+        let after = crate::pcr_device_revocation_proposals::confirmed_revocation_proposals(
+            &pool, &account, &device_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(after.authority_commit_id, proposal_commit.commit_id);
+        assert_eq!(after.proposals.len(), 1);
+        assert_eq!(
+            after.proposals[0].tag_id,
+            format!("{}:0", proposal.event_id)
+        );
+        let later = arkret_wire::test_support::raw_event(
+            EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            json!({"device_id":device_id,"revoked_by":account.principal_id,
+                "revoked_at":"2026-09-24T00:00:01.000Z","reason":"device_lost"}),
+        )
+        .unwrap();
+        let mut later_commit = self::commit(&later);
+        later_commit.commit_id = arkret_wire::RealmCommitId::from_digest([79; 32]);
+        later_commit.stream_position = 2;
+        later_commit.previous_commit_ref = Some(proposal_commit.commit_id.clone());
+        later_commit.authority_ref = commit.authority_ref.clone();
+        insert_accepted(&mut conn, &later, &later_commit).await;
+        assert!(
+            crate::pcr_device_revocation_proposals::confirmed_revocation_proposals(
+                &pool, &account, &device_id
+            )
+            .await
+            .is_err(),
+            "missing accepted proposal must make the same-snapshot read unavailable"
+        );
     }
 }
