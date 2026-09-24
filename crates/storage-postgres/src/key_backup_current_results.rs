@@ -31,6 +31,8 @@ struct ConfirmedPointerRow {
     #[diesel(sql_type = BigInt)]
     head_position: i64,
     #[diesel(sql_type = Nullable<Text>)]
+    latest_pointer_commit_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     pointer_commit_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     pointer_event_id: Option<String>,
@@ -174,6 +176,7 @@ pub(crate) async fn confirmed_key_backup_pointer(
     let row = sql_query(
         "SELECT p.pcr_realm_id, h.commit_id AS head_commit_id, \
                 h.stream_position AS head_position, \
+                latest_pointer.commit_id AS latest_pointer_commit_id, \
                 b.current_commit_id AS pointer_commit_id, \
                 b.current_event_id AS pointer_event_id, \
                 b.current_stream_position AS pointer_position, \
@@ -185,6 +188,12 @@ pub(crate) async fn confirmed_key_backup_pointer(
                        WHERE realm_id=p.pcr_realm_id \
                          AND stream_ref=jsonb_build_object('kind','realm','realm_id',p.pcr_realm_id) \
                        ORDER BY stream_position DESC LIMIT 1) h ON TRUE \
+         LEFT JOIN LATERAL (SELECT c.commit_id FROM realm_commits c \
+                            JOIN canonical_events e ON e.pk=c.event_pk \
+                            WHERE c.realm_id=p.pcr_realm_id \
+                              AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',p.pcr_realm_id) \
+                              AND e.kind='ak.key_backup.active_series' \
+                            ORDER BY c.stream_position DESC LIMIT 1) latest_pointer ON TRUE \
          LEFT JOIN key_backup_active_series_current_results b \
            ON b.realm_id=p.pcr_realm_id AND b.current_key=$3 \
          LEFT JOIN realm_commits c ON c.commit_id=b.current_commit_id \
@@ -209,7 +218,9 @@ pub(crate) async fn confirmed_key_backup_pointer(
         row.pointer_value,
         row.pointer_commit_json,
     ) {
-        (None, None, None, None, None) => BackupActiveSeriesPointer::Absent {},
+        (None, None, None, None, None) if row.latest_pointer_commit_id.is_none() => {
+            BackupActiveSeriesPointer::Absent {}
+        }
         (Some(commit_id), Some(event_id), Some(position), Some(value), Some(commit_json)) => {
             let record: KeyBackupActiveSeries = serde_json::from_value(value).map_err(|error| {
                 invalid(format!("stored KeyBackup pointer is invalid: {error}"))
@@ -219,6 +230,7 @@ pub(crate) async fn confirmed_key_backup_pointer(
             if record.actor_id != actor
                 || record.backup_kind != BackupKind::SecretStorage
                 || commit.commit_id.as_str() != commit_id
+                || row.latest_pointer_commit_id.as_deref() != Some(commit_id.as_str())
                 || commit.event_ref.as_str() != event_id
                 || commit.realm_id != control_realm_id
                 || commit.stream_ref
@@ -505,5 +517,33 @@ mod tests {
                 ..
             }
         ));
+
+        // An accepted successor without its typed current projection makes
+        // the read unavailable; it must not return the earlier pointer.
+        let mut later_payload = serde_json::to_value(&event.payload).unwrap();
+        later_payload["series_pointer_version"] = serde_json::json!(2);
+        later_payload["source_commit_ref"]["realm_commit_id"] =
+            serde_json::to_value(&successor.commit_id).unwrap();
+        let later_event = arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::KeyBackupActiveSeries.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: successor.realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            later_payload,
+        )
+        .unwrap();
+        let later_commit = commit(
+            later_event.event_id.clone(),
+            successor.realm_id.clone(),
+            2,
+            Some(successor.commit_id),
+        );
+        insert_commit(&mut conn, &later_commit, &later_event).await;
+        assert!(
+            confirmed_key_backup_pointer(&pool, &account).await.is_err(),
+            "a missing accepted pointer projection must not return a stale pointer"
+        );
     }
 }
