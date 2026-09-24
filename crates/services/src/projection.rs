@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
@@ -20,10 +20,6 @@ mod atomic_batch;
 pub mod tombstone;
 
 /// A confirmed metadata mutation is awaiting reconstruction at its exact head.
-#[derive(Clone, Copy, Debug, thiserror::Error)]
-#[error("confirmed metadata projection is temporarily unavailable")]
-pub struct MetadataProjectionPending;
-
 fn projection_event_ref(operation: &Operation) -> String {
     operation.context.event_id.to_string()
 }
@@ -83,7 +79,6 @@ impl std::ops::Deref for ServiceClock {
 #[derive(Clone)]
 pub struct ProjectionService {
     state: Arc<Mutex<ProjectionState>>,
-    pending_backup_metadata: Arc<Mutex<BTreeSet<(String, String)>>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
@@ -268,7 +263,6 @@ impl ProjectionService {
     pub fn new(clock_node: &str) -> Self {
         Self {
             state: Arc::new(Mutex::new(ProjectionState::new())),
-            pending_backup_metadata: Arc::new(Mutex::new(BTreeSet::new())),
             history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
@@ -1056,53 +1050,6 @@ impl ProjectionService {
             ProjectionEffect::Rejected { reason } => Some(reason),
             _ => None,
         }
-    }
-
-    pub fn key_backup_active_series(
-        &self,
-        actor_id: &str,
-        backup_kind: &str,
-    ) -> Result<
-        Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeries>,
-        MetadataProjectionPending,
-    > {
-        let pending = self.pending_backup_metadata.lock();
-        if pending.contains(&(actor_id.to_owned(), backup_kind.to_owned())) {
-            return Err(MetadataProjectionPending);
-        }
-        let state = self.state.lock();
-        let Some(row) = state.key_backup_active_series(actor_id, backup_kind) else {
-            return Ok(None);
-        };
-        let record = (|| {
-            Some(
-                arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
-                    schema: arkret_wire::SchemaId::KEY_BACKUP_ACTIVE_SERIES_V1.to_owned(),
-                    actor_id: serde_json::from_str(&row.actor_id).ok()?,
-                    backup_kind: arkret_models_crypto::BackupKind::try_from(
-                        row.backup_kind.as_str(),
-                    )
-                    .ok()?,
-                    active_series_id: arkret_identifiers::BackupSeriesId::new(
-                        row.active_series_id.clone(),
-                    )
-                    .ok()?,
-                    series_pointer_version: row.series_pointer_version,
-                    previous_series_ids: row
-                        .previous_series_ids
-                        .iter()
-                        .cloned()
-                        .map(arkret_identifiers::BackupSeriesId::new)
-                        .collect::<Result<Vec<_>, _>>()
-                        .ok()?,
-                    source_commit_ref: row.source_commit_ref.clone(),
-                    issued_at: row.issued_at,
-                    auth_data: row.auth_data.clone(),
-                    extra: row.extra.clone(),
-                },
-            )
-        })();
-        record.map(Some).ok_or(MetadataProjectionPending)
     }
 
     pub fn bind_circle_mls_group(

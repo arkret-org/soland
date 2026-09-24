@@ -14,15 +14,6 @@ use soland_services::identity::{
 
 use super::*;
 
-fn pending_backup_projection(
-    _: soland_services::projection::MetadataProjectionPending,
-) -> AppError {
-    crate::app_error!(
-        TemporarilyUnavailable,
-        "confirmed backup pointer is awaiting reconstruction; retry the same operation"
-    )
-}
-
 fn transaction_account(request: &SecurityTransactionCreateRequest) -> &arkret_wire::AccountId {
     match request {
         SecurityTransactionCreateRequest::Recovery(request) => &request.account_id,
@@ -1046,56 +1037,32 @@ pub(crate) async fn backup_series_erase_command(
         || transaction.resource.expires_at <= now
         || state.account_lifecycle_state(transaction.resource.account_id.principal_id.as_str())
             != "active"
-        || crate::routing::is_device_revoked(
-            state,
-            &transaction_actor.to_string(),
-            authorizing_device_id.as_str(),
-        )
-        .await
     {
         return Err(crate::app_error!(
             FailedPrecondition,
             "backup-series erase request is not authorized for this transaction",
         ));
     }
-    let principal = state
-        .persistence()
-        .principal_resolution_by_account_id(&transaction.resource.account_id)
+    // One PCR snapshot answers both execution-time checks (§3 step 4): the
+    // authorizing device is still active, and the durable secret_storage
+    // pointer with its covering head is the basis the request names.
+    let confirmed = state
+        .key_backups()
+        .confirmed_active_series_for_device(
+            &transaction.resource.account_id,
+            authorizing_device_id,
+            now,
+        )
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok()
+        .flatten()
         .ok_or_else(|| {
             crate::app_error!(
                 FailedPrecondition,
-                "principal control Realm is unavailable before old-series erasure",
+                "authorizing device or confirmed backup pointer is not current",
             )
         })?;
-    let current_authority = state
-        .authority_commits()
-        .current_authority(&principal.pcr_realm_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| {
-            crate::app_error!(
-                FailedPrecondition,
-                "principal control Realm has no current authority",
-            )
-        })?;
-    let current_head = state
-        .authority_commits()
-        .stream_head(&arkret_wire::CommitStreamRef::Realm {
-            realm_id: principal.pcr_realm_id.clone(),
-        })
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| {
-            crate::app_error!(
-                FailedPrecondition,
-                "principal control Realm has no current commit",
-            )
-        })?;
-    if current_authority.service_id != state.service_core_id()
-        || current_head.commit_id != request.authority_commit_id
-    {
+    if confirmed.authority_commit_id != request.authority_commit_id {
         return Err(crate::app_error!(
             FailedPrecondition,
             "backup-series erase authority commit is no longer current",
@@ -1132,30 +1099,26 @@ pub(crate) async fn backup_series_erase_command(
             .event_queries()
             .accepted_event(rotation.active_series_event_id.as_str())
             .await
-            .map_err(recovery_service_error)?;
-        if active.is_none_or(|event| {
-            event.kind != arkret_wire::EventKind::KeyBackupActiveSeries.as_str()
-        }) {
-            return Err(crate::app_error!(
-                FailedPrecondition,
-                "replacement active-series Event is not accepted"
-            ));
-        }
-        let active_pointer = state
-            .projections()
-            .key_backup_active_series(
-                &transaction_actor.to_string(),
-                backup_rotation_kind_name(rotation.backup_kind),
-            )
-            .map_err(pending_backup_projection)?
+            .map_err(recovery_service_error)?
+            .filter(|event| event.kind == arkret_wire::EventKind::KeyBackupActiveSeries.as_str())
+            .and_then(|event| {
+                serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
+                >(event.envelope.get("payload")?.clone())
+                .ok()
+            })
             .ok_or_else(|| {
                 crate::app_error!(
                     FailedPrecondition,
-                    "replacement backup series is not authoritative"
+                    "replacement active-series Event is not accepted"
                 )
             })?;
-        if active_pointer.active_series_id != rotation.new_series_id
-            || !active_pointer
+        if !matches!(
+            &confirmed.secret_storage,
+            arkret_models_crypto::BackupActiveSeriesPointer::Active { active_series_id, .. }
+                if active_series_id == &rotation.new_series_id
+        ) || active.active_series_id != rotation.new_series_id
+            || !active
                 .previous_series_ids
                 .contains(&rotation.previous_series_id)
         {
@@ -1991,14 +1954,6 @@ fn security_transaction_service_error(error: soland_services::ServiceError) -> A
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pending_confirmed_backup_pointer_returns_retryable_unavailable() {
-        let error =
-            pending_backup_projection(soland_services::projection::MetadataProjectionPending);
-        assert_eq!(error.http_status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(error.wire_code(), "temporarily_unavailable");
-    }
 
     fn core(name: &str) -> DidCoreId {
         DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()
