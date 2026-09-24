@@ -336,14 +336,13 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
     );
     assert!(store.current_authority(&realm_id).await.unwrap().is_none());
     assert_eq!(authority_root_count(&pool, &realm_id).await, 0);
-    assert!(store.queued_event(&first_event_id).await.unwrap().is_none());
-    assert!(
-        store
-            .committed_event(&first_event_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert_eq!(bootstrap_singleton_count(&pool, &realm_id).await, 0);
+    assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
+    assert!(store.realm_state_snapshot_material(&realm_id).await.unwrap().is_none());
+    for transaction in &unit.transactions {
+        assert!(store.queued_event(&transaction.event.event_id).await.unwrap().is_none());
+        assert!(store.committed_event(&transaction.event.event_id).await.unwrap().is_none());
+    }
 
     let accepted = store
         .admit_ordinary_realm_bootstrap_unit(&unit, at)
@@ -415,6 +414,9 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
             .await
             .is_err()
     );
+    assert_eq!(authority_root_count(&pool, &realm_id).await, 1);
+    assert_eq!(bootstrap_singleton_count(&pool, &realm_id).await, 5);
+    assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
 }
 
 #[tokio::test]
