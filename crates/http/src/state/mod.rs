@@ -10,6 +10,7 @@ mod authority_bootstrap_validation;
 mod authority_key_backup_pointer;
 mod authority_port;
 mod authority_producer_validation;
+mod authority_self_event_unit;
 mod member_identity;
 mod notification;
 mod service_route_fetcher;
@@ -22,8 +23,9 @@ pub use app_state::{
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
     getrandom_seed, realm_genesis_payload,
 };
-pub(crate) use authority_producer_validation::verify_self_event_producer;
 pub(crate) use authority_key_backup_pointer::mirror_committed_key_backup_pointer;
+pub(crate) use authority_producer_validation::verify_self_event_producer;
+pub(crate) use authority_self_event_unit::submit_self_moderation_report;
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
     MemberIdentitySubjectKey,

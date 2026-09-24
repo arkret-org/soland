@@ -4320,6 +4320,24 @@ CREATE TABLE message_revision_current_results (
 );
 CREATE INDEX message_revision_current_results_realm ON message_revision_current_results(realm_id,message_id);
 
+-- `moderation_report` typed current: the accepted `ak.self.moderation.report`
+-- Event itself, keyed by its own EventId and stored with the exact complete
+-- signed payload at the covering RealmCommit. The report queue item is a
+-- read-side View over this family; it has no second writable state here.
+CREATE TABLE moderation_report_current_results (
+ realm_id TEXT NOT NULL,
+ report_event_id TEXT NOT NULL PRIMARY KEY,
+ current_commit_id TEXT NOT NULL UNIQUE,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'realm_id'=realm_id),
+ CHECK(jsonb_typeof(value->'target_ref')='string'),
+ CHECK(jsonb_typeof(value->'reporter_id')='string')
+);
+CREATE INDEX moderation_report_current_results_realm ON moderation_report_current_results(realm_id,report_event_id);
+
 -- Ordinary Realm bootstrap singleton families share one physical table. Each
 -- row is keyed by its registered typed-current-result selector kind and by
 -- the exact RealmCommit that first established it.

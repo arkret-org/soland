@@ -2406,3 +2406,404 @@ async fn peer_stream_scan_refuses_non_hosting_peers_and_never_serves_an_unproved
         AccountStreamScan::Unproved(_)
     ));
 }
+
+fn moderation_report_request(
+    previous: &EventCommitRequest,
+    reporter: &arkret_wire::DidCoreId,
+    payload: serde_json::Value,
+) -> EventCommitRequest {
+    let mut request = previous.clone();
+    let previous_commit = &previous.authority_commit.commit;
+    let realm_id = previous.authority_commit.event.realm_id.clone();
+    let station = previous
+        .authority_commit
+        .expected_authority
+        .service_id
+        .clone();
+    let event = event(
+        arkret_wire::EventKind::SelfModerationReport,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        reporter,
+        &station,
+        payload,
+        previous_commit.committed_at,
+    );
+    request.authority_commit.event = event.clone();
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("report:{}", event.event_id).as_bytes()),
+    );
+    request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
+    request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
+    request.event.event_id = event.event_id.to_string();
+    request.event.actor_id = event.actor_id.to_string();
+    request.event.kind = event.kind.as_str().to_owned();
+    request.event.envelope = serde_json::to_value(&event).unwrap();
+    request.event.canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+    request.projections[0].event_kind = event.kind.as_str().to_owned();
+    request.projections[0].sender = Some(event.actor_id.to_string());
+    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request
+}
+
+fn report_payload(
+    realm_id: &arkret_wire::RealmId,
+    target_ref: &str,
+    reporter: &arkret_wire::DidCoreId,
+) -> serde_json::Value {
+    serde_json::json!({
+        "realm_id": realm_id,
+        "target_ref": target_ref,
+        "report_reason_code": "spam",
+        "reporter_id": reporter,
+        "provenance": "self"
+    })
+}
+
+fn franking_nonce(
+    request: &EventCommitRequest,
+    received_by: &arkret_wire::DidCoreId,
+    replay_nonce: &str,
+) -> soland_storage::EventBatchCommitRequest {
+    soland_storage::EventBatchCommitRequest {
+        events: vec![request.clone()],
+        franking_replay_nonce: Some(soland_storage::FrankingReplayNonceCommit {
+            realm_id: request.authority_commit.event.realm_id.to_string(),
+            received_by: received_by.clone(),
+            replay_nonce: replay_nonce.to_owned(),
+            report_event_id: request.authority_commit.event.event_id.to_string(),
+            consumed_at: request.authority_commit.commit.committed_at,
+        }),
+        applet_record: None,
+        applet_authoring_preview: None,
+        agent_membership_cascade: None,
+    }
+}
+
+async fn report_row_count(pool: &soland_storage_postgres::PgPool) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM moderation_report_current_results")
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
+async fn franking_nonce_count(pool: &soland_storage_postgres::PgPool) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM moderation_franking_replay_nonces")
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
+/// Real PostgreSQL: the reporter-signed self moderation report commits with its
+/// Station-signed RealmCommit, the exact `moderation_report` current row and
+/// the consumed franking nonce in one transaction; every refusal (absent
+/// target, non-member reporter, facade provenance, Circle scope, reused nonce,
+/// divergent bytes for an accepted Event id, unplanned remote target) leaves
+/// zero Event, Commit, current, nonce and outbox writes.
+#[tokio::test]
+async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writes() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    unit.validate().unwrap();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let message = message_create_request(&default, &strand_id, "reported");
+    uow.commit_event(message.clone()).await.unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let reporter = message
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
+    let target = message.authority_commit.event.event_id.to_string();
+    let station = message
+        .authority_commit
+        .expected_authority
+        .service_id
+        .clone();
+
+    let assert_zero_writes = async |request: &EventCommitRequest, reports: i64, nonces: i64| {
+        assert!(
+            store
+                .committed_event(&request.authority_commit.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(report_row_count(&pool).await, reports);
+        assert_eq!(franking_nonce_count(&pool).await, nonces);
+        assert_eq!(source_outbox_count(&pool, &realm_id).await, 0);
+    };
+
+    // An absent target is the single anti-oracle not_found.
+    let absent = arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"absent-report-target"),
+    );
+    let denied = moderation_report_request(
+        &message,
+        &reporter,
+        report_payload(&realm_id, absent.as_str(), &reporter),
+    );
+    let error = uow.commit_event(denied.clone()).await.unwrap_err();
+    assert!(
+        matches!(error, soland_storage::PersistenceError::NotFound(_)),
+        "{error}"
+    );
+    assert_zero_writes(&denied, 0, 0).await;
+
+    // A reporter that is not a confirmed joined member cannot see the target.
+    let outsider = arkret_wire::DidCoreId::new("ak:did_core:web:report-outsider.example").unwrap();
+    let denied = moderation_report_request(
+        &message,
+        &outsider,
+        report_payload(&realm_id, &target, &outsider),
+    );
+    assert!(matches!(
+        uow.commit_event(denied.clone()).await.unwrap_err(),
+        soland_storage::PersistenceError::NotFound(_)
+    ));
+    assert_zero_writes(&denied, 0, 0).await;
+
+    // MIMI facade provenance has its own ingress and never enters this unit.
+    let mut facade = report_payload(&realm_id, &target, &reporter);
+    facade["provenance"] = serde_json::json!("mimi_facade");
+    facade["source_provider_id"] = serde_json::json!("ak:did_core:web:mimi-provider.example");
+    let denied = moderation_report_request(&message, &reporter, facade);
+    let error = uow.commit_event(denied.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("directly authored"), "{error}");
+    assert_zero_writes(&denied, 0, 0).await;
+
+    // A Circle effective scope does not match a Realm-scope target.
+    let mut circle = report_payload(&realm_id, &target, &reporter);
+    circle["effective_scope"] = serde_json::json!({
+        "kind": "circle",
+        "realm_id": realm_id,
+        "circle_id": arkret_wire::CircleId::from_event_id(&message.authority_commit.event.event_id),
+    });
+    let denied = moderation_report_request(&message, &reporter, circle);
+    assert!(matches!(
+        uow.commit_event(denied.clone()).await.unwrap_err(),
+        soland_storage::PersistenceError::NotFound(_)
+    ));
+    assert_zero_writes(&denied, 0, 0).await;
+
+    // Accepted: Event, Commit, exact current row and the consumed nonce.
+    let mut framed = report_payload(&realm_id, &target, &reporter);
+    framed["franking_proof"] = serde_json::json!({
+        "realm_id": realm_id,
+        "event_id": target,
+        "received_by": station,
+        "verification_method": "did:web:bootstrap-station.example#notary-key",
+        "received_at": message.authority_commit.commit.committed_at,
+        "replay_nonce": "report-nonce-0000000001",
+        "signature": "c2lnbmF0dXJl"
+    });
+    let report = moderation_report_request(&message, &reporter, framed);
+    let outcome = uow
+        .commit_event_batch(franking_nonce(&report, &station, "report-nonce-0000000001"))
+        .await
+        .unwrap();
+    assert!(outcome.event_inserted);
+    assert_eq!(outcome.outbox_inserted, 0);
+    let committed = store
+        .committed_event(&report.authority_commit.event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.event, report.authority_commit.event);
+    assert_eq!(committed.commit, report.authority_commit.commit);
+    #[derive(diesel::QueryableByName)]
+    struct ReportRow {
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+        #[diesel(sql_type = BigInt)]
+        current_stream_position: i64,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let row = diesel::sql_query(
+        "SELECT current_commit_id,current_stream_position,value \
+         FROM moderation_report_current_results WHERE report_event_id=$1 AND realm_id=$2",
+    )
+    .bind::<Text, _>(report.authority_commit.event.event_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<ReportRow>(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert_eq!(
+        row.current_commit_id,
+        report.authority_commit.commit.commit_id.as_str()
+    );
+    assert_eq!(
+        row.current_stream_position,
+        report.authority_commit.commit.stream_position as i64
+    );
+    assert_eq!(
+        row.value,
+        serde_json::to_value(&report.authority_commit.event.payload).unwrap()
+    );
+    assert_eq!(report_row_count(&pool).await, 1);
+    assert_eq!(franking_nonce_count(&pool).await, 1);
+    // The Realm snapshot cut still materializes after the report Commit.
+    store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // The same Event id with different canonical bytes is refused and the
+    // accepted Event is not rewritten.
+    let mut divergent = report.clone();
+    let proof = divergent
+        .authority_commit
+        .event
+        .producer_proof
+        .as_mut()
+        .unwrap();
+    proof.created_at = proof.created_at + chrono::Duration::seconds(1);
+    divergent.event.envelope = serde_json::to_value(&divergent.authority_commit.event).unwrap();
+    let error = uow.commit_event(divergent).await.unwrap_err();
+    assert!(
+        error.to_string().contains("event_hash_collision"),
+        "{error}"
+    );
+    assert_eq!(
+        store
+            .committed_event(&report.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .event,
+        report.authority_commit.event
+    );
+    assert_eq!(report_row_count(&pool).await, 1);
+
+    // A second report that reuses the consumed franking nonce is refused.
+    let mut reused = report_payload(&realm_id, &target, &reporter);
+    reused["report_reason_code"] = serde_json::json!("harassment");
+    reused["franking_proof"] = report.authority_commit.event.payload["franking_proof"].clone();
+    let denied = moderation_report_request(&report, &reporter, reused);
+    let error = uow
+        .commit_event_batch(franking_nonce(&denied, &station, "report-nonce-0000000001"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate_conflict"), "{error}");
+    assert_zero_writes(&denied, 1, 1).await;
+
+    // A Realm-target report without evidence is accepted at the next position.
+    let realm_report = moderation_report_request(
+        &report,
+        &reporter,
+        report_payload(&realm_id, realm_id.as_str(), &reporter),
+    );
+    uow.commit_event(realm_report.clone()).await.unwrap();
+    assert_eq!(report_row_count(&pool).await, 2);
+
+    // A newly joined remote account makes the empty source outbox false.
+    let remote = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:report-remote.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:report-remote-station.example").unwrap(),
+    ));
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,'join',$3,$4,$5,$6)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(remote.to_string())
+    .bind::<Text, _>(unit.transactions.last().unwrap().commit.commit_id.as_str())
+    .bind::<BigInt, _>(unit.transactions.last().unwrap().commit.stream_position as i64)
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"membership":"join"}))
+    .bind::<diesel::sql_types::Timestamptz, _>(unit.transactions[0].commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let mut remote_payload = report_payload(&realm_id, &target, &reporter);
+    remote_payload["report_reason_code"] = serde_json::json!("illegal");
+    let denied = moderation_report_request(&realm_report, &reporter, remote_payload);
+    let error = uow.commit_event(denied.clone()).await.unwrap_err();
+    assert!(
+        error.to_string().contains("remote delivery target set"),
+        "{error}"
+    );
+    assert_zero_writes(&denied, 2, 1).await;
+}
+
+/// Real PostgreSQL: a committed moderation report is moderator-only, so the
+/// caller-unaware single-member disclosure subset refuses the whole cut
+/// instead of signing a snapshot that omits or discloses it.
+#[tokio::test]
+async fn moderation_report_row_refuses_the_single_member_disclosure_cut() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    assert_eq!(
+        single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+            .await
+            .unwrap()
+            .unwrap()
+            .current_state_entries
+            .len(),
+        10
+    );
+
+    let report = moderation_report_request(
+        &default,
+        &creator.principal_id,
+        report_payload(&realm_id, strand_id.as_str(), &creator.principal_id),
+    );
+    uow.commit_event(report).await.unwrap();
+    assert_eq!(report_row_count(&pool).await, 1);
+    let error = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("outside the disclosure subset"),
+        "{error}"
+    );
+}

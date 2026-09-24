@@ -1,0 +1,285 @@
+//! The guarded self-authored Event unit of work.
+//!
+//! One caller-signed Event is admitted by the current governing Station in a
+//! single PostgreSQL transaction: the queued Event, its Station-signed
+//! `RealmCommit` at the exact per-stream head, the kind's registered typed
+//! current result, the source outbox (empty for the supported local-only
+//! Realm kinds), the projection event and any kind-specific effect such as the
+//! consumed franking replay nonce. The producer guard and the stream head are
+//! rechecked inside that transaction, so a failure leaves zero writes.
+//!
+//! Only kinds with a registered same-cut current writer enter this unit. The
+//! generic `/_arkret/self/events` route and dedicated operations such as
+//! `ak.self.moderation.command.report.v1` share it; every other kind stays
+//! closed at its caller.
+
+use arkret_wire::{AuthorityCommitStatus, AuthoritySubmitOutcome, Event, EventAdmissionSubmission};
+use chrono::Utc;
+use soland_services::identity::SessionIdentityState;
+use soland_services::{ServiceError, ServiceResult};
+use soland_storage::SelfProducerCommitGuard;
+
+use super::AppState;
+
+/// Kind-specific durable effects committed atomically with the Event.
+#[derive(Default)]
+pub(super) struct SelfEventUnitEffects {
+    /// The report's embedded franking proof nonce; its `consumed_at` is set to
+    /// the accepting Commit time inside the unit.
+    pub(super) franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
+}
+
+async fn exact_replay(
+    state: &AppState,
+    event: &Event,
+) -> ServiceResult<Option<AuthoritySubmitOutcome>> {
+    let Some(existing) = state
+        .authority_commits()
+        .committed_event(&event.event_id)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if existing.event != *event {
+        return Err(ServiceError::Conflict(
+            "duplicate_conflict: event_id is already committed with different canonical content"
+                .to_owned(),
+        ));
+    }
+    Ok(Some(AuthoritySubmitOutcome::Accepted {
+        status: AuthorityCommitStatus::Duplicate,
+        commit: existing.commit,
+    }))
+}
+
+/// Admit one verified self-authored Event through the guarded unit.
+pub(super) async fn commit_self_event_unit(
+    state: &AppState,
+    event: &Event,
+    producer_guard: SelfProducerCommitGuard,
+    effects: SelfEventUnitEffects,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    if let Some(outcome) = exact_replay(state, event).await? {
+        return Ok(outcome);
+    }
+    let envelope = serde_json::to_value(event)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let operation_id =
+        crate::routing::events::event_log::event_operation_id(&envelope, event.event_id.as_str())
+            .ok_or_else(|| {
+            ServiceError::SchemaViolation("self Event projection id is invalid".to_owned())
+        })?;
+    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+        operation_id,
+        arkret_wire::OperationKind::Create,
+        None,
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    crate::routing::events::operations::validate_operation_semantics(
+        state,
+        std::slice::from_ref(&operation),
+    )
+    .map_err(|reason| ServiceError::SchemaViolation(reason.to_owned()))?;
+    crate::routing::events::operations::validate_operation_policy(
+        state,
+        std::slice::from_ref(&operation),
+    )
+    .await
+    .map_err(|reason| ServiceError::Conflict(reason.to_owned()))?;
+    if event.kind == arkret_wire::EventKind::MessageCreate {
+        crate::routing::message_authoring::message_create_send_gate(state, event).await?;
+    }
+    if let Some(reason) = state
+        .projections()
+        .preflight_projected_batch_rejection(std::iter::once(&operation))
+    {
+        return Err(ServiceError::Conflict(reason));
+    }
+    let committed_at = Utc::now();
+    let method = arkret_wire::DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .map_err(|error| ServiceError::Internal(error.to_string()))?;
+    let transaction = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
+        .await?;
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(
+        &event
+            .digest_payload()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?,
+    )
+    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let record = soland_storage::CanonicalEventRecord {
+        event_id: event.event_id.to_string(),
+        actor_id: event.actor_id.to_string(),
+        realm_id: Some(event.realm_id.to_string()),
+        kind: event.kind.as_str().to_owned(),
+        schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+        digest_suite: arkret_canonical::DigestSuite::Sha256,
+        canonical_digest,
+        canonical_bytes,
+        envelope,
+        received_at: committed_at,
+    };
+    let command = soland_services::events::CommitAcceptedEventCommand {
+        authority_commit: transaction.clone(),
+        self_producer_guard: Some(producer_guard),
+        event: record,
+        parent_membership_admission: None,
+        device_pairing_authorization: None,
+        contact_projection: None,
+        agent_draft_pending_intent: None,
+        actor_private_account_data: None,
+        consent_projection: None,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
+        projections: vec![soland_services::events::ProjectedEvent {
+            event_id: event.event_id.to_string(),
+            realm_id: event.realm_id.to_string(),
+            event_kind: event.kind.clone(),
+            operation_kind: "create".to_owned(),
+            operation_id: Some(operation.operation_id.to_string()),
+            sender: Some(event.actor_id.to_string()),
+            payload: serde_json::to_value(&event.payload)
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?,
+            created_at: event.created_at,
+            received_at: committed_at,
+        }],
+        idempotency: None,
+        deliveries: Vec::new(),
+    };
+    let committed = match effects.franking_replay_nonce {
+        Some(mut nonce) => {
+            nonce.consumed_at = committed_at;
+            state
+                .events()
+                .commit_accepted_event_batch(
+                    soland_services::events::CommitAcceptedEventBatchCommand {
+                        events: vec![command],
+                        franking_replay_nonce: Some(nonce),
+                        applet_record: None,
+                        applet_authoring_preview: None,
+                        agent_membership_cascade: None,
+                    },
+                )
+                .await
+        }
+        None => state.events().commit_accepted_event(command).await,
+    };
+    if let Err(error) = committed {
+        // A concurrent exact replay may have won the same Event identity; it
+        // answers with the stored outcome instead of the losing rollback.
+        if let Some(outcome) = exact_replay(state, event).await? {
+            return Ok(outcome);
+        }
+        return Err(error);
+    }
+    let effect = state.projections().apply_projected(&operation, state.hlc());
+    if matches!(
+        effect,
+        soland_services::projection::ProjectionEffectView::Rejected { .. }
+            | soland_services::projection::ProjectionEffectView::Ignored
+    ) {
+        let repair_state = state.clone();
+        tokio::spawn(async move {
+            let mut delay = std::time::Duration::from_secs(1);
+            loop {
+                if repair_state.hydrate().await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(30));
+            }
+        });
+    }
+    Ok(AuthoritySubmitOutcome::Accepted {
+        status: AuthorityCommitStatus::Committed,
+        commit: transaction.commit,
+    })
+}
+
+/// `ak.self.moderation.command.report.v1`: admit the reporter's exact signed
+/// `ak.self.moderation.report` Event (content-moderation.md §3.1/§3.3).
+///
+/// The Station never authors, re-signs or injects guards into the Event; it
+/// only signs the covering RealmCommit. The report's typed current result and
+/// any consumed franking nonce commit with it. Circle-scope reports need a
+/// Circle-stream authority cut and MIMI facade reports their own ingress, so
+/// both stay closed here.
+pub(crate) async fn submit_self_moderation_report(
+    state: &AppState,
+    session: &SessionIdentityState,
+    request: EventAdmissionSubmission,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    request
+        .validate()
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let event = &request.event;
+    if event.kind != arkret_wire::EventKind::SelfModerationReport {
+        return Err(ServiceError::SchemaViolation(
+            "report_event must be ak.self.moderation.report".to_owned(),
+        ));
+    }
+    if request.approval_signatures.is_some() {
+        return Err(ServiceError::SchemaViolation(
+            "self moderation report carries no approval signatures".to_owned(),
+        ));
+    }
+    if event.executed_by.is_some() || event.authorization_ref.is_some() || event.applet_id.is_some()
+    {
+        return Err(ServiceError::SchemaViolation(
+            "self moderation report must be directly authored by its reporter".to_owned(),
+        ));
+    }
+    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
+    {
+        return Err(ServiceError::Internal(
+            "Circle-scope moderation report authority cut is unavailable".to_owned(),
+        ));
+    }
+    let producer_guard =
+        super::authority_producer_validation::verify_self_event_producer(state, session, event)
+            .await?;
+    let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
+        serde_json::from_value(
+            serde_json::to_value(&event.payload)
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?,
+        )
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    payload
+        .validate_self_endpoint(event.actor_id.signing_principal_id())
+        .map_err(|error| ServiceError::SchemaViolation(error.to_owned()))?;
+    let franking_replay_nonce =
+        payload
+            .franking_proof
+            .map(|proof| soland_storage::FrankingReplayNonceCommit {
+                realm_id: event.realm_id.to_string(),
+                received_by: proof.received_by,
+                replay_nonce: proof.replay_nonce,
+                report_event_id: event.event_id.to_string(),
+                consumed_at: Utc::now(),
+            });
+    commit_self_event_unit(
+        state,
+        event,
+        producer_guard,
+        SelfEventUnitEffects {
+            franking_replay_nonce,
+        },
+    )
+    .await
+}

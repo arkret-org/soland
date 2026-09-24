@@ -9,7 +9,7 @@ use arkret_models_collaboration::authority_commit::{
     OrdinaryRealmBootstrapUnitSubmission,
 };
 use arkret_wire::{
-    AuthorityBundleRequest, AuthorityCommitStatus, AuthorityHandoffRequest, AuthoritySubmitOutcome,
+    AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome,
     EventAdmissionSubmission, MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff,
     StreamScanRequest,
 };
@@ -196,146 +196,13 @@ impl AuthorityProtocolPort for AppState {
                 "Circle-bound StrandCreate needs a Circle-scope authority cut".to_owned(),
             ));
         }
-        if let Some(existing) = self
-            .authority_commits()
-            .committed_event(&event.event_id)
-            .await?
-        {
-            if existing.event != *event {
-                return Err(ServiceError::Conflict(
-                    "event_id is already committed with different canonical content".to_owned(),
-                ));
-            }
-            return Ok(AuthoritySubmitOutcome::Accepted {
-                status: AuthorityCommitStatus::Duplicate,
-                commit: existing.commit,
-            });
-        }
-        let envelope = serde_json::to_value(event)
-            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        let operation_id = crate::routing::events::event_log::event_operation_id(
-            &envelope,
-            event.event_id.as_str(),
-        )
-        .ok_or_else(|| {
-            ServiceError::SchemaViolation("self Event projection id is invalid".to_owned())
-        })?;
-        let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-            operation_id,
-            arkret_wire::OperationKind::Create,
-            None,
+        super::authority_self_event_unit::commit_self_event_unit(
+            self,
             event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        crate::routing::events::operations::validate_operation_semantics(
-            self,
-            std::slice::from_ref(&operation),
-        )
-        .map_err(|reason| ServiceError::SchemaViolation(reason.to_owned()))?;
-        crate::routing::events::operations::validate_operation_policy(
-            self,
-            std::slice::from_ref(&operation),
+            producer_guard,
+            super::authority_self_event_unit::SelfEventUnitEffects::default(),
         )
         .await
-        .map_err(|reason| ServiceError::Conflict(reason.to_owned()))?;
-        if event.kind == arkret_wire::EventKind::MessageCreate {
-            crate::routing::message_authoring::message_create_send_gate(self, event).await?;
-        }
-        if let Some(reason) = self
-            .projections()
-            .preflight_projected_batch_rejection(std::iter::once(&operation))
-        {
-            return Err(ServiceError::Conflict(reason));
-        }
-        let committed_at = Utc::now();
-        let method = arkret_wire::DidUrl::new(
-            crate::routing::federation::federation_service_signature_key_id(
-                self.service_did().as_str(),
-            ),
-        )
-        .map_err(|error| ServiceError::Internal(error.to_string()))?;
-        let transaction = self
-            .authority_commits()
-            .prepare_self_event_transaction(
-                event,
-                &self.service_core_id(),
-                method,
-                self.notary_signing_key().as_ref(),
-                committed_at,
-            )
-            .await?;
-        let canonical_bytes = arkret_canonical::canonical_json_bytes(
-            &event
-                .digest_payload()
-                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?,
-        )
-        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        let canonical_digest = event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        let record = soland_storage::CanonicalEventRecord {
-            event_id: event.event_id.to_string(),
-            actor_id: event.actor_id.to_string(),
-            realm_id: Some(event.realm_id.to_string()),
-            kind: event.kind.as_str().to_owned(),
-            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest,
-            canonical_bytes,
-            envelope,
-            received_at: committed_at,
-        };
-        let command = soland_services::events::CommitAcceptedEventCommand {
-            authority_commit: transaction.clone(),
-            self_producer_guard: Some(producer_guard),
-            event: record,
-            parent_membership_admission: None,
-            device_pairing_authorization: None,
-            contact_projection: None,
-            agent_draft_pending_intent: None,
-            actor_private_account_data: None,
-            consent_projection: None,
-            device_revocation_transition: None,
-            device_revocation_gate: None,
-            projections: vec![soland_services::events::ProjectedEvent {
-                event_id: event.event_id.to_string(),
-                realm_id: event.realm_id.to_string(),
-                event_kind: event.kind.clone(),
-                operation_kind: "create".to_owned(),
-                operation_id: Some(operation.operation_id.to_string()),
-                sender: Some(event.actor_id.to_string()),
-                payload: serde_json::to_value(&event.payload)
-                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?,
-                created_at: event.created_at,
-                received_at: committed_at,
-            }],
-            idempotency: None,
-            deliveries: Vec::new(),
-        };
-        self.events().commit_accepted_event(command).await?;
-        let effect = self.projections().apply_projected(&operation, self.hlc());
-        if matches!(
-            effect,
-            soland_services::projection::ProjectionEffectView::Rejected { .. }
-                | soland_services::projection::ProjectionEffectView::Ignored
-        ) {
-            let repair_state = self.clone();
-            tokio::spawn(async move {
-                let mut delay = std::time::Duration::from_secs(1);
-                loop {
-                    if repair_state.hydrate().await.is_ok() {
-                        break;
-                    }
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(std::time::Duration::from_secs(30));
-                }
-            });
-        }
-        Ok(AuthoritySubmitOutcome::Accepted {
-            status: AuthorityCommitStatus::Committed,
-            commit: transaction.commit,
-        })
     }
 
     async fn submit_self_mls(

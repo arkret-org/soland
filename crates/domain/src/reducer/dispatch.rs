@@ -1255,6 +1255,15 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::ModerationDecisionLift,
         apply_moderation_decision_lift_dispatch,
     );
+    // `ak.self.moderation.report` writes the `moderation_report` typed current
+    // result, keyed by the report Event itself, inside the guarded authority
+    // unit of work at the covering RealmCommit. The report is visible only to
+    // the target scope's moderators, so the shared product projection keeps no
+    // mirror of it and only acknowledges the durable fact.
+    m.insert(
+        arkret_wire::EventKind::SelfModerationReport,
+        apply_durable_fact_dispatch,
+    );
     // MLS lifecycle: group genesis and the monotonic commit-epoch bump.
     m.insert(
         arkret_wire::EventKind::MlsGenesis,
@@ -1364,6 +1373,7 @@ mod tests {
             EventKind::AppletManagedActorProvision,
             EventKind::AuditAccessed,
             EventKind::DeviceListUpdate,
+            EventKind::SelfModerationReport,
         ] {
             let effect = state.apply_projected(&operation(&kind), &hlc);
             assert!(

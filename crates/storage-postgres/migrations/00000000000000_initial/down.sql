@@ -194,6 +194,7 @@ DROP TABLE IF EXISTS projection_strand_watches CASCADE;
 DROP TABLE IF EXISTS projection_strands CASCADE;
 DROP TABLE IF EXISTS strand_current_results CASCADE;
 DROP TABLE IF EXISTS message_revision_current_results CASCADE;
+DROP TABLE IF EXISTS moderation_report_current_results CASCADE;
 DROP TABLE IF EXISTS realm_set_default_strand_current_results CASCADE;
 DROP TABLE IF EXISTS projection_morphs CASCADE;
 DROP TABLE IF EXISTS projection_spaces CASCADE;

@@ -978,6 +978,11 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     if code == arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION {
         return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
     }
+    // The bounded inline snapshot capacity is a registered failed_precondition
+    // reason of every Realm-stream append, not a top-level code.
+    if code == arkret_wire::ReasonCode::SNAPSHOT_CAPACITY_EXCEEDED {
+        return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
+    }
     if let Some(mapped) = ErrorCode::from_wire(&code) {
         return AppError::from_rejection(mapped, message);
     }
