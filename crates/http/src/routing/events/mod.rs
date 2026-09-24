@@ -11,7 +11,7 @@ mod peer_device_revocations;
 // facade can reuse the canonical space→strand mapping + projection-event
 // JSON shape when ingesting MIMI traffic into the Arkret timeline.
 pub(super) mod notify;
-pub(super) mod operations;
+pub(crate) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(crate) mod strand;

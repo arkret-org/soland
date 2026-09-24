@@ -72,6 +72,7 @@ mod realm_invites;
 mod recovery;
 mod registry;
 mod relation_current_results;
+mod strand_current_results;
 mod security_transactions;
 mod service_identity;
 mod service_route;

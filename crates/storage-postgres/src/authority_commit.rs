@@ -116,6 +116,8 @@ struct SnapshotCurrentRow {
     current_stream_position: i64,
     #[diesel(sql_type = Jsonb)]
     value: Value,
+    #[diesel(sql_type = Jsonb)]
+    source_stream_ref: Value,
 }
 
 #[derive(QueryableByName)]
@@ -554,7 +556,8 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
 
     let rows = sql_query(
-        "SELECT result_family AS selector_kind, NULL::jsonb AS selector_subject, \
+        "SELECT result.*, covering.stream_ref AS source_stream_ref FROM ( \
+         SELECT result_family AS selector_kind, NULL::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM realm_bootstrap_current_results WHERE realm_id = $1 \
          UNION ALL \
@@ -572,6 +575,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM member_state_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'strand'::text AS selector_kind, to_jsonb(strand_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM strand_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
@@ -582,7 +589,11 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
          UNION ALL \
          SELECT 'agent_key'::text AS selector_kind, jsonb_build_object('agent_id',agent_id,'agent_key_id',agent_key_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
-           FROM agent_key_current_results WHERE realm_id = $1",
+           FROM agent_key_current_results WHERE realm_id = $1 \
+         ) result JOIN realm_commits covering \
+           ON covering.commit_id=result.current_commit_id \
+          AND covering.stream_position=result.current_stream_position \
+          AND covering.realm_id=$1",
     )
     .bind::<Text, _>(realm_id.as_str())
     .load::<SnapshotCurrentRow>(&mut *conn)
@@ -607,6 +618,13 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                     actor_id: serde_json::from_value(actor_id).map_err(|error| {
                         PersistenceError::Internal(format!(
                             "stored snapshot member actor id is invalid: {error}"
+                        ))
+                    })?,
+                },
+                ("strand", Some(strand_id)) => arkret_wire::CurrentSelector::Strand {
+                    strand_id: serde_json::from_value(strand_id).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Strand selector identity is invalid: {error}"
                         ))
                     })?,
                 },
@@ -657,6 +675,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
             };
             Ok(arkret_wire::TypedCurrentResult::Value {
                 selector,
+                source_stream_ref: decode_json(row.source_stream_ref, "current source stream ref")?,
                 revision: arkret_wire::CurrentRevision {
                     commit_id: decode_text(row.current_commit_id, "current RealmCommit id")?,
                     stream_position: to_u64(
@@ -769,6 +788,7 @@ pub(crate) async fn queue_event_in_connection(
     let envelope = serde_json::to_value(event).map_err(PersistenceError::database)?;
     let token = ids::parse_event_id(event.event_id.as_str())
         .ok_or_else(|| invalid("Event id is not a canonical Event token"))?;
+    let realm_pk = crate::realm_identity::ensure_realm_pk(conn, event.realm_id.as_str()).await?;
     let digest_suite = i16::from(token[0] & 0x0f);
     let existing = sql_query(
         "SELECT pk AS event_pk, state, canonical_bytes, envelope \
@@ -786,14 +806,15 @@ pub(crate) async fn queue_event_in_connection(
     }
     sql_query(
         "INSERT INTO canonical_events \
-         (id, digest_suite, digest, actor_id, realm_id, scope_ref, kind, canonical_bytes, envelope, state, received_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'queued', $10)",
+         (id, digest_suite, digest, actor_id, realm_id, realm_pk, scope_ref, kind, canonical_bytes, envelope, state, received_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'queued', $11)",
     )
     .bind::<Binary, _>(token.to_vec())
     .bind::<SmallInt, _>(digest_suite)
     .bind::<Binary, _>(token[1..].to_vec())
     .bind::<Text, _>(event.actor_id.to_string())
     .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<BigInt, _>(realm_pk)
     .bind::<Jsonb, _>(serde_json::to_value(&event.scope_ref).map_err(PersistenceError::database)?)
     .bind::<Text, _>(event.kind.as_str())
     .bind::<Binary, _>(canonical_bytes)

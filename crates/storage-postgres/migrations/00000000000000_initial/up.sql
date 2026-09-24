@@ -4201,6 +4201,20 @@ CREATE TABLE member_state_current_results (
 CREATE INDEX member_state_current_result_membership
  ON member_state_current_results(realm_id,membership,member_id);
 
+-- Event-derived Strand identity and its complete registered current value.
+CREATE TABLE strand_current_results (
+ realm_id TEXT NOT NULL,
+ strand_id TEXT NOT NULL PRIMARY KEY,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'id'=strand_id),
+ CHECK(value->>'realm_id'=realm_id)
+);
+CREATE INDEX strand_current_results_realm ON strand_current_results(realm_id,strand_id);
+
 -- Ordinary Realm bootstrap singleton families share one physical table. Each
 -- row is keyed by its registered typed-current-result selector kind and by
 -- the exact RealmCommit that first established it.

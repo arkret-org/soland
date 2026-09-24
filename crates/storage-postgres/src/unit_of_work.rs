@@ -67,6 +67,64 @@ struct CountRow {
     count: i64,
 }
 
+#[derive(diesel::QueryableByName)]
+struct JoinedMemberRow {
+    #[diesel(sql_type = Text)]
+    member_id: String,
+}
+
+/// A local-only Strand has no federation targets. The Realm authority row is
+/// already locked by the just-installed Commit, so every concurrent member
+/// transition targeting the same Realm waits until this transaction finishes.
+async fn ensure_local_only_strand_source_cut(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    authority_station: &arkret_wire::DidCoreId,
+    outbox: &[soland_storage::FederationOutboxRecord],
+) -> soland_storage::PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::StrandCreate {
+        return Ok(());
+    }
+    if !outbox.is_empty() {
+        return Err(PersistenceError::Conflict(
+            "StrandCreate federation target planning is unavailable".to_owned(),
+        ));
+    }
+    let rows = sql_query(
+        "SELECT m.member_id FROM member_state_current_results m \
+         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
+         WHERE m.realm_id=$1 AND m.membership='join' \
+           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
+           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .load::<JoinedMemberRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if rows.is_empty() {
+        return Err(PersistenceError::Conflict(
+            "StrandCreate has no confirmed joined source member".to_owned(),
+        ));
+    }
+    for row in rows {
+        let member: arkret_wire::ActorId =
+            serde_json::from_str(&row.member_id).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "confirmed member identity is malformed: {error}"
+                ))
+            })?;
+        if member
+            .as_account_id()
+            .is_none_or(|account| &account.station_id != authority_station)
+        {
+            return Err(PersistenceError::Conflict(
+                "StrandCreate remote delivery target set is not planned".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 const MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 fn enforce_inline_snapshot_capacity(
@@ -2279,11 +2337,22 @@ async fn commit_one_in_connection(
     }
 
     let commit = &request.authority_commit.commit;
+    ensure_local_only_strand_source_cut(
+        conn,
+        event,
+        &request.authority_commit.expected_authority.service_id,
+        &request.outbox,
+    )
+    .await?;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
         commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
         commit_parent_membership_current_results(conn, event, commit).await?;
+        crate::strand_current_results::commit_strand_create_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
     }
     let committed_ref = arkret_wire::CommittedEventRef {
         event_id: event.event_id.clone(),

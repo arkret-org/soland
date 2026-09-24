@@ -190,6 +190,7 @@ async fn current_agent_key(
             selector: current,
             value,
             revision,
+            ..
         } = entry
         else {
             continue;

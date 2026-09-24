@@ -736,6 +736,56 @@ impl AuthorityCommitApplication {
         .await
     }
 
+    /// Prepare a single Event/RealmCommit for a larger atomic result unit.
+    /// The caller must use the Event UoW, which rechecks the authority head and
+    /// producer guard while installing current results and source effects.
+    pub async fn prepare_self_event_transaction(
+        &self,
+        event: &Event,
+        local_service_id: &DidCoreId,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+    ) -> ServiceResult<AuthorityCommitTransaction> {
+        event.validate_for_submit_structural().map_err(|error| {
+            ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
+        })?;
+        let authority = self
+            .store()
+            .current_authority(&event.realm_id)
+            .await?
+            .ok_or_else(|| ServiceError::Conflict("Realm authority is unavailable".to_owned()))?;
+        if &authority.service_id != local_service_id {
+            return Err(ServiceError::Conflict(
+                "this Station is not the current Realm authority".to_owned(),
+            ));
+        }
+        let stream_ref =
+            CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let head = self.store().stream_head(&stream_ref).await?;
+        let commit = build_signed_event_commit(
+            event,
+            &authority,
+            head.as_ref(),
+            verification_method,
+            signing_key,
+            committed_at,
+        )?;
+        let transaction = AuthorityCommitTransaction {
+            expected_authority: authority,
+            event: event.clone(),
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: self.recipient_queue_capacity,
+        };
+        transaction.validate().map_err(|error| {
+            ServiceError::SchemaViolation(format!("invalid authority transaction: {error}"))
+        })?;
+        Ok(transaction)
+    }
+
     async fn admit_event_with_guard(
         &self,
         event: &Event,

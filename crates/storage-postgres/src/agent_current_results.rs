@@ -20,6 +20,8 @@ struct CurrentResultRow {
     current_stream_position: i64,
     #[diesel(sql_type = Jsonb)]
     value: Value,
+    #[diesel(sql_type = Jsonb)]
+    source_stream_ref: Value,
 }
 
 pub(crate) async fn read_agent_current_result(
@@ -29,14 +31,22 @@ pub(crate) async fn read_agent_current_result(
 ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
     let (query, current_key) = match selector {
         arkret_wire::CurrentSelector::AgentStatus { agent_id } => (
-            "SELECT current_commit_id,current_stream_position,value FROM agent_status_current_results WHERE realm_id=$1 AND agent_id=$2",
+            "SELECT result.current_commit_id,result.current_stream_position,result.value,covering.stream_ref AS source_stream_ref \
+             FROM agent_status_current_results result JOIN realm_commits covering \
+               ON covering.commit_id=result.current_commit_id \
+              AND covering.stream_position=result.current_stream_position \
+             WHERE result.realm_id=$1 AND result.agent_id=$2",
             agent_id.as_str().to_owned(),
         ),
         arkret_wire::CurrentSelector::AgentKey {
             agent_id,
             agent_key_id,
         } => (
-            "SELECT current_commit_id,current_stream_position,value FROM agent_key_current_results WHERE realm_id=$1 AND current_key=$2",
+            "SELECT result.current_commit_id,result.current_stream_position,result.value,covering.stream_ref AS source_stream_ref \
+             FROM agent_key_current_results result JOIN realm_commits covering \
+               ON covering.commit_id=result.current_commit_id \
+              AND covering.stream_position=result.current_stream_position \
+             WHERE result.realm_id=$1 AND result.current_key=$2",
             arkret_wire::derive_agent_key_current_key(agent_id, agent_key_id)
                 .map_err(|error| invalid(error.to_string()))?,
         ),
@@ -53,6 +63,11 @@ pub(crate) async fn read_agent_current_result(
     row.map(|row| {
         Ok(arkret_wire::TypedCurrentResult::Value {
             selector: selector.clone(),
+            source_stream_ref: serde_json::from_value(row.source_stream_ref).map_err(|error| {
+                invalid(format!(
+                    "stored Agent source stream ref is invalid: {error}"
+                ))
+            })?,
             revision: arkret_wire::CurrentRevision {
                 commit_id: arkret_wire::RealmCommitId::new(row.current_commit_id)
                     .map_err(|error| invalid(error.to_string()))?,
