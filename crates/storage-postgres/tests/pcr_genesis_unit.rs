@@ -28,12 +28,14 @@ use diesel::sql_types::{BigInt, Jsonb, Text, Uuid};
 use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
-    AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority,
+    AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, DeviceRevocationStore,
     PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError, RevokeCommandTerminalWrite,
     RevokeProposalCommitWrite, SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
     SecurityTransactionStore,
 };
-use soland_storage_postgres::{Db, PgAuthorityCommitStore, PgPool, PgSecurityTransactionStore};
+use soland_storage_postgres::{
+    Db, PgAuthorityCommitStore, PgDeviceRevocationStore, PgPool, PgSecurityTransactionStore,
+};
 
 #[derive(diesel::QueryableByName)]
 struct StationRow {
@@ -727,6 +729,13 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .admit_pcr_genesis_unit(&genesis, at)
         .await
         .unwrap();
+    let device_status = PgDeviceRevocationStore { pool: pool.clone() };
+    assert!(
+        device_status
+            .pcr_device_active(&account, &authorizer, at)
+            .await
+            .unwrap()
+    );
 
     let target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
     let payload = serde_json::json!({
@@ -998,7 +1007,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .push(AcceptedSecurityTransactionStep {
             prepared_material_digest: request_digest,
             acceptor: SecurityTransactionAcceptor::Principal {
-                principal_id: station,
+                principal_id: station.clone(),
             },
             output_ref: covering.commit_id.to_string(),
             output_digest: hash("revoke-command-accepted"),
@@ -1057,6 +1066,13 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .bind::<Uuid,_>(uuid::Uuid::parse_str(transaction_id.as_str().strip_prefix("ak:transaction:").unwrap()).unwrap())
         .get_result::<CountRow>(&mut *conn).await.unwrap();
     assert_eq!(terminal_rows.count, 1);
+    // A decided proposal for another target does not revoke the authorizer.
+    assert!(
+        device_status
+            .pcr_device_active(&account, &authorizer, at)
+            .await
+            .unwrap()
+    );
 
     let reject_target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
     let reject_event = device_history_fixture::sign_event(
@@ -1075,7 +1091,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             }),
         )
         .unwrap(),
-        device_method,
+        device_method.clone(),
         device_seed,
     );
     let mut reject_commit = covering.clone();
@@ -1157,7 +1173,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     let mut rejected = transactions.get(reject_id.as_str()).await.unwrap().unwrap();
     rejected.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: reject_event.event_id,
-        covering_commit_id: reject_commit.commit_id,
+        covering_commit_id: reject_commit.commit_id.clone(),
         result: SecurityRotationRevokeCommandResult::Rejected,
         decided_at: at + chrono::TimeDelta::seconds(3),
     });
@@ -1217,4 +1233,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .bind::<Uuid,_>(uuid::Uuid::parse_str(reject_id.as_str().strip_prefix("ak:transaction:").unwrap()).unwrap())
         .get_result::<CountRow>(&mut *conn).await.unwrap();
     assert_eq!(rejected_rows.count, 0);
+    assert!(
+        device_status
+            .pcr_device_active(&account, &authorizer, at)
+            .await
+            .unwrap()
+    );
 }

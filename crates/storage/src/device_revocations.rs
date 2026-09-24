@@ -152,6 +152,19 @@ pub struct DeviceRevocationCleanupIntent {
 
 #[async_trait]
 pub trait DeviceRevocationStore: Send + Sync {
+    /// Authoritative PCR human-device admission. Missing or incomplete typed
+    /// current is an error, never an implicit active device.
+    async fn pcr_device_active(
+        &self,
+        _account: &arkret_wire::AccountId,
+        _device_id: &arkret_wire::DeviceId,
+        _now: DateTime<Utc>,
+    ) -> PersistenceResult<bool> {
+        Err(PersistenceError::SchemaViolation(
+            "PCR device status provider is unavailable".to_owned(),
+        ))
+    }
+
     async fn gate_status(
         &self,
         selector: &DeviceRevocationGateSelector,

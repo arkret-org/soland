@@ -328,6 +328,19 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn pcr_device_active(
+        &self,
+        account: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .pcr_device_active(account, device_id, now)
+            .await?)
+    }
+
     pub async fn push_registration_handoff_for_local_route(
         &self,
         source_station_id: &arkret_wire::DidCoreId,
@@ -1043,6 +1056,17 @@ impl PersistenceHandle {
 
 #[async_trait::async_trait]
 impl soland_storage::DeviceRevocationStore for PersistenceHandle {
+    async fn pcr_device_active(
+        &self,
+        account: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .device_revocations()
+            .pcr_device_active(account, device_id, now)
+            .await
+    }
     async fn gate_status(
         &self,
         selector: &soland_storage::DeviceRevocationGateSelector,

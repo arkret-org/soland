@@ -71,6 +71,25 @@ fn target(row: TargetRow) -> PersistenceResult<DeviceRevocationTargetRecord> {
 
 #[async_trait]
 impl DeviceRevocationStore for PgDeviceRevocationStore {
+    async fn pcr_device_active(
+        &self,
+        account: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        let cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut(
+            &self.pool, account, device_id, now,
+        )
+        .await?
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "PCR device has no confirmed same-cut status".to_owned(),
+            )
+        })?;
+        Ok(!cut.generation_conflicted
+            && cut.lifecycle == crate::pcr_device_status_fold::PcrDeviceLifecycle::Active)
+    }
+
     async fn gate_status(
         &self,
         selector: &DeviceRevocationGateSelector,

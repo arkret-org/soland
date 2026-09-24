@@ -562,6 +562,42 @@ async fn enforce_session_device_revocation_gate(
         }
         Err(error) => return Err(session_device_selector_error(&error)),
     };
+    let account = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "session principal is invalid",
+            )
+        })?,
+        state.service_core_id(),
+    );
+    let device_id = arkret_wire::DeviceId::new(session.device_id.clone()).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "session device is invalid",
+        )
+    })?;
+    let active = state
+        .persistence()
+        .pcr_device_active(&account, &device_id, now())
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "PCR device status unavailable at session admission");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "PCR device status is unavailable",
+            )
+        })?;
+    if !active {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "device is not active at the PCR cut",
+        ));
+    }
     let selector = if let Some(grant) = session.session_grant.as_ref() {
         let binding = grant.device_binding.as_ref().ok_or((
             StatusCode::UNAUTHORIZED,
