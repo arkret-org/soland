@@ -813,13 +813,22 @@ pub(crate) async fn commit_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
-    commit_transaction_in_connection_with_pcr_genesis(conn, transaction, false).await
+    commit_transaction_in_connection_with_device_guard(conn, transaction, false).await
 }
 
-async fn commit_transaction_in_connection_with_pcr_genesis(
+/// Only registered PCR genesis and recovery UoWs may call this after they
+/// validate the complete ordered Event/Commit pair and its authority proof.
+pub(crate) async fn commit_verified_pcr_device_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
-    verified_pcr_genesis: bool,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(conn, transaction, true).await
+}
+
+async fn commit_transaction_in_connection_with_device_guard(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+    verified_pcr_device_unit: bool,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
     // The pointer's own signature, accepted device authorization, current
     // generation and source checkpoint must be rechecked at this cut. The
@@ -834,7 +843,7 @@ async fn commit_transaction_in_connection_with_pcr_genesis(
     if matches!(
         transaction.event.kind,
         arkret_wire::EventKind::DeviceAuthorize | arkret_wire::EventKind::DeviceReanchor
-    ) && !verified_pcr_genesis
+    ) && !verified_pcr_device_unit
     {
         return Err(PersistenceError::Conflict(
             "pcr_device_current_authority_unavailable".to_owned(),
@@ -1539,7 +1548,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             }
             for transaction in &unit.transactions {
                 queue_event_in_connection(conn, &transaction.event, queued_at).await?;
-                match commit_transaction_in_connection_with_pcr_genesis(conn, transaction, true).await? {
+                match commit_verified_pcr_device_transaction_in_connection(conn, transaction).await? {
                     AuthorityCommitWriteOutcome::Committed => {}
                     AuthorityCommitWriteOutcome::Duplicate => {
                         return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());

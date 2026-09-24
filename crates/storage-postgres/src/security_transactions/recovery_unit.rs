@@ -7,7 +7,9 @@ use super::{
     AsyncPgConnection, PgTransactionError, StepAttemptSource, accept_step_in_transaction, load_one,
     load_step_outcome, lock_transaction_recovery_authority,
 };
-use crate::authority_commit::{commit_transaction_in_connection, queue_event_in_connection};
+use crate::authority_commit::{
+    commit_verified_pcr_device_transaction_in_connection, queue_event_in_connection,
+};
 
 /// The caller owns the PostgreSQL transaction. A failure in either Commit or
 /// the terminal ledger rolls back the queued Events and every earlier write.
@@ -50,7 +52,7 @@ pub(super) async fn commit_recovery_unit_in_connection(
     }
     for commit in &write.commits {
         queue_event_in_connection(conn, &commit.event, write.queued_at).await?;
-        match commit_transaction_in_connection(conn, commit).await? {
+        match commit_verified_pcr_device_transaction_in_connection(conn, commit).await? {
             AuthorityCommitWriteOutcome::Committed => {}
             AuthorityCommitWriteOutcome::Duplicate => {
                 return Err(PersistenceError::Conflict(
@@ -65,6 +67,13 @@ pub(super) async fn commit_recovery_unit_in_connection(
                 .into());
             }
         }
+        crate::pcr_device_current_results::project_pcr_device_current_in_connection(
+            conn,
+            &commit.event,
+            &commit.commit,
+            None,
+        )
+        .await?;
     }
     accept_step_in_transaction(
         conn,
