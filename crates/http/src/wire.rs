@@ -589,6 +589,9 @@ pub fn describe(
             "ak.operation_bundle.station.http_core.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
             "ak.operation_bundle.station.push.v1".to_owned(),
+            // Exact by-ref read of a Snapshot this Station issued to the
+            // caller at `/head`, re-proved for disclosure at the read cut.
+            "ak.operation_bundle.station.snapshot_exact_read.v1".to_owned(),
             "ak.operation_bundle.station.tus_upload.v1".to_owned(),
         ],
         transport_bindings: vec![
@@ -888,6 +891,8 @@ mod tests {
             arkret_wire::ServiceOperationId::SelfMessagesCommandPrepareV1,
             arkret_wire::ServiceOperationId::SelfRealmJoinCommandPrepareV1,
             arkret_wire::ServiceOperationId::PeerRealmJoinReadBootstrapV1,
+            arkret_wire::ServiceOperationId::SelfRealmStateSnapshotReadManifestHeadV1,
+            arkret_wire::ServiceOperationId::SelfRealmStateSnapshotReadByRefV1,
         ] {
             assert!(
                 description
