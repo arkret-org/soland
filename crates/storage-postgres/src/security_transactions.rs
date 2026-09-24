@@ -4,13 +4,14 @@ use arkret_wire::{DeviceId, DidCoreId, Hash, TransactionId};
 use super::{
     AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RecoveryUnitCommitWrite, RunQueryDsl, SecurityTransactionRecord,
-    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
-    SecurityTransactionStore, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
-    sql_types,
+    QueryableByName, RecoveryUnitCommitWrite, RevokeProposalCommitWrite, RunQueryDsl,
+    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, Text, Timestamptz, Uuid, Value,
+    async_trait, ids, pg_conn, sql_query, sql_types,
 };
 
 mod recovery_unit;
+mod revoke_unit;
 
 pub struct PgSecurityTransactionStore {
     pub pool: PgPool,
@@ -299,7 +300,7 @@ async fn insert_one(
     .map_err(PersistenceError::database)
 }
 
-async fn load_step_outcome(
+pub(crate) async fn load_step_outcome(
     conn: &mut AsyncPgConnection,
     transaction_id: &str,
     step: SecurityTransactionStep,
@@ -588,6 +589,19 @@ async fn insert_step_attempt(
 
 #[async_trait]
 impl SecurityTransactionStore for PgSecurityTransactionStore {
+    async fn commit_revoke_proposal(
+        &self,
+        write: RevokeProposalCommitWrite,
+    ) -> PersistenceResult<arkret_wire::RealmCommit> {
+        write.validate()?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            revoke_unit::commit_revoke_proposal_in_connection(conn, write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn commit_recovery_unit(
         &self,
         write: RecoveryUnitCommitWrite,
@@ -609,6 +623,14 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             .resource
             .validate_structural()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if record.resource.revoke_proposal.is_some()
+            || record.resource.revoke_command_outcome.is_some()
+        {
+            return Err(PersistenceError::Conflict(
+                "security rotation proposal and result require their guarded durable unit"
+                    .to_owned(),
+            ));
+        }
         arkret_canonical::canonical::verify_digest(
             &record.canonical_request,
             record.resource.request_digest.as_str(),
@@ -728,6 +750,13 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                     ))
                 })?;
             super::validate_security_transaction_update(&existing, &record)?;
+            if record.resource.accepted_steps != existing.resource.accepted_steps {
+                return Err(PersistenceError::Conflict(
+                    "security transaction accepted step requires its durable outcome unit"
+                        .to_owned(),
+                )
+                .into());
+            }
             update_mutable_fields(conn, &record).await?;
             Ok(())
         })

@@ -841,7 +841,7 @@ pub(crate) async fn commit_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
-    commit_transaction_in_connection_with_device_guard(conn, transaction, false).await
+    commit_transaction_in_connection_with_device_guard(conn, transaction, false, false).await
 }
 
 /// Only registered PCR genesis and recovery UoWs may call this after they
@@ -850,13 +850,23 @@ pub(crate) async fn commit_verified_pcr_device_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
-    commit_transaction_in_connection_with_device_guard(conn, transaction, true).await
+    commit_transaction_in_connection_with_device_guard(conn, transaction, true, false).await
+}
+
+/// Only the SecurityRotation proposal unit may call this after rechecking the
+/// authorizing device against the typed PCR current cut under authority lock.
+pub(crate) async fn commit_verified_pcr_revoke_proposal_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(conn, transaction, false, true).await
 }
 
 async fn commit_transaction_in_connection_with_device_guard(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
     verified_pcr_device_unit: bool,
+    verified_pcr_revoke_unit: bool,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
     // The pointer's own signature, accepted device authorization, current
     // generation and source checkpoint must be rechecked at this cut. The
@@ -871,7 +881,7 @@ async fn commit_transaction_in_connection_with_device_guard(
     // No registered atomic revoke UoW yet writes the immutable proposal dot
     // and covering command result. Do not accept an Event that read-side
     // device status cannot fold at the same authority cut.
-    if transaction.event.kind == arkret_wire::EventKind::DeviceRevoke {
+    if transaction.event.kind == arkret_wire::EventKind::DeviceRevoke && !verified_pcr_revoke_unit {
         return Err(PersistenceError::Conflict(
             "pcr_device_revocation_current_authority_unavailable".to_owned(),
         )

@@ -6,13 +6,20 @@ use arkret_models_collaboration::events_payloads::{
     DeviceAuthorizePayload, device_authorize_payload_digest,
 };
 use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput;
+use arkret_models_crypto::{
+    BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
+    PreparedEventBatchRequest, PreparedEventUnit, SecurityRotationRevokeProposal,
+    SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
+    SecurityTransactionPreparedPlan,
+};
 use arkret_models_identity::{
     IdentityBindingPurpose, IdentityCreationControlProofKind, PCR_GENESIS_UNIT_KINDS,
     UnsignedIdentityCreationControlProof, UnsignedIdentityCreationControlProofBody,
 };
 use arkret_wire::{
+    BackupId, BackupSeriesId, CanonicalPublicMaterial, DetachedSignatureContext, DeviceId,
     DidCoreId, DidUrl, EventKind, Hash, IdempotencyKey, PcrGenesisUnit, RealmCommitAuthorityRef,
-    RealmCommitId, RealmId, TrustDomainId, WebOrigin,
+    RealmCommitId, RealmId, TransactionId, TrustDomainId, WebOrigin,
 };
 use device_history_fixture::{DeviceHistoryFixture, DeviceHistoryFixtureOptions};
 use diesel::sql_types::{BigInt, Jsonb, Text, Uuid};
@@ -20,9 +27,10 @@ use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority,
-    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError,
+    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, PersistenceError, RevokeProposalCommitWrite,
+    SecurityTransactionRecord, SecurityTransactionStore,
 };
-use soland_storage_postgres::{Db, PgAuthorityCommitStore, PgPool};
+use soland_storage_postgres::{Db, PgAuthorityCommitStore, PgPool, PgSecurityTransactionStore};
 
 #[derive(diesel::QueryableByName)]
 struct StationRow {
@@ -695,4 +703,277 @@ async fn reused_genesis_realm_or_idempotency_key_is_a_zero_write_duplicate_confl
         PcrGenesisCommitOutcome::Duplicate(result),
     );
     assert_eq!(unit_footprint(&pool, &accepted).await, ACCEPTED_FOOTPRINT);
+}
+
+#[tokio::test]
+async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
+    use arkret_models_collaboration::events_payloads::DeviceRevokePayload;
+    use arkret_wire::RealmCommit;
+
+    let (pool, station) = contract_store().await;
+    let fixture = fixture(&station);
+    let account = fixture.account.clone();
+    let authorizer = fixture.founding_device_id.clone();
+    let device_method = fixture.device_verification_method.clone();
+    let device_seed = fixture.founding_device_signing_seed;
+    let station_did = fixture.station_did.clone();
+    let genesis = assemble(station.clone(), fixture);
+    let realm_id = genesis.submission.pcr_realm_id.clone();
+    let at = genesis.transactions[1].commit.committed_at;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_pcr_genesis_unit(&genesis, at)
+        .await
+        .unwrap();
+
+    let target = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let payload = serde_json::json!({
+        "device_id": target,
+        "revoked_by": authorizer,
+        "revoked_at": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "reason": "security_rotation"
+    });
+    let _: DeviceRevokePayload = serde_json::from_value(payload.clone()).unwrap();
+    let revoke = device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            payload,
+        )
+        .unwrap(),
+        device_method.clone(),
+        device_seed,
+    );
+    let active_series = device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::KeyBackupActiveSeries.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            serde_json::json!({"fixture":"prepared-only"}),
+        )
+        .unwrap(),
+        device_method,
+        device_seed,
+    );
+    let mut covering: RealmCommit = genesis.transactions[1].commit.clone();
+    covering.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{}:revoke", revoke.event_id).as_bytes(),
+    ));
+    covering.stream_position += 1;
+    covering.previous_commit_ref = Some(genesis.transactions[1].commit.commit_id.clone());
+    covering.event_ref = revoke.event_id.clone();
+    covering.committed_at += chrono::TimeDelta::seconds(1);
+    let station_key = SigningKey::from_bytes(&[83; 32]);
+    let unsigned = arkret_canonical::canonical::unsigned_value(&covering, &["signature"]).unwrap();
+    covering.signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        DetachedSignatureContext::RealmCommit,
+        DidUrl::new(format!("{}#authority", station_did)).unwrap(),
+        covering.committed_at,
+        &station_key,
+    )
+    .unwrap();
+    arkret_signatures::detached_object::verify_detached_object_signature(
+        &covering.signature,
+        &unsigned,
+        DetachedSignatureContext::RealmCommit,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: station_key.verifying_key().to_bytes().to_vec(),
+        },
+    )
+    .unwrap();
+
+    let revoke_unit = PreparedEventUnit::new(
+        arkret_canonical::DigestSuite::Sha256,
+        PreparedEventBatchRequest {
+            events: vec![revoke.clone()],
+        },
+    )
+    .unwrap();
+    let active_unit = PreparedEventUnit::new(
+        arkret_canonical::DigestSuite::Sha256,
+        PreparedEventBatchRequest {
+            events: vec![active_series.clone()],
+        },
+    )
+    .unwrap();
+    let backup =
+        |suffix: &str| BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7())).unwrap();
+    let binding = BackupRotationBinding {
+        backup_kind: BackupRotationKind::SecretStorage,
+        previous_series_id: BackupSeriesId::new(format!(
+            "ak:backup_series:{}",
+            uuid::Uuid::now_v7()
+        ))
+        .unwrap(),
+        new_series_id: BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+        new_backups: vec![BackupObjectRef {
+            backup_id: backup("new"),
+            ciphertext_digest: hash("new-backup"),
+        }],
+        active_series_event_id: active_series.event_id.clone(),
+        old_backups: vec![BackupObjectRef {
+            backup_id: backup("old"),
+            ciphertext_digest: hash("old-backup"),
+        }],
+    };
+    let rotation = BackupRotationPlan {
+        binding,
+        encrypted_backup_material: CanonicalPublicMaterial::canonical_json(
+            serde_json::json!({"fixture":"ciphertext"}),
+        )
+        .unwrap(),
+        active_series_unit: active_unit,
+    };
+    let request = SecurityRotationTransactionCreateRequest::from_prepared_rotations(
+        TransactionId::new(format!("ak:transaction:{}", uuid::Uuid::now_v7())).unwrap(),
+        account.clone(),
+        authorizer.clone(),
+        at + chrono::TimeDelta::hours(1),
+        revoke_unit,
+        hash("new-secret"),
+        vec![rotation],
+    )
+    .unwrap();
+    let plan = SecurityTransactionPreparedPlan::SecurityRotation(request.prepared_plan.clone());
+    let (initial, canonical_request) = SecurityTransactionCreateRequest::SecurityRotation(request)
+        .into_initial_resource(plan, at)
+        .unwrap();
+    let initial_record = SecurityTransactionRecord {
+        resource: initial.clone(),
+        canonical_request: canonical_request.clone(),
+    };
+    let transaction_id = initial.transaction_id.clone();
+    let transactions = PgSecurityTransactionStore { pool: pool.clone() };
+    transactions.create(initial_record).await.unwrap();
+    let mut proposed = initial;
+    proposed.revoke_proposal = Some(SecurityRotationRevokeProposal {
+        proposal_event_id: revoke.event_id.clone(),
+        covering_commit_id: covering.commit_id.clone(),
+    });
+    let write = RevokeProposalCommitWrite {
+        transaction: SecurityTransactionRecord {
+            resource: proposed,
+            canonical_request,
+        },
+        commit: AuthorityCommitTransaction {
+            expected_authority: genesis.transactions[1].expected_authority.clone(),
+            event: revoke.clone(),
+            commit: covering.clone(),
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        },
+        queued_at: at,
+    };
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=1 WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    assert!(
+        transactions
+            .commit_revoke_proposal(write.clone())
+            .await
+            .is_err()
+    );
+    let committed =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM realm_commits WHERE commit_id=$1")
+            .bind::<Text, _>(covering.commit_id.as_str())
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(committed.count, 0);
+    diesel::sql_query(
+        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=0 WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let mut bad_authorizer = write.clone();
+    bad_authorizer.transaction.resource.authorizing_device_id = Some(target.clone());
+    assert!(
+        transactions
+            .commit_revoke_proposal(bad_authorizer)
+            .await
+            .is_err()
+    );
+    let mut bad_proof = write.clone();
+    bad_proof.commit.event.producer_proof.as_mut().unwrap().jws = "invalid".to_owned();
+    assert!(
+        transactions
+            .commit_revoke_proposal(bad_proof)
+            .await
+            .is_err()
+    );
+    diesel::sql_query(
+        "UPDATE pcr_device_generation_current_results SET value=jsonb_build_object('current_device_generation_ref',2) WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    assert!(
+        transactions
+            .commit_revoke_proposal(write.clone())
+            .await
+            .is_err()
+    );
+    diesel::sql_query(
+        "UPDATE pcr_device_generation_current_results SET value=jsonb_build_object('current_device_generation_ref',1) WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let before = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM pcr_device_revocation_proposals WHERE event_id=$1",
+    )
+    .bind::<Text, _>(revoke.event_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(
+        before.count, 0,
+        "rejected proposal leaked its immutable dot"
+    );
+    assert_eq!(
+        transactions
+            .commit_revoke_proposal(write.clone())
+            .await
+            .unwrap(),
+        covering
+    );
+    assert_eq!(
+        transactions.commit_revoke_proposal(write).await.unwrap(),
+        covering
+    );
+    let dots = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM pcr_device_revocation_proposals WHERE event_id=$1",
+    )
+    .bind::<Text, _>(revoke.event_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(dots.count, 1);
+    let stored = transactions
+        .get(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.resource.revoke_proposal.unwrap().covering_commit_id,
+        covering.commit_id
+    );
 }

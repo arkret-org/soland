@@ -16,6 +16,58 @@ pub struct RecoveryUnitCommitWrite {
     pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One accepted SecurityRotation revoke proposal. The command result belongs
+/// to a later worker decision; this write may only publish a pending proposal.
+#[derive(Clone, Debug)]
+pub struct RevokeProposalCommitWrite {
+    pub transaction: SecurityTransactionRecord,
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl RevokeProposalCommitWrite {
+    pub fn validate(&self) -> PersistenceResult<()> {
+        let resource = &self.transaction.resource;
+        resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let plan = resource.security_rotation_plan().ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "revoke proposal requires SecurityRotation".to_owned(),
+            )
+        })?;
+        let proposal = resource.revoke_proposal.as_ref().ok_or_else(|| {
+            PersistenceError::SchemaViolation("revoke proposal binding is missing".to_owned())
+        })?;
+        if resource.revoke_command_outcome.is_some()
+            || resource.terminal_outcome.is_some()
+            || !resource.accepted_steps.is_empty()
+            || plan.revoke_unit.request.events.as_slice() != [self.commit.event.clone()]
+            || proposal.proposal_event_id != self.commit.event.event_id
+            || proposal.covering_commit_id != self.commit.commit.commit_id
+            || self.commit.event.actor_id
+                != arkret_wire::ActorId::account(resource.account_id.clone())
+            || self.commit.event.kind != arkret_wire::EventKind::DeviceRevoke
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "revoke proposal unit differs from its prepared Event or covering Commit"
+                    .to_owned(),
+            ));
+        }
+        let suite = arkret_canonical::canonical::digest_suite(
+            self.commit.event.event_id.digest_suite_code().as_str(),
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        self.commit
+            .event
+            .verify_event_id_matches_content_with_digest_suite(suite)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        self.commit
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
+    }
+}
+
 impl RecoveryUnitCommitWrite {
     pub fn validate(&self) -> PersistenceResult<()> {
         self.transaction
@@ -147,6 +199,12 @@ pub trait RecoverySessionStore: Send + Sync {
 
 #[async_trait]
 pub trait SecurityTransactionStore: Send + Sync {
+    /// Commits the exact prepared revoke Event/RealmCommit, immutable proposal
+    /// dot and transaction binding in one PCR authority transaction.
+    async fn commit_revoke_proposal(
+        &self,
+        write: RevokeProposalCommitWrite,
+    ) -> PersistenceResult<arkret_wire::RealmCommit>;
     /// Atomically queues and commits the ordered PCR recovery Event pair and
     /// accepts the terminal step. An error leaves zero accepted Event, Commit,
     /// session consumption or terminal ledger writes visible.
@@ -293,12 +351,12 @@ pub fn validate_security_transaction_update(
             "terminal security transaction cannot change".to_owned(),
         ));
     }
-    if (current.revoke_proposal.is_some() && current.revoke_proposal != next.revoke_proposal)
+    if current.revoke_proposal != next.revoke_proposal
         || (current.revoke_command_outcome.is_some()
             && current.revoke_command_outcome != next.revoke_command_outcome)
     {
         return Err(PersistenceError::Conflict(
-            "security rotation revoke proposal and command result are immutable".to_owned(),
+            "security rotation revoke proposal requires its Event/Commit unit and command result is immutable".to_owned(),
         ));
     }
     if next.accepted_steps.len() < current.accepted_steps.len()
