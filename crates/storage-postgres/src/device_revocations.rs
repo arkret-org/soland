@@ -76,7 +76,7 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
         account: &arkret_wire::AccountId,
         device_id: &arkret_wire::DeviceId,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<soland_storage::PcrDeviceAdmission> {
+    ) -> PersistenceResult<arkret_wire::DeviceRevocationAdmissionDecision> {
         let cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut(
             &self.pool, account, device_id, now,
         )
@@ -87,6 +87,28 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             )
         })?;
         Ok(cut.admission())
+    }
+
+    async fn pcr_device_authorization_key(
+        &self,
+        account: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+    ) -> PersistenceResult<Option<arkret_wire::DidKey>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let cut = crate::pcr_device_revocation_proposals::confirmed_pcr_device_cut_in_connection(
+            &mut conn, account, device_id,
+        )
+        .await?;
+        cut.and_then(|cut| cut.authorization)
+            .map(|authorization| {
+                arkret_wire::DidKey::new(authorization.payload.device_public_key_did.into_string())
+                    .map_err(|error| {
+                        PersistenceError::SchemaViolation(format!(
+                            "accepted PCR device authorization key is not did:key: {error}"
+                        ))
+                    })
+            })
+            .transpose()
     }
 
     async fn gate_status(

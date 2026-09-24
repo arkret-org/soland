@@ -2,6 +2,7 @@
 
 pub mod authority_commit;
 pub mod authorization;
+pub mod committed_receipt;
 pub mod delivery;
 pub mod events;
 pub mod federation;
@@ -112,6 +113,30 @@ impl ServiceError {
             Self::Conflict(detail) => soland_storage::ConflictCode::from_detail(detail),
             _ => None,
         }
+    }
+
+    /// A refusal carrying one registered protocol code.
+    #[must_use]
+    pub fn protocol(code: arkret_wire::ErrorCode, detail: impl std::fmt::Display) -> Self {
+        match code {
+            arkret_wire::ErrorCode::SchemaViolation => Self::SchemaViolation(detail.to_string()),
+            arkret_wire::ErrorCode::UnsupportedEventKind => {
+                Self::UnsupportedEventKind(detail.to_string())
+            }
+            code => Self::Conflict(format!("{}: {detail}", code.as_str())),
+        }
+    }
+
+    /// Refusal of a current-device admission decision under the SDK's single
+    /// decision-to-code mapping; `None` when the device is admitted.
+    #[must_use]
+    pub fn device_admission_refusal(
+        decision: arkret_wire::DeviceRevocationAdmissionDecision,
+        detail: impl std::fmt::Display,
+    ) -> Option<Self> {
+        decision
+            .error_code()
+            .map(|code| Self::protocol(code, detail))
     }
 
     #[must_use]

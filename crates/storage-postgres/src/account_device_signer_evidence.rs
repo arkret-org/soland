@@ -185,9 +185,10 @@ impl PgAccountDeviceSignerEvidenceArchive {
                     "{}: account-device current PCR cut is unavailable",
                     ConflictCode::TemporarilyUnavailable,
                 )))?;
-                if let Some(code) = cut.admission().refusal_code() {
+                if let Some(code) = cut.admission().error_code() {
                     return Err(PersistenceError::Conflict(format!(
-                        "{code}: account-device is not active at the confirmed PCR cut",
+                        "{}: account-device is not active at the confirmed PCR cut",
+                        code.as_str(),
                     )).into());
                 }
                 if cut.authority.authorization.as_ref().is_none_or(|current| {

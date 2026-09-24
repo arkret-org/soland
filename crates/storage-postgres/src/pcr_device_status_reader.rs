@@ -45,22 +45,24 @@ pub(crate) struct ConfirmedPcrDeviceStatusCut {
 }
 
 impl ConfirmedPcrDeviceStatusCut {
-    /// Fold this cut into the admission state shared by every human-device
-    /// producer gate; a conflicted generation fences an otherwise active device.
-    pub(crate) fn admission(&self) -> soland_storage::PcrDeviceAdmission {
-        use soland_storage::PcrDeviceAdmission;
+    /// Fold this cut into the current-device admission decision shared by
+    /// every human-device producer gate; a conflicted generation fences an
+    /// otherwise active device, and an instant outside the accepted
+    /// authorization window has no complete current authorization.
+    pub(crate) fn admission(&self) -> arkret_wire::DeviceRevocationAdmissionDecision {
+        use arkret_wire::DeviceRevocationAdmissionDecision as Decision;
         match self.lifecycle {
             PcrDeviceLifecycle::Active if self.generation_conflicted => {
-                PcrDeviceAdmission::GenerationFenced
+                Decision::GenerationMismatch
             }
-            PcrDeviceLifecycle::Active => PcrDeviceAdmission::Active,
-            PcrDeviceLifecycle::Revoked => PcrDeviceAdmission::Revoked,
-            PcrDeviceLifecycle::RevocationPending => PcrDeviceAdmission::RevocationPending,
+            PcrDeviceLifecycle::Active => Decision::Allow,
+            PcrDeviceLifecycle::Revoked => Decision::Revoked,
+            PcrDeviceLifecycle::RevocationPending => Decision::RevocationPending,
             PcrDeviceLifecycle::GenerationFenced | PcrDeviceLifecycle::Conflicted => {
-                PcrDeviceAdmission::GenerationFenced
+                Decision::GenerationMismatch
             }
             PcrDeviceLifecycle::Expired | PcrDeviceLifecycle::NotYetEffective => {
-                PcrDeviceAdmission::OutsideAuthorizationWindow
+                Decision::AuthorityMismatch
             }
         }
     }

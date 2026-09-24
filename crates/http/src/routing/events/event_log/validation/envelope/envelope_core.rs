@@ -9,10 +9,11 @@ pub(in crate::routing) struct PrivateInviteEnvelope {
     pub(in crate::routing) canonical_digest: String,
 }
 
-/// A peer-delivered Invite cannot enter the holder-private projection until
-/// its historical producer key is proven at the accepted Event/Commit cut.
+/// Shape and inviter binding of a peer-delivered Invite (invite-addressing §7
+/// step 4). The producer proof and the governance `invite_commit` are verified
+/// by the caller under the non-governance receiver rule of federation §3.
 pub(in crate::routing) async fn validate_private_invite_envelope(
-    _state: &AppState,
+    state: &AppState,
     session: &SessionRecord,
     envelope: &Value,
 ) -> Result<PrivateInviteEnvelope, EventValidationError> {
@@ -41,9 +42,22 @@ pub(in crate::routing) async fn validate_private_invite_envelope(
             format!("private Invite Event violates the submit schema: {error}"),
         )
     })?;
-    Err(event_validation_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        arkret_wire::ErrorCode::SERVICE_UNAVAILABLE,
-        "private Invite needs historical producer proof at an accepted Event/Commit cut",
-    ))
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(event.realm_id.as_str());
+    let canonical_digest = event
+        .event_digest_with_digest_suite(digest_suite)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+                error.to_string(),
+            )
+        })?;
+    Ok(PrivateInviteEnvelope {
+        event_id: event.event_id,
+        actor: event.actor_id,
+        realm_id: event.realm_id,
+        canonical_digest,
+    })
 }

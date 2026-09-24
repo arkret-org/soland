@@ -16,6 +16,9 @@ use arkret_models_collaboration::governance::invite_addressing::{
     SelfInviteDispatchRequestBody,
 };
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
+use arkret_models_collaboration::governance::realm_join_intake::{
+    AuthorityLocatorSource, RealmJoinCandidate, RealmJoinCandidateServiceKind,
+};
 use arkret_models_identity::handle::Handle;
 use arkret_models_identity::proof::DetachedPayloadProof;
 use arkret_models_identity::{HandleClaim, HandleClaimStatus, ServiceResolutionCarrier};
@@ -357,7 +360,7 @@ async fn receive_private_invite_delivery(
     }
 
     // Authenticate the notification before consulting holder state.
-    let step_four = authenticate_invite_notification(state, body, &projection).await?;
+    let step_four = authenticate_invite_notification(state, delivery, body, &projection).await?;
 
     // §7 steps 5-7 — the bindings between `invite_event` and the delivery
     // envelope. `invite_event.kind` is re-checked inside; it is also step 4's
@@ -487,6 +490,7 @@ async fn receive_private_invite_delivery(
         inviter_account_id,
         body,
         &realm_id,
+        &delivery.authority_locator_hints,
     )
     .await?;
 
@@ -558,15 +562,25 @@ async fn self_invites_dispatch(
     // `canonical_bytes` is the Event digest preimage and deliberately omits
     // identity/proof fields such as `event_id`.  Private delivery carries the
     // complete accepted Event, which is stored separately as the envelope.
-    let invite_event = serde_json::from_value(accepted.envelope.clone())
+    let invite_event: arkret_wire::Event = serde_json::from_value(accepted.envelope.clone())
         .map_err(|error| AppError::internal(format!("stored invite Event is invalid: {error}")))?;
-    let delivery = InviteDeliveryRequestBody {
-        schema: dispatch.schema,
+    let (invite_commit, governance) = governance_invite_commit(state, &invite_event).await?;
+    let delivery = InviteDeliveryRequestBody::new(
         invite_event,
-        invite_address: dispatch.invite_address,
-        introduction_evidence: dispatch.introduction_evidence,
-        idempotency_key: dispatch.idempotency_key,
-    };
+        invite_commit,
+        vec![RealmJoinCandidate {
+            service_kind: RealmJoinCandidateServiceKind::Station,
+            service_id: governance,
+            endpoint_url: None,
+            source: AuthorityLocatorSource::Invite,
+        }],
+        dispatch.invite_address,
+        dispatch.introduction_evidence,
+        dispatch.idempotency_key,
+    );
+    delivery
+        .validate_minimal()
+        .map_err(|error| AppError::internal(format!("invite delivery is malformed: {error}")))?;
     let delivery_body = serde_json::to_value(&delivery)
         .map_err(|error| AppError::internal(format!("invite delivery encoding failed: {error}")))?;
 
@@ -659,6 +673,36 @@ async fn require_dispatchable_invite_event(
         ));
     }
     Ok(accepted)
+}
+
+/// The Realm-stream authority commit of the accepted invite Event. Only the
+/// current governance Station of the invite Realm emits a delivery
+/// (`invite-delivery-request.schema.json`), and it names itself as the
+/// authority locator hint.
+async fn governance_invite_commit(
+    state: &AppState,
+    invite_event: &arkret_wire::Event,
+) -> Result<(arkret_wire::RealmCommit, DidCoreId), AppError> {
+    let authority = state
+        .authority_commits()
+        .current_authority(&invite_event.realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("invite Realm authority lookup: {error}")))?
+        .filter(|authority| authority.service_id == state.service_core_id())
+        .ok_or_else(|| {
+            invite_event_precondition(
+                "only the current governance Station of the invite Realm emits its delivery",
+            )
+        })?;
+    let committed = state
+        .authority_commits()
+        .committed_event(&invite_event.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("invite commit lookup: {error}")))?
+        .ok_or_else(|| {
+            invite_event_precondition("invite_event has no Realm-stream authority commit")
+        })?;
+    Ok((committed.commit, authority.service_id))
 }
 
 fn invite_event_precondition(message: &'static str) -> AppError {
@@ -880,6 +924,7 @@ async fn deliver_invite_credential(
     inviter_account_id: &arkret_wire::AccountId,
     body: &Value,
     realm_id: &str,
+    authority_locator_hints: &[RealmJoinCandidate],
 ) -> Result<bool, AppError> {
     if account_id.station_id != state.service_core_id() {
         return Err(AppError::param_invalid(
@@ -955,6 +1000,7 @@ async fn deliver_invite_credential(
             .map_err(|error| AppError::internal(format!("invite realm id is invalid: {error}")))?,
         inviter_account_id: inviter_account_id.clone(),
         invite_token,
+        authority_locator_hints: authority_locator_hints.to_vec(),
         received_at,
         expires_at,
     };
@@ -2223,28 +2269,103 @@ fn resolved_by_allowed(
 /// Authenticate a notification without admitting an Event into Realm state.
 async fn authenticate_invite_notification(
     state: &AppState,
+    delivery: &InviteDeliveryRequestBody,
     body: &Value,
     projection: &InvitePrivateProjection<'_>,
 ) -> Result<Option<super::events::event_log::PrivateInviteEnvelope>, AppError> {
     validate_invite_delivery_event_kind(body)?;
     match projection {
         InvitePrivateProjection::FromDeliveredEvent { session } => {
-            super::events::event_log::validate_private_invite_envelope(
+            let envelope = super::events::event_log::validate_private_invite_envelope(
                 state,
                 session,
                 &body["invite_event"],
             )
             .await
-            .map(Some)
             .map_err(|error| {
                 AppError::from_rejection(
                     soland_http::error::ErrorCode::from_wire(error.code)
                         .unwrap_or(soland_http::error::ErrorCode::SchemaViolation),
                     error.message,
                 )
-            })
+            })?;
+            verify_invite_commit(state, delivery).await?;
+            Ok(Some(envelope))
         }
         InvitePrivateProjection::AlreadyAcceptedLocally { .. } => Ok(None),
+    }
+}
+
+/// invite-addressing §7 step 4 under the non-governance receiver rule of
+/// federation §3. The inviter's device key is never resolved or fetched: the
+/// producer proof must be self-consistent and `invite_commit` must verify
+/// under the governance Station the verified authority chain names for its
+/// generation. The chain is discovered only through the untrusted
+/// `authority_locator_hints`. An inviter this Station hosts is still verified
+/// against local PCR. Nothing is written on any refusal.
+async fn verify_invite_commit(
+    state: &AppState,
+    delivery: &InviteDeliveryRequestBody,
+) -> Result<(), AppError> {
+    let unavailable = |detail: String| {
+        AppError::from_rejection(
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
+            detail,
+        )
+    };
+    let nonce =
+        arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(uuid::Uuid::new_v4().as_bytes()))
+            .map_err(|error| AppError::internal(format!("authority bundle nonce: {error}")))?;
+    let realm_id = &delivery.invite_event.realm_id;
+    let mut located = super::realm_join::resolve_verified_authority(
+        state,
+        realm_id,
+        &delivery.authority_locator_hints,
+        &nonce,
+    )
+    .await
+    .map_err(|error| unavailable(format!("invite Realm authority is unavailable: {error}")))?;
+    super::realm_join::insert_method_key(
+        state,
+        &mut located.keys,
+        &delivery.invite_commit.signature.verification_method,
+    )
+    .await
+    .map_err(|error| unavailable(format!("invite_commit signing key is unavailable: {error}")))?;
+    let received = soland_services::committed_receipt::verify_committed_event_receipt(
+        state.persistence(),
+        &delivery.invite_event,
+        &delivery.invite_commit,
+        soland_services::committed_receipt::CommitContinuity::Standalone,
+        &located.authority,
+        &located.keys,
+        &state.service_core_id(),
+        state.projections().realm_digest_suite(realm_id.as_str()),
+    )
+    .await
+    .map_err(receipt_refusal)?;
+    match received {
+        soland_services::committed_receipt::ReceivedProducer::GovernanceCommittedHumanDevice
+        | soland_services::committed_receipt::ReceivedProducer::HostedHumanDevice(_) => Ok(()),
+        soland_services::committed_receipt::ReceivedProducer::OtherSigner => Err(unavailable(
+            "invite producer is not a human Account device; its signer evidence is not connected"
+                .to_owned(),
+        )),
+    }
+}
+
+fn receipt_refusal(error: soland_services::ServiceError) -> AppError {
+    let code = match &error {
+        soland_services::ServiceError::SchemaViolation(_) => {
+            Some(soland_http::error::ErrorCode::SchemaViolation)
+        }
+        _ => error
+            .conflict_code()
+            .and_then(|code| soland_http::error::ErrorCode::from_wire(code.as_str())),
+    };
+    match code {
+        Some(code) => AppError::from_rejection(code, error.to_string()),
+        None => AppError::internal(error.to_string()),
     }
 }
 
@@ -2523,6 +2644,15 @@ mod invite_locator_security_tests {
         }
     }
 
+    fn fixture_locator_hint() -> RealmJoinCandidate {
+        RealmJoinCandidate {
+            service_kind: RealmJoinCandidateServiceKind::Station,
+            service_id: DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+            endpoint_url: None,
+            source: AuthorityLocatorSource::Invite,
+        }
+    }
+
     fn production_invite_delivery(state: &AppState) -> InviteDeliveryRequestBody {
         let event: arkret_wire::Event = serde_json::from_value(json!({
             "event_id": PRODUCTION_INVITE_EVENT,
@@ -2555,8 +2685,41 @@ mod invite_locator_security_tests {
         // These fixtures exercise the receive policy, quarantine and fanout
         // helpers directly; §7 step 4 has its own coverage and is not on their
         // path.
+        let invite_commit = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                event.event_id.as_str().as_bytes(),
+            )),
+            realm_id: event.realm_id.clone(),
+            stream_ref: arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            },
+            stream_position: 1,
+            previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest([0x01; 32])),
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                event.realm_id.event_id(),
+            ),
+            committed_at: now(),
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: state.service_verification_method("notary-key").unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                    .unwrap(),
+                created_at: now(),
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+            },
+        };
         InviteDeliveryRequestBody::new(
             event,
+            invite_commit,
+            vec![RealmJoinCandidate {
+                service_kind: RealmJoinCandidateServiceKind::Station,
+                service_id: state.service_core_id(),
+                endpoint_url: None,
+                source: AuthorityLocatorSource::Invite,
+            }],
             address,
             IntroductionEvidence::ExplicitAddress,
             "ak:idempotency:production-service-fanout",
@@ -2838,6 +3001,7 @@ mod invite_locator_security_tests {
                 DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
             ),
             invite_token: "opaque-token".to_owned(),
+            authority_locator_hints: vec![fixture_locator_hint()],
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
                 .unwrap()
@@ -2876,6 +3040,7 @@ mod invite_locator_security_tests {
                 DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
             ),
             invite_token: invite_token.to_owned(),
+            authority_locator_hints: vec![fixture_locator_hint()],
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
                 .unwrap()
@@ -2945,6 +3110,7 @@ mod invite_locator_security_tests {
                 &inviter_account_id,
                 &body,
                 PRODUCTION_REALM,
+                &delivery.authority_locator_hints,
             )
             .await
             .expect("invite credential delivery")
@@ -2984,7 +3150,8 @@ mod invite_locator_security_tests {
                 &foreign,
                 &inviter_account_id,
                 &body,
-                PRODUCTION_REALM
+                PRODUCTION_REALM,
+                &delivery.authority_locator_hints,
             )
             .await
             .is_err()
@@ -3461,6 +3628,7 @@ mod invite_locator_security_tests {
                 &inviter_account_id,
                 &body,
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W",
+                &[fixture_locator_hint()],
             )
             .await
             .expect("unknown subject skips the credential write")

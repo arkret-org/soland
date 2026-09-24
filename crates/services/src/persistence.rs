@@ -356,11 +356,23 @@ impl PersistenceHandle {
         account: &arkret_wire::AccountId,
         device_id: &arkret_wire::DeviceId,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<soland_storage::PcrDeviceAdmission> {
+    ) -> crate::ServiceResult<arkret_wire::DeviceRevocationAdmissionDecision> {
         Ok(self
             .persistence
             .device_revocations()
             .pcr_device_admission(account, device_id, now)
+            .await?)
+    }
+
+    pub async fn pcr_device_authorization_key(
+        &self,
+        account: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+    ) -> crate::ServiceResult<Option<arkret_wire::DidKey>> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .pcr_device_authorization_key(account, device_id)
             .await?)
     }
 
@@ -1084,10 +1096,20 @@ impl soland_storage::DeviceRevocationStore for PersistenceHandle {
         account: &arkret_wire::AccountId,
         device_id: &arkret_wire::DeviceId,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<soland_storage::PcrDeviceAdmission> {
+    ) -> PersistenceResult<arkret_wire::DeviceRevocationAdmissionDecision> {
         self.persistence
             .device_revocations()
             .pcr_device_admission(account, device_id, now)
+            .await
+    }
+    async fn pcr_device_authorization_key(
+        &self,
+        account: &arkret_wire::AccountId,
+        device_id: &arkret_wire::DeviceId,
+    ) -> PersistenceResult<Option<arkret_wire::DidKey>> {
+        self.persistence
+            .device_revocations()
+            .pcr_device_authorization_key(account, device_id)
             .await
     }
     async fn gate_status(

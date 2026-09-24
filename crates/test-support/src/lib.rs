@@ -2,6 +2,7 @@
 
 pub mod device_authorization_history;
 pub mod fault_injection;
+pub mod governance_authority;
 pub mod pcr_genesis;
 pub mod signed_event;
 

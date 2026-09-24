@@ -31,15 +31,6 @@ use soland_storage::{ConflictCode, ForwardedProducerDeviceEvidence};
 
 use super::AppState;
 
-/// A refusal carrying one registered protocol code.
-pub(super) fn protocol_refusal(code: ErrorCode, detail: impl std::fmt::Display) -> ServiceError {
-    match code {
-        ErrorCode::SchemaViolation => ServiceError::SchemaViolation(detail.to_string()),
-        ErrorCode::UnsupportedEventKind => ServiceError::UnsupportedEventKind(detail.to_string()),
-        code => ServiceError::Conflict(format!("{}: {detail}", code.as_str())),
-    }
-}
-
 fn temporarily_unavailable(detail: impl std::fmt::Display) -> ServiceError {
     ServiceError::Conflict(format!(
         "{}: {detail}",
@@ -48,7 +39,7 @@ fn temporarily_unavailable(detail: impl std::fmt::Display) -> ServiceError {
 }
 
 fn wire_refusal(error: arkret_wire::WireError) -> ServiceError {
-    protocol_refusal(
+    ServiceError::protocol(
         error.error_code().unwrap_or(ErrorCode::SchemaViolation),
         error,
     )
@@ -84,7 +75,7 @@ fn verify_forwarded_producer(
         now,
     )
     .map_err(|error| {
-        protocol_refusal(
+        ServiceError::protocol(
             error.error_code().unwrap_or(ErrorCode::SignatureInvalid),
             error,
         )
@@ -181,10 +172,11 @@ pub(crate) async fn fresh_producer_device_evidence(
         )
         .await
         .map_err(|error| temporarily_unavailable(format!("PCR device status: {error}")))?;
-    if let Some(code) = admission.refusal_code() {
-        return Err(ServiceError::Conflict(format!(
-            "{code}: producer device is not active at the forwarding Station"
-        )));
+    if let Some(refusal) = ServiceError::device_admission_refusal(
+        admission,
+        "producer device is not active at the forwarding Station",
+    ) {
+        return Err(refusal);
     }
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
@@ -284,7 +276,7 @@ fn relay_governance_response(
             .unwrap_or("governance Station refused the forwarded Event")
             .to_owned();
         return Err(match code {
-            Some(code) if response.status < 500 => protocol_refusal(code, detail),
+            Some(code) if response.status < 500 => ServiceError::protocol(code, detail),
             _ => temporarily_unavailable(format!(
                 "governance Station answered HTTP {}",
                 response.status

@@ -583,7 +583,7 @@ async fn enforce_session_device_revocation_gate(
                 "PCR device status is unavailable",
             )
         })?;
-    if admission != soland_storage::PcrDeviceAdmission::Active {
+    if admission != arkret_wire::DeviceRevocationAdmissionDecision::Allow {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",

@@ -57,13 +57,26 @@ pub enum DeviceRevocationGateStatus {
 }
 
 impl DeviceRevocationGateStatus {
-    pub fn ensure_allowed(&self) -> PersistenceResult<()> {
+    /// The current-device admission decision this durable gate state denotes.
+    #[must_use]
+    pub const fn admission_decision(&self) -> arkret_wire::DeviceRevocationAdmissionDecision {
+        use arkret_wire::DeviceRevocationAdmissionDecision as Decision;
         match self {
-            Self::Active => Ok(()),
-            Self::Revoked { .. } => Err(PersistenceError::Conflict("device_revoked".to_owned())),
-            Self::AuthorityMismatch | Self::GenerationMismatch => Err(PersistenceError::Conflict(
-                "failed_precondition: device gate selector mismatch".to_owned(),
-            )),
+            Self::Active => Decision::Allow,
+            Self::Revoked { .. } => Decision::Revoked,
+            Self::AuthorityMismatch => Decision::AuthorityMismatch,
+            Self::GenerationMismatch => Decision::GenerationMismatch,
+        }
+    }
+
+    /// Refuse anything but an admitted device with the SDK's registered code.
+    pub fn ensure_allowed(&self) -> PersistenceResult<()> {
+        match self.admission_decision().error_code() {
+            None => Ok(()),
+            Some(code) => Err(PersistenceError::Conflict(format!(
+                "{}: device revocation gate does not admit the exact device generation",
+                code.as_str()
+            ))),
         }
     }
 }
@@ -150,46 +163,35 @@ pub struct DeviceRevocationCleanupIntent {
     pub mls_obligation_completed_at: Option<DateTime<Utc>>,
 }
 
-/// Human-device admission state folded from one confirmed PCR cut: the
-/// accepted `device_authorization`, `device_generation`, revoke proposals and
-/// the verified conflict index, all read under the same snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PcrDeviceAdmission {
-    Active,
-    Revoked,
-    RevocationPending,
-    /// The authorization generation is no longer current or is conflicted.
-    GenerationFenced,
-    /// The instant lies outside the accepted authorization window.
-    OutsideAuthorizationWindow,
-}
-
-impl PcrDeviceAdmission {
-    /// Registered code refusing a producer in this state; `None` when active.
-    #[must_use]
-    pub const fn refusal_code(self) -> Option<crate::ConflictCode> {
-        match self {
-            Self::Active => None,
-            Self::Revoked => Some(crate::ConflictCode::DeviceRevoked),
-            Self::RevocationPending => Some(crate::ConflictCode::DeviceRevocationPending),
-            Self::GenerationFenced => Some(crate::ConflictCode::DeviceGenerationFenced),
-            Self::OutsideAuthorizationWindow => Some(crate::ConflictCode::DeviceUnauthorized),
-        }
-    }
-}
-
 #[async_trait]
 pub trait DeviceRevocationStore: Send + Sync {
-    /// Authoritative PCR human-device admission at `now`. Missing or
+    /// Authoritative PCR human-device admission at `now`, folded from one
+    /// confirmed cut of the accepted `device_authorization`,
+    /// `device_generation`, revoke proposals and conflict index. Missing or
     /// incomplete typed current is an error, never an implicit active device.
     async fn pcr_device_admission(
         &self,
         _account: &arkret_wire::AccountId,
         _device_id: &arkret_wire::DeviceId,
         _now: DateTime<Utc>,
-    ) -> PersistenceResult<PcrDeviceAdmission> {
+    ) -> PersistenceResult<arkret_wire::DeviceRevocationAdmissionDecision> {
         Err(PersistenceError::SchemaViolation(
             "PCR device status provider is unavailable".to_owned(),
+        ))
+    }
+
+    /// Signing key of the latest accepted `device_authorization` of a device
+    /// whose Account this Station hosts, read from one confirmed PCR cut whose
+    /// `device_authorization`/`device_generation` projections match their
+    /// accepted Commits. `None` when this Station holds no PCR for the Account
+    /// or no authorization for the device.
+    async fn pcr_device_authorization_key(
+        &self,
+        _account: &arkret_wire::AccountId,
+        _device_id: &arkret_wire::DeviceId,
+    ) -> PersistenceResult<Option<arkret_wire::DidKey>> {
+        Err(PersistenceError::SchemaViolation(
+            "PCR device authorization provider is unavailable".to_owned(),
         ))
     }
 

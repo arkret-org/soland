@@ -16,6 +16,8 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 mod authority;
 
+pub(in crate::routing) use authority::{insert_method_key, resolve_verified_authority};
+
 pub(super) fn self_router() -> Router {
     Router::new().push(Router::with_path("realm-joins/prepare").post(prepare))
 }

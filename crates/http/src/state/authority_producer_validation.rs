@@ -212,25 +212,15 @@ async fn human_producer_key(
             "human grant is stale against current device authorization",
         ));
     }
-    match state
+    let gate = state
         .persistence()
         .device_revocation_gate_status(&selector)
-        .await?
-    {
-        soland_storage::DeviceRevocationGateStatus::Active => {}
-        soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
-            return Err(rejected(format!(
-                "{}: Event producer device is revoked",
-                soland_storage::ConflictCode::DeviceRevoked
-            )));
-        }
-        soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
-        | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
-            return Err(rejected(format!(
-                "{}: Event producer device gate names another generation",
-                soland_storage::ConflictCode::DeviceGenerationFenced
-            )));
-        }
+        .await?;
+    if let Some(refusal) = ServiceError::device_admission_refusal(
+        gate.admission_decision(),
+        "Event producer device is not admitted by its revocation gate",
+    ) {
+        return Err(refusal);
     }
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(

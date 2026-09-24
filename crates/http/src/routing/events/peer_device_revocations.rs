@@ -1,6 +1,7 @@
 use arkret_wire::{
     AcceptedDevicePossessionProof, AccountId, CommittedEventRef, DeviceId,
-    DeviceRevocationAdmissionAction, EventId, Hash, RealmCommitId,
+    DeviceRevocationAdmissionAction, DeviceRevocationAdmissionDecision, EventId, Hash,
+    RealmCommitId,
 };
 use chrono::{DateTime, Utc};
 use salvo::prelude::*;
@@ -41,7 +42,7 @@ fn admit_origin_current_selector(
 /// The receipt members a linearized gate status projects to, before typed-id
 /// parsing.
 struct GateDecisionProjection {
-    decision: CurrentDeviceDecision,
+    decision: DeviceRevocationAdmissionDecision,
     derived_binding: Option<CommittedEventRef>,
 }
 
@@ -53,25 +54,12 @@ fn project_gate_decision(
     status: soland_storage::DeviceRevocationGateStatus,
     origin_current_selector: Option<&soland_storage::DeviceRevocationGateSelector>,
 ) -> GateDecisionProjection {
-    let plain = |decision| GateDecisionProjection {
+    let decision = status.admission_decision();
+    GateDecisionProjection {
         decision,
-        derived_binding: None,
-    };
-    match status {
-        soland_storage::DeviceRevocationGateStatus::Active => GateDecisionProjection {
-            decision: CurrentDeviceDecision::Allow,
-            derived_binding: origin_current_selector
-                .map(|selector| selector.authorization_ref.clone()),
-        },
-        soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
-            plain(CurrentDeviceDecision::Revoked)
-        }
-        soland_storage::DeviceRevocationGateStatus::AuthorityMismatch => {
-            plain(CurrentDeviceDecision::AuthorityMismatch)
-        }
-        soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
-            plain(CurrentDeviceDecision::GenerationMismatch)
-        }
+        derived_binding: origin_current_selector
+            .filter(|_| decision == DeviceRevocationAdmissionDecision::Allow)
+            .map(|selector| selector.authorization_ref.clone()),
     }
 }
 
@@ -105,16 +93,6 @@ pub(super) struct CurrentDeviceCheckRequest {
     requested_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum CurrentDeviceDecision {
-    Allow,
-    RevocationPending,
-    Revoked,
-    AuthorityMismatch,
-    GenerationMismatch,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CurrentDeviceCheckOutcome {
@@ -125,7 +103,7 @@ pub(super) struct CurrentDeviceCheckOutcome {
     action_class: DeviceRevocationAdmissionAction,
     intent_digest: Hash,
     accepted_device_possession_proof_digest: Option<Hash>,
-    decision: CurrentDeviceDecision,
+    decision: DeviceRevocationAdmissionDecision,
     linearization_seq: u64,
     linearized_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
@@ -376,7 +354,7 @@ pub(super) async fn check_private_current_device(
         ),
         None => (None, None, None),
     };
-    if decision == CurrentDeviceDecision::Allow && accepted_commit_id.is_none() {
+    if decision == DeviceRevocationAdmissionDecision::Allow && accepted_commit_id.is_none() {
         return Err(AppError::internal(
             "allowed current-device binding has no accepted RealmCommit",
         ));
@@ -422,8 +400,12 @@ mod tests {
                     event_id.as_str().as_bytes(),
                 )),
                 stream_ref: arkret_wire::CommitStreamRef::Realm {
-                    realm_id: arkret_wire::RealmId::new(format!("ak:realm:A{}", "r".repeat(43)))
-                        .unwrap(),
+                    realm_id: arkret_wire::RealmId::from_event_id(
+                        &arkret_wire::EventId::from_digest(
+                            arkret_canonical::DigestSuite::Sha256,
+                            [0x52; 32],
+                        ),
+                    ),
                 },
                 stream_position: 1,
                 event_id,
@@ -446,7 +428,7 @@ mod tests {
             accepted_device_possession_proof_digest: Some(
                 Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
             ),
-            decision: CurrentDeviceDecision::Allow,
+            decision: DeviceRevocationAdmissionDecision::Allow,
             linearization_seq: 9,
             linearized_at: now,
             expires_at: now + chrono::Duration::seconds(30),
@@ -525,7 +507,7 @@ mod tests {
 
         let projected =
             project_gate_decision(DeviceRevocationGateStatus::Active, admitted.as_ref());
-        assert_eq!(projected.decision, CurrentDeviceDecision::Allow);
+        assert_eq!(projected.decision, DeviceRevocationAdmissionDecision::Allow);
         assert_eq!(
             projected.derived_binding,
             Some(selector().authorization_ref)
@@ -552,7 +534,10 @@ mod tests {
             DeviceRevocationGateStatus::AuthorityMismatch,
             admitted.as_ref(),
         );
-        assert_eq!(projected.decision, CurrentDeviceDecision::AuthorityMismatch);
+        assert_eq!(
+            projected.decision,
+            DeviceRevocationAdmissionDecision::AuthorityMismatch
+        );
         assert!(projected.derived_binding.is_none());
         assert!(!accepted_device_proof_requires_verification(None));
     }
@@ -585,15 +570,15 @@ mod tests {
                     revoke_ref: selector.authorization_ref.clone(),
                     committed_at: Utc::now(),
                 },
-                CurrentDeviceDecision::Revoked,
+                DeviceRevocationAdmissionDecision::Revoked,
             ),
             (
                 DeviceRevocationGateStatus::GenerationMismatch,
-                CurrentDeviceDecision::GenerationMismatch,
+                DeviceRevocationAdmissionDecision::GenerationMismatch,
             ),
             (
                 DeviceRevocationGateStatus::AuthorityMismatch,
-                CurrentDeviceDecision::AuthorityMismatch,
+                DeviceRevocationAdmissionDecision::AuthorityMismatch,
             ),
         ];
         for (status, expected) in cases {

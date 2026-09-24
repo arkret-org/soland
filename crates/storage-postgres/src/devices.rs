@@ -279,17 +279,10 @@ impl DeviceMessageStore for PgDeviceMessageStore {
 
             if let Some(selector) = batch.device_revocation_gate.as_ref() {
             match crate::gate_status_in_transaction(conn, selector).await? {
-                DeviceRevocationGateStatus::Active => {}
                 DeviceRevocationGateStatus::Revoked { .. } => {
                     return Ok(DeviceMessageBatchCommitOutcome::DeviceRevoked);
                 }
-                DeviceRevocationGateStatus::AuthorityMismatch
-                | DeviceRevocationGateStatus::GenerationMismatch => {
-                    return Err(PersistenceError::Conflict(
-                        "failed_precondition: device gate selector mismatch".to_owned(),
-                    )
-                    .into());
-                }
+                status => status.ensure_allowed()?,
             }
             }
 
