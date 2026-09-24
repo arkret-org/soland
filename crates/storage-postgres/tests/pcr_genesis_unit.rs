@@ -1918,3 +1918,481 @@ fn author_with_method(author: &PointerAuthor, method: DidUrl) -> PointerAuthor {
         seed: author.seed,
     }
 }
+
+/// Install one accepted `accepted_device` authorization as durable PCR state.
+///
+/// FIXTURE ONLY: Soland has no registered accepted-device admission unit yet
+/// (it needs the Account Authority pairing ledger of device-lifecycle.md
+/// §2.1/§5.2.2), and the generic authority path refuses the kind. This writes
+/// exactly the rows that unit must produce -- the committed Event, its
+/// Station-signed Commit, the typed authorization current value and the
+/// advanced conflict-index marker -- so the same-cut status reader can be
+/// exercised with a second device. It proves nothing about pairing admission.
+async fn install_accepted_device_fixture(
+    pool: &PgPool,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) {
+    let mut conn = pool.get().await.unwrap();
+    let token = soland_storage::ids::parse_event_id(event.event_id.as_str()).unwrap();
+    let canonical =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    diesel::sql_query(
+        "INSERT INTO canonical_events \
+         (id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,received_at,committed_at) \
+         VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,'committed',$9,$9)",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<diesel::sql_types::Binary, _>(token[1..].to_vec())
+    .bind::<Text, _>(event.actor_id.to_string())
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Jsonb, _>(serde_json::to_value(&event.scope_ref).unwrap())
+    .bind::<Text, _>(event.kind.as_str())
+    .bind::<diesel::sql_types::Binary, _>(canonical)
+    .bind::<Jsonb, _>(serde_json::to_value(event).unwrap())
+    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO realm_commits \
+         (commit_id,realm_id,stream_key,stream_ref,stream_position,previous_commit_ref,event_pk,governance_generation,commit_json,committed_at) \
+         SELECT $1,$2,$3,$4,$5,$6,pk,0,$7,$8 FROM canonical_events WHERE id=$9",
+    )
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<Text, _>(commit.realm_id.as_str())
+    .bind::<Text, _>(arkret_canonical::canonical_json_string(&commit.stream_ref).unwrap())
+    .bind::<Jsonb, _>(serde_json::to_value(&commit.stream_ref).unwrap())
+    .bind::<BigInt, _>(commit.stream_position as i64)
+    .bind::<diesel::sql_types::Nullable<Text>, _>(
+        commit.previous_commit_ref.as_ref().map(|id| id.as_str()),
+    )
+    .bind::<Jsonb, _>(serde_json::to_value(commit).unwrap())
+    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let mut value = serde_json::to_value(&event.payload).unwrap();
+    let device_id = value.as_object_mut().unwrap().remove("device_id").unwrap();
+    value["device_authorize_event_id"] = serde_json::to_value(&event.event_id).unwrap();
+    diesel::sql_query(
+        "INSERT INTO pcr_device_authorization_current_results \
+         (realm_id,device_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6)",
+    )
+    .bind::<Text, _>(commit.realm_id.as_str())
+    .bind::<Text, _>(device_id.as_str().unwrap())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<BigInt, _>(commit.stream_position as i64)
+    .bind::<Jsonb, _>(value)
+    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let advanced = diesel::sql_query(
+        "UPDATE pcr_device_conflict_index_cuts SET pcr_head_commit_id=$2,updated_at=$4 \
+         WHERE realm_id=$1 AND pcr_head_commit_id=$3",
+    )
+    .bind::<Text, _>(commit.realm_id.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<Text, _>(commit.previous_commit_ref.as_ref().unwrap().as_str())
+    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(advanced, 1);
+}
+
+#[tokio::test]
+async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() {
+    use arkret_models_collaboration::events_payloads::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
+    };
+    use soland_storage::{KeyBackupActiveSeriesCommitOutcome, KeyBackupActiveSeriesCommitWrite};
+
+    let (pool, station) = contract_store().await;
+    let fixture = fixture(&station);
+    let account = fixture.account.clone();
+    let realm_id = RealmId::new(fixture.events[0].realm_id.to_string()).unwrap();
+    let did = fixture.did.clone();
+    let station_did = fixture.station_did.clone();
+    let device_a = fixture.founding_device_id.clone();
+    let author_a = PointerAuthor {
+        account: account.clone(),
+        realm_id: realm_id.clone(),
+        method: fixture.device_verification_method.clone(),
+        seed: fixture.founding_device_signing_seed,
+    };
+    let genesis = assemble(station.clone(), fixture);
+    let at = genesis.transactions[1].commit.committed_at;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_pcr_genesis_unit(&genesis, at)
+        .await
+        .unwrap();
+    let authority = genesis.transactions[1].expected_authority.clone();
+    let authorize_a = genesis.transactions[1].event.event_id.clone();
+    let status = PgDeviceRevocationStore { pool: pool.clone() };
+    let backups = PgKeyBackupStore { pool: pool.clone() };
+    let transactions = PgSecurityTransactionStore { pool: pool.clone() };
+    let tx =
+        |event: arkret_wire::Event, commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+            expected_authority: authority.clone(),
+            event,
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        };
+
+    // Device B is approved by A under the current generation.
+    let device_b = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let seed_b = [97; 32];
+    let payload_b = device_history_fixture::possession_with(
+        &account,
+        device_history_fixture::DeviceAuthorizationSpec {
+            device_id: device_b.clone(),
+            signing_seed: seed_b,
+            hpke_seed: [7; 32],
+            authorized_by: DeviceOrPrincipalRef::DeviceId(device_a.clone()),
+            not_before: at,
+            expires_at: None,
+            binding: DeviceAuthorizationBindingKind::AcceptedDevice,
+            authorized_generation_ref: 1,
+            applet_id: None,
+        },
+    );
+    arkret_signatures::verify_device_authorize_possession(&payload_b, &account).unwrap();
+    let authorize_b = device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::DeviceAuthorize.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            serde_json::to_value(&payload_b).unwrap(),
+        )
+        .unwrap(),
+        author_a.method.clone(),
+        author_a.seed,
+    );
+    let commit_b = station_successor(
+        &genesis.transactions[1].commit,
+        &authorize_b,
+        &station_did,
+        1,
+    );
+    assert!(
+        PgAuthorityCommitStore { pool: pool.clone() }
+            .admit_event_transaction(&tx(authorize_b.clone(), commit_b.clone()), at)
+            .await
+            .is_err(),
+        "generic admission must not authorize an accepted device"
+    );
+    install_accepted_device_fixture(&pool, &authorize_b, &commit_b).await;
+    let now = commit_b.committed_at;
+    assert!(
+        status
+            .pcr_device_active(&account, &device_a, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        status
+            .pcr_device_active(&account, &device_b, now)
+            .await
+            .unwrap()
+    );
+    let author_b = PointerAuthor {
+        account: account.clone(),
+        realm_id: realm_id.clone(),
+        method: DidUrl::new(format!("{did}#{device_b}")).unwrap(),
+        seed: seed_b,
+    };
+
+    // B, as an active device, may select the first series at this cut.
+    let series_one =
+        BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let pointer_b = author_b.event(
+        author_b.record(
+            &series_one,
+            1,
+            vec![],
+            &commit_b.commit_id,
+            &authorize_b.event_id,
+            1,
+            seed_b,
+        ),
+        1,
+    );
+    let pointer_b_commit = station_successor(&commit_b, &pointer_b, &station_did, 1);
+    assert!(matches!(
+        backups
+            .commit_active_series_pointer(KeyBackupActiveSeriesCommitWrite {
+                commit: tx(pointer_b, pointer_b_commit.clone()),
+                queued_at: now,
+            })
+            .await
+            .unwrap(),
+        KeyBackupActiveSeriesCommitOutcome::Committed(_)
+    ));
+
+    // A proposes revoking B through the SecurityRotation proposal unit.
+    let revoke = device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            serde_json::json!({
+                "device_id": device_b,
+                "revoked_by": device_a,
+                "revoked_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "reason": "security_rotation"
+            }),
+        )
+        .unwrap(),
+        author_a.method.clone(),
+        author_a.seed,
+    );
+    let covering = station_successor(&pointer_b_commit, &revoke, &station_did, 1);
+    let rotation_series =
+        BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let rotation_pointer = author_a.event(
+        author_a.record(
+            &rotation_series,
+            2,
+            vec![series_one.clone()],
+            &covering.commit_id,
+            &authorize_a,
+            1,
+            author_a.seed,
+        ),
+        2,
+    );
+    let request = SecurityRotationTransactionCreateRequest::from_prepared_rotations(
+        TransactionId::new(format!("ak:transaction:{}", uuid::Uuid::now_v7())).unwrap(),
+        account.clone(),
+        device_a.clone(),
+        now + chrono::TimeDelta::hours(1),
+        PreparedEventUnit::new(
+            arkret_canonical::DigestSuite::Sha256,
+            PreparedEventBatchRequest {
+                events: vec![revoke.clone()],
+            },
+        )
+        .unwrap(),
+        hash("rotated-secret"),
+        vec![BackupRotationPlan {
+            binding: BackupRotationBinding {
+                backup_kind: BackupRotationKind::SecretStorage,
+                previous_series_id: series_one.clone(),
+                new_series_id: rotation_series.clone(),
+                new_backups: vec![BackupObjectRef {
+                    backup_id: BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7()))
+                        .unwrap(),
+                    ciphertext_digest: hash("rotated-backup"),
+                }],
+                active_series_event_id: rotation_pointer.event_id.clone(),
+                old_backups: vec![BackupObjectRef {
+                    backup_id: BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7()))
+                        .unwrap(),
+                    ciphertext_digest: hash("old-backup"),
+                }],
+            },
+            encrypted_backup_material: CanonicalPublicMaterial::canonical_json(
+                serde_json::json!({"fixture":"ciphertext"}),
+            )
+            .unwrap(),
+            active_series_unit: PreparedEventUnit::new(
+                arkret_canonical::DigestSuite::Sha256,
+                PreparedEventBatchRequest {
+                    events: vec![rotation_pointer.clone()],
+                },
+            )
+            .unwrap(),
+        }],
+    )
+    .unwrap();
+    let plan = SecurityTransactionPreparedPlan::SecurityRotation(request.prepared_plan.clone());
+    let (initial, canonical_request) = SecurityTransactionCreateRequest::SecurityRotation(request)
+        .into_initial_resource(plan, now)
+        .unwrap();
+    let transaction_id = initial.transaction_id.clone();
+    transactions
+        .create(SecurityTransactionRecord {
+            resource: initial.clone(),
+            canonical_request: canonical_request.clone(),
+        })
+        .await
+        .unwrap();
+    let mut proposed = initial;
+    proposed.revoke_proposal = Some(SecurityRotationRevokeProposal {
+        proposal_event_id: revoke.event_id.clone(),
+        covering_commit_id: covering.commit_id.clone(),
+    });
+    transactions
+        .commit_revoke_proposal(RevokeProposalCommitWrite {
+            transaction: SecurityTransactionRecord {
+                resource: proposed,
+                canonical_request,
+            },
+            commit: tx(revoke.clone(), covering.clone()),
+            queued_at: now,
+        })
+        .await
+        .unwrap();
+
+    // Pending: B stops authenticating and cannot move the pointer; A goes on.
+    let pending_at = covering.committed_at;
+    assert!(
+        !status
+            .pcr_device_active(&account, &device_b, pending_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        status
+            .pcr_device_active(&account, &device_a, pending_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        backups
+            .confirmed_active_series_for_device(&account, &device_b, pending_at)
+            .await
+            .is_err()
+    );
+    let pending_pointer = author_b.event(
+        author_b.record(
+            &rotation_series,
+            2,
+            vec![series_one.clone()],
+            &covering.commit_id,
+            &authorize_b.event_id,
+            1,
+            seed_b,
+        ),
+        3,
+    );
+    let pending_commit = station_successor(&covering, &pending_pointer, &station_did, 1);
+    let refused = backups
+        .commit_active_series_pointer(KeyBackupActiveSeriesCommitWrite {
+            commit: tx(pending_pointer, pending_commit),
+            queued_at: pending_at,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("not active at the PCR cut"), "{refused}");
+
+    // The accepted terminal result revokes B; it never touches A.
+    let mut accepted = transactions
+        .get(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let request_digest = accepted
+        .resource
+        .security_rotation_plan()
+        .unwrap()
+        .revoke_unit
+        .request_digest
+        .clone();
+    let decided_at = pending_at + chrono::TimeDelta::seconds(1);
+    accepted
+        .resource
+        .accepted_steps
+        .push(AcceptedSecurityTransactionStep {
+            prepared_material_digest: request_digest,
+            acceptor: SecurityTransactionAcceptor::Principal {
+                principal_id: station.clone(),
+            },
+            output_ref: covering.commit_id.to_string(),
+            output_digest: hash("revoke-command-accepted"),
+            accepted_at: decided_at,
+        });
+    accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
+        proposal_event_id: revoke.event_id.clone(),
+        covering_commit_id: covering.commit_id.clone(),
+        result: SecurityRotationRevokeCommandResult::Accepted,
+        decided_at,
+    });
+    transactions
+        .commit_revoke_command_terminal(RevokeCommandTerminalWrite {
+            step_outcome: Some(SecurityTransactionStepOutcomeRecord {
+                transaction_id: transaction_id.to_string(),
+                step: SecurityTransactionStep::Revoke,
+                canonical_request: b"revoke-worker-request".to_vec(),
+                response: serde_json::to_value(&accepted.resource).unwrap(),
+                participant_outcome: None,
+            }),
+            transaction: accepted,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !status
+            .pcr_device_active(&account, &device_b, decided_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        status
+            .pcr_device_active(&account, &device_a, decided_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        backups
+            .confirmed_active_series_for_device(&account, &device_b, decided_at)
+            .await
+            .is_err()
+    );
+
+    // A, still active, commits the rotation's successor pointer. Its source
+    // is the covering Commit; the generation did not move, so it is fresh.
+    let pointer_a_commit = station_successor(&covering, &rotation_pointer, &station_did, 2);
+    backups
+        .commit_active_series_pointer(KeyBackupActiveSeriesCommitWrite {
+            commit: tx(rotation_pointer, pointer_a_commit.clone()),
+            queued_at: decided_at,
+        })
+        .await
+        .unwrap();
+    let after = backups
+        .confirmed_active_series_for_device(&account, &device_a, decided_at)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.authority_commit_id, pointer_a_commit.commit_id);
+    assert_eq!(
+        after.secret_storage,
+        BackupActiveSeriesPointer::Active {
+            active_series_id: rotation_series,
+            series_pointer_version: 2,
+        }
+    );
+    // A fresh pool rebuilds the same fold from durable rows only.
+    let restarted = Db::connect(Some(&support::contract_database_url()), Default::default())
+        .await
+        .unwrap()
+        .pool
+        .unwrap();
+    let restarted_status = PgDeviceRevocationStore { pool: restarted };
+    assert!(
+        !restarted_status
+            .pcr_device_active(&account, &device_b, decided_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        restarted_status
+            .pcr_device_active(&account, &device_a, decided_at)
+            .await
+            .unwrap()
+    );
+}
