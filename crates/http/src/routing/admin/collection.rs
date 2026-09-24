@@ -102,12 +102,15 @@ pub(super) async fn admin_collection(
         "applets" => ("applets", admin_applet_items(state)),
         "reports" => (
             "reports",
-            crate::routing::interop::moderation::visible_reports_for_actor(
+            crate::routing::interop::moderation::moderation_queue_for_session(
                 state,
                 &session.actor,
                 None,
             )
-            .await,
+            .await?
+            .into_iter()
+            .map(|item| json!(item))
+            .collect(),
         ),
         "invite-tokens" => (
             "invite_tokens",

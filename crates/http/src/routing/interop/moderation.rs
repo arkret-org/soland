@@ -786,113 +786,39 @@ async fn moderation_report(
     })
 }
 
-pub(crate) async fn visible_reports_for_actor(
+/// The moderation queue View (content-moderation.md §3.3, §5.4) for the
+/// authenticated caller, read from one durable cut.
+///
+/// Items are derived from the accepted `moderation_report` family; only a
+/// moderator of the reported scope sees them. A Realm where the caller is not
+/// a moderator contributes nothing, exactly like a Realm without reports.
+/// Deployment operator status grants no Realm moderation capability.
+pub(crate) async fn moderation_queue_for_session(
     state: &AppState,
-    actor: &str,
-    realm_filter: Option<&str>,
-) -> Vec<Value> {
-    let all = state
-        .governance()
-        .moderation_reports()
-        .await
-        .unwrap_or_default();
-    let mut visible = Vec::new();
-    for report in all {
-        let realm_id = report_realm_id(&report);
-        if realm_filter.is_some_and(|filter| realm_id != Some(filter)) {
-            continue;
-        }
-        if moderation_report_visible_to_actor(state, &report, actor).await {
-            visible.push(report);
-        }
-    }
-    visible
-}
-
-pub(crate) async fn moderation_report_visible_to_actor(
-    state: &AppState,
-    report: &Value,
-    actor: &str,
-) -> bool {
-    if state.is_admin_principal(actor) {
-        return true;
-    }
-    match report_realm_id(report) {
-        Some(realm_id) => moderation_routing_visible_to_actor(state, realm_id, actor).await,
-        None => false,
-    }
-}
-
-fn report_realm_id(report: &Value) -> Option<&str> {
-    report.get("realm_id").and_then(Value::as_str)
-}
-
-async fn moderation_routing_visible_to_actor(
-    state: &AppState,
-    realm_id: &str,
-    actor: &str,
-) -> bool {
-    if state.is_admin_principal(actor) {
-        return true;
-    }
-    let owner = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|meta| meta.owner);
-    // Realm metadata stores the normative complete ActorId, while authenticated
-    // sessions identify the signing principal. Resolve the same identity facet
-    // used by authorization before comparing or passing the owner onward.
-    let owner_principal = owner.as_deref().and_then(|owner| {
-        serde_json::from_str::<arkret_wire::ActorId>(owner)
-            .ok()
-            .map(|actor_id| actor_id.signing_principal_id().as_str().to_owned())
-    });
-    if owner_principal.as_deref() == Some(actor) {
-        return true;
-    }
-    let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
-        return false;
-    };
-    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        principal_id,
+    principal: &str,
+    realm_filter: Option<&RealmId>,
+) -> Result<
+    Vec<arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem>,
+    AppError,
+> {
+    let principal = arkret_wire::DidCoreId::new(principal.to_owned())
+        .map_err(|error| AppError::internal(format!("session principal is invalid: {error}")))?;
+    let actor = ActorId::account(arkret_wire::AccountId::new(
+        principal,
         state.service_core_id().clone(),
     ));
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        RealmId::new(realm_id.to_owned())
-            .ok()
-            .and_then(|id| realms.get(&id))
-            .map(|realm| {
-                realm
-                    .members
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_default()
-    };
-    [
-        arkret_wire::CapabilityActionId::MODERATION_DECISION,
-        arkret_wire::CapabilityActionId::REALM_ADMIN,
-    ]
-    .into_iter()
-    .any(|action| {
-        state
-            .authorization()
-            .check(soland_services::authorization::AuthorizationCheck {
-                actor: &actor_id,
-                action,
-                resource: realm_id,
-                realm_id,
-                owner: owner_principal.as_deref(),
-                members: &members,
-                resource_facets: &[],
-            })
-            .allowed
-    })
+    match state
+        .governance()
+        .moderation_queue_for_actor(&actor, realm_filter)
+        .await
+        .map_err(|error| AppError::internal(format!("moderation queue read failed: {error}")))?
+    {
+        soland_storage::ModerationQueueRead::Items(items) => Ok(items),
+        soland_storage::ModerationQueueRead::StatusUnavailable => Err(AppError::new(
+            soland_http::error::ErrorCode::RevisionUnavailable,
+            "moderation_state current result is unavailable at this cut",
+        )),
+    }
 }
 
 #[cfg(test)]

@@ -4,8 +4,7 @@
 -- `<role>_event_ref`. That is not drift: the suffix is normative and comes from
 -- `arkret-spec zh/models/common-fields.md` 2.1. `_id` names the Event as the
 -- artifact the row is about -- an operation target, audit target or selector
--- target (`retention_tombstones.event_id`, `moderation_reports.target_event_id`,
--- `mls_key_packages.device_authorize_event_id`). `_ref` names an Event used as
+-- target (`retention_tombstones.event_id`, `mls_key_packages.device_authorize_event_id`). `_ref` names an Event used as
 -- causal, finality or proof material (`contacts.request_event_ref`,
 -- `agent_sidecar_contexts.predecessor_event_ref`,
 -- `agent_principals.authorized_event_ref`). A column MUST carry the same name
@@ -2568,44 +2567,6 @@ CREATE TABLE public.peer_keypackage_claims (
 
 CREATE UNIQUE INDEX peer_keypackage_claims_single_use_keypackage_id_key ON public.peer_keypackage_claims USING btree (keypackage_id) WHERE key_package_use = 'single_use' AND keypackage_id IS NOT NULL;
 
-
--- `report` is an Event-derived kind: `id` is the create Event's 33-byte token
--- behind a local sequential `pk`. `target_event_id` is the protocol identity of
--- the reported Event.
-CREATE TABLE public.moderation_reports (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id bytea NOT NULL CHECK (octet_length(id) = 33),
-    reporter_id text,
-    target_actor_id text,
-    target_event_id bytea CHECK (octet_length(target_event_id) = 33),
-    realm_id text,
-    payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT moderation_reports_id_key UNIQUE (id)
-);
-
-CREATE INDEX moderation_reports_space_idx ON public.moderation_reports USING btree (realm_id);
-
-CREATE INDEX moderation_reports_target_idx ON public.moderation_reports USING btree (target_actor_id);
-
--- Queue identity is derived from the same accepted report Event token. The
--- payload is an idempotent read projection and may be rebuilt from Events.
--- Keeping the report Event in its own indexed column makes decision projection
--- a bounded lookup instead of a full JSON queue scan.
-CREATE TABLE public.moderation_queue_items (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id bytea NOT NULL CHECK (octet_length(id) = 33),
-    report_event_id bytea NOT NULL CHECK (octet_length(report_event_id) = 33),
-    realm_id text,
-    payload jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT moderation_queue_items_id_key UNIQUE (id)
-);
-
-CREATE INDEX moderation_queue_items_realm_idx ON public.moderation_queue_items USING btree (realm_id);
-
-CREATE INDEX moderation_queue_items_report_event_idx
-    ON public.moderation_queue_items USING btree (report_event_id);
 
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY CHECK (organization_id LIKE 'ak:did_core:%'),

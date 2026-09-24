@@ -6,7 +6,6 @@ mod collection;
 mod handles;
 mod introspect;
 mod media;
-mod moderation;
 mod queries;
 mod retention;
 mod server_ops;
@@ -146,7 +145,6 @@ pub fn admin_router() -> Router {
         .push(Router::with_path("capabilities").get(queries::admin_list_capabilities))
         .push(Router::with_path("devices").get(queries::admin_list_devices))
         .push(media::router())
-        .push(moderation::router())
         .push(service_routes::router())
         // Operator audit queries (`/_soland/admin/audit/events`,
         // `/_soland/admin/audit/erasure-receipts`) under the shared

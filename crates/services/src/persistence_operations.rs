@@ -373,32 +373,19 @@ impl crate::governance::AuditLogPort for PersistenceAuditLog {
 
 #[async_trait::async_trait]
 impl crate::governance::ModerationPort for PersistenceModeration {
-    async fn append_report(&self, report: Value) -> crate::ServiceResult<()> {
-        self.0.moderation().append_report(report).await?;
-        Ok(())
-    }
-    async fn reports(&self) -> crate::ServiceResult<Vec<Value>> {
-        Ok(self.0.moderation().list_reports().await?)
-    }
-    async fn upsert_queue_item(&self, item: Value) -> crate::ServiceResult<()> {
-        self.0.moderation().upsert_queue_item(item).await?;
-        Ok(())
-    }
-    async fn queue_items(&self) -> crate::ServiceResult<Vec<Value>> {
-        Ok(self.0.moderation().list_queue_items().await?)
-    }
-    async fn queue_item(&self, id: &str) -> crate::ServiceResult<Option<Value>> {
-        Ok(self.0.moderation().get_queue_item(id).await?)
-    }
-    async fn submitted_queue_item_for_report_event(
+    async fn queue_view_for_actor(
         &self,
-        report_event_id: &str,
-    ) -> crate::ServiceResult<Option<Value>> {
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> crate::ServiceResult<soland_storage::ModerationQueueRead> {
         Ok(self
             .0
             .moderation()
-            .get_submitted_queue_item_for_report_event(report_event_id)
+            .queue_view_for_actor(actor, realm_id)
             .await?)
+    }
+    async fn report_count(&self) -> crate::ServiceResult<u64> {
+        Ok(self.0.moderation().report_count().await?)
     }
 }
 

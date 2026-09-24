@@ -1,35 +1,36 @@
-use super::{PersistenceError, PersistenceResult, Value, async_trait};
-/// Moderation reports and queue items.
+use arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem;
+
+use super::{PersistenceResult, async_trait};
+
+/// One same-cut read of the moderation queue View.
 ///
-/// Reports are append-only. Queue items support the moderation workbench;
-/// canonical decisions remain durable Events projected by
-/// `soland_domain::reducer::apply_moderation`, so there is no separate
-/// moderator-action record.
+/// The queue is a read-side View over the accepted `moderation_report` typed
+/// current family and the `moderation_state` records that point at it
+/// (content-moderation.md §3.3, §5.4); it holds no writable state of its own.
+#[derive(Debug)]
+pub enum ModerationQueueRead {
+    /// The report items the caller may see as a moderator of their scope, in
+    /// accepting-Commit order per Realm stream. Realms where the caller is not
+    /// a moderator contribute nothing and are indistinguishable from Realms
+    /// without reports.
+    Items(Vec<ModerationQueueItem>),
+    /// A visible Realm holds moderation decision records that no durable
+    /// `moderation_state` current result can fold at this cut, so no item
+    /// status can be proved.
+    StatusUnavailable,
+}
+
+/// The moderation queue View over the accepted report family.
 #[async_trait]
 pub trait ModerationStore: Send + Sync {
-    async fn append_report(&self, report: Value) -> PersistenceResult<()>;
-    async fn list_reports(&self) -> PersistenceResult<Vec<Value>>;
-
-    /// Upsert a `ModerationQueueItem` record. The JSON must carry
-    /// `id`, `status`, `visibility`, `created_at`.
-    async fn upsert_queue_item(&self, _item: Value) -> PersistenceResult<()> {
-        Err(PersistenceError::Internal(
-            "moderation queue item upsert not wired in this backend".to_owned(),
-        ))
-    }
-    async fn list_queue_items(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(Vec::new())
-    }
-    async fn get_queue_item(&self, _id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(None)
-    }
-    /// Return the still-submitted queue item derived from one moderation report
-    /// Event. Report identity is a first-class lookup key so a decision
-    /// projection never needs to load and scan the entire queue.
-    async fn get_submitted_queue_item_for_report_event(
+    /// Read the View for `actor` from one database snapshot, optionally
+    /// restricted to one Realm.
+    async fn queue_view_for_actor(
         &self,
-        _report_event_id: &str,
-    ) -> PersistenceResult<Option<Value>> {
-        Ok(None)
-    }
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> PersistenceResult<ModerationQueueRead>;
+
+    /// Deployment-local operator counter of accepted report rows.
+    async fn report_count(&self) -> PersistenceResult<u64>;
 }

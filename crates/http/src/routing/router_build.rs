@@ -283,8 +283,8 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
         // matters only where paths overlap:
         //   1. `server_ops_router` — soland-local admin endpoints
         //      (server/status, accounts, devices, moderation/queue).
-        //   2. `admin_router`  — operator surface (moderation sub-actions,
-        //      Realm and account administration).
+        //   2. `admin_router`  — operator surface (Realm and account
+        //      administration).
         //   3. `router`        — collection (`/_soland/admin/{resource}`),
         //      cells, control-frames, retention.
         .push(

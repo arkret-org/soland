@@ -32,15 +32,12 @@ pub trait AuditLogPort: Send + Sync {
 
 #[async_trait]
 pub trait ModerationPort: Send + Sync {
-    async fn append_report(&self, report: Value) -> ServiceResult<()>;
-    async fn reports(&self) -> ServiceResult<Vec<Value>>;
-    async fn upsert_queue_item(&self, item: Value) -> ServiceResult<()>;
-    async fn queue_items(&self) -> ServiceResult<Vec<Value>>;
-    async fn queue_item(&self, id: &str) -> ServiceResult<Option<Value>>;
-    async fn submitted_queue_item_for_report_event(
+    async fn queue_view_for_actor(
         &self,
-        report_event_id: &str,
-    ) -> ServiceResult<Option<Value>>;
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> ServiceResult<soland_storage::ModerationQueueRead>;
+    async fn report_count(&self) -> ServiceResult<u64>;
 }
 
 #[async_trait]
@@ -257,28 +254,16 @@ impl GovernanceService {
         self.audit_log.entries().await
     }
 
-    pub async fn append_moderation_report(&self, report: Value) -> ServiceResult<()> {
-        self.moderation.append_report(report).await
-    }
-    pub async fn moderation_reports(&self) -> ServiceResult<Vec<Value>> {
-        self.moderation.reports().await
-    }
-    pub async fn upsert_moderation_queue_item(&self, item: Value) -> ServiceResult<()> {
-        self.moderation.upsert_queue_item(item).await
-    }
-    pub async fn moderation_queue_items(&self) -> ServiceResult<Vec<Value>> {
-        self.moderation.queue_items().await
-    }
-    pub async fn moderation_queue_item(&self, id: &str) -> ServiceResult<Option<Value>> {
-        self.moderation.queue_item(id).await
-    }
-    pub async fn submitted_moderation_queue_item_for_report_event(
+    /// The moderation queue View for `actor` from one durable cut.
+    pub async fn moderation_queue_for_actor(
         &self,
-        report_event_id: &str,
-    ) -> ServiceResult<Option<Value>> {
-        self.moderation
-            .submitted_queue_item_for_report_event(report_event_id)
-            .await
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> ServiceResult<soland_storage::ModerationQueueRead> {
+        self.moderation.queue_view_for_actor(actor, realm_id).await
+    }
+    pub async fn moderation_report_count(&self) -> ServiceResult<u64> {
+        self.moderation.report_count().await
     }
     pub async fn retention_policy(
         &self,
@@ -446,26 +431,15 @@ mod tests {
 
     #[async_trait]
     impl ModerationPort for NoModeration {
-        async fn append_report(&self, _report: Value) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn reports(&self) -> ServiceResult<Vec<Value>> {
-            Ok(Vec::new())
-        }
-        async fn upsert_queue_item(&self, _item: Value) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn queue_items(&self) -> ServiceResult<Vec<Value>> {
-            Ok(Vec::new())
-        }
-        async fn queue_item(&self, _id: &str) -> ServiceResult<Option<Value>> {
-            Ok(None)
-        }
-        async fn submitted_queue_item_for_report_event(
+        async fn queue_view_for_actor(
             &self,
-            _report_event_id: &str,
-        ) -> ServiceResult<Option<Value>> {
-            Ok(None)
+            _actor: &arkret_wire::ActorId,
+            _realm_id: Option<&arkret_wire::RealmId>,
+        ) -> ServiceResult<soland_storage::ModerationQueueRead> {
+            Ok(soland_storage::ModerationQueueRead::Items(Vec::new()))
+        }
+        async fn report_count(&self) -> ServiceResult<u64> {
+            Ok(0)
         }
     }
 

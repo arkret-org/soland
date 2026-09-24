@@ -648,51 +648,6 @@ pub(super) async fn preflight_moderation_dismiss(
     Ok(())
 }
 
-pub(super) async fn resolve_moderation_dismiss_queue_item(
-    state: &AppState,
-    operation: &arkret_event_draft::ProjectedEventOperation,
-    decision_event_id: &str,
-) {
-    if operation.event_kind != arkret_wire::EventKind::ModerationDecision
-        || operation.payload.get("decision").and_then(Value::as_str) != Some("dismiss")
-    {
-        return;
-    }
-    let Some(target_ref) = operation.payload.get("target_ref").and_then(|value| {
-        value
-            .as_str()
-            .or_else(|| value.get("id").and_then(Value::as_str))
-    }) else {
-        return;
-    };
-    let Ok(item) = state
-        .governance()
-        .submitted_moderation_queue_item_for_report_event(target_ref)
-        .await
-    else {
-        tracing::warn!(target_ref, "moderation queue lookup failed after dismiss");
-        return;
-    };
-    let Some(mut item) = item else {
-        return;
-    };
-    if let Some(object) = item.as_object_mut() {
-        object.insert("status".to_owned(), Value::String("resolved".to_owned()));
-        object.insert(
-            "resolution".to_owned(),
-            json!({
-                "decision": "dismiss",
-                "effective_verdict": "none",
-                "decision_event_id": decision_event_id,
-            }),
-        );
-        object.insert("resolved_at".to_owned(), json!(now()));
-    }
-    if let Err(error) = state.governance().upsert_moderation_queue_item(item).await {
-        tracing::warn!(%error, target_ref, "moderation queue dismiss projection failed");
-    }
-}
-
 pub(super) async fn preflight_account_data_cas(
     state: &AppState,
     operation: &arkret_event_draft::ProjectedEventOperation,

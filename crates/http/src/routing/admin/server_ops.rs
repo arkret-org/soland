@@ -59,7 +59,9 @@ struct AdminAccountLifecycleOutcome {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AdminModerationQueueOutcome {
-    items: Vec<super::moderation::ModerationQueueItemOutcome>,
+    /// `moderation-queue-item.schema.json` View items.
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    items: Vec<arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem>,
     total: usize,
     generated_at: String,
 }
@@ -75,12 +77,8 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("accounts/{account_id}/suspend").post(suspend_account))
         .push(Router::with_path("accounts/{account_id}/unsuspend").post(unsuspend_account))
         .push(Router::with_path("accounts/{account_id}/deactivate").post(deactivate_account))
-        // `GET /_soland/admin/moderation/queue` is the local queue read.
-        // The operator moderation suite in
-        // `moderation.rs` owns the remaining `/_soland/admin/moderation/*`
-        // sub-paths (queue/{id}/assign and decision) and
-        // deliberately does NOT re-bind the bare `queue` GET to avoid
-        // double-binding the single URL.
+        // `GET /_soland/admin/moderation/queue` is the caller's moderation
+        // queue View; the queue holds no writable state of its own.
         .push(Router::with_path("moderation/queue").get(get_moderation_queue))
 }
 
@@ -190,9 +188,8 @@ async fn get_server_stats(
         .unwrap_or(0);
     let report_count = state
         .governance()
-        .moderation_queue_items()
+        .moderation_report_count()
         .await
-        .map(|items| items.len() as u64)
         .unwrap_or(0);
     let federation_peer_count = state.settings().federation_peers.len() as u64;
     let applet_count = {
@@ -456,17 +453,14 @@ async fn get_moderation_queue(
 ) -> JsonResult<AdminModerationQueueOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let _ = require_admin_principal(state, session)?;
-    let items = state
-        .governance()
-        .moderation_queue_items()
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    let session = require_admin_principal(state, session)?;
+    let items = crate::routing::interop::moderation::moderation_queue_for_session(
+        state,
+        &session.actor,
+        None,
+    )
+    .await?;
     let total = items.len();
-    let items = items
-        .into_iter()
-        .map(super::moderation::ModerationQueueItemOutcome::from_value)
-        .collect();
     json_ok(AdminModerationQueueOutcome {
         items,
         total,

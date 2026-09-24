@@ -985,30 +985,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    moderation_reports (pk) {
-        pk -> Int8,
-        id -> Bytea,
-        reporter_id -> Nullable<Text>,
-        target_actor_id -> Nullable<Text>,
-        target_event_id -> Nullable<Bytea>,
-        realm_id -> Nullable<Text>,
-        payload -> Jsonb,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    moderation_queue_items (pk) {
-        pk -> Int8,
-        id -> Bytea,
-        report_event_id -> Bytea,
-        realm_id -> Nullable<Text>,
-        payload -> Jsonb,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     notifications (id) {
         id -> Uuid,
         recipient_actor_id -> Text,
@@ -2048,8 +2024,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     messages,
     mls_commits,
     mls_key_packages,
-    moderation_queue_items,
-    moderation_reports,
     notifications,
     one_time_keys,
     organizations,

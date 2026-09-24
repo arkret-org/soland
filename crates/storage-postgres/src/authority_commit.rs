@@ -688,6 +688,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM message_revision_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'moderation_report'::text AS selector_kind, to_jsonb(report_event_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM moderation_report_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
@@ -745,6 +749,15 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         message_id: serde_json::from_value(message_id).map_err(|error| {
                             PersistenceError::Internal(format!(
                                 "stored Message revision selector identity is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
+                ("moderation_report", Some(event_id)) => {
+                    arkret_wire::CurrentSelector::ModerationReport {
+                        event_id: serde_json::from_value(event_id).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored moderation report selector identity is invalid: {error}"
                             ))
                         })?,
                     }

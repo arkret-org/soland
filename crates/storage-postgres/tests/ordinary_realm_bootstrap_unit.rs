@@ -2412,6 +2412,20 @@ fn moderation_report_request(
     reporter: &arkret_wire::DidCoreId,
     payload: serde_json::Value,
 ) -> EventCommitRequest {
+    realm_self_event_request(
+        previous,
+        reporter,
+        arkret_wire::EventKind::SelfModerationReport,
+        payload,
+    )
+}
+
+fn realm_self_event_request(
+    previous: &EventCommitRequest,
+    reporter: &arkret_wire::DidCoreId,
+    kind: arkret_wire::EventKind,
+    payload: serde_json::Value,
+) -> EventCommitRequest {
     let mut request = previous.clone();
     let previous_commit = &previous.authority_commit.commit;
     let realm_id = previous.authority_commit.event.realm_id.clone();
@@ -2421,7 +2435,7 @@ fn moderation_report_request(
         .service_id
         .clone();
     let event = event(
-        arkret_wire::EventKind::SelfModerationReport,
+        kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
@@ -2923,4 +2937,160 @@ async fn concurrent_self_reports_on_one_stream_head_leave_one_winner_and_a_retry
             .stream_position,
         winner.authority_commit.commit.stream_position + 1
     );
+}
+
+/// Real PostgreSQL: the moderation queue is a same-cut View over the
+/// `moderation_report` family. The Realm root controller sees every report as
+/// a closed `moderation-queue-item` with the retyped id, the exact payload and
+/// the accepting Commit time; any other caller sees nothing; the full Realm
+/// snapshot material carries each report under its registered selector; and an
+/// accepted moderation decision makes item status unprovable instead of
+/// `submitted`.
+#[tokio::test]
+async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
+    use soland_storage::{ModerationQueueRead, ModerationStore as _};
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let queue = soland_storage_postgres::PgModerationStore { pool: pool.clone() };
+    let unit = unit();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let controller = default.authority_commit.event.actor_id.clone();
+    let reporter = controller.signing_principal_id().clone();
+    let stranger = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:queue-stranger.example").unwrap(),
+        controller.as_account_id().unwrap().station_id.clone(),
+    ));
+
+    let items = |read: ModerationQueueRead| match read {
+        ModerationQueueRead::Items(items) => items,
+        ModerationQueueRead::StatusUnavailable => panic!("status must be provable"),
+    };
+    assert!(items(queue.queue_view_for_actor(&controller, None).await.unwrap()).is_empty());
+
+    let first = moderation_report_request(
+        &default,
+        &reporter,
+        report_payload(&realm_id, strand_id.as_str(), &reporter),
+    );
+    uow.commit_event(first.clone()).await.unwrap();
+    let mut second_payload = report_payload(&realm_id, realm_id.as_str(), &reporter);
+    second_payload["report_reason_code"] = serde_json::json!("harassment");
+    let second = moderation_report_request(&first, &reporter, second_payload);
+    uow.commit_event(second.clone()).await.unwrap();
+    assert_eq!(queue.report_count().await.unwrap(), 2);
+
+    let view = items(queue.queue_view_for_actor(&controller, None).await.unwrap());
+    assert_eq!(view.len(), 2);
+    for (item, request) in view.iter().zip([&first, &second]) {
+        let value = serde_json::to_value(item).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": request
+                    .authority_commit
+                    .event
+                    .event_id
+                    .as_str()
+                    .replacen("ak:event:", "ak:moderation_queue_item:", 1),
+                "report": serde_json::to_value(&request.authority_commit.event.payload).unwrap(),
+                "status": "submitted",
+                "visibility": "plaintext_evidence",
+                "created_at": arkret_canonical::format_timestamp_canonical(
+                    request.authority_commit.commit.committed_at
+                ),
+            })
+        );
+    }
+    assert_eq!(
+        items(
+            queue
+                .queue_view_for_actor(&controller, Some(&realm_id))
+                .await
+                .unwrap()
+        )
+        .len(),
+        2
+    );
+    let other_realm = arkret_wire::RealmId::from_event_id(&strand.authority_commit.event.event_id);
+    assert!(
+        items(
+            queue
+                .queue_view_for_actor(&controller, Some(&other_realm))
+                .await
+                .unwrap()
+        )
+        .is_empty()
+    );
+    assert!(items(queue.queue_view_for_actor(&stranger, None).await.unwrap()).is_empty());
+
+    let material = store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for request in [&first, &second] {
+        let selector = arkret_wire::CurrentSelector::ModerationReport {
+            event_id: request.authority_commit.event.event_id.clone(),
+        };
+        let entry = material
+            .current_state_entries
+            .iter()
+            .find(|entry| {
+                matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: found, .. } if found == &selector)
+            })
+            .expect("snapshot material carries the report row");
+        let arkret_wire::TypedCurrentResult::Value {
+            source_stream_ref,
+            revision,
+            value,
+            ..
+        } = entry
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            source_stream_ref,
+            &request.authority_commit.commit.stream_ref
+        );
+        assert_eq!(
+            revision.commit_id,
+            request.authority_commit.commit.commit_id
+        );
+        assert_eq!(
+            value,
+            &serde_json::to_value(&request.authority_commit.event.payload).unwrap()
+        );
+    }
+
+    // A committed decision needs the moderation_state fold this Station
+    // cannot yet produce; only a visible Realm makes the read unavailable.
+    let dismiss = realm_self_event_request(
+        &second,
+        &reporter,
+        arkret_wire::EventKind::ModerationDecision,
+        serde_json::json!({
+            "target_ref": first.authority_commit.event.event_id,
+            "decision": "dismiss",
+            "issuer_id": reporter,
+            "request_canonical_digest": format!("sha256:{}", "00".repeat(32)),
+        }),
+    );
+    uow.commit_event(dismiss).await.unwrap();
+    assert!(matches!(
+        queue.queue_view_for_actor(&controller, None).await.unwrap(),
+        ModerationQueueRead::StatusUnavailable
+    ));
+    assert!(items(queue.queue_view_for_actor(&stranger, None).await.unwrap()).is_empty());
 }

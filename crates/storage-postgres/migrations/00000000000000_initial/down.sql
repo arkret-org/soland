@@ -173,8 +173,6 @@ DROP FUNCTION IF EXISTS key_backup_list_metadata(jsonb) CASCADE;
 DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
 DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;
-DROP TABLE IF EXISTS moderation_reports CASCADE;
-DROP TABLE IF EXISTS moderation_queue_items CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
 DROP TABLE IF EXISTS organization_registration_states CASCADE;
 DROP TABLE IF EXISTS organization_registration_challenges CASCADE;

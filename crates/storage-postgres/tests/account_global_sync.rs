@@ -645,11 +645,12 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
         .err()
         .or_else(|| b_result.as_ref().err())
         .unwrap();
-    // The Realm stream position is the durable compare-and-set the racing
-    // holders contend on, so the loser fails on stream ordering rather than on
-    // an unrelated error.
-    assert!(
-        rejected_error.to_string().contains("stream_position"),
+    // The Realm stream head is the durable compare-and-set the racing holders
+    // contend on. The loser produced no Commit and may retry the exact Event,
+    // so it answers the registered retryable code, not a schema fault.
+    assert_eq!(
+        rejected_error.conflict_code(),
+        Some(soland_storage::ConflictCode::TemporarilyUnavailable),
         "{rejected_error}"
     );
     let rejected = if a_result.is_err() { a_id } else { b_id };
