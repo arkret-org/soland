@@ -804,6 +804,16 @@ CREATE TABLE public.realm_state_snapshots (
 CREATE INDEX realm_state_snapshots_latest_idx
     ON public.realm_state_snapshots (realm_id, governance_generation DESC, created_at DESC);
 
+-- A signed snapshot is readable by exact reference only for the Account to
+-- which the complete object was actually issued. Private handoff snapshots
+-- have no issuance row and are never exposed by the by-ref read path.
+CREATE TABLE public.realm_state_snapshot_issuances (
+    snapshot_id text NOT NULL REFERENCES public.realm_state_snapshots(snapshot_id) ON DELETE CASCADE,
+    account_id text NOT NULL,
+    issued_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (snapshot_id, account_id)
+);
+
 -- The staged OpenMLS successor is installed in the same transaction that
 -- commits its producer Event and queues every recipient Welcome.
 CREATE TABLE public.mls_group_states (

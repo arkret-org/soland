@@ -1,5 +1,6 @@
 DROP TABLE IF EXISTS mls_welcome_deliveries CASCADE;
 DROP TABLE IF EXISTS mls_group_states CASCADE;
+DROP TABLE IF EXISTS realm_state_snapshot_issuances;
 DROP TABLE IF EXISTS realm_state_snapshots CASCADE;
 DROP TABLE IF EXISTS realm_authority_handoffs CASCADE;
 DROP TABLE IF EXISTS key_backup_active_series_current_results;
