@@ -38,8 +38,8 @@ async fn insert(
 ) -> diesel::QueryResult<usize> {
     sql_query(
         "INSERT INTO contact_completion_intents \
-         (event_id,event_digest,event_json,binding,intent,committed_ref,result,created_at) \
-         VALUES ($1,$2,'{}'::jsonb,$3,$4,'{}'::jsonb,$5,now())",
+         (event_id,event_digest,event_json,binding,intent,intent_digest,committed_ref,result,created_at) \
+         VALUES ($1,$2,'{}'::jsonb,$3,$4,'sha256:' || repeat('d',64),'{}'::jsonb,$5,now())",
     )
     .bind::<Text, _>(event_id)
     .bind::<Text, _>(format!("{event_id}:digest"))

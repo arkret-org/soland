@@ -26,10 +26,14 @@ struct CompletionRow {
     binding: serde_json::Value,
     #[diesel(sql_type = Nullable<Jsonb>)]
     intent: Option<serde_json::Value>,
+    #[diesel(sql_type = Text)]
+    intent_digest: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
     committed_ref: Option<serde_json::Value>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     result: Option<serde_json::Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    delivery_outbox_id: Option<String>,
 }
 
 #[derive(QueryableByName)]
@@ -42,7 +46,19 @@ struct ExistingOutbox {
     payload_json: String,
 }
 
-const COLUMNS: &str = "event_digest,event_json,binding,intent,committed_ref,result";
+const COLUMNS: &str =
+    "event_digest,event_json,binding,intent,intent_digest,committed_ref,result,delivery_outbox_id";
+
+/// Storage-local domain of the frozen plan digest. It never leaves this table.
+const INTENT_DIGEST_DOMAIN: &str = "soland.storage.contact-completion-intent.v1";
+
+/// Canonical digest of the exact frozen business plan. The terminal row keeps
+/// it after the plan itself is replaced by the result, so a replay can still be
+/// bound to the one plan that produced that result.
+fn intent_digest(intent: &ContactCompletionIntent) -> PersistenceResult<String> {
+    arkret_canonical::domain_prefixed_canonical_sha256(INTENT_DIGEST_DOMAIN, intent)
+        .map_err(invalid)
+}
 
 pub(super) async fn lookup(
     pool: &PgPool,
@@ -131,13 +147,14 @@ pub(crate) async fn stage_in_transaction(
     let committed_ref_json = serde_json::to_value(committed_ref).map_err(invalid)?;
     let affected = sql_query(
         "INSERT INTO contact_completion_intents \
-         (event_id,event_digest,event_json,binding,intent,committed_ref,created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7) \
+         (event_id,event_digest,event_json,binding,intent,intent_digest,committed_ref,created_at) \
+         VALUES ($1,$2,$3,$4,$5,$8,$6,$7) \
          ON CONFLICT (event_id) DO UPDATE SET event_id=contact_completion_intents.event_id \
          WHERE contact_completion_intents.event_digest=EXCLUDED.event_digest \
            AND contact_completion_intents.event_json=EXCLUDED.event_json \
            AND contact_completion_intents.binding=EXCLUDED.binding \
            AND contact_completion_intents.intent=EXCLUDED.intent \
+           AND contact_completion_intents.intent_digest=EXCLUDED.intent_digest \
            AND contact_completion_intents.committed_ref=EXCLUDED.committed_ref",
     )
     .bind::<Text, _>(event.event_id.as_str())
@@ -147,6 +164,7 @@ pub(crate) async fn stage_in_transaction(
     .bind::<Jsonb, _>(intent_json)
     .bind::<Jsonb, _>(committed_ref_json)
     .bind::<Timestamptz, _>(intent.accepted_at()?)
+    .bind::<Text, _>(intent_digest(intent)?)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
@@ -189,10 +207,16 @@ pub(super) async fn finalize(
         .get_result::<CompletionRow>(conn)
         .await
         .map_err(PersistenceError::database)?;
+        // Finalization replaces the staged plan with its result, so the plan is
+        // bound through its immutable digest: a concurrent or later replay of
+        // the same completion still matches the terminal row, and any other
+        // plan for this Event does not.
         if row.committed_ref.as_ref()
             != Some(&serde_json::to_value(&ready.committed_ref).map_err(invalid)?)
-            || row.intent.as_ref() != Some(&serde_json::to_value(&ready.intent).map_err(invalid)?)
+            || row.intent_digest != intent_digest(&ready.intent)?
             || row.event_json != serde_json::to_value(&ready.intent.plan.event).map_err(invalid)?
+            || row.binding
+                != serde_json::to_value(&ready.intent.plan.response_binding).map_err(invalid)?
         {
             return Err(
                 invalid("Contact completion does not bind the exact committed Event").into(),
@@ -202,10 +226,19 @@ pub(super) async fn finalize(
             if existing != serde_json::to_value(result).map_err(invalid)? {
                 return Err(invalid("Contact terminal result cannot be replaced").into());
             }
-            if let Some(delivery) = delivery {
-                assert_same_outbox(conn, delivery).await?;
+            let outbox_id = match delivery {
+                Some(delivery) => Some(assert_same_outbox(conn, delivery).await?),
+                None => None,
+            };
+            if outbox_id != row.delivery_outbox_id {
+                return Err(invalid("Contact terminal delivery cannot be replaced").into());
             }
             return Ok(false);
+        }
+        if row.intent.as_ref() != Some(&serde_json::to_value(&ready.intent).map_err(invalid)?) {
+            return Err(
+                invalid("Contact completion does not bind the exact committed Event").into(),
+            );
         }
         let outbox_id = if let Some(delivery) = delivery {
             crate::federation::insert_federation_outbox_row(conn, delivery).await?;
@@ -327,3 +360,6 @@ fn validate_destination(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

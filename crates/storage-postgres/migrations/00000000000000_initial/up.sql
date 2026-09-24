@@ -1822,12 +1822,16 @@ CREATE INDEX contact_verified_mirrors_verified_at_idx
 -- commit of its exact Event. `intent` is the frozen business plan the worker
 -- finalizes; finalization replaces it with the immutable terminal `result` and
 -- the optional federation delivery row, so exactly one of the two is present.
+-- `intent_digest` is the immutable canonical digest of that frozen plan; it
+-- outlives the plan so a finalization replay against the terminal row is
+-- recognized as the same completion instead of a different one.
 CREATE TABLE public.contact_completion_intents (
     event_id text PRIMARY KEY,
     event_digest text NOT NULL UNIQUE,
     event_json jsonb NOT NULL,
     binding jsonb NOT NULL,
     intent jsonb,
+    intent_digest text NOT NULL CHECK (intent_digest ~ '^sha256:[0-9a-f]{64}$'),
     committed_ref jsonb NOT NULL,
     result jsonb,
     delivery_outbox_id text,
