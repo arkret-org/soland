@@ -245,6 +245,30 @@ fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
 
+/// Project an accepted ordinary collaboration Realm genesis.
+///
+/// The lifecycle write gate fails closed for a Realm the projection has never
+/// accepted, so a policy case about some later write needs the Realm to exist
+/// first; otherwise every write reads as `realm_frozen` before the policy
+/// under test runs.
+fn install_collaboration_realm(state: &AppState, realm_id: &arkret_identifiers::RealmId) {
+    state.test_projection().lock().set_realm_facet(
+        realm_id.as_str(),
+        soland_domain::reducer::facet::REALM_GENESIS,
+        json!({
+            "schema": "ak.schema.realm_genesis.v1",
+            "purpose": "collaboration",
+            "genesis_salt": "X-kS8-uBvWQ_iuRqO7Rsv0WGBjZG2S2wJ533Tk2SJJ4",
+            "trust_domain": "ak:trust_domain:policy.example",
+            "security_class": "high_assurance",
+            "governance_station_id": crate::test_event::station_id(),
+            "initial_join_rule": "invite",
+            "initial_history_access": "since_join",
+            "initial_discoverability": "invite_only"
+        }),
+    );
+}
+
 fn install_projected_grant(
     authorization: &soland_services::authorization::AuthorizationService,
     realm_id: String,
@@ -1288,6 +1312,7 @@ async fn profile_accountable_principal_requires_active_grant() {
         "ak:realm:ARHX7LGKk2svV3upZ10pEmGoLdgEaEPI06-04trUQQdu".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let profile = op(
         realm_id,
         "0000000007a3",
@@ -1314,6 +1339,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         "ak:realm:AcDBmaLJmexYp8de9kbZez_sjHqo3WTTKGdS8F_Tamb6".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let profile = op(
         realm_id.clone(),
         "0000000007a4",
@@ -1354,6 +1380,7 @@ async fn profile_accountable_principal_accepts_active_atomic_grant() {
         "ak:realm:AWT48tEXpBf1y4S4objnI4XLvPGbMAHzCgphs0-WDJPH".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let grant = op(
         realm_id.clone(),
         "0000000007a8",
@@ -1384,6 +1411,7 @@ async fn profile_accountable_principal_atomic_revoke_wins() {
         "ak:realm:AaajU0E3YekQlILA6KFwZaoB7JHYohg-O0crFYr4hwuS".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let grant = op(
         realm_id.clone(),
         "0000000007aa",
@@ -1423,6 +1451,7 @@ async fn profile_accountability_uses_signed_frozen_time() {
         "ak:realm:ASQslZEMbgHWd6DWpeEhQbJIgft2QchUND7vZal60zaI".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let grant = op(
         realm_id.clone(),
         "0000000007ad",
@@ -1456,6 +1485,7 @@ async fn circle_member_manage_rejects_without_grant() {
         "ak:realm:ASzMBU92ndTUgCFayN1yKHiZ3dJ7Irh18ENIqLIELrIQ".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     insert_joined_realm_member(&state, &realm_id, BOB_CORE_ID);
     let member_add = op(
         realm_id,
@@ -1484,6 +1514,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         "ak:realm:AW2Ebs3FRn6VzpiCswpoViFTHh-iDZrF_UzakuV14ZSm".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let circle_id = "ak:circle:AbPMdhKXl6Pe1lcCeCC_k_V5tvHDt1LAFRB6g6WrpDLJ";
     insert_joined_realm_member(&state, &realm_id, BOB_CORE_ID);
     grant_circle_action(
@@ -1517,6 +1548,7 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
         "ak:realm:ASS8zG4z3bNJuUr3YrKuhVUKUOTpX3PhfV-JrJ56QMzs".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let circle_id = "ak:circle:AT2LoQ65P6bU2ZDxq9XbubTSMDrqzlK8EFJNmM_pxt62";
     let tombstone = op(
         realm_id.clone(),
@@ -1623,6 +1655,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
         "ak:realm:AaGPy5t1BAnukci5lpGNiOlo7TufaF-ociC1LVnQpv5B".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     let circle_id = "ak:circle:AfF5Vi42N83lUBU2d9UbQFWzHxX2vlXkKpR-Ctx0Oh6D";
     let relation_id = "ak:relation:AfF5Vi42N83lUBU2d9UbQFWzHxX2vlXkKpR-Ctx0Oh6D";
     let now = chrono::Utc::now();
@@ -1732,6 +1765,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
         "ak:realm:ARkNLd10PLFU6nWXwpfON7eQhZGezakXw3pvJ5cRGc0Q".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example");
     let decision = op(
         realm_id,
@@ -1762,6 +1796,7 @@ async fn moderation_decision_allows_authorized_issuer() {
         "ak:realm:AUYLjBoI0xYRjG5SKmFPOh3Agj-mEAcV6cmiVPn4KB64".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_moderation_decision(&state, &realm_id, MODERATOR);
     let decision = op(
         realm_id,
@@ -1789,6 +1824,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
         "ak:realm:AQsAANkzbRAod6oC5lFzs1OxsLEt5mVJ35YGKc4cf_Vn".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example");
     let decision = op(
         realm_id,
@@ -1817,6 +1853,7 @@ async fn call_recording_start_defaults_to_record_capability() {
         "ak:realm:AfBbfcm-ayz4ms4IjZtpa_UeR-zkx9xDxFy3_SgyqMkh".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_call_action(
         &state,
         &realm_id,
@@ -1853,6 +1890,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         "ak:realm:AbvPRiXVavzVHJKCDG8HK7s2PlyJBga3olAriX06ZGPZ".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_call_action(
         &state,
         &realm_id,
@@ -1899,6 +1937,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         "ak:realm:AYMs5egM4i4NiSry19jn62Jo_3_cXrETY3yjnsupOeTI".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_call_action(
         &state,
         &realm_id,
@@ -1935,6 +1974,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         "ak:realm:AdoFjBodfOdOvxfSAV_E0X6ztrtRXo7FYSVsU9YRV4pE".to_owned(),
     )
     .unwrap();
+    install_collaboration_realm(&state, &realm_id);
     grant_call_action(
         &state,
         &realm_id,
