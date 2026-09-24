@@ -1781,6 +1781,7 @@ pub trait SecurityTransactionPort: Send + Sync {
         transaction_id: &str,
     ) -> ServiceResult<Option<SecurityTransactionRecord>>;
     async fn save(&self, transaction: SecurityTransactionRecord) -> ServiceResult<()>;
+    async fn rotations_awaiting_revoke(&self, limit: u32) -> ServiceResult<Vec<String>>;
     async fn step_outcome(
         &self,
         transaction_id: &str,
@@ -1842,6 +1843,10 @@ impl SecurityTransactionService {
         self.transactions
             .commit_revoke_command_terminal(write)
             .await
+    }
+
+    pub async fn rotations_awaiting_revoke(&self, limit: u32) -> ServiceResult<Vec<String>> {
+        self.transactions.rotations_awaiting_revoke(limit).await
     }
 
     pub async fn create(

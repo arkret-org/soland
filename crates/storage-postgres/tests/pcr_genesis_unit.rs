@@ -975,6 +975,11 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     let transaction_id = initial.transaction_id.clone();
     let transactions = PgSecurityTransactionStore { pool: pool.clone() };
     transactions.create(initial_record).await.unwrap();
+    let awaiting = |ids: Vec<String>| ids.contains(&transaction_id.to_string());
+    assert!(
+        awaiting(transactions.rotations_awaiting_revoke(1000).await.unwrap()),
+        "a created rotation awaits its coordinator-owned revoke"
+    );
     let mut proposed = initial;
     proposed.revoke_proposal = Some(SecurityRotationRevokeProposal {
         proposal_event_id: revoke.event_id.clone(),
@@ -1098,6 +1103,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         transactions.commit_revoke_proposal(write).await.unwrap(),
         covering
     );
+    assert!(
+        awaiting(transactions.rotations_awaiting_revoke(1000).await.unwrap()),
+        "a pending proposal still awaits its terminal decision"
+    );
     let dots = diesel::sql_query(
         "SELECT COUNT(*) AS count FROM pcr_device_revocation_proposals WHERE event_id=$1",
     )
@@ -1172,6 +1181,10 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         .commit_revoke_command_terminal(terminal.clone())
         .await
         .unwrap();
+    assert!(
+        !awaiting(transactions.rotations_awaiting_revoke(1000).await.unwrap()),
+        "a decided revoke leaves the worker's queue"
+    );
     assert_eq!(
         decided
             .resource

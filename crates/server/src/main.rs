@@ -213,6 +213,10 @@ async fn run() -> anyhow::Result<()> {
     }
 
     let _account_erasure_worker = soland_http::account_erasure_worker::spawn(state.clone());
+    // security-transactions.md §3 — the Station, not a client, advances the
+    // coordinator-owned SecurityRotation `revoke` step and resumes it after a
+    // restart from the durable proposal/terminal units.
+    let _security_rotation_worker = soland_http::security_rotation_worker::spawn(state.clone());
     tracing::info!(
         worker = "account_erasure",
         enabled = true,

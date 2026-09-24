@@ -616,6 +616,28 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn rotations_awaiting_revoke(&self, limit: u32) -> PersistenceResult<Vec<String>> {
+        #[derive(QueryableByName)]
+        struct AwaitingRow {
+            #[diesel(sql_type = sql_types::Uuid)]
+            id: Uuid,
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query(
+            "SELECT id FROM security_transactions WHERE kind='security_rotation' \
+             AND terminal_outcome IS NULL AND revoke_command_outcome IS NULL \
+             AND accepted_steps='[]'::jsonb ORDER BY created_at, id LIMIT $1",
+        )
+        .bind::<sql_types::BigInt, _>(i64::from(limit))
+        .load::<AwaitingRow>(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| format!("ak:transaction:{}", row.id))
+            .collect())
+    }
+
     async fn commit_recovery_unit(
         &self,
         write: RecoveryUnitCommitWrite,

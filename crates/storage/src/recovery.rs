@@ -301,6 +301,10 @@ pub trait SecurityTransactionStore: Send + Sync {
         transaction_id: &str,
     ) -> PersistenceResult<Option<SecurityTransactionRecord>>;
     async fn update(&self, record: SecurityTransactionRecord) -> PersistenceResult<()>;
+    /// Live SecurityRotation transactions whose coordinator-owned `revoke`
+    /// step has no terminal decision, oldest first. The durable rotation
+    /// worker drives exactly these; the list carries no authority.
+    async fn rotations_awaiting_revoke(&self, limit: u32) -> PersistenceResult<Vec<String>>;
     async fn step_outcome(
         &self,
         transaction_id: &str,

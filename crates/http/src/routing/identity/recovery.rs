@@ -60,6 +60,7 @@ pub(crate) use session_endpoints::validate_frozen_session_policy;
 use session_endpoints::*;
 mod security_transaction_endpoints;
 pub(super) use security_transaction_endpoints::backup_series_erase_command;
+pub(crate) use security_transaction_endpoints::sweep_rotation_revokes;
 use security_transaction_endpoints::*;
 mod signatures;
 use signatures::*;

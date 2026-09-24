@@ -1532,6 +1532,14 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
         Ok(())
     }
 
+    async fn rotations_awaiting_revoke(&self, limit: u32) -> crate::ServiceResult<Vec<String>> {
+        Ok(self
+            .0
+            .security_transactions()
+            .rotations_awaiting_revoke(limit)
+            .await?)
+    }
+
     async fn step_outcome(
         &self,
         transaction_id: &str,
