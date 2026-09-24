@@ -840,6 +840,15 @@ async fn commit_transaction_in_connection_with_device_guard(
         )
         .into());
     }
+    // No registered atomic revoke UoW yet writes the immutable proposal dot
+    // and covering command result. Do not accept an Event that read-side
+    // device status cannot fold at the same authority cut.
+    if transaction.event.kind == arkret_wire::EventKind::DeviceRevoke {
+        return Err(PersistenceError::Conflict(
+            "pcr_device_revocation_current_authority_unavailable".to_owned(),
+        )
+        .into());
+    }
     if matches!(
         transaction.event.kind,
         arkret_wire::EventKind::DeviceAuthorize | arkret_wire::EventKind::DeviceReanchor

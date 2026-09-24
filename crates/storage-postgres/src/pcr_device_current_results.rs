@@ -251,6 +251,12 @@ mod tests {
     use super::*;
     use crate::{AsyncConnection, Binary, PgTransactionError, pg_conn};
 
+    #[derive(QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+
     fn commit(event: &Event) -> RealmCommit {
         let now = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
             .unwrap()
@@ -329,6 +335,49 @@ mod tests {
             .bind::<Timestamptz,_>(commit.committed_at)
             .bind::<Binary,_>(token.to_vec())
             .execute(&mut conn).await.unwrap();
+
+        let revoke = arkret_wire::test_support::raw_event(
+            EventKind::DeviceRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+            json!({"device_id":"ak:device:01964137-0000-7000-8000-000000000001"}),
+        )
+        .unwrap();
+        let refused = crate::authority_commit::commit_transaction_in_connection(
+            &mut conn,
+            &soland_storage::AuthorityCommitTransaction {
+                expected_authority: soland_storage::CurrentRealmAuthority {
+                    realm_id: realm_id.clone(),
+                    generation: 0,
+                    service_id: arkret_wire::DidCoreId::new("ak:did_core:web:station.example")
+                        .unwrap(),
+                    authority_ref: commit.authority_ref.clone(),
+                    last_handoff_ref: None,
+                },
+                event: revoke.clone(),
+                commit: self::commit(&revoke),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+        )
+        .await
+        .unwrap_err()
+        .into_persistence();
+        assert!(matches!(refused, PersistenceError::Conflict(ref reason)
+            if reason == "pcr_device_revocation_current_authority_unavailable"));
+        let revoke_token =
+            crate::ids::event_token_part_expect_internal(revoke.event_id.as_str(), "event");
+        let writes = sql_query("SELECT (SELECT count(*) FROM canonical_events WHERE id=$1) + (SELECT count(*) FROM realm_commits WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)) AS count")
+            .bind::<Binary,_>(revoke_token.to_vec())
+            .get_result::<CountRow>(&mut conn).await.unwrap();
+        assert_eq!(
+            writes.count, 0,
+            "unchecked revoke made durable Event/Commit writes"
+        );
 
         write_generation(&mut conn, &commit, None, 1).await.unwrap();
         assert!(matches!(
