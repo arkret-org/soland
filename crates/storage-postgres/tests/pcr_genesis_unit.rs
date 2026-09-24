@@ -3164,7 +3164,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         .await
         .unwrap()
         .unwrap();
-    let erase_request = soland_storage::BackupSeriesEraseRequestBody {
+    let erase_request = soland_storage::BackupSeriesEraseWorkerRequest {
         transaction_id: transaction_id.clone(),
         transaction_request_digest: switched_record.resource.request_digest.clone(),
         prepared_plan_digest: switched_record.resource.prepared_plan_digest.clone(),

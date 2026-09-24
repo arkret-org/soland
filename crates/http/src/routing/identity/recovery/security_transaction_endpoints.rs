@@ -967,7 +967,7 @@ async fn try_advance_rotation_erase(
     state: &AppState,
     transaction: SecurityTransactionRecord,
 ) -> Result<(), soland_services::ServiceError> {
-    use soland_storage::BackupSeriesEraseRequestBody;
+    use soland_storage::BackupSeriesEraseWorkerRequest;
 
     let internal =
         |error: &dyn std::fmt::Display| soland_services::ServiceError::Internal(error.to_string());
@@ -986,7 +986,7 @@ async fn try_advance_rotation_erase(
         .await?
     {
         Some(progress) => (
-            serde_json::from_slice::<BackupSeriesEraseRequestBody>(&progress.canonical_request)
+            serde_json::from_slice::<BackupSeriesEraseWorkerRequest>(&progress.canonical_request)
                 .map_err(|e| internal(&e))?,
             progress.canonical_request,
         ),
@@ -1021,7 +1021,7 @@ async fn try_advance_rotation_erase(
                             .to_owned(),
                     )
                 })?;
-            let request = BackupSeriesEraseRequestBody {
+            let request = BackupSeriesEraseWorkerRequest {
                 transaction_id: resource.transaction_id.clone(),
                 transaction_request_digest: resource.request_digest.clone(),
                 prepared_plan_digest: resource.prepared_plan_digest.clone(),
@@ -1061,7 +1061,7 @@ fn backup_rotation_kind_name(kind: arkret_models_crypto::BackupRotationKind) -> 
 }
 
 fn initial_backup_erase_outcome(
-    request: &soland_storage::BackupSeriesEraseRequestBody,
+    request: &soland_storage::BackupSeriesEraseWorkerRequest,
 ) -> Result<soland_storage::BackupSeriesEraseOutcome, AppError> {
     use soland_storage::{
         BackupSeriesEraseOutcome, BackupSeriesEraseRow, BackupSeriesEraseRowStatus,
@@ -1124,7 +1124,7 @@ fn backup_value_matches_rotation(
 
 fn refresh_backup_erase_completion(
     outcome: &mut soland_storage::BackupSeriesEraseOutcome,
-    request: &soland_storage::BackupSeriesEraseRequestBody,
+    request: &soland_storage::BackupSeriesEraseWorkerRequest,
 ) -> bool {
     use arkret_models_crypto::BackupSeriesEraseConfirmation;
     use soland_storage::BackupSeriesEraseStatus;
@@ -1158,7 +1158,7 @@ fn refresh_backup_erase_completion(
 async fn execute_rotation_erase(
     state: &AppState,
     mut transaction: SecurityTransactionRecord,
-    request: &soland_storage::BackupSeriesEraseRequestBody,
+    request: &soland_storage::BackupSeriesEraseWorkerRequest,
     canonical_request: Vec<u8>,
 ) -> Result<soland_storage::BackupSeriesEraseOutcome, AppError> {
     use soland_storage::BackupSeriesEraseRowStatus;

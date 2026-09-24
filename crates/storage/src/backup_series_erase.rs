@@ -33,9 +33,11 @@ pub enum BackupSeriesEraseRowStatus {
     Erased,
 }
 
+/// Canonical erase request the worker derives from the saved plan; its bytes
+/// define `request_digest` for exact-retry and `duplicate_conflict` checks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BackupSeriesEraseRequestBody {
+pub struct BackupSeriesEraseWorkerRequest {
     pub transaction_id: TransactionId,
     pub transaction_request_digest: Hash,
     pub prepared_plan_digest: Hash,
@@ -116,7 +118,7 @@ fn validate_binding(series: &[BackupRotationBinding]) -> PersistenceResult<&Back
     Ok(binding)
 }
 
-impl BackupSeriesEraseRequestBody {
+impl BackupSeriesEraseWorkerRequest {
     pub fn validate_structural(&self) -> PersistenceResult<()> {
         validate_binding(&self.series)?;
         let expected =
@@ -174,7 +176,7 @@ impl BackupSeriesEraseOutcome {
 
     pub fn validate_for_request(
         &self,
-        request: &BackupSeriesEraseRequestBody,
+        request: &BackupSeriesEraseWorkerRequest,
     ) -> PersistenceResult<()> {
         self.validate_structural()?;
         request.validate_structural()?;
@@ -225,7 +227,7 @@ mod tests {
     use super::*;
 
     fn fixture() -> (
-        BackupSeriesEraseRequestBody,
+        BackupSeriesEraseWorkerRequest,
         crate::BackupSeriesEraseProgressRecord,
     ) {
         let transaction_id =
@@ -256,7 +258,7 @@ mod tests {
             ),
             old_backups: vec![object.clone()],
         };
-        let request = BackupSeriesEraseRequestBody {
+        let request = BackupSeriesEraseWorkerRequest {
             transaction_id: transaction_id.clone(),
             transaction_request_digest: Hash::new(arkret_canonical::sha256_digest(b"request"))
                 .unwrap(),

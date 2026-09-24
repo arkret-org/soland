@@ -613,7 +613,7 @@ pub fn validate_backup_erase_progress_initial(
             "backup erase progress requires a transaction and request".to_owned(),
         ));
     }
-    let request: crate::BackupSeriesEraseRequestBody =
+    let request: crate::BackupSeriesEraseWorkerRequest =
         serde_json::from_slice(&progress.canonical_request)
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     let canonical_request = arkret_canonical::canonical_json_bytes(&request)
