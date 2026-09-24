@@ -72,6 +72,15 @@ pub(super) async fn admit_event(
             }
         }
         Err(error) => match error.kind() {
+            ServiceErrorKind::Conflict
+                if error.conflict_code()
+                    == Some(soland_storage::ConflictCode::FailedPrecondition) =>
+            {
+                return Err(AppError::new(
+                    arkret_wire::ErrorCode::FailedPrecondition,
+                    error.detail(),
+                ));
+            }
             ServiceErrorKind::Conflict => return Err(AppError::conflict(error.detail())),
             ServiceErrorKind::SchemaViolation => {
                 return Err(AppError::param_invalid(error.detail()));

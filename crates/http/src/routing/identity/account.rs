@@ -2004,10 +2004,6 @@ async fn account_device_summary(
                 .clone(),
         )
     };
-    // The accepted Event carries a ProducerEventProof, which has no signer
-    // evidence reference. A verified summary therefore fails validation until
-    // the durable account_device_control evidence root is available here.
-    let signer_resolution_evidence_ref = None;
     let summary = AccountDeviceSummary {
         device_id,
         status,
@@ -2015,7 +2011,6 @@ async fn account_device_summary(
         verification_source,
         display_name,
         authorized_event_ref,
-        signer_resolution_evidence_ref,
         authorized_at: accepted.as_ref().map(|record| record.commit.committed_at),
         last_seen_at: None,
         revoked_at: device.revoked_at,

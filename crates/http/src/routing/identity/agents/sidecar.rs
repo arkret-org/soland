@@ -370,6 +370,23 @@ pub(crate) fn validate_sidecar_exchange_control_event(
     Ok(())
 }
 
+/// Decode one signed MLS governance binding and apply its closed member rules:
+/// the five shared members, plus `participant_authority_digest` and
+/// `authority_stream_head` exactly for Sidecar scope, where the head holds
+/// 1..=64 UTF-8 sorted unique refs (`encryption-and-audit.md` §2.5.1,
+/// `sidecar.md` §6). Realm and Circle bindings carrying either Sidecar member
+/// are rejected before any state comparison.
+fn decode_mls_governance_binding(
+    value: &Value,
+) -> Result<MlsGovernanceBindingPayload, &'static str> {
+    let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(value.clone())
+        .map_err(|_| "mls_governance_binding_invalid")?;
+    binding
+        .validate()
+        .map_err(|_| "mls_governance_binding_invalid")?;
+    Ok(binding)
+}
+
 pub(crate) async fn validate_sidecar_mls_event_binding(
     state: &AppState,
     controller_device_id: &str,
@@ -384,23 +401,17 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     // Public MLS events name the binding `governance_binding`.
     let binding_value = crate::routing::mls::payload_fields::governance_binding(&operation.payload)
         .ok_or("mls_governance_binding_missing")?;
-    let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(binding_value.clone())
-        .map_err(|_| "mls_governance_binding_invalid")?;
-    let sidecar_for_scope = binding.sidecar_id().and_then(|sidecar_id| {
-        state
-            .projections()
-            .snapshot()
-            .sidecars
-            .get(sidecar_id.as_str())
-            .cloned()
-    });
-    let Some(sidecar_projection) = sidecar_for_scope else {
-        return if binding.sidecar_binding().is_some() {
-            Err("mls_sidecar_binding_forbidden")
-        } else {
-            Ok(())
-        };
+    let binding = decode_mls_governance_binding(binding_value)?;
+    let Some(sidecar_id) = binding.sidecar_id() else {
+        return Ok(());
     };
+    let sidecar_projection = state
+        .projections()
+        .snapshot()
+        .sidecars
+        .get(sidecar_id.as_str())
+        .cloned()
+        .ok_or("mls_sidecar_binding_mismatch")?;
     let supplied = binding
         .sidecar_binding()
         .ok_or("mls_sidecar_binding_missing")?;
@@ -1527,39 +1538,90 @@ mod tests {
         );
     }
 
-    #[test]
-    fn native_sidecar_governance_binding_uses_sidecar_scope() {
-        let value = json!({
-            "binding_version": 1,
-            "encoding_profile": "cbor-deterministic-rfc8949-v1",
-            "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
-            "sidecar_id": "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
+    const BINDING_REALM_ID: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
+    const BINDING_SIDECAR_ID: &str = "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo";
+
+    fn binding_event_ref(seed: u8) -> String {
+        EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [seed; 32]).to_string()
+    }
+
+    fn sorted_event_refs(count: u8) -> Vec<String> {
+        let mut refs = (1..=count).map(binding_event_ref).collect::<Vec<_>>();
+        refs.sort();
+        refs
+    }
+
+    fn sidecar_binding_value(authority_stream_head: Vec<String>) -> Value {
+        json!({
             "effective_scope": {
                 "kind": "sidecar",
-                "realm_id": "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
-                "sidecar_id": "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo"
+                "realm_id": BINDING_REALM_ID,
+                "sidecar_id": BINDING_SIDECAR_ID,
             },
-            "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",
+            "base_group_state_ref": null,
             "previous_epoch": 0,
-            "next_epoch": 1,
-            "security_frontier_digest": format!("sha256:{}", "1".repeat(64)),
-            "content_scheme": "mls_rfc9420",
-            "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-            "reducer_profile": "ak.reducer.core.v1",
-            "sidecar_binding": {
-                "sidecar_id": "ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo",
-                "participant_authority_digest": format!("sha256:{}", "4".repeat(64)),
-                "control_frontier": ["ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV"]
-            }
-        });
-        let binding = serde_json::from_value::<MlsGovernanceBindingPayload>(value).unwrap();
-        assert_eq!(
-            binding.sidecar_id().map(|id| id.as_str()),
-            Some("ak:sidecar:AcweNVvZUYNuOdCMey9HT7PQHKPbHPJwOFTgn_cx7yjo")
-        );
+            "next_epoch": 0,
+            "key_access_revision": 0,
+            "participant_authority_digest": format!("sha256:{}", "4".repeat(64)),
+            "authority_stream_head": authority_stream_head,
+        })
+    }
+
+    #[test]
+    fn sidecar_governance_binding_carries_the_seven_members() {
+        let head = sorted_event_refs(2);
+        let binding = decode_mls_governance_binding(&sidecar_binding_value(head.clone()))
+            .expect("the seven-member Sidecar binding decodes");
         assert!(matches!(
             binding.effective_scope(),
             arkret_wire::ScopeRef::Sidecar { .. }
         ));
+        let sidecar = binding.sidecar_binding().expect("Sidecar members");
+        assert_eq!(sidecar.sidecar_id.as_str(), BINDING_SIDECAR_ID);
+        assert_eq!(
+            sidecar
+                .authority_stream_head
+                .iter()
+                .map(|event_id| event_id.to_string())
+                .collect::<Vec<_>>(),
+            head
+        );
+    }
+
+    #[test]
+    fn governance_binding_rejects_sidecar_member_violations() {
+        for member in ["participant_authority_digest", "authority_stream_head"] {
+            let mut missing = sidecar_binding_value(sorted_event_refs(1));
+            missing.as_object_mut().unwrap().remove(member);
+            assert_eq!(
+                decode_mls_governance_binding(&missing).unwrap_err(),
+                "mls_governance_binding_invalid",
+                "Sidecar binding without {member}"
+            );
+        }
+
+        let mut realm = sidecar_binding_value(sorted_event_refs(1));
+        realm["effective_scope"] = json!({"kind": "realm", "realm_id": BINDING_REALM_ID});
+        assert_eq!(
+            decode_mls_governance_binding(&realm).unwrap_err(),
+            "mls_governance_binding_invalid",
+            "a Realm binding must not carry Sidecar members"
+        );
+
+        let mut unsorted = sorted_event_refs(2);
+        unsorted.reverse();
+        let duplicate = vec![binding_event_ref(1), binding_event_ref(1)];
+        for head in [unsorted, duplicate, Vec::new(), sorted_event_refs(65)] {
+            assert_eq!(
+                decode_mls_governance_binding(&sidecar_binding_value(head)).unwrap_err(),
+                "mls_governance_binding_invalid"
+            );
+        }
+        assert_eq!(
+            arkret_models_collaboration::agent_sidecar::SIDECAR_AUTHORITY_STREAM_HEAD_MAX_ITEMS,
+            64
+        );
+        decode_mls_governance_binding(&sidecar_binding_value(sorted_event_refs(64)))
+            .expect("64 authority refs fit the decoder bound");
     }
 }

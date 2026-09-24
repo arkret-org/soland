@@ -1782,10 +1782,10 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
         basis.anchor_kind,
         StreamWindowAnchorKind::AfterCommittedPrefix
     );
-    assert_eq!(basis.anchor_position, Some(6));
+    assert_eq!(basis.anchor_position, 6);
     assert_eq!(
-        basis.anchor_commit_ref.as_ref(),
-        Some(&unit.transactions[6].commit.commit_id)
+        basis.anchor_commit_ref,
+        unit.transactions[6].commit.commit_id
     );
     assert_eq!(basis.snapshot_ref, at_six.snapshot_id);
     assert_eq!(basis.governance_generation, 0);

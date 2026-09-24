@@ -90,6 +90,50 @@ fn signed_account_data_event(
     )
 }
 
+/// `device-lifecycle.md` §10.1: a verified device_summary's provenance is
+/// exactly `verification_source` plus `authorized_event_ref`, so the account
+/// projection returns the verified founding device instead of failing closed.
+#[tokio::test]
+async fn verified_device_summary_carries_only_authorization_provenance() {
+    let state = soland_test_support::app_state(test_config());
+    let fixture = PcrGenesisFixture::new(state.service_did());
+    fixture.admit(&state).await.expect("durable PCR genesis");
+    let app = service(state.clone());
+    let mut projection = TestClient::post("http://server/_soland/gate/account/project")
+        .add_header("authorization", "Bearer fixture-registration", true)
+        .json(&json!({
+            "principal_id": fixture.history.account.principal_id,
+            "did": fixture.history.did,
+            "display_name": "Device summary fixture",
+        }))
+        .send(&app)
+        .await;
+    let status = projection.status_code;
+    let body: Value = projection
+        .take_json()
+        .await
+        .expect("account projection JSON");
+    assert_eq!(status, Some(StatusCode::OK), "account projection: {body}");
+    let device = body["devices"]
+        .as_array()
+        .expect("account projection devices")
+        .iter()
+        .find(|device| device["device_id"] == fixture.history.founding_device_id.as_str())
+        .unwrap_or_else(|| panic!("the founding device is listed: {body}"));
+    assert_eq!(device["verification_state"], "verified", "{device}");
+    assert!(device["verification_source"].is_string(), "{device}");
+    assert!(
+        device["authorized_event_ref"]
+            .as_str()
+            .is_some_and(|reference| reference.starts_with("ak:event:")),
+        "{device}"
+    );
+    assert!(
+        device.get("signer_resolution_evidence_ref").is_none(),
+        "device_summary carries no signer evidence reference: {device}"
+    );
+}
+
 #[tokio::test]
 async fn signed_account_data_set_uses_the_accepted_pcr_and_cas_revision() {
     let state = soland_test_support::app_state(test_config());

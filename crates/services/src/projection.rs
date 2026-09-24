@@ -426,7 +426,6 @@ impl ProjectionService {
         request_id: &str,
         approval_nonce: &str,
         action: &str,
-        _now: DateTime<Utc>,
     ) -> Result<ProjectedAgentActionApproval, &'static str> {
         let state = self.state.lock();
         let request = state

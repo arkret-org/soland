@@ -9,7 +9,7 @@
 //! - `POST /_arkret/self/device_messages/ack` — consume a bearer ack token and prune the messages
 //!   covered by that delivery batch.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arkret_models_collaboration::device_messages::{
     DeviceMessageDeliveredRow, DeviceMessageDeliveredStatus, DeviceMessageTarget,
@@ -18,7 +18,7 @@ use arkret_models_collaboration::device_messages::{
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
@@ -211,7 +211,7 @@ pub(super) fn protocol_router() -> Router {
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send.v1"))]
 async fn send_device_messages(
     aa: AuthArgs,
-    body: JsonBody<DeviceMessagesSendRequestBody>,
+    body: JsonBody<Value>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<DeviceMessagesSendOutcome> {
@@ -219,7 +219,7 @@ async fn send_device_messages(
     let session = aa.authenticated_session(state, req).await?;
     let sender_account_id =
         super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
-    let body = body.into_inner();
+    let body = device_messages_send_request_body(body.into_inner())?;
     let sender_revocation_gate =
         match super::device_generation::active_device_revocation_gate_selector(
             state,
@@ -324,26 +324,20 @@ async fn send_device_messages(
             return Err(device_message_intent_conflict());
         }
     };
-    // Expiry admission applies to new enqueues only; an exact logical replay
-    // keeps its original outcome. A refused target is never written to either
-    // idempotency ledger, so the sender may retry it with a valid window.
-    let expiry_refused = prepared_targets
-        .iter()
-        .filter(|target| {
-            !existing_message_outcomes.contains_key(&target.message_key)
-                && !device_message_expiry_admissible(sent_at, target.target.expires_at)
-        })
-        .map(|target| target.message_key.clone())
-        .collect::<BTreeSet<_>>();
-    if !prepared_targets.is_empty() && expiry_refused.len() == prepared_targets.len() {
+    // Exact idempotency was judged above; expiry admission applies to every
+    // remaining new enqueue. One inadmissible target fails the whole request
+    // before either idempotency ledger or any queue is written.
+    if prepared_targets.iter().any(|target| {
+        !existing_message_outcomes.contains_key(&target.message_key)
+            && !device_message_expiry_admissible(sent_at, target.target.expires_at)
+    }) {
         return Err(AppError::param_invalid(
-            "every DeviceMessage expires_at must be later than sent_at and within the enqueue TTL",
+            "every new DeviceMessage expires_at must be later than sent_at and within the enqueue TTL",
         ));
     }
-    let has_fresh_targets = prepared_targets.iter().any(|target| {
-        !existing_message_outcomes.contains_key(&target.message_key)
-            && !expiry_refused.contains(&target.message_key)
-    });
+    let has_fresh_targets = prepared_targets
+        .iter()
+        .any(|target| !existing_message_outcomes.contains_key(&target.message_key));
     let sender_verified = if has_fresh_targets {
         let sender_device = state
             .identities()
@@ -366,9 +360,6 @@ async fn send_device_messages(
 
     let mut batch_items = Vec::with_capacity(prepared_targets.len());
     for prepared in &prepared_targets {
-        if expiry_refused.contains(&prepared.message_key) {
-            continue;
-        }
         let message = if existing_message_outcomes.contains_key(&prepared.message_key) {
             None
         } else {
@@ -460,10 +451,10 @@ async fn send_device_messages(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let message_outcomes = match batch_outcome {
         DeviceMessageBatchCommitOutcome::Stored(outcomes) => {
-            if prepared_targets.iter().any(|target| {
-                outcomes.contains_key(&target.message_key)
-                    == expiry_refused.contains(&target.message_key)
-            }) {
+            if prepared_targets
+                .iter()
+                .any(|target| !outcomes.contains_key(&target.message_key))
+            {
                 return Err(AppError::internal(
                     "stored device-message outcome differs from the admitted targets",
                 ));
@@ -507,15 +498,14 @@ fn device_message_send_outcome(
     let mut delivered = BTreeMap::new();
     let mut unknown_devices = BTreeMap::new();
     for target in targets {
-        // A committed batch records every admitted target and omits exactly
-        // the ones refused by expiry admission, so a stored replay reproduces
-        // that refusal as well.
-        let outcome = outcomes.get(&target.message_key).copied();
+        let outcome = outcomes.get(&target.message_key).copied().ok_or_else(|| {
+            AppError::internal("stored device-message outcome is missing a target")
+        })?;
         let recipient = arkret_wire::DidCoreId::new(target.recipient.clone())
             .map_err(|error| AppError::internal(format!("stored recipient id: {error}")))?;
         let device_id = arkret_wire::DeviceId::new(target.device_id.clone())
             .map_err(|error| AppError::internal(format!("stored device id: {error}")))?;
-        if outcome == Some(true) {
+        if outcome {
             delivered
                 .entry(recipient)
                 .or_insert_with(BTreeMap::new)
@@ -535,12 +525,6 @@ fn device_message_send_outcome(
                     DeviceMessageUnknownRow {
                         device_message_id: target.target.device_message_id.clone(),
                         status: DeviceMessageUnknownStatus::Unknown,
-                        reason_code: match outcome {
-                            Some(_) => ErrorCode::DeviceUnknown,
-                            None => ErrorCode::ParamInvalid,
-                        }
-                        .as_str()
-                        .to_owned(),
                     },
                 );
         }
@@ -548,6 +532,34 @@ fn device_message_send_outcome(
     Ok(DeviceMessagesSendOutcome {
         delivered,
         unknown_devices,
+    })
+}
+
+/// Decode the send body. `device-lifecycle.md` §7 makes a target without
+/// `expires_at` a sender request defect judged like any other inadmissible
+/// window (`param_invalid`), so that member is checked before the typed
+/// decoder turns its absence into a generic schema violation.
+fn device_messages_send_request_body(
+    body: Value,
+) -> Result<DeviceMessagesSendRequestBody, AppError> {
+    let missing_expiry = body
+        .get("messages")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|recipients| recipients.values())
+        .filter_map(Value::as_object)
+        .flat_map(|devices| devices.values())
+        .filter_map(Value::as_object)
+        .any(|target| target.get("expires_at").is_none_or(Value::is_null));
+    if missing_expiry {
+        return Err(AppError::param_invalid(
+            "every DeviceMessage target must carry expires_at",
+        ));
+    }
+    serde_json::from_value(body).map_err(|error| {
+        AppError::schema_violation(format!(
+            "request body violates the declared schema: {error}"
+        ))
     })
 }
 

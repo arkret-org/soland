@@ -902,7 +902,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[message])
+        validate_agent_reply_participation(&state, &[message], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_act_on_behalf_not_permitted"
@@ -936,7 +936,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[message])
+        validate_agent_reply_participation(&state, &[message], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_act_on_behalf_authorization_ref_scope"
@@ -967,7 +967,7 @@ async fn act_on_behalf_agent_non_message_write_requires_authorization_ref() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_act_on_behalf_authorization_ref_missing"
@@ -1008,7 +1008,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_context_missing"
@@ -1036,7 +1036,7 @@ async fn agent_member_target_uses_sender_for_agent_write_detection() {
         }),
     );
 
-    validate_agent_reply_participation(&state, &[operation])
+    validate_agent_reply_participation(&state, &[operation], covering_committed_at())
         .await
         .expect("membership target must not be treated as the executing agent");
 }
@@ -1085,7 +1085,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_context_authorization_ref_mismatch"
@@ -1116,7 +1116,7 @@ async fn signed_agent_provenance_unknown_action_fails_closed_before_context() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_participation_action_unknown"
@@ -1159,16 +1159,20 @@ async fn act_on_behalf_private_approval_cannot_replace_exact_consumption() {
     insert_approved_agent_action(&state, &operation, "request-7c4", agent, "nonce-7c4");
 
     assert_eq!(
-        validate_agent_reply_participation(&state, std::slice::from_ref(&operation))
-            .await
-            .unwrap_err(),
+        validate_agent_reply_participation(
+            &state,
+            std::slice::from_ref(&operation),
+            covering_committed_at()
+        )
+        .await
+        .unwrap_err(),
         "dependency_missing"
     );
     let mut substituted = operation;
     substituted.context.event_id =
         arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [99; 32]);
     assert_eq!(
-        validate_agent_reply_participation(&state, &[substituted])
+        validate_agent_reply_participation(&state, &[substituted], covering_committed_at())
             .await
             .unwrap_err(),
         "dependency_missing"
@@ -1207,7 +1211,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_act_on_behalf_authorization_action_unsupported"
@@ -1244,7 +1248,7 @@ async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_participation_action_unknown"
@@ -1284,7 +1288,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let operation = reply_message(realm_id, "0000000007c7", agent, grant.grant_id.as_str());
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_paused"
@@ -1316,7 +1320,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[operation])
+        validate_agent_reply_participation(&state, &[operation], covering_committed_at())
             .await
             .unwrap_err(),
         "agent_deactivated"
@@ -1625,29 +1629,29 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     insert_approved_agent_action(&state, &message, "request-703", agent, "nonce-703");
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[message])
+        validate_agent_reply_participation(&state, &[message], covering_committed_at())
             .await
             .unwrap_err(),
         "dependency_missing"
     );
 }
 
-/// Commit one controller `ak.agent.action_approve` in `realm_id` through the
-/// governing Station's authority path, exactly as admission leaves it.
-async fn commit_agent_action_approval(
+/// Sign one controller `ak.agent.action_approve` for `realm_id` whose
+/// governing Station is this test Station.
+async fn agent_action_approval_event(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
     controller: &str,
     controller_did: &str,
     payload: serde_json::Value,
-) -> arkret_wire::EventId {
-    let station = crate::test_event::station_id();
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::Event {
     state
         .authority_commits()
         .install_genesis_authority(&soland_storage::CurrentRealmAuthority {
             realm_id: realm_id.clone(),
             generation: 0,
-            service_id: station.clone(),
+            service_id: crate::test_event::station_id(),
             authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
                 realm_id.event_id(),
             ),
@@ -1655,7 +1659,7 @@ async fn commit_agent_action_approval(
         })
         .await
         .expect("genesis authority installs");
-    let mut event = crate::test_event::raw_event(
+    let mut event = crate::test_event::raw_event_at(
         arkret_wire::EventKind::AgentActionApprove.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
@@ -1664,21 +1668,55 @@ async fn commit_agent_action_approval(
         0,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
         payload,
+        created_at,
     )
     .unwrap();
     crate::test_event::attach_structural_only_producer_proof(
         &mut event,
         arkret_wire::DidUrl::new(format!("{controller_did}#key-1")).unwrap(),
     );
-    let outcome = state
+    event
+}
+
+/// Admit one signed confirmation through the governing Station's authority
+/// path with the given covering `committed_at`.
+async fn admit_agent_action_approval(
+    state: &AppState,
+    event: &arkret_wire::Event,
+    committed_at: chrono::DateTime<chrono::Utc>,
+) -> soland_services::ServiceResult<soland_services::authority_commit::AuthorityEventAdmissionOutcome>
+{
+    state
         .authority_commits()
         .admit_event(
-            &event,
-            &station,
+            event,
+            &crate::test_event::station_id(),
             state.service_verification_method("notary-key").unwrap(),
             state.notary_signing_key().as_ref(),
-            chrono::Utc::now(),
+            committed_at,
         )
+        .await
+}
+
+/// Commit one controller `ak.agent.action_approve` inside its window, exactly
+/// as admission leaves it.
+async fn commit_agent_action_approval(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    controller: &str,
+    controller_did: &str,
+    payload: serde_json::Value,
+) -> arkret_wire::EventId {
+    let event = agent_action_approval_event(
+        state,
+        realm_id,
+        controller,
+        controller_did,
+        payload,
+        timestamp("2026-05-30T00:00:00.000Z"),
+    )
+    .await;
+    let outcome = admit_agent_action_approval(state, &event, timestamp("2026-05-31T00:00:00.000Z"))
         .await
         .expect("controller confirmation commits");
     assert!(matches!(
@@ -1689,6 +1727,19 @@ async fn commit_agent_action_approval(
 }
 
 const CONFIRMED_APPROVAL_NONCE: &str = "Q29uZmlybWVkQXBwcm92YWxOb25jZQ";
+const CONFIRMED_APPROVAL_EXPIRES_AT: &str = "2027-01-01T00:00:00.000Z";
+
+fn timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+
+/// The signed `committed_at` of the RealmCommit covering the Operation under
+/// test; well inside every fixture approval window.
+fn covering_committed_at() -> chrono::DateTime<chrono::Utc> {
+    timestamp("2026-06-01T00:00:00.000Z")
+}
 
 fn agent_action_approve_payload(
     realm_id: &arkret_identifiers::RealmId,
@@ -1704,12 +1755,28 @@ fn agent_action_approve_payload(
         "target": { "kind": "realm", "realm_id": realm_id.as_str() },
         "approved_event_id": approved_event_id.as_str(),
         "approval_nonce": CONFIRMED_APPROVAL_NONCE,
-        "approved_at": "2026-01-01T00:00:00.000Z",
-        "expires_at": "2027-01-01T00:00:00.000Z"
+        "expires_at": CONFIRMED_APPROVAL_EXPIRES_AT
     })
 }
 
 async fn act_on_behalf_with_committed_confirmation(
+    realm_seed: u8,
+    seed: &str,
+    request_id: &str,
+    confirm: impl FnOnce(&Operation, &mut serde_json::Value) -> (&'static str, &'static str),
+) -> Result<(), &'static str> {
+    act_on_behalf_covered_at(
+        covering_committed_at(),
+        realm_seed,
+        seed,
+        request_id,
+        confirm,
+    )
+    .await
+}
+
+async fn act_on_behalf_covered_at(
+    covering_committed_at: chrono::DateTime<chrono::Utc>,
     realm_seed: u8,
     seed: &str,
     request_id: &str,
@@ -1751,7 +1818,97 @@ async fn act_on_behalf_with_committed_confirmation(
         CONFIRMED_APPROVAL_NONCE,
         confirmation.as_str(),
     );
-    validate_agent_reply_participation(&state, &[message]).await
+    validate_agent_reply_participation(&state, &[message], covering_committed_at).await
+}
+
+/// `ak.vector.agent.action_approve_expiry.v1`: the approved Event is judged
+/// only by its own covering `committed_at`, inclusive with zero tolerance.
+#[tokio::test]
+async fn act_on_behalf_approval_window_is_judged_by_the_covering_commit() {
+    act_on_behalf_covered_at(
+        timestamp(CONFIRMED_APPROVAL_EXPIRES_AT),
+        0x7a,
+        "00000000070a",
+        "request-70a",
+        |_, _| (ALICE_CORE_ID, ALICE_DID),
+    )
+    .await
+    .expect("an Event covered exactly at expires_at is inside the window");
+    assert_eq!(
+        act_on_behalf_covered_at(
+            timestamp(CONFIRMED_APPROVAL_EXPIRES_AT) + chrono::Duration::milliseconds(1),
+            0x7b,
+            "00000000070b",
+            "request-70b",
+            |_, _| (ALICE_CORE_ID, ALICE_DID),
+        )
+        .await
+        .unwrap_err(),
+        arkret_wire::ReasonCode::APPROVAL_REQUIRED
+    );
+}
+
+/// A confirmation whose own covering `committed_at` is after `expires_at` is
+/// refused with `failed_precondition` and writes nothing; the boundary is
+/// inclusive, envelope `created_at` never participates, and an exact retry
+/// after the window returns the original Commit.
+#[tokio::test]
+async fn late_confirmation_is_refused_with_zero_writes() {
+    let state = test_state();
+    let realm_id = arkret_identifiers::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [0x7c; 32],
+    ));
+    let approved_event_id =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x9c; 32]);
+    let expires_at = timestamp(CONFIRMED_APPROVAL_EXPIRES_AT);
+    let event = agent_action_approval_event(
+        &state,
+        &realm_id,
+        ALICE_CORE_ID,
+        ALICE_DID,
+        agent_action_approve_payload(&realm_id, "request-70c", AGENT_CORE_ID, &approved_event_id),
+        expires_at + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    let error = admit_agent_action_approval(
+        &state,
+        &event,
+        expires_at + chrono::Duration::milliseconds(1),
+    )
+    .await
+    .expect_err("a confirmation covered after expires_at is refused");
+    assert_eq!(
+        error.conflict_code(),
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+        "{error}"
+    );
+    assert!(
+        state
+            .authority_commits()
+            .committed_event(&event.event_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a refused confirmation leaves no Event or Commit"
+    );
+
+    let soland_services::authority_commit::AuthorityEventAdmissionOutcome::Committed(commit) =
+        admit_agent_action_approval(&state, &event, expires_at)
+            .await
+            .expect("a confirmation covered exactly at expires_at commits")
+    else {
+        panic!("expected a new Commit");
+    };
+    assert_eq!(commit.committed_at, expires_at);
+
+    assert_eq!(
+        admit_agent_action_approval(&state, &event, expires_at + chrono::Duration::hours(1))
+            .await
+            .expect("exact retry is not re-judged"),
+        soland_services::authority_commit::AuthorityEventAdmissionOutcome::Duplicate(commit)
+    );
 }
 
 #[tokio::test]
@@ -1831,7 +1988,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[message])
+        validate_agent_reply_participation(&state, &[message], covering_committed_at())
             .await
             .unwrap_err(),
         "dependency_missing"

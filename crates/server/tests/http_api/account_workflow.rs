@@ -470,14 +470,14 @@ async fn account_viewer_returns_device_summaries_body() {
 }
 
 #[test]
-fn account_viewer_repeatedly_resolves_atomically_installed_control_root() {
+fn account_viewer_repeatedly_returns_verified_device_summary() {
     run_on_deep_stack(
-        "account_viewer_repeatedly_resolves_atomically_installed_control_root",
-        account_viewer_repeatedly_resolves_atomically_installed_control_root_body,
+        "account_viewer_repeatedly_returns_verified_device_summary",
+        account_viewer_repeatedly_returns_verified_device_summary_body,
     );
 }
 
-async fn account_viewer_repeatedly_resolves_atomically_installed_control_root_body() {
+async fn account_viewer_repeatedly_returns_verified_device_summary_body() {
     let state = soland_test_support::app_state_with_postgres_governance(test_config());
     let fixture = soland_test_support::device_authorization_history::DeviceHistoryFixture::new(
         state.service_did(),
@@ -517,10 +517,14 @@ async fn account_viewer_repeatedly_resolves_atomically_installed_control_root_bo
             .expect("confirmed founding device summary");
         assert_eq!(device["verification_state"], "verified", "{viewer}");
         assert!(
-            device["signer_resolution_evidence_ref"]
+            device["authorized_event_ref"]
                 .as_str()
-                .is_some_and(|reference| reference.starts_with("ak:signer_evidence:sha256:")),
-            "viewer must expose the fixed generic-Control root: {viewer}"
+                .is_some_and(|reference| reference.starts_with("ak:event:")),
+            "verified provenance is the accepted authorization Event: {viewer}"
+        );
+        assert!(
+            device.get("signer_resolution_evidence_ref").is_none(),
+            "device_summary carries no signer evidence reference: {viewer}"
         );
     }
 }

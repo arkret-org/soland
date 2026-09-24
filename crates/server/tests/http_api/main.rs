@@ -13,7 +13,7 @@ mod admin_b_track;
 mod admin_production_queries;
 mod blob_resumable;
 mod deactivation_push_fanout;
-mod device_message_expiry;
+mod device_message_send_admission;
 mod health;
 mod history_authority;
 mod openapi;

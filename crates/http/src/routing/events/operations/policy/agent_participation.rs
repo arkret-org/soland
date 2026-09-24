@@ -359,10 +359,18 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
     Ok(authorization_ref.to_owned())
 }
 
+/// Authorize one act-on-behalf Operation by its controller confirmation.
+///
+/// `covering_committed_at` is the signed `committed_at` of the RealmCommit
+/// that covers this Operation's Event. It is the only clock the approval
+/// window is judged against (`constraint-schema.md` §9.2.6): an Event
+/// covered after the approval's `expires_at` lacks a valid confirmation and
+/// fails as `approval_required`.
 pub(super) async fn validate_agent_act_on_behalf_approval(
     state: &AppState,
     operation: &Operation,
     agent_id: &str,
+    covering_committed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), &'static str> {
     let request_id = operation
         .payload
@@ -386,10 +394,14 @@ pub(super) async fn validate_agent_act_on_behalf_approval(
             request_id,
             approval_nonce,
             action.as_str(),
-            chrono::Utc::now(),
         )
         .await?;
-    require_committed_agent_action_approval(state, operation, agent_id, &projected).await
+    let confirmed =
+        require_committed_agent_action_approval(state, operation, agent_id, &projected).await?;
+    if !confirmed.admits_commit_at(covering_committed_at) {
+        return Err(arkret_wire::ReasonCode::APPROVAL_REQUIRED);
+    }
+    Ok(())
 }
 
 /// The private request projection only names a confirmation. Publication is
@@ -404,7 +416,10 @@ async fn require_committed_agent_action_approval(
     operation: &Operation,
     agent_id: &str,
     projected: &soland_services::projection::ProjectedAgentActionApproval,
-) -> Result<(), &'static str> {
+) -> Result<
+    arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload,
+    &'static str,
+> {
     let committed = state
         .authority_commits()
         .committed_event(&projected.approval_event_id)
@@ -443,7 +458,7 @@ async fn require_committed_agent_action_approval(
     {
         return Err("dependency_missing");
     }
-    Ok(())
+    Ok(confirmed)
 }
 
 pub(super) fn operation_agent_context(operation: &Operation) -> Option<&Value> {
@@ -721,6 +736,7 @@ pub(super) fn validate_agent_context(
 pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
+    covering_committed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), &'static str> {
     for operation in operations {
         let Some((agent_id, mode)) = operation_agent_write_context(state, operation).await? else {
@@ -765,7 +781,13 @@ pub async fn validate_agent_reply_participation(
             return Err(mode.rejection_reason());
         }
         if authorization_ref.is_some() {
-            validate_agent_act_on_behalf_approval(state, operation, &agent_id).await?;
+            validate_agent_act_on_behalf_approval(
+                state,
+                operation,
+                &agent_id,
+                covering_committed_at,
+            )
+            .await?;
         }
     }
     Ok(())

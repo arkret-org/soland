@@ -250,6 +250,39 @@ fn validate_pcr_genesis_producer_proofs(
     Ok(())
 }
 
+/// Judge Event-carried validity windows against the signed `committed_at`
+/// of the Commit that would cover the Event.
+///
+/// `constraint-schema.md` §9.2.6: an `ak.agent.action_approve` confirmation
+/// is admissible only while its covering `committed_at <= expires_at`,
+/// inclusive with zero tolerance. Envelope `created_at` and the Station's
+/// current time never participate, and a refusal happens before any write,
+/// so no nonce is allocated. Exact retries return their stored Commit before
+/// reaching this point and are never re-judged.
+fn ensure_commit_time_admits_event(
+    event: &Event,
+    committed_at: DateTime<Utc>,
+) -> ServiceResult<()> {
+    if event.kind != arkret_wire::EventKind::AgentActionApprove {
+        return Ok(());
+    }
+    let payload: arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload =
+        serde_json::to_value(&event.payload)
+            .and_then(serde_json::from_value)
+            .map_err(|error| {
+                ServiceError::SchemaViolation(format!(
+                    "ak.agent.action_approve payload is invalid: {error}"
+                ))
+            })?;
+    if !payload.admits_commit_at(committed_at) {
+        return Err(ServiceError::Conflict(format!(
+            "{}: ak.agent.action_approve covering committed_at is after expires_at",
+            soland_storage::ConflictCode::FailedPrecondition.as_str()
+        )));
+    }
+    Ok(())
+}
+
 fn build_signed_event_commit(
     event: &Event,
     authority: &CurrentRealmAuthority,
@@ -275,6 +308,7 @@ fn build_signed_event_commit(
         None => (0, None),
     };
     let committed_at = arkret_canonical::normalize_timestamp_canonical(committed_at);
+    ensure_commit_time_admits_event(event, committed_at)?;
     let identity_body = RealmCommitIdentityBody {
         realm_id: &event.realm_id,
         stream_ref: &stream_ref,
