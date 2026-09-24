@@ -580,7 +580,7 @@ fn parse_account_subscribe_query(query: &str) -> Result<SyncRequestBody, String>
         .map(|value| {
             require_canonical_query_object(&value)?;
             serde_json::from_str::<
-                arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter,
+                arkret_models_collaboration::sync_frames::account_subscribe::AccountFilter,
             >(&value)
             .map_err(|error| format!("invalid account filter: {error}"))
         })
@@ -716,7 +716,7 @@ fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barri
 }
 
 pub(crate) fn sync_filter_value(
-    filter: Option<&arkret_models_collaboration::sync_frames::account_subscribe::SyncFilter>,
+    filter: Option<&arkret_models_collaboration::sync_frames::account_subscribe::AccountFilter>,
 ) -> Option<Value> {
     let Some(filter) = filter else {
         return Some(json!({}));
@@ -728,6 +728,13 @@ pub(crate) fn sync_filter_value(
                 items.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
                 items.dedup();
             }
+        }
+        // A stream selection is a set: its digest binds the members, not the
+        // order they were listed in. Order by canonical `stream_ref` bytes.
+        if let Some(Value::Array(items)) = object.get_mut("stream_refs") {
+            items.sort_by_cached_key(|item| {
+                arkret_canonical::canonical_json_bytes(item).unwrap_or_default()
+            });
         }
     }
     Some(value)
@@ -811,13 +818,18 @@ mod account_query_tests {
         )
         .unwrap();
         assert_eq!(empty.filter.unwrap().realm_ids, Some(Vec::new()));
+        let bounded = parse_account_subscribe_query("filter=%7B%22window_limit%22%3A0%7D").unwrap();
+        assert_eq!(bounded.filter.unwrap().window_limit, Some(0));
         for query in [
             "filter.realm_ids=x",
             "filter=%7B%7D&filter=%7B%7D",
             "catchup=garbage",
             "catchup=true&catchup=false",
             "filter=%7B%22realm_ids%22%3Anull%7D",
-            "filter=%7B%22timeline_limit%22%3A1%2C%22timeline_limit%22%3A2%7D",
+            "filter=%7B%22window_limit%22%3A1%2C%22window_limit%22%3A2%7D",
+            // The retired member has no alias or dual read.
+            "filter=%7B%22timeline_limit%22%3A20%7D",
+            "filter=%7B%22window_limit%22%3A101%7D",
             "filter=%7B%20%7D",
             "filter=%FF",
             "filter=%GG",

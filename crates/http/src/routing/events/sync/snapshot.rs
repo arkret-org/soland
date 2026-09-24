@@ -226,10 +226,7 @@ pub(crate) async fn build_sync_snapshot(
                 .expect("resync frame");
         }
     };
-    let summary_advanced = summary_delta
-        .as_ref()
-        .is_some_and(|delta| delta.position > after_cursor.account_summary_position);
-    let response=arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+    let response = arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
         realm_list: summary_delta.as_ref().and_then(|delta| delta.page.clone()),
         realm_list_changes: summary_delta.as_ref().and_then(|delta| delta.changes.clone()),
         realm_invalidations: summary_delta.and_then(|delta| delta.invalidations),
@@ -254,20 +251,9 @@ pub(crate) async fn build_sync_snapshot(
         priority: None,
         reconnect_after_ms: None,
     };
-    if (summary_advanced
-        || (!after_cursor.detail_turn
-            && body
-                .filter
-                .as_ref()
-                .and_then(|filter| filter.realm_ids.as_ref())
-                .is_some_and(|realms| !realms.is_empty())))
-        && subscribe::delta_is_empty(&response)
-    {
-        serde_json::from_value(json!({"kind":"frontier","cursor":response.cursor}))
-            .expect("detail scheduling frontier")
-    } else {
-        response
-    }
+    // An empty global delta is not sent: the long poll keeps waiting and the
+    // caller keeps its cursor. There is no cursor-only "frontier" frame kind.
+    response
 }
 
 pub(crate) async fn projection_record_visible_to_session(

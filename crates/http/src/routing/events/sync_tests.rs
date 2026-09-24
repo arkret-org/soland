@@ -1195,19 +1195,27 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
     );
 }
 
+/// A selected Realm this Account cannot read is an explicit `unavailable`
+/// detail with a resumable cursor, never a synthetic window or a resync.
 #[tokio::test]
-async fn selected_realm_requires_committed_per_stream_detail_provider() {
+async fn selected_unreadable_realm_is_an_explicit_unavailable_detail() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
     let realm = "ak:realm:AQVZRUJrSSC16EodjmqL6mBFC9TGwv6oxx-sQlJzlvxS";
     let body: SyncRequestBody =
-        serde_json::from_value(json!({"filter": {"realm_ids": [realm]}})).unwrap();
+        serde_json::from_value(json!({"filter": {"realm_ids": [realm], "window_limit": 2}}))
+            .unwrap();
     let frame = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     assert_eq!(
         frame.kind,
-        arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::ResyncRequired
+        arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Delta
     );
-    assert!(frame.cursor.is_none() && frame.realms.is_none());
+    frame.validate().unwrap();
+    assert!(frame.cursor.is_some());
+    assert_eq!(
+        serde_json::to_value(&frame.realms.unwrap().entries[realm]).unwrap(),
+        json!({"unavailable": {"error_code": "not_found"}})
+    );
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@ use super::{
 };
 pub(crate) mod retention;
 use diesel_async::AsyncConnection;
-use soland_storage::{AuthorityCommitStore, RealmJoinDownload};
+use soland_storage::RealmJoinDownload;
 pub struct PgSyncCursorStore {
     pub pool: PgPool,
 }
@@ -167,102 +167,6 @@ impl SyncCursorStore for PgSyncCursorStore {
         }).await.map_err(crate::PgTransactionError::into_persistence)
     }
 
-    async fn current_detail_page(
-        &self,
-        request: &soland_storage::CurrentDetailRequest,
-        progress: Option<&soland_storage::CurrentDetailProgress>,
-        byte_budget: usize,
-    ) -> PersistenceResult<soland_storage::CurrentDetailOutcome> {
-        let authority = crate::PgAuthorityCommitStore {
-            pool: self.pool.clone(),
-        };
-        let Some(snapshot) = authority.latest_snapshot(&request.realm_id).await? else {
-            return Ok(soland_storage::CurrentDetailOutcome::Unavailable);
-        };
-        let request_digest = arkret_canonical::canonical_sha256(request)
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let now = Utc::now();
-        let mut progress = match progress {
-            Some(progress)
-                if progress.request_digest == request_digest
-                    && progress.snapshot_id == snapshot.snapshot_id
-                    && progress.expires_at_ms > now.timestamp_millis() =>
-            {
-                progress.clone()
-            }
-            Some(_) => return Ok(soland_storage::CurrentDetailOutcome::Unavailable),
-            None => {
-                let stream_heads = authority.realm_stream_heads(&request.realm_id).await?;
-                let snapshot_positions = snapshot
-                    .visible_stream_heads
-                    .iter()
-                    .map(|head| (head.stream_ref.clone(), head.stream_position))
-                    .collect::<std::collections::BTreeMap<_, _>>();
-                soland_storage::CurrentDetailProgress {
-                    request_digest,
-                    snapshot_cursor: arkret_wire::Cursor::new(format!(
-                        "ak:cursor:{}",
-                        uuid::Uuid::now_v7()
-                    ))
-                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
-                    expires_at_ms: now.timestamp_millis() + 300_000,
-                    snapshot_id: snapshot.snapshot_id.clone(),
-                    stream_heads,
-                    next_positions: snapshot_positions,
-                    complete: false,
-                }
-            }
-        };
-        let mut entries = Vec::new();
-        let item_limit = usize::try_from(request.timeline_limit.min(1000).max(1))
-            .expect("timeline limit is bounded to 1000");
-        for head in progress.stream_heads.clone() {
-            if entries.len() >= item_limit {
-                break;
-            }
-            let after = progress.next_positions.get(&head.stream_ref).copied();
-            let remaining = item_limit - entries.len();
-            let scan = authority
-                .scan_stream(&arkret_wire::StreamScanRequest {
-                    realm_id: request.realm_id.clone(),
-                    stream_ref: head.stream_ref.clone(),
-                    direction: arkret_wire::StreamScanDirection::After(after),
-                    limit: u16::try_from(remaining).unwrap_or(1000),
-                })
-                .await?;
-            for view in scan.committed_events {
-                let arkret_wire::CommittedEventView::Full(item) = view else {
-                    return Err(PersistenceError::SchemaViolation(
-                        "authority storage scan returned a withheld committed Event".to_owned(),
-                    ));
-                };
-                progress
-                    .next_positions
-                    .insert(head.stream_ref.clone(), item.commit.stream_position);
-                entries.push(item);
-            }
-        }
-        progress.complete = progress.stream_heads.iter().all(|head| {
-            progress
-                .next_positions
-                .get(&head.stream_ref)
-                .is_some_and(|position| *position >= head.stream_position)
-        });
-        let encoded = arkret_canonical::canonical_json_bytes(&entries)
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        if encoded.len() > byte_budget {
-            return Err(PersistenceError::Conflict(
-                "snapshot tail page exceeds byte budget".to_owned(),
-            ));
-        }
-        Ok(soland_storage::CurrentDetailOutcome::Page(
-            soland_storage::CurrentDetailPage {
-                progress,
-                entries,
-                snapshot: Some(snapshot),
-            },
-        ))
-    }
     async fn account_summary_has_join(
         &self,
         actor_key: &str,

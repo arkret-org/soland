@@ -1,45 +1,23 @@
-//! Private resumable snapshot-and-tail coordinates for account sync.
+//! Server-private Account detail progress carried inside the opaque Account
+//! stream cursor handle. None of it is a wire member.
 
-use std::collections::BTreeMap;
-
-use arkret_wire::{ActorId, CommitStreamHead, CommitStreamRef, Cursor, EventId, RealmId, StrandId};
+use arkret_wire::{CommitStreamHead, Cursor};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize)]
-pub struct CurrentDetailRequest {
-    pub actor_id: ActorId,
-    pub realm_id: RealmId,
-    pub strand_ids: Option<Vec<StrandId>>,
-    pub all_members: bool,
-    pub event_ids: Vec<EventId>,
-    pub timeline_limit: u32,
-    pub event_kinds: Option<Vec<String>>,
-    pub not_event_kinds: Option<Vec<String>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Progress of one Realm's frozen Account stream window.
+///
+/// `window_cursor` is the window identity the frame repeats as
+/// `window_snapshot_cursor`. `expires_at_ms` is the window's consumable
+/// deadline: it is exactly the `expires_at_ms` of the window's basis
+/// reservation, and the Account cursor that carries this progress never
+/// outlives it. `retained_revision` is the Account-summary revision frozen
+/// with the window; the 0441 cursor floor keeps it readable for as long as the
+/// cursor lives. `stream_heads` are the heads the window was frozen at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CurrentDetailProgress {
-    pub request_digest: String,
-    pub snapshot_cursor: Cursor,
+pub struct AccountDetailProgress {
+    pub window_cursor: Cursor,
     pub expires_at_ms: i64,
-    pub snapshot_id: arkret_wire::RealmSnapshotId,
+    pub retained_revision: i64,
     pub stream_heads: Vec<CommitStreamHead>,
-    /// Next unread position for each independent stream's tail.
-    pub next_positions: BTreeMap<CommitStreamRef, u64>,
-    pub complete: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct CurrentDetailPage {
-    pub progress: CurrentDetailProgress,
-    pub entries: Vec<arkret_wire::CommittedEventFullView>,
-    pub snapshot: Option<arkret_wire::RealmStateSnapshot>,
-}
-
-#[derive(Clone, Debug)]
-pub enum CurrentDetailOutcome {
-    Page(CurrentDetailPage),
-    NotFound,
-    Unavailable,
 }

@@ -18,12 +18,6 @@ pub trait CursorStorePort: Send + Sync {
         key: &str,
         assembly: &RealmJoinDownload,
     ) -> ServiceResult<()>;
-    async fn current_detail_page(
-        &self,
-        request: &soland_storage::CurrentDetailRequest,
-        progress: Option<&soland_storage::CurrentDetailProgress>,
-        byte_budget: usize,
-    ) -> ServiceResult<soland_storage::CurrentDetailOutcome>;
     async fn account_summary_has_join(
         &self,
         actor_key: &str,
@@ -169,17 +163,6 @@ impl SyncService {
     ) -> ServiceResult<bool> {
         self.cursors
             .account_summary_has_join(actor_key, realm_id)
-            .await
-    }
-
-    pub async fn current_detail_page(
-        &self,
-        request: &soland_storage::CurrentDetailRequest,
-        progress: Option<&soland_storage::CurrentDetailProgress>,
-        byte_budget: usize,
-    ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
-        self.cursors
-            .current_detail_page(request, progress, byte_budget)
             .await
     }
 
@@ -335,14 +318,6 @@ mod tests {
             _: &RealmJoinDownload,
         ) -> ServiceResult<()> {
             unreachable!("cursor-only fixture cannot store bootstrap downloads")
-        }
-        async fn current_detail_page(
-            &self,
-            _: &soland_storage::CurrentDetailRequest,
-            _: Option<&soland_storage::CurrentDetailProgress>,
-            _: usize,
-        ) -> ServiceResult<soland_storage::CurrentDetailOutcome> {
-            Ok(soland_storage::CurrentDetailOutcome::Unavailable)
         }
         async fn account_summary_has_join(&self, _: &str, _: &str) -> ServiceResult<bool> {
             Ok(false)

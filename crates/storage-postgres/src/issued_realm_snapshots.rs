@@ -607,6 +607,7 @@ pub(crate) async fn freeze_account_realm_window(
             governance_generation: generation,
             window,
             committed_events: delivered,
+            current_state_entries: material.current_state_entries.clone(),
         }))
     })
     .await

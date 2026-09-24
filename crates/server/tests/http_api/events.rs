@@ -2157,7 +2157,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes_body() {
     // client-sync.md §11 / §12.1: changing the filter scope on a returned cursor
     // MUST trigger a filter_digest mismatch -> cursor_integrity_invalid (HTTP
     // 400). The realm id MUST use the `ak:` prefix (decision 0008 / rebrand); a
-    // `ck:` id is rejected by SyncFilter deserialization and silently degrades to
+    // `ck:` id is rejected by AccountFilter deserialization and silently degrades to
     // an empty filter, which would bypass this case.
     let mut changed_url =
         reqwest::Url::parse("http://server/_arkret/self/account/subscribe").unwrap();

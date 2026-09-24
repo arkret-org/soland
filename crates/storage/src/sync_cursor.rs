@@ -78,12 +78,6 @@ pub trait SyncCursorStore: Send + Sync {
         key: &str,
         assembly: &RealmJoinDownload,
     ) -> PersistenceResult<()>;
-    async fn current_detail_page(
-        &self,
-        request: &super::CurrentDetailRequest,
-        progress: Option<&super::CurrentDetailProgress>,
-        byte_budget: usize,
-    ) -> PersistenceResult<super::CurrentDetailOutcome>;
     async fn account_summary_has_join(
         &self,
         actor_key: &str,

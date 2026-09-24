@@ -2170,3 +2170,127 @@ async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
 /// rows, and the typed current of the same proved cut. The basis reservation
 /// expires exactly at the window's consumable deadline, which is the deadline
 /// the Account cursor that carries the window is bounded by.
+#[tokio::test]
+async fn account_window_carries_same_cut_current_and_reservation_deadline() {
+    use soland_storage::AccountRealmWindowRequest;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let at_six = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    let strand = strand_create_request(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    uow.commit_event(set_default_strand_request(&strand, &strand_id, None))
+        .await
+        .unwrap();
+    let head_material = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let request = AccountRealmWindowRequest {
+        realm_id: realm_id.clone(),
+        account: creator.clone(),
+        issuer: issuer.clone(),
+        window_limit: 2,
+        window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+        expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS,
+        now_ms,
+        byte_budget: 7 * 1024 * 1024,
+    };
+    let backed = store
+        .freeze_account_realm_window(&request)
+        .await
+        .unwrap()
+        .unwrap();
+    let basis = backed.window.window_start_basis.clone().unwrap();
+    assert_eq!(basis.snapshot_ref, at_six.snapshot_id);
+    assert_eq!(backed.window.next_position, 9);
+    assert_eq!(
+        backed.current_state_entries,
+        head_material.current_state_entries
+    );
+    assert_eq!(
+        backed.governance_generation,
+        head_material.governance_generation
+    );
+    #[derive(diesel::QueryableByName)]
+    struct Deadline {
+        #[diesel(sql_type = BigInt)]
+        expires_at_ms: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let reserved = diesel::sql_query(
+        "SELECT expires_at_ms FROM realm_state_snapshot_window_reservations \
+         WHERE window_cursor=$1",
+    )
+    .bind::<Text, _>(&request.window_cursor)
+    .get_result::<Deadline>(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(reserved.expires_at_ms, request.expires_at_ms);
+
+    // A preview-only window still carries the same-cut current: current
+    // never depends on the window start.
+    let preview = store
+        .freeze_account_realm_window(&AccountRealmWindowRequest {
+            window_limit: 1,
+            window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+            ..request.clone()
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preview.window.preview_only, Some(true));
+    assert_eq!(
+        preview.current_state_entries,
+        head_material.current_state_entries
+    );
+    // A consumable deadline beyond the cursor's lifetime is refused whole.
+    assert!(
+        store
+            .freeze_account_realm_window(&AccountRealmWindowRequest {
+                expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS + 1,
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                ..request.clone()
+            })
+            .await
+            .is_err()
+    );
+}

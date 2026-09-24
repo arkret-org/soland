@@ -579,18 +579,6 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
             .save_realm_join_download(key, assembly)
             .await?)
     }
-    async fn current_detail_page(
-        &self,
-        request: &soland_storage::CurrentDetailRequest,
-        progress: Option<&soland_storage::CurrentDetailProgress>,
-        byte_budget: usize,
-    ) -> crate::ServiceResult<soland_storage::CurrentDetailOutcome> {
-        Ok(self
-            .0
-            .sync_cursors()
-            .current_detail_page(request, progress, byte_budget)
-            .await?)
-    }
     async fn account_summary_has_join(
         &self,
         actor_key: &str,

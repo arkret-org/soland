@@ -117,6 +117,9 @@ pub struct AccountRealmWindow {
     pub governance_generation: u64,
     pub window: arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow,
     pub committed_events: Vec<arkret_wire::CommittedEventView>,
+    /// Typed current results of the same proved cut, i.e. at the window
+    /// head; the Account current carrier of the window's Realm detail.
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
 }
 
 /// An issued snapshot without any live window reservation stays archived at

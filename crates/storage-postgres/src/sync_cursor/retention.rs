@@ -295,6 +295,89 @@ mod tests {
         assert_eq!(count.revision, 1);
     }
 
+    /// Real PostgreSQL: an Account stream cursor that carries a frozen
+    /// Realm window keeps the window's `retained_revision` readable even after
+    /// its own summary position moved on and the minute reservation expired;
+    /// a detail progress without the floor is refused, never defaulted.
+    #[tokio::test]
+    async fn account_cursor_detail_progress_holds_its_retained_revision() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let store = PgSyncCursorStore { pool: pool.clone() };
+        let mut conn = pg_conn(&pool).await.unwrap();
+        conn.batch_execute("UPDATE account_summary_clock SET revision=1; UPDATE account_global_clock SET revision=1;
+            INSERT INTO current_result_versions(realm_id,selector_key,revision,target_kind,target_key,payload) VALUES('realm','selector',1,'realm','','{}');").await.unwrap();
+        let (retained_revision, _) = store.account_sync_watermarks().await.unwrap();
+        assert_eq!(retained_revision, 1);
+        conn.batch_execute("UPDATE account_summary_clock SET revision=2; UPDATE account_global_clock SET revision=2;
+            UPDATE current_result_versions SET valid_until=2;
+            INSERT INTO current_result_versions(realm_id,selector_key,revision,target_kind,target_key,payload) VALUES('realm','selector',2,'realm','','{}');").await.unwrap();
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x61; 32],
+        ));
+        let now = Utc::now().timestamp_millis();
+        let progress = soland_storage::AccountDetailProgress {
+            window_cursor: arkret_wire::Cursor::new("ak:cursor:window".to_owned()).unwrap(),
+            expires_at_ms: now + 3_600_000,
+            retained_revision,
+            stream_heads: vec![arkret_wire::CommitStreamHead {
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                stream_position: 8,
+                commit_id: arkret_wire::RealmCommitId::from_digest([0x62; 32]),
+            }],
+        };
+        let record = |handle: &str, detail: Value| SyncCursorRecord {
+            handle: handle.into(),
+            binding_subject: Some("account".into()),
+            device_id: Some("device".into()),
+            service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example")
+                .unwrap(),
+            filter_digest: Some("digest".into()),
+            purpose: "ak.self.account.stream.subscribe.v1".into(),
+            positions: Some(serde_json::json!({
+                "account_summary": 2,
+                "global_baseline": null,
+                "detail_positions": {(realm_id.as_str()): detail},
+            })),
+            target: None,
+            issued_at_ms: now,
+            expires_at_ms: now + 3_600_000,
+        };
+        let detail = serde_json::to_value(&progress).unwrap();
+        let mut without_floor = detail.clone();
+        without_floor
+            .as_object_mut()
+            .unwrap()
+            .remove("retained_revision");
+        assert!(matches!(
+            store.upsert(&record("no-floor", without_floor)).await,
+            Err(PersistenceError::SchemaViolation(_))
+        ));
+        let cursor = record("window-cursor", detail);
+        assert_eq!(cursor_floors(&cursor).unwrap(), Some((1, 0)));
+        store.upsert(&cursor).await.unwrap();
+
+        // The minute reservation lapses; only the cursor now holds revision 1.
+        conn.batch_execute("UPDATE account_sync_snapshot_reservations SET expires_at_ms=0")
+            .await
+            .unwrap();
+        store.prune_expired(now).await.unwrap();
+        let versions = || async {
+            sql_query("SELECT count(*)::bigint AS revision FROM current_result_versions")
+                .get_result::<SummaryWatermarkRow>(&mut *pg_conn(&pool).await.unwrap())
+                .await
+                .unwrap()
+                .revision
+        };
+        assert_eq!(versions().await, 2);
+        store.delete(&cursor.handle).await.unwrap();
+        store.prune_expired(now).await.unwrap();
+        assert_eq!(versions().await, 1);
+    }
+
     #[tokio::test]
     async fn waiting_snapshot_reads_its_cut_after_the_gc_lock() {
         let database = crate::test_database::TestDatabase::lease().await;

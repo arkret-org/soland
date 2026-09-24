@@ -22,7 +22,7 @@ pub struct SyncCursor {
     /// account continuation still has complete replay coverage.
     pub account_data_change_position: i64,
     pub global_baseline: Option<Value>,
-    pub detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress>,
+    pub detail_positions: BTreeMap<String, soland_storage::AccountDetailProgress>,
     pub detail_turn: bool,
     pub detail_next_realm: Option<String>,
 }
@@ -117,7 +117,7 @@ pub(crate) async fn sync_token_for_account_positions(
     account_summary_position: i64,
     account_data_change_position: i64,
     global_baseline: Option<Value>,
-    detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress>,
+    detail_positions: BTreeMap<String, soland_storage::AccountDetailProgress>,
     detail_turn: bool,
     detail_next_realm: Option<String>,
 ) -> Result<String, SyncCursorError> {
@@ -699,7 +699,7 @@ pub(crate) async fn parse_account_cursor(
         "account_realms",
         Some("cursor handle is missing positions.account_realms"),
     )?;
-    let mut detail_positions: BTreeMap<String, soland_storage::CurrentDetailProgress> =
+    let mut detail_positions: BTreeMap<String, soland_storage::AccountDetailProgress> =
         serde_json::from_value(positions_value["detail_positions"].clone())
             .map_err(|_| SyncCursorError::Integrity("invalid current detail positions"))?;
     let filter_changed = positions_value.get("detail_filter") != filter;
@@ -795,7 +795,7 @@ mod account_position_shape_tests {
 
     #[test]
     fn retired_global_coordinates_are_rejected_not_defaulted() {
-        let current = json!({"realms":{},"account_realms":{},"to_device":0,"account_summary":0,"global_baseline":null,"detail_filter":{},"detail_positions":{},"detail_turn":false,"detail_next_realm":null});
+        let current = json!({"realms":{},"account_realms":{},"to_device":0,"account_summary":0,"account_data_change":0,"global_baseline":null,"detail_filter":{},"detail_positions":{},"detail_turn":false,"detail_next_realm":null});
         validate_account_positions_shape(&current).unwrap();
         for key in ["device_lists", "notifications", "account_data", "devices"] {
             let mut retired = current.clone();
