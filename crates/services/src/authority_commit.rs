@@ -577,13 +577,16 @@ impl AuthorityCommitApplication {
         }
         let mut previous_head: Option<CommitStreamHead> = None;
         let mut transactions = Vec::with_capacity(submission.events.len());
-        for submitted in &submission.events {
+        for (position, submitted) in submission.events.iter().enumerate() {
             let event = &submitted.event;
-            if event.scope_ref
-                != (arkret_wire::ScopeRef::Realm {
+            let expected_scope = if position == 0 {
+                arkret_wire::ScopeRef::RealmGenesis
+            } else {
+                arkret_wire::ScopeRef::Realm {
                     realm_id: genesis.realm_id.clone(),
-                })
-            {
+                }
+            };
+            if event.scope_ref != expected_scope {
                 return Err(ServiceError::SchemaViolation(
                     "ordinary Realm bootstrap Event must use the Realm stream".to_owned(),
                 ));

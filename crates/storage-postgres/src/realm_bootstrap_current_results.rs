@@ -58,7 +58,7 @@ pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connec
             "realm_discovery",
             payload
                 .get("value")
-                .filter(|value| value.is_string())
+                .filter(|value| value.is_object())
                 .cloned()
                 .ok_or_else(|| missing("payload.value"))?,
         ),

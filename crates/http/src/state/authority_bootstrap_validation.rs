@@ -4,7 +4,7 @@ use arkret_models_collaboration::authority_commit::OrdinaryRealmBootstrapUnitSub
 use arkret_models_collaboration::events_payloads::realm::{
     RealmCreatePayload, RealmPolicyBundlePayload, RealmPurpose,
 };
-use arkret_wire::{EventKind, OperationId, OperationKind};
+use arkret_wire::{EventKind, OperationKind};
 use soland_services::identity::SessionIdentityState;
 use soland_services::projection::StagedRealmBootstrap;
 use soland_services::{ServiceError, ServiceResult};
@@ -118,8 +118,17 @@ pub(super) async fn verify_ordinary_realm_bootstrap(
                 .await?,
         );
         if fresh_realm {
-            let operation_id = OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
-                .map_err(|error| ServiceError::Internal(error.to_string()))?;
+            let envelope = serde_json::to_value(event)
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+            let operation_id = crate::routing::events::event_log::event_operation_id(
+                &envelope,
+                event.event_id.as_str(),
+            )
+            .ok_or_else(|| {
+                ServiceError::SchemaViolation(
+                    "ordinary Realm bootstrap Event has no reproducible projection id".to_owned(),
+                )
+            })?;
             let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
                 operation_id,
                 OperationKind::Create,
