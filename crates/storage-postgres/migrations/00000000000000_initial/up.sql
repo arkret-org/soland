@@ -1818,6 +1818,33 @@ CREATE TABLE public.contact_verified_mirrors (
 CREATE INDEX contact_verified_mirrors_verified_at_idx
     ON public.contact_verified_mirrors USING btree (verified_at);
 
+-- Contact command completion staged in the same transaction as the authority
+-- commit of its exact Event. `intent` is the frozen business plan the worker
+-- finalizes; finalization replaces it with the immutable terminal `result` and
+-- the optional federation delivery row, so exactly one of the two is present.
+CREATE TABLE public.contact_completion_intents (
+    event_id text PRIMARY KEY,
+    event_digest text NOT NULL UNIQUE,
+    event_json jsonb NOT NULL,
+    binding jsonb NOT NULL,
+    intent jsonb,
+    committed_ref jsonb NOT NULL,
+    result jsonb,
+    delivery_outbox_id text,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT contact_completion_intents_terminal_shape_check
+        CHECK ((intent IS NULL) <> (result IS NULL)),
+    CONSTRAINT contact_completion_intents_delivery_check
+        CHECK (delivery_outbox_id IS NULL OR result IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX contact_completion_intents_binding_idx
+    ON public.contact_completion_intents ((binding->'authenticated_actor'), (binding->>'idempotency_key'));
+
+CREATE INDEX contact_completion_intents_pending_idx
+    ON public.contact_completion_intents USING btree (event_digest)
+    WHERE result IS NULL;
+
 -- Device inventory is a single-Station local directory. Only trusted service
 -- identity provisioning initializes its immutable owner; requests cannot claim it.
 CREATE TABLE device_inventory_station (

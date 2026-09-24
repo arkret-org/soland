@@ -139,6 +139,7 @@ DROP TABLE IF EXISTS state_seal_signing_leases CASCADE;
 DROP TABLE IF EXISTS state_cell_ops CASCADE;
 DROP TABLE IF EXISTS consent_grants CASCADE;
 DROP TABLE IF EXISTS mimi_consent_correlations CASCADE;
+DROP TABLE IF EXISTS contact_completion_intents CASCADE;
 DROP TABLE IF EXISTS contact_verified_mirrors CASCADE;
 DROP TABLE IF EXISTS contacts CASCADE;
 DROP TABLE IF EXISTS device_revocation_cleanup_intents CASCADE;
