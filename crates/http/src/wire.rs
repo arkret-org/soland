@@ -585,7 +585,6 @@ pub fn describe(
             "ak.operation_bundle.station.applet.v1".to_owned(),
             "ak.operation_bundle.station.applet_ghost.v1".to_owned(),
             "ak.operation_bundle.station.applet_install.v1".to_owned(),
-            "ak.operation_bundle.station.current_signer_evidence.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
             "ak.operation_bundle.station.http_core.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
@@ -636,7 +635,6 @@ pub fn describe(
             "ak.feature.agent_runtime_approval_notifications.v1".to_owned(),
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
-            "ak.feature.mls_exporter_aead.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
         ],
         auth_metadata,
@@ -896,6 +894,9 @@ mod tests {
                     .supports_operation_binding(operation, arkret_wire::BindingKind::HttpJson,)
             );
         }
+        description
+            .validate()
+            .expect("advertised bundles are registered");
         let value = serde_json::to_value(description).expect("description serializes");
         assert!(value["limits"].get("mls_governance_proof").is_none());
         assert_eq!(value["transport_bindings"][0]["kind"], "http_json");
@@ -907,9 +908,6 @@ mod tests {
             .as_array()
             .expect("operation bundle ids are present");
         assert!(bundles.contains(&json!("ak.operation_bundle.station.describe.v1")));
-        assert!(bundles.contains(&json!(
-            "ak.operation_bundle.station.current_signer_evidence.v1"
-        )));
         assert!(!bundles.contains(&json!(
             "ak.operation_bundle.station.device_pairing_handoff.v1"
         )));
@@ -955,6 +953,13 @@ mod tests {
             arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
             arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
             arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
+        ] {
+            assert!(
+                !description
+                    .supports_operation_binding(operation, arkret_wire::BindingKind::HttpJson)
+            );
+        }
+        for operation in [
             arkret_wire::ServiceOperationId::SelfSecurityTransactionCommandContinueV1,
             arkret_wire::ServiceOperationId::SelfSecurityTransactionCommandCreateV1,
             arkret_wire::ServiceOperationId::SelfSecurityTransactionResourceGetV1,
@@ -981,13 +986,7 @@ mod tests {
         );
         assert_eq!(
             value["privacy_derivation"]["push_target_id_derivation"]["input_binding"],
-            json!([
-                "recipient_did_core_id",
-                "did_core_id",
-                "device_id",
-                "push_route_id",
-                "salt_epoch_id"
-            ])
+            json!(["account_id", "device_id", "push_route_id", "salt_epoch_id"])
         );
         assert_eq!(
             value["limits"]["resumable_upload_incomplete_ttl_seconds"],
@@ -1011,7 +1010,7 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            value["limits"]["scalability_constraints"]["max_refs"],
+            value["limits"]["scalability_constraints"]["max_semantic_refs"],
             json!(arkret_wire::event_envelope::MAX_SEMANTIC_REFS)
         );
         assert_eq!(
