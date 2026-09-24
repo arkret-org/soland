@@ -611,6 +611,22 @@ async fn try_advance_rotation_revoke(
         }
     };
 
+    // Crash-consistency fault injection between the proposal and its
+    // decision. Empty outside development mode.
+    if state
+        .config()
+        .failpoints
+        .scope(
+            crate::failpoints::FailpointId::SecurityRotationRevokeTerminal,
+            true,
+        )
+        .trips_before_next_step()
+    {
+        return Err(ServiceError::Conflict(
+            "temporarily_unavailable: revoke decision deferred by a development failpoint"
+                .to_owned(),
+        ));
+    }
     let proposal = proposed
         .resource
         .revoke_proposal

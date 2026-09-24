@@ -31,12 +31,18 @@ pub enum FailpointId {
     /// The rotation worker's `erase_old_material` — each successfully
     /// deleted old backup is one durable step.
     BackupSeriesEraseDurableStep,
+    /// The rotation worker's decision of an admitted `ak.device.revoke`
+    /// proposal — the terminal write is the one durable step. Armed on every
+    /// attempt, so `fail_after_durable_steps:0` keeps the proposal pending
+    /// until the transaction expires with its `rejected` result.
+    SecurityRotationRevokeTerminal,
 }
 
 impl FailpointId {
     pub const fn as_str(self) -> &'static str {
         match self {
             FailpointId::BackupSeriesEraseDurableStep => "backup_series_erase_durable_step",
+            FailpointId::SecurityRotationRevokeTerminal => "security_rotation_revoke_terminal",
         }
     }
 }
@@ -53,6 +59,7 @@ impl FromStr for FailpointId {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "backup_series_erase_durable_step" => Ok(FailpointId::BackupSeriesEraseDurableStep),
+            "security_rotation_revoke_terminal" => Ok(FailpointId::SecurityRotationRevokeTerminal),
             other => Err(format!("unknown failpoint id {other:?}")),
         }
     }
