@@ -111,9 +111,9 @@ async fn visible_target_scope(
 pub(crate) enum MlsSendGateRefusal {
     /// Plaintext into a scope with an accepted `ak.mls.genesis`.
     ActivationRequired,
-    /// Ciphertext into a scope whose accepted MLS state this Station does not
-    /// hold. Nothing was written; the exact request may be retried.
-    StateUnavailable,
+    /// Ciphertext into a scope with no accepted MLS Genesis/current group.
+    /// Nothing was written; the scope needs activation or plaintext authoring.
+    NotActivated,
     /// The scope's membership / policy / key-access checkpoint still awaits a
     /// covering winning Commit: the sender pauses instead of re-encrypting.
     EpochUpdateRequired,
@@ -126,6 +126,7 @@ pub(crate) enum MlsSendGateRefusal {
 #[derive(Debug)]
 pub(crate) enum MlsSendGateError {
     Refused(MlsSendGateRefusal),
+    CurrentUnavailable,
     Internal(String),
 }
 
@@ -148,7 +149,7 @@ pub(crate) async fn mls_send_gate(
         .mls_commits()
         .commit(scope, &group)
         .await
-        .map_err(|error| MlsSendGateError::Internal(error.to_string()))?;
+        .map_err(|_| MlsSendGateError::CurrentUnavailable)?;
     let Some(envelopes) = envelopes else {
         return match current {
             Some(_) => Err(MlsSendGateError::Refused(
@@ -157,9 +158,7 @@ pub(crate) async fn mls_send_gate(
             None => Ok(()),
         };
     };
-    let current = current.ok_or(MlsSendGateError::Refused(
-        MlsSendGateRefusal::StateUnavailable,
-    ))?;
+    let current = current.ok_or(MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated))?;
     if state
         .projections()
         .snapshot()
@@ -193,15 +192,20 @@ pub(crate) async fn mls_send_gate(
 fn send_gate_problem(error: MlsSendGateError) -> AppError {
     match error {
         MlsSendGateError::Internal(detail) => AppError::internal(detail),
+        MlsSendGateError::CurrentUnavailable => {
+            crate::app_error!(
+                TemporarilyUnavailable,
+                "current MLS group is temporarily unavailable"
+            )
+        }
         MlsSendGateError::Refused(MlsSendGateRefusal::ActivationRequired) => crate::app_error!(
             FailedPrecondition,
             "plaintext is not allowed after MLS activation",
         )
         .with_reason_code(arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED),
-        MlsSendGateError::Refused(MlsSendGateRefusal::StateUnavailable) => crate::app_error!(
-            RevisionUnavailable,
-            "accepted MLS group state is unavailable",
-        ),
+        MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated) => {
+            crate::app_error!(FailedPrecondition, "scope has no accepted MLS group",)
+        }
         MlsSendGateError::Refused(MlsSendGateRefusal::EpochUpdateRequired) => crate::app_error!(
             FailedPrecondition,
             "the scope key-access revision is not yet covered by an accepted MLS Commit",
@@ -250,13 +254,19 @@ pub(crate) async fn message_create_send_gate(
         .map_err(|error| {
             let (code, detail) = match error {
                 MlsSendGateError::Internal(detail) => return ServiceError::Internal(detail),
+                MlsSendGateError::CurrentUnavailable => {
+                    return ServiceError::Conflict(format!(
+                        "{}: current MLS group is temporarily unavailable",
+                        ConflictCode::TemporarilyUnavailable
+                    ));
+                }
                 MlsSendGateError::Refused(MlsSendGateRefusal::ActivationRequired) => (
                     ConflictCode::MlsActivationRequired,
                     "plaintext is not allowed after MLS activation",
                 ),
-                MlsSendGateError::Refused(MlsSendGateRefusal::StateUnavailable) => (
-                    ConflictCode::TemporarilyUnavailable,
-                    "accepted MLS group state is unavailable",
+                MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated) => (
+                    ConflictCode::FailedPrecondition,
+                    "scope has no accepted MLS group",
                 ),
                 MlsSendGateError::Refused(MlsSendGateRefusal::EpochUpdateRequired) => (
                     ConflictCode::EpochUpdateRequired,
@@ -280,7 +290,8 @@ pub(crate) async fn message_create_send_gate(
 /// `schema_violation`; a frozen scope other than the Strand's is
 /// `failed_precondition` / `scope_ref_mismatch`; a sender domain other than the
 /// authenticated device is `capability_denied`; absent accepted MLS state is
-/// `revision_unavailable`; an uncovered key-access revision is
+/// generic `failed_precondition` with no reason; a current MLS read fault is
+/// `temporarily_unavailable`; an uncovered key-access revision is
 /// `failed_precondition` / `epoch_update_required`; and a frozen epoch or group
 /// state the scope has moved past is `epoch_mismatch`.
 async fn validate_encryption_context(
@@ -925,14 +936,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_authoring_missing_mls_state_is_revision_unavailable() {
+    async fn message_authoring_without_accepted_mls_group_is_failed_precondition() {
         let state = test_state();
         let scope = realm_scope(REALM);
         let content = mls_content(standard(0, event_ref(1)), None, scope.clone(), DEVICE);
         assert_problem(
             validate_encryption_context(&state, &content, &scope, DEVICE).await,
+            StatusCode::CONFLICT,
+            "failed_precondition",
+            None,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn message_authoring_current_read_fault_is_temporarily_unavailable() {
+        assert_problem(
+            Err(send_gate_problem(MlsSendGateError::CurrentUnavailable)),
             StatusCode::SERVICE_UNAVAILABLE,
-            "revision_unavailable",
+            "temporarily_unavailable",
             None,
         )
         .await;
@@ -1107,13 +1129,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_submit_gate_without_mls_state_is_temporarily_unavailable() {
+    async fn message_submit_gate_without_accepted_mls_group_is_failed_precondition() {
         let state = test_state();
         let scope = realm_scope(REALM);
         let event = encrypted_message(&scope, standard(0, event_ref(1)), None);
-        assert_eq!(
-            submit_refusal(message_create_send_gate(&state, &event).await),
-            soland_storage::ConflictCode::TemporarilyUnavailable
+        for _ in 0..2 {
+            assert_eq!(
+                submit_refusal(message_create_send_gate(&state, &event).await),
+                soland_storage::ConflictCode::FailedPrecondition
+            );
+        }
+        assert!(
+            state
+                .mls_commits()
+                .commit(&scope, &scope.canonical_mls_group_id().unwrap())
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 

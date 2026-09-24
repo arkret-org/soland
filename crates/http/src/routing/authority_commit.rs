@@ -130,6 +130,13 @@ fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            Some(soland_storage::ConflictCode::FailedPrecondition) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::FailedPrecondition,
+                    res,
+                    detail,
+                );
+            }
             Some(
                 code @ (soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired),
@@ -515,6 +522,12 @@ mod tests {
                 ConflictCode::TemporarilyUnavailable,
                 StatusCode::SERVICE_UNAVAILABLE,
                 "temporarily_unavailable",
+                None,
+            ),
+            (
+                ConflictCode::FailedPrecondition,
+                StatusCode::CONFLICT,
+                "failed_precondition",
                 None,
             ),
         ] {
