@@ -190,7 +190,10 @@ pub(super) async fn finalize(
     };
     ready.intent.validate_finalized_outcome(outcome)?;
     match (ready.intent.requires_delivery(), delivery) {
-        (true, Some(delivery)) => validate_destination(&ready.intent.plan.target, delivery)?,
+        (true, Some(delivery)) => {
+            validate_destination(&ready.intent.plan.target, delivery)?;
+            validate_delivery_payload(&ready.intent, outcome, delivery)?;
+        }
         (false, None) => {}
         _ => {
             return Err(invalid(
@@ -223,11 +226,15 @@ pub(super) async fn finalize(
             );
         }
         if let Some(existing) = row.result {
-            if existing != serde_json::to_value(result).map_err(invalid)? {
-                return Err(invalid("Contact terminal result cannot be replaced").into());
-            }
+            // The first durable terminal result is fixed. A worker that lost
+            // the race for this exact plan may have signed different bytes
+            // (signatures carry their own signing time); its result was
+            // already proven a valid terminal for this plan above, so it is a
+            // lost race, not a conflict. It never replaces the fixed result or
+            // delivery, and callers answer from the stored result.
+            let same_result = existing == serde_json::to_value(result).map_err(invalid)?;
             let outbox_id = match delivery {
-                Some(delivery) => Some(assert_same_outbox(conn, delivery).await?),
+                Some(delivery) => Some(assert_same_outbox(conn, delivery, same_result).await?),
                 None => None,
             };
             if outbox_id != row.delivery_outbox_id {
@@ -242,7 +249,7 @@ pub(super) async fn finalize(
         }
         let outbox_id = if let Some(delivery) = delivery {
             crate::federation::insert_federation_outbox_row(conn, delivery).await?;
-            Some(assert_same_outbox(conn, delivery).await?)
+            Some(assert_same_outbox(conn, delivery, true).await?)
         } else {
             None
         };
@@ -260,9 +267,13 @@ pub(super) async fn finalize(
     .map_err(PgTransactionError::into_persistence)
 }
 
+/// Returns the durable outbox row bound to this delivery's peer and
+/// idempotency key. `same_payload` also requires its exact bytes; a lost-race
+/// worker's own carrier differs only through its own valid signing.
 async fn assert_same_outbox(
     conn: &mut AsyncPgConnection,
     delivery: &FederationOutboxRecord,
+    same_payload: bool,
 ) -> PersistenceResult<String> {
     let existing = sql_query(
         "SELECT id,endpoint,payload_json FROM federation_outbox \
@@ -273,7 +284,9 @@ async fn assert_same_outbox(
     .get_result::<ExistingOutbox>(conn)
     .await
     .map_err(PersistenceError::database)?;
-    if existing.endpoint != delivery.endpoint || existing.payload_json != delivery.payload_json {
+    if existing.endpoint != delivery.endpoint
+        || (same_payload && existing.payload_json != delivery.payload_json)
+    {
         return Err(invalid(
             "Contact delivery idempotency key binds different bytes",
         ));
@@ -342,6 +355,22 @@ async fn persist_result(
     .map_err(PersistenceError::database)?;
     if changed != 1 {
         return Err(invalid("Contact terminal result is immutable"));
+    }
+    Ok(())
+}
+
+/// The delivery must be the exact canonical peer carrier of this result.
+fn validate_delivery_payload(
+    intent: &ContactCompletionIntent,
+    outcome: &arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+    delivery: &FederationOutboxRecord,
+) -> PersistenceResult<()> {
+    let carrier = intent.finalized_carrier(outcome)?;
+    let bytes = arkret_canonical::canonical_json_bytes(&carrier).map_err(invalid)?;
+    if delivery.payload_json.as_bytes() != bytes.as_slice() {
+        return Err(invalid(
+            "Contact delivery does not carry its finalized result",
+        ));
     }
     Ok(())
 }

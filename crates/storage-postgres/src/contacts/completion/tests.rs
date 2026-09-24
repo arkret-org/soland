@@ -15,7 +15,7 @@ use arkret_wire::{
     ProtocolSignature, RealmCommitId, RealmId, ScopeRef,
 };
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::SigningKey;
 use serde_json::json;
 use soland_storage::{
     ContactCompletionAction, ContactCompletionDraft, ContactDeliveryTarget, FederationOutboxRecord,
@@ -98,7 +98,7 @@ fn request_result(
             Ok(ProtocolSignature {
                 verification_method: DidUrl::new(RECEIPT_METHOD).unwrap(),
                 created_at: signed_at,
-                jws: arkret_canonical::base64url_encode(key.sign(bytes).to_bytes()),
+                jws: arkret_signatures::sign_ed25519_detached_jws(&key, bytes).unwrap(),
             })
         })
         .unwrap();
@@ -177,33 +177,46 @@ fn fixture(remote: bool) -> Fixture {
         .freeze_acceptance_time(base() + Duration::seconds(1))
         .unwrap();
     assert_eq!(intent.requires_delivery(), remote);
-    let result = request_result(&intent, base() + Duration::seconds(2));
-    let delivery = remote.then(|| {
-        let ContactCompletionResult::Accepted { outcome } = &result else {
-            unreachable!()
-        };
-        FederationOutboxRecord::pending(
-            "contact-outbox-1".to_owned(),
-            core(PEER_STATION),
-            "https://contact-peer-station.example".to_owned(),
-            "/_arkret/peer/contacts".to_owned(),
-            intent.plan.target.idempotency_key.as_str().to_owned(),
-            serde_json::to_string(&intent.finalized_carrier(outcome).unwrap()).unwrap(),
-            base().timestamp_millis(),
-        )
-    });
     let committed_ref = CommittedEventRef {
         event_id: event.event_id.clone(),
         commit_id: RealmCommitId::from_digest(arkret_canonical::sha256_bytes(b"contact-commit")),
         stream_ref: CommitStreamRef::Realm { realm_id },
         stream_position: 7,
     };
+    let ready = CommittedContactCompletionIntent {
+        event_digest: event.event_id.event_digest(),
+        committed_ref,
+        intent,
+    };
+    worker(&ready, base() + Duration::seconds(2))
+}
+
+/// One completion worker's own finalization of `ready`: it signs the outcome
+/// at `signed_at` and, for a remote peer, builds the delivery carrier from
+/// that outcome exactly as the HTTP worker does.
+fn worker(ready: &CommittedContactCompletionIntent, signed_at: DateTime<Utc>) -> Fixture {
+    let intent = &ready.intent;
+    let result = request_result(intent, signed_at);
+    let delivery = intent.requires_delivery().then(|| {
+        let ContactCompletionResult::Accepted { outcome } = &result else {
+            unreachable!()
+        };
+        FederationOutboxRecord::pending(
+            format!("contact-outbox-{}", signed_at.timestamp_millis()),
+            core(PEER_STATION),
+            "https://contact-peer-station.example".to_owned(),
+            "/_arkret/peer/contacts".to_owned(),
+            intent.plan.target.idempotency_key.as_str().to_owned(),
+            String::from_utf8(
+                arkret_canonical::canonical_json_bytes(&intent.finalized_carrier(outcome).unwrap())
+                    .unwrap(),
+            )
+            .unwrap(),
+            base().timestamp_millis(),
+        )
+    });
     Fixture {
-        ready: CommittedContactCompletionIntent {
-            event_digest: event.event_id.event_digest(),
-            committed_ref,
-            intent,
-        },
+        ready: ready.clone(),
         result,
         delivery,
     }
@@ -249,22 +262,59 @@ async fn count(pool: &PgPool, query: &str) -> i64 {
         .count
 }
 
-/// The single terminal state every accepted path must leave behind.
-async fn assert_terminal_once(pool: &PgPool, fixture: &Fixture) {
+#[derive(QueryableByName)]
+struct Payload {
+    #[diesel(sql_type = Text)]
+    payload_json: String,
+}
+
+/// The single terminal state every accepted path must leave behind: the first
+/// durable result and delivery, which is also what the request lookup returns.
+async fn assert_terminal_once(pool: &PgPool, first: &Fixture) {
     let mut conn = pg_conn(pool).await.unwrap();
     let row = sql_query(format!(
         "SELECT {COLUMNS} FROM contact_completion_intents WHERE event_digest=$1"
     ))
-    .bind::<Text, _>(fixture.ready.event_digest.as_str())
+    .bind::<Text, _>(first.ready.event_digest.as_str())
     .get_result::<CompletionRow>(&mut *conn)
     .await
     .unwrap();
+    let outbox = sql_query("SELECT payload_json FROM federation_outbox")
+        .load::<Payload>(&mut *conn)
+        .await
+        .unwrap();
     drop(conn);
+    let first_result = serde_json::to_value(&first.result).unwrap();
     assert!(row.intent.is_none());
+    assert_eq!(row.result.as_ref(), Some(&first_result));
     assert_eq!(
-        row.result,
-        Some(serde_json::to_value(&fixture.result).unwrap())
+        row.delivery_outbox_id,
+        first.delivery.as_ref().map(|delivery| delivery.id.clone())
     );
+    assert_eq!(
+        outbox
+            .into_iter()
+            .map(|row| row.payload_json)
+            .collect::<Vec<_>>(),
+        first
+            .delivery
+            .iter()
+            .map(|delivery| delivery.payload_json.clone())
+            .collect::<Vec<_>>(),
+    );
+    // The HTTP caller answers from this lookup, never from its own signing.
+    let binding = &first.ready.intent.plan.response_binding;
+    let returned = lookup(
+        pool,
+        &binding.authenticated_actor,
+        &binding.idempotency_key,
+        &binding.request_hash,
+    )
+    .await
+    .unwrap()
+    .and_then(|state| state.result)
+    .expect("the terminal result is readable");
+    assert_eq!(serde_json::to_value(returned).unwrap(), first_result);
     assert!(confirmed(pool, 16, None).await.unwrap().is_empty());
     assert_eq!(
         count(
@@ -275,33 +325,32 @@ async fn assert_terminal_once(pool: &PgPool, fixture: &Fixture) {
         .await,
         1
     );
-    let delivered = count(
-        pool,
-        "SELECT count(*) AS count FROM contact_completion_intents c \
-         JOIN federation_outbox o ON o.id=c.delivery_outbox_id",
-    )
-    .await;
-    assert_eq!(delivered, i64::from(fixture.delivery.is_some()));
-    assert_eq!(
-        count(pool, "SELECT count(*) AS count FROM federation_outbox").await,
-        i64::from(fixture.delivery.is_some())
-    );
 }
 
-/// Hold the staged row's lock until both workers are queued on it, then
+/// Two production-like workers sign the same staged plan at different
+/// instants. Hold the staged row's lock until both are queued on it, then
 /// release it so the two finalizations genuinely contend for the same row.
 async fn race(remote: bool) {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let fixture = fixture(remote);
-    stage(&pool, &fixture).await;
+    let staged = fixture(remote);
+    stage(&pool, &staged).await;
+    let workers = [
+        worker(&staged.ready, base() + Duration::seconds(3)),
+        worker(&staged.ready, base() + Duration::seconds(4)),
+    ];
+    assert_ne!(
+        serde_json::to_value(&workers[0].result).unwrap(),
+        serde_json::to_value(&workers[1].result).unwrap(),
+        "each worker signs its own bytes"
+    );
 
     let mut holder = pg_conn(&pool).await.unwrap();
     sql_query("BEGIN").execute(&mut *holder).await.unwrap();
     sql_query(
         "SELECT event_digest FROM contact_completion_intents WHERE event_digest=$1 FOR UPDATE",
     )
-    .bind::<Text, _>(fixture.ready.event_digest.as_str())
+    .bind::<Text, _>(staged.ready.event_digest.as_str())
     .execute(&mut *holder)
     .await
     .unwrap();
@@ -325,18 +374,19 @@ async fn race(remote: bool) {
         }
         sql_query("COMMIT").execute(&mut *holder).await.unwrap();
     };
-    let (first, second, ()) = tokio::join!(run(&pool, &fixture), run(&pool, &fixture), release);
-    let mut applied = vec![
+    let (first, second, ()) =
+        tokio::join!(run(&pool, &workers[0]), run(&pool, &workers[1]), release);
+    let applied = [
         first.expect("first concurrent worker"),
         second.expect("second concurrent worker"),
     ];
-    applied.sort_unstable();
     assert_eq!(
-        applied,
-        [false, true],
-        "exactly one worker applies the result"
+        applied.iter().filter(|applied| **applied).count(),
+        1,
+        "exactly one worker applies its result: {applied:?}"
     );
-    assert_terminal_once(&pool, &fixture).await;
+    let winner = if applied[0] { &workers[0] } else { &workers[1] };
+    assert_terminal_once(&pool, winner).await;
 }
 
 #[tokio::test]
@@ -350,22 +400,24 @@ async fn concurrent_workers_finalize_delivered_completion_exactly_once() {
 }
 
 #[tokio::test]
-async fn sequential_exact_replay_after_terminal_is_idempotent() {
+async fn sequential_replay_after_terminal_is_idempotent() {
     for remote in [false, true] {
         let database = TestDatabase::lease().await;
         let pool = database.pool();
-        let fixture = fixture(remote);
-        stage(&pool, &fixture).await;
-        assert!(run(&pool, &fixture).await.unwrap());
-        for _ in 0..2 {
+        let first = fixture(remote);
+        stage(&pool, &first).await;
+        assert!(run(&pool, &first).await.unwrap());
+        // An exact replay, and a later worker that signed the same plan again.
+        let later = worker(&first.ready, base() + Duration::seconds(5));
+        for replay in [&first, &first, &later] {
             assert!(
-                !run(&pool, &fixture)
+                !run(&pool, replay)
                     .await
-                    .expect("exact replay after terminal"),
-                "an exact replay never re-applies the terminal result"
+                    .expect("replay of the same completion after terminal"),
+                "a replay never re-applies the terminal result"
             );
         }
-        assert_terminal_once(&pool, &fixture).await;
+        assert_terminal_once(&pool, &first).await;
     }
 }
 
@@ -378,32 +430,37 @@ async fn different_completion_after_terminal_still_conflicts() {
         stage(&pool, &fixture).await;
         assert!(run(&pool, &fixture).await.unwrap());
 
-        // A differently signed result for the same plan cannot replace the
-        // first durable terminal result.
-        let mut resigned = fixture.clone();
-        resigned.result = request_result(&fixture.ready.intent, base() + Duration::seconds(3));
-        if let (Some(delivery), ContactCompletionResult::Accepted { outcome }) =
-            (resigned.delivery.as_mut(), &resigned.result)
+        // A result that is not a valid terminal for this plan.
+        let mut invalid_result = fixture.clone();
+        if let ContactCompletionResult::Accepted {
+            outcome: ContactAcceptedOutcome::Request { operation_id, .. },
+        } = &mut invalid_result.result
         {
-            delivery.payload_json =
-                serde_json::to_string(&fixture.ready.intent.finalized_carrier(outcome).unwrap())
+            *operation_id =
+                arkret_wire::ProtocolOperationId::new("ak:operation:ak.self.contact.other")
                     .unwrap();
         }
-        // A different staged plan for the same Event and result.
+        // A different staged plan for the same Event, alone and with its own signing.
         let mut replanned = fixture.clone();
         replanned.ready.intent.plan.local_mirror_target = Some("mirror-elsewhere".to_owned());
+        let replanned_resigned = worker(&replanned.ready, base() + Duration::seconds(6));
         // A different authority commit for the same Event.
-        let mut recommitted = fixture.clone();
+        let mut recommitted = worker(&fixture.ready, base() + Duration::seconds(7));
         recommitted.ready.committed_ref.stream_position += 1;
         let mut cases = vec![
             (
-                "resigned result",
-                resigned,
-                "terminal result cannot be replaced",
+                "invalid result",
+                invalid_result,
+                "changed its confirmed business inputs",
             ),
             (
                 "different plan",
                 replanned,
+                "does not bind the exact committed Event",
+            ),
+            (
+                "different plan, own signing",
+                replanned_resigned,
                 "does not bind the exact committed Event",
             ),
             (
@@ -413,13 +470,20 @@ async fn different_completion_after_terminal_still_conflicts() {
             ),
         ];
         if remote {
-            // Same result, but a delivery whose bytes differ from the durable outbox row.
+            // A delivery whose bytes are not the carrier of its own result.
             let mut redelivered = fixture.clone();
             redelivered.delivery.as_mut().unwrap().payload_json = "{}".to_owned();
+            let mut unbound = worker(&fixture.ready, base() + Duration::seconds(8));
+            unbound.delivery = fixture.delivery.clone();
             cases.push((
                 "different delivery",
                 redelivered,
-                "idempotency key binds different bytes",
+                "delivery does not carry its finalized result",
+            ));
+            cases.push((
+                "delivery of another result",
+                unbound,
+                "delivery does not carry its finalized result",
             ));
         }
         for (name, case, expected) in cases {
