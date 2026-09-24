@@ -4,7 +4,7 @@ use arkret_models_collaboration::events_payloads::DeviceRevokePayload;
 use arkret_wire::{
     AccountId, CommitStreamRef, DeviceId, Event, EventKind, RealmCommit, RealmCommitId,
 };
-use diesel::sql_types::{BigInt, Jsonb, Text};
+use diesel::sql_types::{BigInt, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,23 @@ pub(crate) struct RevocationProposal {
 pub(crate) struct ConfirmedRevocationProposals {
     pub authority_commit_id: RealmCommitId,
     pub proposals: Vec<RevocationProposal>,
+}
+
+/// All PCR device authority inputs that can be justified by one SQL snapshot.
+/// Lifecycle `active` still requires the formally specified terminal-result
+/// and verified-conflict carriers; this type deliberately has no status flag.
+pub(crate) struct ConfirmedPcrDeviceCut {
+    pub realm_id: arkret_wire::RealmId,
+    pub authority_commit_id: RealmCommitId,
+    pub current_generation: Option<u64>,
+    pub authorization: Option<DeviceAuthorizationAtCut>,
+    pub proposals: Vec<RevocationProposal>,
+}
+
+pub(crate) struct DeviceAuthorizationAtCut {
+    pub source_commit_id: RealmCommitId,
+    pub event_id: arkret_wire::EventId,
+    pub payload: arkret_models_collaboration::events_payloads::DeviceAuthorizePayload,
 }
 
 #[derive(QueryableByName)]
@@ -49,7 +66,25 @@ struct StoredProposalRow {
 #[derive(QueryableByName)]
 struct SnapshotRow {
     #[diesel(sql_type = Text)]
+    pcr_realm_id: String,
+    #[diesel(sql_type = Text)]
     head_commit_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    generation_commit_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    generation_value: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    latest_generation_commit_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    expected_generation_value: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    authorization_commit_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    authorization_value: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    latest_authorization_commit_id: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    expected_authorization_value: Option<Value>,
     #[diesel(sql_type = BigInt)]
     accepted_count: i64,
     #[diesel(sql_type = BigInt)]
@@ -148,14 +183,42 @@ pub(crate) async fn project_revoke_proposal_in_connection(
 
 /// One SQL statement fixes the head, accepted revoke count and canonical dot
 /// set at one MVCC snapshot. An accepted revoke without its dot is unavailable.
-pub(crate) async fn confirmed_revocation_proposals(
+pub(crate) async fn confirmed_pcr_device_cut(
     pool: &PgPool,
     account: &AccountId,
     device_id: &DeviceId,
-) -> PersistenceResult<Option<ConfirmedRevocationProposals>> {
+) -> PersistenceResult<Option<ConfirmedPcrDeviceCut>> {
     let mut conn = pg_conn(pool).await?;
     let row = sql_query(
-        "SELECT h.commit_id AS head_commit_id, \
+        "SELECT p.pcr_realm_id, h.commit_id AS head_commit_id, \
+           g.current_commit_id AS generation_commit_id, g.value AS generation_value, \
+           (SELECT c.commit_id FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+            WHERE c.realm_id=p.pcr_realm_id AND \
+              (e.kind='ak.device.reanchor' OR \
+               (e.kind='ak.device.authorize' AND \
+                e.envelope->'payload'->>'authorization_binding_kind'='registration_anchor')) \
+            ORDER BY c.stream_position DESC LIMIT 1) AS latest_generation_commit_id, \
+           (SELECT jsonb_build_object('current_device_generation_ref', \
+                    CASE WHEN e.kind='ak.device.reanchor' \
+                      THEN e.envelope->'payload'->'new_device_generation' \
+                      ELSE e.envelope->'payload'->'authorized_generation_ref' END) \
+            FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+            WHERE c.realm_id=p.pcr_realm_id AND \
+              (e.kind='ak.device.reanchor' OR \
+               (e.kind='ak.device.authorize' AND \
+                e.envelope->'payload'->>'authorization_binding_kind'='registration_anchor')) \
+            ORDER BY c.stream_position DESC LIMIT 1) AS expected_generation_value, \
+           a.current_commit_id AS authorization_commit_id, a.value AS authorization_value, \
+           (SELECT c.commit_id FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+            WHERE c.realm_id=p.pcr_realm_id AND e.kind='ak.device.authorize' \
+              AND e.envelope->'payload'->>'device_id'=$3 \
+            ORDER BY c.stream_position DESC LIMIT 1) AS latest_authorization_commit_id, \
+           (SELECT ((e.envelope->'payload') - 'device_id'::text) || \
+                    jsonb_build_object('device_authorize_event_id',e.envelope->>'event_id') \
+            FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+            WHERE c.realm_id=p.pcr_realm_id AND e.kind='ak.device.authorize' \
+              AND e.envelope->'payload'->>'device_id'=$3 \
+            ORDER BY c.stream_position DESC LIMIT 1) AS expected_authorization_value, \
            (SELECT count(*) FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
             WHERE c.realm_id=p.pcr_realm_id AND e.kind='ak.device.revoke' \
               AND e.envelope->'payload'->>'device_id'=$3) AS accepted_count, \
@@ -177,6 +240,9 @@ pub(crate) async fn confirmed_revocation_proposals(
                        WHERE realm_id=p.pcr_realm_id \
                          AND stream_ref=jsonb_build_object('kind','realm','realm_id',p.pcr_realm_id) \
                        ORDER BY stream_position DESC LIMIT 1) h ON TRUE \
+         LEFT JOIN pcr_device_generation_current_results g ON g.realm_id=p.pcr_realm_id \
+         LEFT JOIN pcr_device_authorization_current_results a \
+           ON a.realm_id=p.pcr_realm_id AND a.device_id=$3 \
          WHERE p.principal_id=$1 AND p.station_id=$2",
     )
     .bind::<Text, _>(account.principal_id.as_str())
@@ -187,9 +253,16 @@ pub(crate) async fn confirmed_revocation_proposals(
     .optional()
     .map_err(PersistenceError::database)?;
     let Some(row) = row else { return Ok(None) };
-    if row.accepted_count != row.projected_count
-        || row.projected_count != row.matched_count
+    if row.generation_commit_id != row.latest_generation_commit_id
+        || row.authorization_commit_id != row.latest_authorization_commit_id
+        || row.generation_value != row.expected_generation_value
+        || row.authorization_value != row.expected_authorization_value
     {
+        return Err(invalid(
+            "PCR device authority projection is behind accepted Commit",
+        ));
+    }
+    if row.accepted_count != row.projected_count || row.projected_count != row.matched_count {
         return Err(invalid(
             "accepted PCR revoke proposals are not fully projected",
         ));
@@ -201,9 +274,70 @@ pub(crate) async fn confirmed_revocation_proposals(
             return Err(invalid("stored revoke proposal selector differs"));
         }
     }
-    Ok(Some(ConfirmedRevocationProposals {
+    let current_generation = row
+        .generation_value
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| invalid("PCR generation value is not an object"))?;
+            if object.len() != 1 {
+                return Err(invalid("PCR generation value is not closed"));
+            }
+            value["current_device_generation_ref"]
+                .as_u64()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| invalid("PCR generation value is invalid"))
+        })
+        .transpose()?;
+    let authorization = match (row.authorization_commit_id, row.authorization_value) {
+        (None, None) => None,
+        (Some(source), Some(mut value)) => {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| invalid("PCR device authorization value is not an object"))?;
+            let event_id: arkret_wire::EventId = serde_json::from_value(
+                object
+                    .remove("device_authorize_event_id")
+                    .ok_or_else(|| invalid("PCR device authorization event id is absent"))?,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+            object.insert(
+                "device_id".to_owned(),
+                serde_json::to_value(device_id).map_err(PersistenceError::database)?,
+            );
+            let payload: arkret_models_collaboration::events_payloads::DeviceAuthorizePayload =
+                serde_json::from_value(value).map_err(|error| {
+                    invalid(format!("PCR device authorization is invalid: {error}"))
+                })?;
+            Some(DeviceAuthorizationAtCut {
+                source_commit_id: RealmCommitId::new(source)
+                    .map_err(|error| invalid(error.to_string()))?,
+                event_id,
+                payload,
+            })
+        }
+        _ => return Err(invalid("PCR device authorization provenance is incomplete")),
+    };
+    Ok(Some(ConfirmedPcrDeviceCut {
+        realm_id: arkret_wire::RealmId::new(row.pcr_realm_id)
+            .map_err(|error| invalid(error.to_string()))?,
         authority_commit_id: RealmCommitId::new(row.head_commit_id)
             .map_err(|error| invalid(error.to_string()))?,
+        current_generation,
+        authorization,
         proposals,
     }))
+}
+
+pub(crate) async fn confirmed_revocation_proposals(
+    pool: &PgPool,
+    account: &AccountId,
+    device_id: &DeviceId,
+) -> PersistenceResult<Option<ConfirmedRevocationProposals>> {
+    Ok(confirmed_pcr_device_cut(pool, account, device_id)
+        .await?
+        .map(|cut| ConfirmedRevocationProposals {
+            authority_commit_id: cut.authority_commit_id,
+            proposals: cut.proposals,
+        }))
 }

@@ -314,6 +314,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_cut_reads_authorization_generation_and_proposals_at_one_head() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let account = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [32; 32],
+        ));
+        let genesis = arkret_wire::test_support::raw_event(
+            EventKind::RealmCreate.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            json!({"genesis":true}),
+        )
+        .unwrap();
+        let genesis_commit = self::commit(&genesis);
+        let mut conn = pg_conn(&pool).await.unwrap();
+        sql_query("INSERT INTO realm_authorities(realm_id,generation,service_id,authority_ref) VALUES($1,0,$2,$3)")
+            .bind::<Text,_>(realm_id.as_str())
+            .bind::<Text,_>(account.station_id.as_str())
+            .bind::<Jsonb,_>(serde_json::to_value(&genesis_commit.authority_ref).unwrap())
+            .execute(&mut conn).await.unwrap();
+        insert_accepted(&mut conn, &genesis, &genesis_commit).await;
+        sql_query("INSERT INTO principal_resolutions \
+            (principal_id,station_id,pcr_realm_id,genesis_event_id,current_event_id,projection,updated_at) \
+            VALUES($1,$2,$3,$4,$4,'{}'::jsonb,now())")
+            .bind::<Text,_>(account.principal_id.as_str())
+            .bind::<Text,_>(account.station_id.as_str())
+            .bind::<Text,_>(realm_id.as_str())
+            .bind::<Text,_>(genesis.event_id.as_str())
+            .execute(&mut conn).await.unwrap();
+        let device_id =
+            arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-000000000001").unwrap();
+        let authorize = arkret_wire::test_support::raw_event(
+            EventKind::DeviceAuthorize.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            json!({
+                "device_id":device_id,
+                "device_public_key_did":"did:key:z6Mki3devicepublickey",
+                "hpke_key":"z6LSdevicehpke",
+                "algorithms":["Ed25519","HPKE-X25519-HKDF-SHA256-AES128GCM"],
+                "device_key_algorithm":"Ed25519",
+                "authorized_by":account.principal_id,
+                "not_before":"2026-09-16T00:00:00.000Z",
+                "authorization_binding_kind":"registration_anchor",
+                "authorized_generation_ref":1,
+                "device_signature":"c2lnbmF0dXJl"
+            }),
+        )
+        .unwrap();
+        let mut authorize_commit = self::commit(&authorize);
+        authorize_commit.commit_id = arkret_wire::RealmCommitId::from_digest([81; 32]);
+        authorize_commit.stream_position = 1;
+        authorize_commit.previous_commit_ref = Some(genesis_commit.commit_id.clone());
+        authorize_commit.authority_ref = genesis_commit.authority_ref.clone();
+        conn.transaction::<(), PgTransactionError, _>(async |conn| {
+            insert_accepted(conn, &authorize, &authorize_commit).await;
+            project_pcr_device_current_in_connection(
+                conn,
+                &authorize,
+                &authorize_commit,
+                Some(&account),
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+        .unwrap();
+        let cut = crate::pcr_device_revocation_proposals::confirmed_pcr_device_cut(
+            &pool, &account, &device_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(cut.realm_id, realm_id);
+        assert_eq!(cut.authority_commit_id, authorize_commit.commit_id);
+        assert_eq!(cut.current_generation, Some(1));
+        let authorization = cut.authorization.unwrap();
+        assert_eq!(authorization.source_commit_id, authorize_commit.commit_id);
+        assert_eq!(authorization.event_id, authorize.event_id);
+        assert_eq!(authorization.payload.device_id, device_id);
+        assert_eq!(authorization.payload.authorized_generation_ref, 1);
+        assert!(cut.proposals.is_empty());
+        sql_query(
+            "UPDATE pcr_device_authorization_current_results \
+                   SET value=jsonb_set(value,'{authorized_generation_ref}','2'::jsonb) \
+                   WHERE realm_id=$1 AND device_id=$2",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(device_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert!(
+            crate::pcr_device_revocation_proposals::confirmed_pcr_device_cut(
+                &pool, &account, &device_id
+            )
+            .await
+            .is_err(),
+            "a current row changed after its accepted Event must be unavailable"
+        );
+    }
+
+    #[tokio::test]
     async fn generation_cas_rejects_stale_and_rolls_back() {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
@@ -430,6 +545,13 @@ mod tests {
             write_generation(&mut conn, &commit, Some(1), 2).await,
             Err(PersistenceError::Conflict(_))
         ));
+        // The CAS fixture used a RealmCreate Commit as an isolated FK. Clear
+        // that synthetic generation before testing the independent revoke set.
+        sql_query("DELETE FROM pcr_device_generation_current_results WHERE realm_id=$1")
+            .bind::<Text, _>(realm_id.as_str())
+            .execute(&mut conn)
+            .await
+            .unwrap();
 
         let account = arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
