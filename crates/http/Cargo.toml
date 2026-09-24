@@ -95,6 +95,7 @@ salvo = { workspace = true, features = ["test"] }
 soland-domain.workspace = true
 soland-services = { workspace = true, features = ["test-support"] }
 soland-storage-postgres = { workspace = true, features = ["test-support"] }
+soland-test-support.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 

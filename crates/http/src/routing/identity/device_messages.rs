@@ -9,7 +9,7 @@
 //! - `POST /_arkret/self/device_messages/ack` — consume a bearer ack token and prune the messages
 //!   covered by that delivery batch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_models_collaboration::device_messages::{
     DeviceMessageDeliveredRow, DeviceMessageDeliveredStatus, DeviceMessageTarget,
@@ -18,7 +18,7 @@ use arkret_models_collaboration::device_messages::{
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::AppError;
+use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
@@ -39,6 +39,20 @@ use crate::wire::{
 
 pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 100;
 const TO_DEVICE_DEFAULT_PAGE_LIMIT: usize = 20;
+/// Default maximum enqueue TTL (`device-lifecycle.md` §7). This Station
+/// declares no service, Realm or profile bound that changes it.
+const DEVICE_MESSAGE_MAX_ENQUEUE_TTL_HOURS: i64 = 24;
+
+/// `device-lifecycle.md` §7: a new enqueue is admissible only while
+/// `sent_at < expires_at <= sent_at + max TTL`. An `expires_at` at or before
+/// the queue-materialized `sent_at` is already expired.
+fn device_message_expiry_admissible(
+    sent_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    expires_at > sent_at
+        && expires_at <= sent_at + chrono::Duration::hours(DEVICE_MESSAGE_MAX_ENQUEUE_TTL_HOURS)
+}
 
 pub(crate) fn recipient_queue_selector(
     session: &SessionIdentityState,
@@ -243,8 +257,10 @@ async fn send_device_messages(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let request_key = arkret_canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
         .map_err(|error| AppError::internal(error.to_string()))?;
+    // The queue materializes one `sent_at` for every envelope of this batch;
+    // expiry admission is judged against exactly that value.
+    let sent_at = arkret_canonical::normalize_timestamp_canonical(now());
     let mut prepared_targets = Vec::new();
-    let mut idempotency_expires_at = now();
     for (recipient, devices) in body.messages {
         for (device_id, target) in devices {
             if matches!(target.kind.as_str(), "ak.secret.request" | "ak.secret.send") {
@@ -252,7 +268,6 @@ async fn send_device_messages(
                     "ak.secret.request and ak.secret.send are not admitted in v1",
                 ));
             }
-            idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
             let message_key = arkret_canonical::canonical_sha256(&json!({
                 "sender_account_id": sender_account_id,
                 "sender_device_id": session.device_id,
@@ -309,9 +324,26 @@ async fn send_device_messages(
             return Err(device_message_intent_conflict());
         }
     };
-    let has_fresh_targets = prepared_targets
+    // Expiry admission applies to new enqueues only; an exact logical replay
+    // keeps its original outcome. A refused target is never written to either
+    // idempotency ledger, so the sender may retry it with a valid window.
+    let expiry_refused = prepared_targets
         .iter()
-        .any(|target| !existing_message_outcomes.contains_key(&target.message_key));
+        .filter(|target| {
+            !existing_message_outcomes.contains_key(&target.message_key)
+                && !device_message_expiry_admissible(sent_at, target.target.expires_at)
+        })
+        .map(|target| target.message_key.clone())
+        .collect::<BTreeSet<_>>();
+    if !prepared_targets.is_empty() && expiry_refused.len() == prepared_targets.len() {
+        return Err(AppError::param_invalid(
+            "every DeviceMessage expires_at must be later than sent_at and within the enqueue TTL",
+        ));
+    }
+    let has_fresh_targets = prepared_targets.iter().any(|target| {
+        !existing_message_outcomes.contains_key(&target.message_key)
+            && !expiry_refused.contains(&target.message_key)
+    });
     let sender_verified = if has_fresh_targets {
         let sender_device = state
             .identities()
@@ -334,6 +366,9 @@ async fn send_device_messages(
 
     let mut batch_items = Vec::with_capacity(prepared_targets.len());
     for prepared in &prepared_targets {
+        if expiry_refused.contains(&prepared.message_key) {
+            continue;
+        }
         let message = if existing_message_outcomes.contains_key(&prepared.message_key) {
             None
         } else {
@@ -377,7 +412,7 @@ async fn send_device_messages(
                         state.service_core_id().clone(),
                     ),
                     recipient_device_id: prepared.recipient_device_id.clone(),
-                    sent_at: arkret_canonical::normalize_timestamp_canonical(now()),
+                    sent_at,
                     expires_at: prepared.target.expires_at,
                     content: prepared.target.content.clone(),
                     unsigned: None,
@@ -406,12 +441,16 @@ async fn send_device_messages(
             message,
         });
     }
+    let idempotency_expires_at = batch_items
+        .iter()
+        .map(|item| item.idempotency_expires_at)
+        .fold(sent_at + chrono::Duration::hours(1), std::cmp::max);
     let batch_outcome = state
         .deliveries()
         .commit_device_message_batch(DeviceMessageBatchRecord {
             request_key,
             request_digest,
-            idempotency_expires_at: idempotency_expires_at + chrono::Duration::hours(1),
+            idempotency_expires_at,
             per_device_queue_capacity: state.config().to_device_queue_capacity,
             device_revocation_gate: sender_revocation_gate,
             target_snapshot_guard: None,
@@ -420,8 +459,18 @@ async fn send_device_messages(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let message_outcomes = match batch_outcome {
-        DeviceMessageBatchCommitOutcome::Stored(outcomes)
-        | DeviceMessageBatchCommitOutcome::Duplicate(outcomes) => outcomes,
+        DeviceMessageBatchCommitOutcome::Stored(outcomes) => {
+            if prepared_targets.iter().any(|target| {
+                outcomes.contains_key(&target.message_key)
+                    == expiry_refused.contains(&target.message_key)
+            }) {
+                return Err(AppError::internal(
+                    "stored device-message outcome differs from the admitted targets",
+                ));
+            }
+            outcomes
+        }
+        DeviceMessageBatchCommitOutcome::Duplicate(outcomes) => outcomes,
         DeviceMessageBatchCommitOutcome::RequestConflict => {
             return Err(device_message_request_conflict());
         }
@@ -458,15 +507,15 @@ fn device_message_send_outcome(
     let mut delivered = BTreeMap::new();
     let mut unknown_devices = BTreeMap::new();
     for target in targets {
-        let is_delivered = outcomes
-            .get(&target.message_key)
-            .copied()
-            .ok_or_else(|| AppError::internal("stored device-message outcome omitted a target"))?;
+        // A committed batch records every admitted target and omits exactly
+        // the ones refused by expiry admission, so a stored replay reproduces
+        // that refusal as well.
+        let outcome = outcomes.get(&target.message_key).copied();
         let recipient = arkret_wire::DidCoreId::new(target.recipient.clone())
             .map_err(|error| AppError::internal(format!("stored recipient id: {error}")))?;
         let device_id = arkret_wire::DeviceId::new(target.device_id.clone())
             .map_err(|error| AppError::internal(format!("stored device id: {error}")))?;
-        if is_delivered {
+        if outcome == Some(true) {
             delivered
                 .entry(recipient)
                 .or_insert_with(BTreeMap::new)
@@ -486,7 +535,12 @@ fn device_message_send_outcome(
                     DeviceMessageUnknownRow {
                         device_message_id: target.target.device_message_id.clone(),
                         status: DeviceMessageUnknownStatus::Unknown,
-                        reason_code: "device_unknown".to_owned(),
+                        reason_code: match outcome {
+                            Some(_) => ErrorCode::DeviceUnknown,
+                            None => ErrorCode::ParamInvalid,
+                        }
+                        .as_str()
+                        .to_owned(),
                     },
                 );
         }
@@ -931,148 +985,142 @@ fn device_message_envelope_from_record(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
+    use soland_services::identity::AccountProfileState;
+    use soland_test_support::AppStateTestExt as _;
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
 
     use super::*;
 
-    fn test_state() -> AppState {
+    /// A Station over a leased PostgreSQL database that holds this Station's
+    /// persisted service identity. Persisting the identity is what binds the
+    /// device inventory to the Station in a deployment, so every device row
+    /// written below carries the Station it belongs to.
+    fn station(development_mode: bool) -> AppState {
         let config = crate::config::AppConfig {
             object_storage: crate::config::ObjectStorageConfig::local(
                 std::env::temp_dir().join("soland-device-messages-test-blobs"),
             ),
-            development_mode: true,
+            development_mode,
             seed_demo_data: false,
             ..crate::config::AppConfig::test_default()
         };
-        AppState::new(config, soland_storage_postgres::Db { pool: None })
-    }
-
-    fn production_test_state() -> AppState {
-        let config = crate::config::AppConfig {
-            object_storage: crate::config::ObjectStorageConfig::local(
-                std::env::temp_dir().join("soland-device-messages-production-test-blobs"),
-            ),
-            development_mode: false,
-            seed_demo_data: false,
-            ..crate::config::AppConfig::test_default()
-        };
-        AppState::new(config, soland_storage_postgres::Db { pool: None })
-    }
-
-    async fn save_active_device(state: &AppState, actor: &str, device_id: &str) {
-        let registered_at = now();
+        let service_did =
+            AppState::new(config.clone(), soland_storage_postgres::Db { pool: None }).service_did();
+        let persisted = soland_test_support::app_state_with_service_did(
+            soland_test_support::app_config(),
+            service_did,
+        );
+        let state = AppState::new_with_persistence(
+            config,
+            soland_storage_postgres::Db { pool: None },
+            persisted.test_persistence(),
+        );
+        assert_eq!(state.service_id(), persisted.service_id());
         state
-            .identities()
-            .save_device(SaveDeviceCommand {
-                actor_id: actor.to_owned(),
-                device_id: device_id.to_owned(),
-                display_name: None,
-                device: DeviceIdentity {
-                    actor_id: actor.to_owned(),
-                    device_id: device_id.to_owned(),
-                    display_name: None,
-                    verification_state: "verified".to_owned(),
-                    payload: json!({"device_id": device_id}),
-                    created_at: registered_at,
-                    updated_at: registered_at,
-                    revoked_at: None,
-                },
-            })
+    }
+
+    /// Admit a genuinely signed PCR genesis at this Station. Its founding
+    /// device is the principal's accepted current device: the only authority
+    /// a to-device fanout target or sender may stand on.
+    async fn accepted_principal(state: &AppState) -> (String, String) {
+        let fixture = PcrGenesisFixture::new(state.service_did());
+        fixture
+            .admit_into(state.test_persistence().as_ref())
             .await
-            .expect("device saved");
+            .expect("accepted PCR genesis");
+        (
+            fixture.history.account.principal_id.to_string(),
+            fixture.history.founding_device_id.to_string(),
+        )
+    }
+
+    fn account_data_update(sender: DeviceMessageSender) -> ActorPrivateDeviceUpdate {
+        ActorPrivateDeviceUpdate::AccountData {
+            sender,
+            content: ActorPrivateAccountDataUpdate {
+                operation: ActorPrivateAccountDataOperation::Put,
+                account_data_key: "ak.account.blocklist".to_owned(),
+                revision: 1,
+                content: Some(json!({"private": true})),
+                updated_at: now(),
+            },
+            created_at: now(),
+        }
     }
 
     /// S-3 (spec review): controller-private account-data plaintext fanned out
     /// by `fanout_actor_private_update` only reaches device rows registered
     /// under the controller principal itself. Agent runtime devices live under
-    /// the agent's own actor id (agent pairing registers no controller-actor
+    /// the agent's own principal (agent pairing registers no controller-actor
     /// device row), so the fanout surface is naturally isolated from agents —
-    /// this test pins that fact by registering an agent-actor device and
-    /// asserting the controller fanout never enqueues anything for it.
+    /// this test pins that fact with an agent principal whose device is itself
+    /// accepted and asserts the controller fanout never enqueues for it. A
+    /// human-device sender additionally never echoes to its origin device.
     #[tokio::test]
     async fn fanout_skips_devices_registered_under_other_principals() {
-        let state = test_state();
-        let controller = "ak:did_core:web:alice.example";
-        let agent = "ak:did_core:web:agent.alice.example";
-        let origin_device = "ak:device:01904100-0000-7000-8000-0000000000c0";
-        let other_controller_device = "ak:device:01904100-0000-7000-8000-0000000000c1";
-        let agent_device = "ak:device:01904100-0000-7000-8000-0000000000a1";
-        save_active_device(&state, controller, origin_device).await;
-        save_active_device(&state, controller, other_controller_device).await;
-        // The agent runtime's device row belongs to the agent actor, mirroring
-        // how agent endpoints are keyed in production.
-        save_active_device(&state, agent, agent_device).await;
+        let state = station(true);
+        let (controller, controller_device) = accepted_principal(&state).await;
+        let (agent, agent_device) = accepted_principal(&state).await;
+
+        let origin_sender = DeviceMessageSender::Account {
+            sender_account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(controller.clone()).unwrap(),
+                state.service_core_id(),
+            ),
+            sender_device_id: arkret_identifiers::DeviceId::new(controller_device.clone()).unwrap(),
+        };
+        assert_eq!(
+            fanout_actor_private_update(&state, &controller, account_data_update(origin_sender))
+                .await,
+            0,
+            "a human-device sender never echoes the update to its origin device"
+        );
 
         let delivered = fanout_actor_private_update(
             &state,
-            controller,
-            ActorPrivateDeviceUpdate::AccountData {
-                sender: DeviceMessageSender::Account {
-                    sender_account_id: arkret_wire::AccountId::new(
-                        arkret_wire::DidCoreId::new(controller.to_owned()).unwrap(),
-                        state.service_core_id(),
-                    ),
-                    sender_device_id: arkret_identifiers::DeviceId::new(origin_device.to_owned())
-                        .unwrap(),
-                },
-                content: ActorPrivateAccountDataUpdate {
-                    operation: ActorPrivateAccountDataOperation::Put,
-                    account_data_key: "ak.account.blocklist".to_owned(),
-                    revision: 1,
-                    content: Some(json!({"private": true})),
-                    updated_at: now(),
-                },
-                created_at: now(),
-            },
+            &controller,
+            account_data_update(station_device_message_sender(&state)),
         )
         .await;
-
         assert_eq!(
             delivered, 1,
-            "only the controller's other device receives the fanout"
+            "only the controller's own accepted device receives the fanout"
         );
         let controller_queue = state
             .deliveries()
-            .device_messages_after(controller, other_controller_device, 0, 101)
+            .device_messages_after(&controller, &controller_device, 0, 101)
             .await
             .expect("controller queue");
         assert_eq!(controller_queue.len(), 1);
+        // Both fixture principals found with the same device id, so the
+        // isolation below is by principal alone: the agent endpoint shares
+        // the controller device's id and still receives nothing.
+        assert_eq!(agent_device, controller_device);
         let agent_queue = state
             .deliveries()
-            .device_messages_after(agent, agent_device, 0, 101)
+            .device_messages_after(&agent, &agent_device, 0, 101)
             .await
             .expect("agent queue");
         assert!(
             agent_queue.is_empty(),
-            "agent-actor devices must never receive controller-private fanout"
-        );
-        let cross_queue = state
-            .deliveries()
-            .device_messages_after(controller, agent_device, 0, 101)
-            .await
-            .expect("cross queue");
-        assert!(
-            cross_queue.is_empty(),
-            "the agent device id is not addressable under the controller actor"
+            "agent-principal devices must never receive controller-private fanout"
         );
     }
 
     #[tokio::test]
     async fn production_service_fanout_reaches_every_active_holder_device_and_is_readable() {
-        let state = production_test_state();
-        let holder = "ak:did_core:web:holder.example";
+        let state = station(false);
+        let (holder, holder_device) = accepted_principal(&state).await;
         let account_id = arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new(holder.clone()).unwrap(),
             state.service_core_id().clone(),
         );
-        let first_device = "ak:device:01904100-0000-7000-8000-0000000000d1";
-        let second_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
         state
             .identities()
             .save_account(AccountProfileState {
                 pk: soland_storage::AccountPk(0),
                 account_id: account_id.clone(),
-                principal_id: arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
+                principal_id: arkret_wire::DidCoreId::new(holder.clone()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,
                 bio: None,
@@ -1081,15 +1129,36 @@ mod tests {
             })
             .await
             .expect("holder account saved");
-        save_active_device(&state, holder, first_device).await;
-        save_active_device(&state, holder, second_device).await;
+        // A verified directory row that no accepted `ak.device.authorize`
+        // stands behind is not an active device and must not be reached.
+        let unauthorized_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
+        let registered_at = now();
+        state
+            .identities()
+            .save_device(soland_services::identity::SaveDeviceCommand {
+                actor_id: holder.clone(),
+                device_id: unauthorized_device.to_owned(),
+                display_name: None,
+                device: DeviceIdentity {
+                    actor_id: holder.clone(),
+                    device_id: unauthorized_device.to_owned(),
+                    display_name: None,
+                    verification_state: "verified".to_owned(),
+                    payload: json!({"device_id": unauthorized_device}),
+                    created_at: registered_at,
+                    updated_at: registered_at,
+                    revoked_at: None,
+                },
+            })
+            .await
+            .expect("unauthorized device row saved");
         let updated_at = now();
         let cell = json!({"entries": [{"invite_id": "one"}]});
         let mut account_wakeups = state.test_subscribe_event_notifications();
 
         let delivered = fanout_actor_private_update(
             &state,
-            holder,
+            &holder,
             ActorPrivateDeviceUpdate::AccountData {
                 sender: station_device_message_sender(&state),
                 content: ActorPrivateAccountDataUpdate {
@@ -1105,8 +1174,8 @@ mod tests {
         .await;
 
         assert_eq!(
-            delivered, 2,
-            "service fanout has no origin device to exclude"
+            delivered, 1,
+            "service fanout reaches every accepted holder device and nothing else"
         );
         let wakeup =
             tokio::time::timeout(std::time::Duration::from_secs(1), account_wakeups.recv())
@@ -1121,30 +1190,36 @@ mod tests {
             } if received_account_id == &account_id
                 && received_recipient_id.as_str() == state.service_id()
         ));
-        for device_id in [first_device, second_device] {
-            let queued = state
+        assert!(
+            state
                 .deliveries()
-                .device_messages_after(holder, device_id, 0, 101)
+                .device_messages_after(&holder, unauthorized_device, 0, 101)
                 .await
-                .expect("holder device queue");
-            assert_eq!(queued.len(), 1);
-            let envelopes = device_message_envelopes_after(&state, &queued);
-            assert_eq!(
-                envelopes.len(),
-                1,
-                "service sender must parse without repair"
-            );
-            let envelope = &envelopes[0];
-            assert_eq!(&envelope.recipient_account_id, &account_id);
-            assert_eq!(envelope.recipient_device_id.as_str(), device_id);
-            assert!(matches!(
-                &envelope.sender,
-                DeviceMessageSender::Station { sender_id }
-                    if sender_id.as_str() == state.service_id()
-            ));
-            let content = serde_json::to_value(&envelope.content).unwrap();
-            assert_eq!(content.get("revision"), Some(&json!(7)));
-            assert_eq!(content.get("content"), Some(&cell));
-        }
+                .expect("unauthorized device queue")
+                .is_empty()
+        );
+        let queued = state
+            .deliveries()
+            .device_messages_after(&holder, &holder_device, 0, 101)
+            .await
+            .expect("holder device queue");
+        assert_eq!(queued.len(), 1);
+        let envelopes = device_message_envelopes_after(&state, &queued);
+        assert_eq!(
+            envelopes.len(),
+            1,
+            "service sender must parse without repair"
+        );
+        let envelope = &envelopes[0];
+        assert_eq!(&envelope.recipient_account_id, &account_id);
+        assert_eq!(envelope.recipient_device_id.as_str(), holder_device);
+        assert!(matches!(
+            &envelope.sender,
+            DeviceMessageSender::Station { sender_id }
+                if sender_id.as_str() == state.service_id()
+        ));
+        let content = serde_json::to_value(&envelope.content).unwrap();
+        assert_eq!(content.get("revision"), Some(&json!(7)));
+        assert_eq!(content.get("content"), Some(&cell));
     }
 }

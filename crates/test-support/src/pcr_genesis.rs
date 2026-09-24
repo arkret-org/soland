@@ -154,7 +154,15 @@ impl PcrGenesisFixture {
         &self,
         state: &soland_http::state::AppState,
     ) -> PersistenceResult<PcrGenesisCommitOutcome> {
-        let persistence = state.test_persistence();
+        self.admit_into(state.test_persistence().as_ref()).await
+    }
+
+    /// [`Self::admit`] against the persistence store directly, for crate-local
+    /// fixtures whose `AppState` is not this crate's `soland_http` instance.
+    pub async fn admit_into(
+        &self,
+        persistence: &dyn soland_storage::PersistenceStore,
+    ) -> PersistenceResult<PcrGenesisCommitOutcome> {
         let did = self.history.did.to_string();
         if persistence.webvh().list_log_events(&did).await?.is_empty() {
             let operation = serde_json::to_value(&self.history.inception.operation)

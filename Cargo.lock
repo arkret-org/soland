@@ -5949,6 +5949,7 @@ dependencies = [
  "soland-services",
  "soland-storage",
  "soland-storage-postgres",
+ "soland-test-support",
  "subtle",
  "thiserror",
  "tokio",
