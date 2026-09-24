@@ -437,12 +437,15 @@ mod tests {
 
     #[test]
     fn policy_set_typed_payload_enforces_wrapper_subject_identity() {
-        let mismatched = operation(
-            arkret_wire::EventKind::PolicySet,
+        // Mirrors event-payload-value-closure-fixture.json
+        // `policy_set_generic_policy_id_mismatch_rejected`: the payload is
+        // otherwise well formed, so only the subject/value identity rule can
+        // reject it.
+        let payload = |value_id: &str| {
             serde_json::json!({
                 "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
                 "value": {
-                    "id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f61",
+                    "id": value_id,
                     "schema": "ak.schema.policy.v1",
                     "policy_kind": "access",
                     "rules": [{
@@ -452,10 +455,28 @@ mod tests {
                         "actions": ["ak.object.read"]
                     }],
                     "default_effect": "deny",
-                    "created_by": "ak:did_core:webvh:z6mkfixtureauthor",
-                    "created_at": "2026-04-26T00:00:00Z"
+                    "created_by": {
+                        "kind": "account",
+                        "account_id": {
+                            "principal_id": "ak:did_core:webvh:z6mkfixtureauthor",
+                            "station_id": "ak:did_core:webvh:z6mkfixturestationexample"
+                        }
+                    },
+                    "created_at": "2026-04-26T00:00:00.000Z"
                 }
-            }),
+            })
+        };
+        let matching = operation(
+            arkret_wire::EventKind::PolicySet,
+            payload("ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60"),
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(&arkret_wire::EventKind::PolicySet, &matching),
+            Ok(())
+        );
+        let mismatched = operation(
+            arkret_wire::EventKind::PolicySet,
+            payload("ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f61"),
         );
         assert_eq!(
             validate_typed_payload_shapes(&arkret_wire::EventKind::PolicySet, &mismatched),
