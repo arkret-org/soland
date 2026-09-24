@@ -186,6 +186,7 @@ pub(super) async fn unregister(
         confirm_revoked_intent(state, &source_station_id, intent)
     })
     .await
+    .map_err(unregistration_error)
 }
 
 pub(crate) async fn unregister_for_hard_logout(
@@ -797,13 +798,33 @@ fn persistence_error(error: soland_storage::PersistenceError) -> AppError {
     }
 }
 
+/// Every handoff failure — an origin that is not onboarded, route/Describe
+/// verification, egress, remote rejection or an unverifiable receipt — means
+/// the requested Gateway is unavailable for this route.  Register reports the
+/// operation-specific `push_gateway_unreachable`; it is not a missing signed
+/// dependency, so `dependency_missing` is outside the operation's error set.
 fn handoff_unavailable(stage: &'static str, _error: impl std::fmt::Display) -> AppError {
     tracing::warn!(stage, "public Push Gateway registration handoff failed");
     AppError::new(
-        ErrorCode::DependencyMissing,
+        ErrorCode::PushGatewayUnreachable,
         "public Push Gateway registration is unavailable",
     )
     .with_private_detail(stage)
+}
+
+/// Unregister has no operation-specific Gateway failure code.  A durable
+/// revoke intent whose remote tombstone is not yet confirmed is the universal
+/// retryable `temporarily_unavailable`, never a 204.
+fn unregistration_error(error: AppError) -> AppError {
+    if error.code != ErrorCode::PushGatewayUnreachable {
+        return error;
+    }
+    let mut unavailable = AppError::new(
+        ErrorCode::TemporarilyUnavailable,
+        "public Push Gateway unregistration is not yet confirmed",
+    );
+    unavailable.private_detail = error.private_detail;
+    unavailable
 }
 
 #[cfg(test)]
@@ -1107,6 +1128,8 @@ mod tests {
             "Gateway request failed",
             "remote body echoed provider-secret",
         );
+        assert_eq!(error.code, ErrorCode::PushGatewayUnreachable);
+        assert_eq!(error.http_status().as_u16(), 503);
         assert_eq!(
             error.message.as_ref(),
             "public Push Gateway registration is unavailable"
@@ -1116,6 +1139,35 @@ mod tests {
             Some("Gateway request failed")
         );
         assert!(!format!("{error:?}").contains("provider-secret"));
+    }
+
+    #[test]
+    fn handoff_failures_stay_inside_each_operation_error_set() {
+        use arkret_wire::generated::OperationSpecificError;
+
+        let register_codes = arkret_wire::ServiceOperationId::EdgePushCommandRegisterDeviceV1
+            .operation_specific_errors();
+        let not_onboarded =
+            handoff_unavailable("Gateway origin is not onboarded", "https://push.example");
+        assert!(
+            register_codes
+                .iter()
+                .any(|code| *code == OperationSpecificError::Code(not_onboarded.code)),
+            "register must report a registered push Gateway failure"
+        );
+        assert_ne!(not_onboarded.code, ErrorCode::DependencyMissing);
+
+        let unregister = unregistration_error(handoff_unavailable(
+            "Gateway request failed",
+            "simulated timeout",
+        ));
+        assert_eq!(unregister.code, ErrorCode::TemporarilyUnavailable);
+        assert_eq!(
+            unregister.private_detail.as_deref(),
+            Some("Gateway request failed")
+        );
+        let untouched = unregistration_error(AppError::internal("storage failed"));
+        assert_eq!(untouched.code, ErrorCode::InternalError);
     }
 
     #[test]

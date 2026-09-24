@@ -17,6 +17,7 @@ mod health;
 mod history_authority;
 mod openapi;
 mod organization_registration;
+mod push_registration_onboarding;
 mod retired_seal_mls_routes;
 mod retired_seal_pending_control;
 mod seal_frontier;
