@@ -255,6 +255,21 @@ pub async fn active_device_revocation_gate_selector(
                 "device mirror differs from the confirmed authorization instance".into(),
             ));
         }
+        // The confirmed history names the authorization instance; whether
+        // that device is still usable (not pending, revoked, fenced or
+        // conflicted) is the same-cut PCR device status, and nothing else.
+        let active = state
+            .persistence()
+            .pcr_device_active(&account, &device_id, chrono::Utc::now())
+            .await
+            .map_err(|error| {
+                ServiceError::Conflict(format!("PCR device status unavailable: {error}"))
+            })?;
+        if !active {
+            return Err(ServiceError::Conflict(
+                "device is not active at the PCR cut".into(),
+            ));
+        }
     } else {
         let bootstrap = accepted_bootstrap_device_binding(state, &account)
             .await?

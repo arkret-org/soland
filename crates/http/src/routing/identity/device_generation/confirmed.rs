@@ -236,11 +236,12 @@ fn apply_device_event(
             let payload: DeviceRevokePayload = event
                 .typed_payload::<arkret_wire::event_spec::DeviceRevoke>()
                 .map_err(invalid)?;
-            if history
-                .current_by_device
-                .remove(&payload.device_id)
-                .is_none()
-            {
+            // A committed revoke Event is only the immutable proposal of a
+            // SecurityRotation (decision 0102): whether the device is pending,
+            // revoked or active again after a rejected result is the PCR
+            // device status fold, which every consumer of this history reads
+            // at its own cut. The authorization instance stays named here.
+            if !history.current_by_device.contains_key(&payload.device_id) {
                 return Err(invalid(
                     "committed device revoke has no current authorization",
                 ));
@@ -475,6 +476,70 @@ pub(crate) async fn load_confirmed_device_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A committed revoke proposal neither ends nor restores an
+    /// authorization in this history: the lifecycle comes from the PCR
+    /// status fold (pending, revoked, or active after a rejected result).
+    #[test]
+    fn committed_revoke_proposal_keeps_the_authorization_instance() {
+        let account = AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            crate::test_event::station_id(),
+        );
+        let realm_id =
+            RealmId::new("ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf".to_owned())
+                .unwrap();
+        let device_id = DeviceId::new("ak:device:01970000-0000-7000-8000-000000000001").unwrap();
+        let authorization_id =
+            EventId::new("ak:event:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-".to_owned())
+                .unwrap();
+        let authorization = ConfirmedDeviceAuthorization {
+            device_id: device_id.clone(),
+            generation: 1,
+            event_id: authorization_id.clone(),
+        };
+        let mut history = ConfirmedDeviceHistory {
+            realm_id: realm_id.clone(),
+            head: CommitStreamHead {
+                stream_ref: CommitStreamRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                stream_position: 2,
+                commit_id: arkret_wire::RealmCommitId::new(
+                    "ak:realm_commit:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-".to_owned(),
+                )
+                .unwrap(),
+            },
+            current_generation: 1,
+            authorizations: BTreeMap::from([(authorization_id.clone(), authorization.clone())]),
+            current_by_device: BTreeMap::from([(device_id.clone(), authorization_id)]),
+        };
+        let revoke = |device: &DeviceId| {
+            arkret_wire::test_support::raw_event(
+                EventKind::DeviceRevoke.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                account.principal_id.clone(),
+                account.station_id.clone(),
+                serde_json::json!({
+                    "device_id": device,
+                    "revoked_by": "ak:device:01970000-0000-7000-8000-000000000002",
+                    "revoked_at": "2026-09-24T00:00:00.000Z",
+                    "reason": "security_rotation"
+                }),
+            )
+            .unwrap()
+        };
+        apply_device_event(&mut history, &account, &revoke(&device_id)).unwrap();
+        assert!(history.is_currently_active(&authorization));
+        // A second proposal (after a rejected result) is equally a proposal.
+        apply_device_event(&mut history, &account, &revoke(&device_id)).unwrap();
+        assert!(history.is_currently_active(&authorization));
+        // A proposal for a device this history never authorized is invalid.
+        let unknown = DeviceId::new("ak:device:01970000-0000-7000-8000-000000000009").unwrap();
+        assert!(apply_device_event(&mut history, &account, &revoke(&unknown)).is_err());
+    }
 
     #[test]
     fn only_exact_latest_authorization_in_current_generation_is_active() {
