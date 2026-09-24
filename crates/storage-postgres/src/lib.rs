@@ -24,6 +24,7 @@ pub use db::{Db, PgPool, PoolTuning};
 pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 
 mod account_status;
+mod account_device_signer_evidence;
 mod accounts;
 mod agent_current_results;
 mod agent_draft_pending_intents;
@@ -96,6 +97,7 @@ mod websocket_auth;
 mod webvh;
 
 pub(crate) use account_status::PgAccountStatusReplicaStore;
+pub use account_device_signer_evidence::PgAccountDeviceSignerEvidenceArchive;
 pub use accounts::*;
 pub use agent_draft_pending_intents::*;
 pub use agent_membership_cascades::*;

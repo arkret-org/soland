@@ -391,6 +391,19 @@ diesel::table! {
 }
 
 diesel::table! {
+    account_device_signer_evidence (evidence_ref) {
+        evidence_ref -> Text,
+        principal_id -> Text,
+        station_id -> Text,
+        device_id -> Text,
+        authorization_event_id -> Text,
+        authorization_commit_id -> Text,
+        attested_at -> Timestamptz,
+        evidence_json -> Jsonb,
+    }
+}
+
+diesel::table! {
     realm_state_snapshots (snapshot_id) {
         snapshot_id -> Text,
         realm_id -> Text,
@@ -1991,6 +2004,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
     blobs,
     canonical_events,
+    account_device_signer_evidence,
     canonical_realms,
     realm_authorities,
     realm_commits,

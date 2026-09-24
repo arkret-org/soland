@@ -4531,3 +4531,19 @@ CREATE TABLE public.agent_approval_publications (
     publication_event_id bytea NOT NULL CHECK (octet_length(publication_event_id) = 33),
     canonical_bytes bytea NOT NULL
 );
+
+-- Immutable complete ordinary account-device signer evidence. Every row is
+-- separately checked against the accepted PCR authorization Event/Commit at
+-- insertion; client and peer keys/query only receive the content address.
+CREATE TABLE account_device_signer_evidence (
+ evidence_ref TEXT PRIMARY KEY CHECK(evidence_ref ~ '^ak:signer_evidence:sha256:[0-9a-f]{64}$'),
+ principal_id TEXT NOT NULL,
+ station_id TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ authorization_event_id TEXT NOT NULL,
+ authorization_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ attested_at TIMESTAMPTZ NOT NULL,
+ evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
+);
+CREATE INDEX account_device_signer_evidence_subject_idx
+ ON account_device_signer_evidence(principal_id,station_id,device_id,attested_at);
