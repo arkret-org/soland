@@ -270,7 +270,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::BackupRevisionStale,
