@@ -337,11 +337,13 @@ fn undisclosable(reason: &str) -> PersistenceError {
 }
 
 /// Re-prove, per row, head, and floor, that the issued object may still be
-/// returned. Only the sole-founder Realm-stream shape admitted by the
+/// returned. Only the joined-member Realm-stream shape admitted by the
 /// issuance gate is re-provable: the Account's `join` row in the object must
-/// still be its unchanged current membership revision, every head must still
-/// be the accepted Commit it names, and this Station must still hold the
-/// object's governing term. Anything else is unavailable, never substituted.
+/// still be its unchanged current membership revision, the object's floor
+/// must still be the Account's readable floor, no Message row may lie below
+/// it, every head must still be the accepted Commit it names, and this
+/// Station must still hold the object's governing term. Anything else is
+/// unavailable, never substituted.
 async fn recheck_disclosure_in_connection(
     conn: &mut AsyncPgConnection,
     account: &arkret_wire::AccountId,
@@ -381,6 +383,23 @@ async fn recheck_disclosure_in_connection(
         return Err(undisclosable("a head or floor is outside the Realm stream"));
     }
     let actor = arkret_wire::ActorId::account(account.clone());
+    let current_floor = crate::account_stream_scan::caller_realm_floor_in_connection(
+        conn,
+        &snapshot.realm_id,
+        &actor,
+    )
+    .await?
+    .ok_or_else(|| undisclosable("the Account's readable floor is not provable"))?;
+    if snapshot.retention_and_history_floor.stream_floors
+        != [arkret_wire::StreamHistoryFloor {
+            stream_ref: realm_stream.clone(),
+            oldest_position: current_floor.oldest_position,
+        }]
+    {
+        return Err(undisclosable(
+            "the object's floor is not the Account's current readable floor",
+        ));
+    }
     let mut own_membership = None;
     let mut message_targets = Vec::new();
     for row in &snapshot.current_state_entries {
@@ -410,7 +429,16 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::Strand { .. }
             | CurrentSelector::RealmSetDefaultStrand
+            | CurrentSelector::InviteLifecycle { .. }
+            | CurrentSelector::InviteLiveTarget { .. }
+            | CurrentSelector::InviteDirectedInvitee { .. }
+            | CurrentSelector::CapabilityGrant { .. }
             | CurrentSelector::ObjectRedaction { .. } => {}
+            CurrentSelector::MessageRevision { .. }
+                if revision.stream_position < current_floor.oldest_position =>
+            {
+                return Err(undisclosable("a Message row lies below the readable floor"));
+            }
             CurrentSelector::MessageRevision { message_id } => {
                 let message_id = message_id.as_str().to_owned();
                 message_targets.push(message_id.replacen("ak:message:", "ak:event:", 1));
@@ -423,6 +451,7 @@ async fn recheck_disclosure_in_connection(
             {
                 own_membership = Some(revision.clone());
             }
+            CurrentSelector::MemberState { actor_id } if actor_id != &actor => {}
             _ => {
                 return Err(undisclosable(
                     "a row selector is outside the re-provable subset",
@@ -528,11 +557,13 @@ fn window_rejected(reason: &str) -> PersistenceError {
 /// The basis an exact issued snapshot gives a window whose first row is the
 /// Commit after `anchor`: the state after this stream's committed prefix
 /// through `anchor`. The snapshot must carry exactly this one stream with
-/// its head at the anchor and the whole readable history from genesis.
+/// its head at the anchor and the caller's readable floor `floor`, at or
+/// below the anchor.
 fn basis_from_snapshot(
     snapshot: &arkret_wire::RealmStateSnapshot,
     stream_ref: &arkret_wire::CommitStreamRef,
     anchor: &arkret_wire::CommitStreamHead,
+    floor: u64,
 ) -> Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis> {
     use arkret_models_collaboration::sync_frames::account_sync::{
         StreamWindowAnchorKind, StreamWindowStartBasis,
@@ -544,18 +575,20 @@ fn basis_from_snapshot(
         .as_slice()
         == [arkret_wire::StreamHistoryFloor {
             stream_ref: stream_ref.clone(),
-            oldest_position: 0,
+            oldest_position: floor,
         }];
-    (exact_head && exact_floor && &anchor.stream_ref == stream_ref).then(|| {
-        StreamWindowStartBasis {
+    (exact_head
+        && exact_floor
+        && floor <= anchor.stream_position
+        && &anchor.stream_ref == stream_ref)
+        .then(|| StreamWindowStartBasis {
             anchor_kind: StreamWindowAnchorKind::AfterCommittedPrefix,
             anchor_position: anchor.stream_position,
             anchor_commit_ref: anchor.commit_id.clone(),
             snapshot_ref: snapshot.snapshot_id.clone(),
             governance_generation: snapshot.governance_generation,
             accepted_dependency_refs: None,
-        }
-    })
+        })
 }
 
 /// Re-prove an issued object for a basis at the caller's cut. Only a
@@ -580,11 +613,16 @@ async fn still_disclosable(
 ///
 /// One `REPEATABLE READ` cut holds, in order: the shared retention lock that
 /// excludes issued-snapshot GC, the share-locked governing tenure, the
-/// complete sole-founder disclosure proof, the delivered rows, and the
+/// complete joined-member disclosure proof, the delivered rows, and the
 /// basis reservation. The window's rows are the live delta after the
 /// Account's delivered head when that head is still an accepted ancestor
 /// within `window_limit`, otherwise the last `window_limit` Commits of the
-/// Realm stream; `limited` states whether readable history lies below them.
+/// Realm stream, never below the Account's readable floor; `limited` states
+/// whether readable history lies below them. A window above the floor names
+/// an `after_committed_prefix` basis from a snapshot already issued to the
+/// Account at its anchor. A window starting exactly at a floor above genesis
+/// would need the state before the floor Commit (`before_readable_floor`),
+/// which this Station never issued to the Account, so it is preview only.
 /// The frozen head is issued to the Account in the same cut, so the next
 /// delta can name it as its exact basis. Rows are served through the shared
 /// committed-event disclosure decision. Issuance reuses the object already
@@ -656,7 +694,17 @@ pub(crate) async fn freeze_account_realm_window(
         let [head] = material.visible_stream_heads.as_slice() else {
             return Err(window_rejected("the proved cut is not one Realm stream").into());
         };
-        let tail_start = (head.stream_position + 1).saturating_sub(u64::from(request.window_limit));
+        let [floor] = material
+            .retention_and_history_floor
+            .stream_floors
+            .as_slice()
+        else {
+            return Err(window_rejected("the proved cut has no single Realm floor").into());
+        };
+        let floor = floor.oldest_position;
+        let tail_start = (head.stream_position + 1)
+            .saturating_sub(u64::from(request.window_limit))
+            .max(floor);
         let position = |value: u64| {
             i64::try_from(value).map_err(|_| window_rejected("stream position exceeds storage"))
         };
@@ -725,9 +773,10 @@ pub(crate) async fn freeze_account_realm_window(
         }
         let start_index =
             usize::try_from(start - lowest).map_err(|_| window_rejected("window start"))?;
-        let delivered = crate::committed_disclosure::disclose_in_connection(
+        let delivered = crate::committed_disclosure::disclose_to_member_in_connection(
             conn,
             chain[start_index..].to_vec(),
+            &arkret_wire::ActorId::account(request.account.clone()),
         )
         .await?;
         let encoded = arkret_canonical::canonical_json_bytes(&delivered)
@@ -735,8 +784,8 @@ pub(crate) async fn freeze_account_realm_window(
         if encoded.len() > request.byte_budget {
             return Err(window_rejected("the atomic window exceeds its byte budget").into());
         }
-        // The sole-founder cut proved a readable floor at genesis.
-        let limited = start > 0;
+        // Readable history lies below the window only above the proved floor.
+        let limited = start > floor;
         let mut basis = None;
         let live_reservations = sql_query(
             "SELECT count(*) AS present FROM realm_state_snapshot_window_reservations \
@@ -750,7 +799,7 @@ pub(crate) async fn freeze_account_realm_window(
         .present;
         // At the cap no further reservation is taken, so a limited window
         // names no basis and is preview only (0441).
-        if start > 0
+        if start > floor
             && live_reservations < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
         {
             let anchor_view = &chain[0];
@@ -785,7 +834,8 @@ pub(crate) async fn freeze_account_realm_window(
                 let snapshot: arkret_wire::RealmStateSnapshot =
                     serde_json::from_value(candidate.snapshot_json)
                         .map_err(PersistenceError::database)?;
-                let Some(candidate_basis) = basis_from_snapshot(&snapshot, &stream_ref, &anchor)
+                let Some(candidate_basis) =
+                    basis_from_snapshot(&snapshot, &stream_ref, &anchor, floor)
                 else {
                     continue;
                 };
@@ -891,7 +941,16 @@ pub(crate) async fn account_window_basis(
         let [anchor] = snapshot.visible_stream_heads.as_slice() else {
             return Ok(None);
         };
-        let Some(basis) = basis_from_snapshot(&snapshot, stream_ref, anchor) else {
+        let [floor] = snapshot
+            .retention_and_history_floor
+            .stream_floors
+            .as_slice()
+        else {
+            return Ok(None);
+        };
+        // The recheck below proves this floor is still the Account's own.
+        let Some(basis) = basis_from_snapshot(&snapshot, stream_ref, anchor, floor.oldest_position)
+        else {
             return Ok(None);
         };
         if !still_disclosable(conn, account, issuer, &snapshot).await? {

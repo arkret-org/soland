@@ -1,5 +1,6 @@
 //! Caller-aware Realm State Snapshot disclosure
-//! (`realm-state-snapshot-schema.md` §3, `current-results.md` §1 and §3).
+//! (`realm-state-snapshot-schema.md` §3, `current-results.md` §1 and §3,
+//! `history-visibility.md` §3.1 and §6).
 //!
 //! The governing Station materializes every typed current result in the same
 //! transaction that commits its Event, so the rows, stream heads and floors of
@@ -19,21 +20,35 @@
 //!   range and not part of the disclosed cut (`strand-and-message.md` §9.2);
 //! - the Realm has only its Realm stream (Circle and Sidecar visibility is not proved here) and is
 //!   in its genesis tenure (a planned handoff import of current families is not proved here);
-//! - the Account is the Realm's founder and its only member, currently joined. The founding join is
-//!   admitted in the same atomic bootstrap unit as the genesis Commit, so the founder's readable
-//!   interval starts at the genesis Commit (`stream_start`), exactly as the Account stream scan
-//!   serves it. Every row of the cut is then within that interval.
+//! - the Account is currently joined and its readable floor on the Realm stream is proved at this
+//!   cut by the same function the Account stream scan uses: the genesis Commit for the founding
+//!   member and under `all_history_for_current_members`, its current join Commit under `since_join`
+//!   (decision 0108 §1045). The Snapshot floor is exactly that value.
+//!
+//! Per family, a joined member receives:
+//!
+//! - every Realm singleton, every `member_state` row, every Realm-scoped Strand, and every
+//!   `invite_lifecycle`, `invite_live_target`, `invite_directed_invitee` and `capability_grant`
+//!   row. These are Realm-stream state written by durable shared Events that federation fans out to
+//!   every joined member (`federation.md` §4.1.1); membership, not a grant, decides a member's
+//!   reads (`capabilities.md` §9) and a Realm promises no read isolation among its joined members
+//!   (`realm-and-space.md` §1). A row below the caller's floor is current state the signed Snapshot
+//!   commits to (`realm-state-snapshot-schema.md` §3);
+//! - a `message_revision` row only when its covering Commit is within the caller's readable
+//!   interval. Its value is the accepted carrier Event's payload, i.e. history content, and a
+//!   Snapshot must satisfy the history policy (`history-visibility.md` §6). A row below the floor
+//!   is a selector the caller may not read and is omitted (`current-results.md` §3).
 
 use arkret_wire::{
-    AccountId, ActorId, CommitStreamRef, CurrentSelector, Event, EventKind, RealmId,
+    AccountId, ActorId, CommitStreamRef, CurrentSelector, EventKind, ReadableFloor, RealmId,
     StreamHistoryFloor, TypedCurrentResult,
 };
 use diesel::sql_types::Text as SqlText;
 
 use super::{
-    AsyncConnection, AsyncPgConnection, Bool, Jsonb, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Value,
-    pg_conn, sql_query,
+    AsyncConnection, AsyncPgConnection, Bool, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, pg_conn,
+    sql_query,
 };
 
 /// Event kinds whose admission writes only disclosed current families. Any
@@ -48,6 +63,13 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmAlias,
     EventKind::RealmPlaintextVisibleServices,
     EventKind::MemberState,
+    EventKind::InviteCreate,
+    EventKind::InviteRevoke,
+    EventKind::InviteCancel,
+    EventKind::InviteAccept,
+    EventKind::CapabilityGrant,
+    EventKind::CapabilityRevoke,
+    EventKind::CapabilityRelinquish,
     EventKind::StrandCreate,
     EventKind::RealmSetDefaultStrand,
     EventKind::MessageCreate,
@@ -70,16 +92,13 @@ const AUDITED_FAMILIES: &[&str] = &[
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
     "object_redaction_current_results",
+    "invite_lifecycle_current_results",
+    "invite_live_target_current_results",
+    "invite_directed_invitee_current_results",
     // Moderator-only (content-moderation.md §3.3): these refuse the cut below
     // while any row exists, never silently omitted from a signed cut.
     "moderation_report_current_results",
     "moderation_state_current_results",
-    // Invite families name invitee accounts outside the joined membership;
-    // their per-member disclosure is not proved here, so they refuse the cut
-    // below while any row exists.
-    "invite_lifecycle_current_results",
-    "invite_live_target_current_results",
-    "invite_directed_invitee_current_results",
     "realm_bootstrap_current_results",
     "agent_status_current_results",
     "agent_key_current_results",
@@ -136,26 +155,12 @@ struct KindRow {
     kind: String,
 }
 
-#[derive(QueryableByName)]
-struct EnvelopeRow {
-    #[diesel(sql_type = Jsonb)]
-    envelope: Value,
-}
-
-#[derive(QueryableByName)]
-struct MemberRow {
-    #[diesel(sql_type = SqlText)]
-    member_id: String,
-    #[diesel(sql_type = SqlText)]
-    membership: String,
-}
-
-/// What one cut says about the Realm beyond its candidate material.
+/// What one cut says about the Realm and the caller beyond its candidate
+/// material.
 pub(crate) struct DisclosureFacts {
-    /// Actor of the accepted genesis Event at Realm stream position 0.
-    pub(crate) founder: ActorId,
-    /// Current member-state rows, `(member, membership)`.
-    pub(crate) members: Vec<(ActorId, String)>,
+    /// The caller's readable floor on the Realm stream, `None` when the caller
+    /// is not a currently joined member or the floor is not provable.
+    pub(crate) caller_floor: Option<ReadableFloor>,
     /// An accepted Event whose kind is outside [`DISCLOSED_EVENT_KINDS`].
     pub(crate) undisclosed_kind: Option<String>,
     /// A family without a disclosure rule holds a row of this Realm, or an
@@ -265,17 +270,17 @@ pub(crate) async fn account_snapshot_material_in_connection(
     {
         return Err(rejected("an unaudited typed-current family is installed"));
     }
-    let facts = disclosure_facts_in_connection(conn, realm_id).await?;
+    let facts = disclosure_facts_in_connection(conn, realm_id, account).await?;
     disclose_to_account(material, account, &facts).map(Some)
 }
 
 async fn disclosure_facts_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
+    account: &AccountId,
 ) -> PersistenceResult<DisclosureFacts> {
     let undisclosed_family_row = sql_query(
         "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM capability_grant_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
@@ -288,9 +293,6 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM invite_lifecycle_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM invite_live_target_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM invite_directed_invitee_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
@@ -318,51 +320,14 @@ async fn disclosure_facts_in_connection(
             "snapshot cut includes an uncommitted Event".to_owned(),
         ));
     }
-    let realm_stream = crate::authority_commit::stream_key(&CommitStreamRef::Realm {
-        realm_id: realm_id.clone(),
-    })?;
-    let genesis = sql_query(
-        "SELECT event_row.envelope FROM realm_commits commit_row \
-         JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
-         WHERE commit_row.realm_id=$1 AND commit_row.stream_key=$2 \
-           AND commit_row.stream_position=0",
+    let caller_floor = crate::account_stream_scan::caller_realm_floor_in_connection(
+        conn,
+        realm_id,
+        &ActorId::account(account.clone()),
     )
-    .bind::<Text, _>(realm_id.as_str())
-    .bind::<Text, _>(&realm_stream)
-    .get_result::<EnvelopeRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .ok_or_else(|| rejected("the Realm stream has no accepted genesis Commit"))?;
-    let genesis: Event =
-        serde_json::from_value(genesis.envelope).map_err(PersistenceError::database)?;
-    if genesis.kind != EventKind::RealmCreate
-        || &RealmId::from_event_id(&genesis.event_id) != realm_id
-    {
-        return Err(rejected(
-            "the Realm stream genesis is not this Realm's create Event",
-        ));
-    }
-    // Two rows decide sole membership without loading the whole roster.
-    let members = sql_query(
-        "SELECT member_id, membership FROM member_state_current_results \
-         WHERE realm_id=$1 ORDER BY member_id LIMIT 2",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .load::<MemberRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?
-    .into_iter()
-    .map(|row| {
-        let member = serde_json::from_str::<ActorId>(&row.member_id).map_err(|error| {
-            PersistenceError::Internal(format!("stored member ActorId is invalid: {error}"))
-        })?;
-        Ok((member, row.membership))
-    })
-    .collect::<PersistenceResult<Vec<_>>>()?;
+    .await?;
     Ok(DisclosureFacts {
-        founder: genesis.actor_id,
-        members,
+        caller_floor,
         undisclosed_kind,
         undisclosed_family_row,
     })
@@ -373,7 +338,8 @@ fn rejected(reason: &str) -> PersistenceError {
 }
 
 /// Decide the Account's complete disclosure of one candidate cut, or refuse
-/// it whole. The returned material carries the Account's own readable floor.
+/// it whole. The returned material carries the Account's own readable floor
+/// and omits only the `message_revision` rows below it.
 pub(crate) fn disclose_to_account(
     mut material: soland_storage::RealmStateSnapshotMaterial,
     account: &AccountId,
@@ -395,12 +361,11 @@ pub(crate) fn disclose_to_account(
         ));
     }
     let caller = ActorId::account(account.clone());
-    if facts.founder != caller || facts.members.as_slice() != [(caller.clone(), "join".to_owned())]
-    {
+    let Some(floor) = &facts.caller_floor else {
         return Err(rejected(
-            "the Account is not the Realm's sole, joined founding member",
+            "the Account is not a joined member with a provable readable floor",
         ));
-    }
+    };
     let realm_stream = CommitStreamRef::Realm {
         realm_id: material.realm_id.clone(),
     };
@@ -417,6 +382,7 @@ pub(crate) fn disclose_to_account(
     let mut history_access = None;
     let mut own_join = false;
     let mut redacted = std::collections::BTreeSet::new();
+    let mut below_floor = std::collections::BTreeSet::new();
     for row in &material.current_state_entries {
         let TypedCurrentResult::Value {
             selector,
@@ -459,6 +425,11 @@ pub(crate) fn disclose_to_account(
                     ));
                 }
             }
+            CurrentSelector::MessageRevision { message_id } => {
+                if revision.stream_position < floor.oldest_position {
+                    below_floor.insert(message_id.clone());
+                }
+            }
             CurrentSelector::RealmProfile
             | CurrentSelector::RealmPolicyBundle
             | CurrentSelector::RealmJoinRule
@@ -466,7 +437,10 @@ pub(crate) fn disclose_to_account(
             | CurrentSelector::RealmAlias
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::RealmSetDefaultStrand
-            | CurrentSelector::MessageRevision { .. } => {}
+            | CurrentSelector::InviteLifecycle { .. }
+            | CurrentSelector::InviteLiveTarget { .. }
+            | CurrentSelector::InviteDirectedInvitee { .. }
+            | CurrentSelector::CapabilityGrant { .. } => {}
             CurrentSelector::ObjectRedaction { target_ref } => {
                 let value = serde_json::from_value::<
                     arkret_models_collaboration::events_payloads::redaction::ObjectRedactionCurrentValue,
@@ -503,14 +477,14 @@ pub(crate) fn disclose_to_account(
             TypedCurrentResult::Value {
                 selector: CurrentSelector::MessageRevision { message_id },
                 ..
-            } if redacted.contains(message_id.as_str())
+            } if redacted.contains(message_id.as_str()) || below_floor.contains(message_id)
         )
     });
     material.retention_and_history_floor = arkret_wire::RetentionAndHistoryFloor {
         history_access,
         stream_floors: vec![StreamHistoryFloor {
             stream_ref: realm_stream,
-            oldest_position: 0,
+            oldest_position: floor.oldest_position,
         }],
     };
     Ok(material)
@@ -519,10 +493,10 @@ pub(crate) fn disclose_to_account(
 #[cfg(test)]
 mod tests {
     use arkret_wire::{
-        CommitStreamHead, CurrentRevision, DidCoreId, HistoryAccess, MessageId, RealmCommitId,
-        RetentionAndHistoryFloor, StrandId,
+        CommitStreamHead, CurrentRevision, DidCoreId, HistoryAccess, MessageId,
+        ReadableFloorReason, RealmCommitId, RetentionAndHistoryFloor, StrandId,
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -632,12 +606,110 @@ mod tests {
             },
         };
         let facts = DisclosureFacts {
-            founder: actor.clone(),
-            members: vec![(actor, "join".to_owned())],
+            caller_floor: Some(ReadableFloor {
+                oldest_position: 0,
+                floor_commit_id: RealmCommitId::from_digest([1; 32]),
+                floor_reason: ReadableFloorReason::StreamStart,
+            }),
             undisclosed_kind: None,
             undisclosed_family_row: false,
         };
         (founder, material, facts)
+    }
+
+    /// The fixture after Alice invites Bob (10), Bob accepts (11), Alice grants
+    /// him `ak.message.create` (12) and Bob posts (13), with Bob's facts: his
+    /// `since_join` floor is his accepting Commit.
+    fn joined_fixture() -> (
+        AccountId,
+        soland_storage::RealmStateSnapshotMaterial,
+        DisclosureFacts,
+    ) {
+        let (_, mut material, _) = fixture();
+        let alice = ActorId::account(account("alice"));
+        let bob_account = account("bob");
+        let bob = ActorId::account(bob_account.clone());
+        let invite_id = arkret_wire::InviteId::from_event_id(&event_id(0x44));
+        let grant_id = arkret_wire::GrantId::from_event_id(&event_id(0x45));
+        material.current_state_entries.extend([
+            row(
+                CurrentSelector::InviteDirectedInvitee {
+                    invite_id: invite_id.clone(),
+                },
+                10,
+                json!({ "invitee_account_id": bob_account }),
+            ),
+            row(
+                CurrentSelector::InviteLifecycle {
+                    invite_id: invite_id.clone(),
+                },
+                11,
+                json!("accepted"),
+            ),
+            row(
+                CurrentSelector::InviteLiveTarget {
+                    invitee_account_id: bob_account.clone(),
+                },
+                11,
+                Value::Null,
+            ),
+            row(
+                CurrentSelector::MemberState { actor_id: bob },
+                11,
+                json!({"membership":"join"}),
+            ),
+            row(
+                CurrentSelector::CapabilityGrant { grant_id },
+                12,
+                json!({ "issuer_id": alice }),
+            ),
+            row(
+                CurrentSelector::MessageRevision {
+                    message_id: MessageId::from_event_id(&event_id(0x46)),
+                },
+                13,
+                json!({ "strand_id": StrandId::from_event_id(&event_id(0x22)) }),
+            ),
+        ]);
+        material.visible_stream_heads[0].stream_position = 13;
+        material.visible_stream_heads[0].commit_id = RealmCommitId::from_digest([14; 32]);
+        let facts = DisclosureFacts {
+            caller_floor: Some(ReadableFloor {
+                oldest_position: 11,
+                floor_commit_id: RealmCommitId::from_digest([12; 32]),
+                floor_reason: ReadableFloorReason::MembershipJoin,
+            }),
+            undisclosed_kind: None,
+            undisclosed_family_row: false,
+        };
+        (bob_account, material, facts)
+    }
+
+    #[test]
+    fn joined_member_receives_state_rows_and_only_messages_from_its_floor() {
+        let (bob, material, facts) = joined_fixture();
+        let disclosed = disclose_to_account(material.clone(), &bob, &facts).unwrap();
+        let mut expected = material.current_state_entries.clone();
+        expected.remove(10);
+        assert_eq!(disclosed.current_state_entries, expected);
+        assert_eq!(
+            disclosed.retention_and_history_floor.stream_floors,
+            vec![StreamHistoryFloor {
+                stream_ref: CommitStreamRef::Realm {
+                    realm_id: realm_id()
+                },
+                oldest_position: 11,
+            }]
+        );
+        // The founder's floor is the genesis Commit: every row, both Messages.
+        let (founder, _, founder_facts) = fixture();
+        let disclosed = disclose_to_account(material.clone(), &founder, &founder_facts).unwrap();
+        assert_eq!(
+            disclosed.current_state_entries,
+            material.current_state_entries
+        );
+        // Bob's facts never serve an Account without its own join row.
+        assert!(disclose_to_account(material, &account("carol"), &facts).is_err());
     }
 
     #[test]
@@ -726,23 +798,23 @@ mod tests {
     }
 
     #[test]
-    fn other_accounts_and_shared_rosters_are_refused() {
+    fn accounts_without_a_join_or_a_provable_floor_are_refused() {
         let (_, material, facts) = fixture();
         assert!(disclose_to_account(material, &account("mallory"), &facts).is_err());
         let (founder, material, mut facts) = fixture();
-        facts
-            .members
-            .push((ActorId::account(account("bob")), "join".to_owned()));
+        facts.caller_floor = None;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
-        let (founder, material, mut facts) = fixture();
-        facts.members[0].1 = "leave".to_owned();
+        let (founder, mut material, facts) = fixture();
+        if let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[7] {
+            *value = json!({"membership":"leave"});
+        }
         assert!(disclose_to_account(material, &founder, &facts).is_err());
     }
 
     #[test]
     fn undisclosed_kinds_families_and_selectors_refuse_the_whole_cut() {
         let (founder, material, mut facts) = fixture();
-        facts.undisclosed_kind = Some("ak.capability.grant".to_owned());
+        facts.undisclosed_kind = Some("ak.moderation.decision".to_owned());
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, material, mut facts) = fixture();
         facts.undisclosed_family_row = true;

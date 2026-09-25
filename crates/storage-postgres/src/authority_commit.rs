@@ -767,6 +767,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM invite_directed_invitee_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'capability_grant'::text AS selector_kind, to_jsonb(grant_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM capability_grant_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
@@ -880,6 +884,15 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         invite_id: serde_json::from_value(invite_id).map_err(|error| {
                             PersistenceError::Internal(format!(
                                 "stored invite_directed_invitee selector identity is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
+                ("capability_grant", Some(grant_id)) => {
+                    arkret_wire::CurrentSelector::CapabilityGrant {
+                        grant_id: serde_json::from_value(grant_id).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored capability_grant selector identity is invalid: {error}"
                             ))
                         })?,
                     }

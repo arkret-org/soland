@@ -15,8 +15,8 @@
 //! A joined member reading the Realm stream additionally receives another
 //! actor's Event in full only when its kind is disclosed to every member
 //! ([`crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS`]); every other
-//! kind (Invite, grant or moderator-only records whose per-member disclosure
-//! is not proved here) is withheld unless the caller authored it.
+//! kind (moderator-only or otherwise unproved records) is withheld unless the
+//! caller authored it.
 //!
 //! The Commit slot is always kept, so the caller's chain stays verifiable.
 //! Withholding is never a reducer input and creates no new object.
