@@ -317,7 +317,8 @@ async fn an_authorized_co_member_resolves_the_exact_signed_profile_event() {
             arkret_wire::ServiceOperationId::SELF_ACTOR_PROFILE_READ_RESOLVE_V1,
             true,
         )
-        .json(&request)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&request).expect("canonical resolve body"))
         .send(&service(state.clone()))
         .await;
     let status = response.status_code;
@@ -355,7 +356,8 @@ async fn pcr_cannot_be_used_as_actor_profile_relationship_selector() {
             arkret_wire::ServiceOperationId::SELF_ACTOR_PROFILE_READ_RESOLVE_V1,
             true,
         )
-        .json(&request)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&request).expect("canonical resolve body"))
         .send(&service(state.clone()))
         .await;
     let status = response.status_code;
