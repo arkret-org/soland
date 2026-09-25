@@ -63,28 +63,38 @@ fn rejection_reason(error: ServiceError) -> ServiceResult<String> {
 }
 
 /// Whether the item is the verified `join` of a member this Station hosts,
-/// the one Event that may open its held Realm stream.
+/// the one Event that may open its held Realm stream: the member's own
+/// `ak.member.state{join}` or the directed invitee's `ak.invite.accept`, which
+/// is that invitee's join (`governance-objects.md` §5.3).
 fn hosted_member_join(state: &AppState, item: &CommittedEventSubmission) -> bool {
     let event = &item.event_submission.event;
-    if event.kind != arkret_wire::EventKind::MemberState
-        || item.source_commit.stream_ref
-            != (CommitStreamRef::Realm {
-                realm_id: event.realm_id.clone(),
-            })
+    if item.source_commit.stream_ref
+        != (CommitStreamRef::Realm {
+            realm_id: event.realm_id.clone(),
+        })
     {
         return false;
     }
-    let Ok(payload) =
-        serde_json::to_value(&event.payload).and_then(serde_json::from_value::<MembershipPayload>)
-    else {
-        return false;
-    };
-    payload.membership == MembershipPayloadState::Join
-        && payload.member_id.route_service_id() == &state.service_core_id()
-        && payload
-            .realm_id
-            .as_ref()
-            .is_none_or(|realm_id| realm_id == &event.realm_id)
+    match event.kind {
+        arkret_wire::EventKind::MemberState => {
+            let Ok(payload) = serde_json::to_value(&event.payload)
+                .and_then(serde_json::from_value::<MembershipPayload>)
+            else {
+                return false;
+            };
+            payload.membership == MembershipPayloadState::Join
+                && payload.member_id.route_service_id() == &state.service_core_id()
+                && payload
+                    .realm_id
+                    .as_ref()
+                    .is_none_or(|realm_id| realm_id == &event.realm_id)
+        }
+        arkret_wire::EventKind::InviteAccept => {
+            matches!(event.actor_id, arkret_wire::ActorId::Account { .. })
+                && event.actor_id.route_service_id() == &state.service_core_id()
+        }
+        _ => false,
+    }
 }
 
 async fn replicate_one(

@@ -1007,6 +1007,77 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
     assert_code(&error, ConflictCode::CapabilityDenied);
 }
 
+/// A hosted invitee's `ak.invite.accept` is its join: the replica opens the
+/// held Realm stream, derives the invitee's joined membership and publishes
+/// its Account summary in the same transaction; a later replicated leave
+/// withdraws that summary.
+#[tokio::test]
+async fn committed_replication_opens_the_stream_with_a_hosted_invite_accept() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = bootstrap_unit_with_join_rule("replica-invite", "invite");
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let last = unit.transactions.last().unwrap();
+    let bob = remote_member("replica-bob");
+    let arkret_wire::ActorId::Account {
+        account_id: bob_account,
+    } = &bob
+    else {
+        unreachable!("remote_member is an Account");
+    };
+    let create = invite_create_request(last, bob_account);
+    let accept = accept_request(
+        &create.authority_commit,
+        &bob,
+        &create,
+        "pending",
+        Some(bob_account),
+        1,
+    );
+    assert_eq!(account_summary(&pool, &realm_id, &bob).await, None);
+
+    assert_eq!(
+        store
+            .install_committed_replica(&replica(&unit, &accept, true))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let held = store
+        .committed_event(&accept.authority_commit.event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.commit, accept.authority_commit.commit);
+    assert_eq!(held.event, accept.authority_commit.event);
+    assert_eq!(
+        member_state(&pool, &realm_id, &bob).await.as_deref(),
+        Some("join")
+    );
+    assert_eq!(
+        account_summary(&pool, &realm_id, &bob).await,
+        Some((Some("join".to_owned()), true))
+    );
+
+    let leave = membership_request(&accept.authority_commit, bob.clone(), &bob, "leave");
+    assert_eq!(
+        store
+            .install_committed_replica(&replica(&unit, &leave, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert_eq!(
+        member_state(&pool, &realm_id, &bob).await.as_deref(),
+        Some("leave")
+    );
+    assert_eq!(
+        account_summary(&pool, &realm_id, &bob).await,
+        Some((None, true))
+    );
+}
+
 /// A remote authority record never names this Station, never goes back a
 /// generation and never forks one.
 #[tokio::test]

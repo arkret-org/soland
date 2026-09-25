@@ -145,19 +145,23 @@ async fn peer_bootstrap(
     let expected_stream = CommitStreamRef::Realm {
         realm_id: body.realm_id.clone(),
     };
-    if event.kind != EventKind::MemberState
-        || event.realm_id != body.realm_id
-        || accepted.commit.stream_ref != expected_stream
-    {
+    if event.realm_id != body.realm_id || accepted.commit.stream_ref != expected_stream {
         return Err(AppError::not_found("Realm join bootstrap not found"));
     }
-    let payload = serde_json::from_value::<MembershipPayload>(
-        serde_json::to_value(&event.payload).map_err(unavailable)?,
-    )
-    .map_err(|_| AppError::not_found("Realm join bootstrap not found"))?;
-    if payload.member_id != ActorId::account(body.member_account_id.clone())
-        || payload.membership != MembershipPayloadState::Join
-    {
+    let member = ActorId::account(body.member_account_id.clone());
+    // The membership Commit is the member's own join: its `ak.member.state{join}`
+    // or, for a directed Invite, its `ak.invite.accept`.
+    let joins_member = match event.kind {
+        EventKind::MemberState => serde_json::to_value(&event.payload)
+            .ok()
+            .and_then(|payload| serde_json::from_value::<MembershipPayload>(payload).ok())
+            .is_some_and(|payload| {
+                payload.member_id == member && payload.membership == MembershipPayloadState::Join
+            }),
+        EventKind::InviteAccept => event.actor_id == member,
+        _ => false,
+    };
+    if !joins_member {
         return Err(AppError::not_found("Realm join bootstrap not found"));
     }
     let bundle =

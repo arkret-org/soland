@@ -5,7 +5,9 @@
 //! and the source RealmCommit exactly, only as the direct successor of the
 //! stream this Station already holds, and only while a member it hosts is
 //! joined. The single bootstrap exception is a hosted member's own verified
-//! `join`, which may open the held Realm stream at its position.
+//! `join` (its `ak.member.state{join}` or its `ak.invite.accept`), which may
+//! open the held Realm stream at its position. The derived membership and the
+//! hosted Accounts' summaries are written in the replica's transaction.
 
 use soland_storage::{CommittedReplica, CommittedReplicaOutcome, ConflictCode};
 
@@ -256,8 +258,15 @@ pub(super) async fn install_committed_replica_in_connection(
     .bind::<Timestamptz, _>(commit.committed_at)
     .execute(&mut *conn)
     .await?;
-    if event.kind == arkret_wire::EventKind::MemberState {
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::MemberState | arkret_wire::EventKind::InviteAccept
+    ) {
         crate::unit_of_work::commit_parent_membership_current_results(conn, event, commit).await?;
+    }
+    if crate::account_summary::changes_account_summary_inputs(&event.kind) {
+        crate::account_summary::publish_realm_account_summary_in_connection(conn, &event.realm_id)
+            .await?;
     }
     Ok(CommittedReplicaOutcome::Stored)
 }
