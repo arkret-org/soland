@@ -417,6 +417,20 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Current joined membership in this service's accepted state, governed
+    /// here or held as a verified committed replica. Grants no Event
+    /// authority by itself.
+    pub async fn accepted_current_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .accepted_current_member_joined(realm_id, member)
+            .await?)
+    }
+
     pub async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> ServiceResult<()> {
         event.validate_for_submit_structural().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))

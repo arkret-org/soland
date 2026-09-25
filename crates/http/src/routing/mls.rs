@@ -1624,6 +1624,13 @@ async fn verify_local_claim_participant_authorization(
     Ok(true)
 }
 
+/// Record which destination gate refused a claim; the external answer stays
+/// the uniform `claim_failed`.
+fn policy_refused(reason: &'static str) -> bool {
+    tracing::debug!(reason, "peer KeyPackage claim policy refused");
+    false
+}
+
 async fn peer_claim_policy_authorized(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
@@ -1672,65 +1679,46 @@ async fn peer_claim_policy_authorized(
             .is_some()
     };
     if !target_authority_current {
-        return Ok(false);
+        return Ok(policy_refused("target_authority_not_current"));
     }
     match body.claim_purpose {
         PeerKeyPackageClaimPurpose::RealmMembership => {
+            // device-lifecycle §9.2.1 / §9.2.2: the requester and the target
+            // are both current joined members of the exact Realm in this
+            // service's own accepted state, and the requester is routed
+            // through the authenticated source service.
             let source = arkret_wire::DidCoreId::new(source_id.to_owned())
                 .map_err(|_| AppError::param_invalid("invalid source_id"))?;
-            let Some(requester_actor) =
-                crate::routing::federation::joined_actor_for_principal_route(
-                    state,
-                    body.intended_realm_id.as_str(),
-                    &requester_id,
-                    &source,
-                )
-            else {
-                return Ok(false);
-            };
-            if !crate::routing::federation::federation_mls_actor_route_acceptable(
-                state,
-                &requester_actor,
-                source_id,
-                None,
-                body.intended_realm_id.as_str(),
-                None,
-            )
-            .await
-            {
-                return Ok(false);
+            let requester_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                requester_id.clone(),
+                source,
+            ));
+            if body.requester_account_id.as_ref().is_some_and(|account| {
+                arkret_wire::ActorId::account(account.clone()) != requester_actor
+            }) {
+                return Ok(policy_refused("requester_route_unacceptable"));
             }
-            let projection = state.projections().snapshot();
-            if projection
-                .member(
-                    body.intended_realm_id.as_str(),
-                    &requester_actor.to_string(),
-                )
-                .is_none_or(|member| member.state != "join")
-            {
-                return Ok(false);
-            }
-            let Some(target_actor) = crate::routing::federation::joined_actor_for_principal_route(
-                state,
-                body.intended_realm_id.as_str(),
-                &target_principal_id,
-                &state.service_core_id(),
-            ) else {
-                return Ok(false);
+            let target_actor = match (&body.target_account_id, &body.target_agent_id) {
+                (Some(account), None) => arkret_wire::ActorId::account(account.clone()),
+                (None, Some(agent_id)) => arkret_wire::ActorId::account(
+                    arkret_wire::AccountId::new(agent_id.clone(), state.service_core_id()),
+                ),
+                _ => return Ok(policy_refused("target_not_routed_member")),
             };
-            let is_participant = |actor_id: &arkret_wire::ActorId| {
-                let actor_key = actor_id.to_string();
-                projection
-                    .member(body.intended_realm_id.as_str(), &actor_key)
-                    .is_some_and(|member| member.state == "join")
-                    || projection
-                        .realm_states
-                        .get(body.intended_realm_id.as_str())
-                        .and_then(|realm| realm.owner.as_deref())
-                        == Some(actor_key.as_str())
-            };
-            if !is_participant(&requester_actor) || !is_participant(&target_actor) {
-                return Ok(false);
+            for (actor, reason) in [
+                (&requester_actor, "requester_not_joined"),
+                (&target_actor, "target_not_joined"),
+            ] {
+                if !state
+                    .authority_commits()
+                    .accepted_current_member_joined(&body.intended_realm_id, actor)
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!("claim membership read: {error}"))
+                    })?
+                {
+                    return Ok(policy_refused(reason));
+                }
             }
         }
         PeerKeyPackageClaimPurpose::DirectConversation => {
@@ -1755,7 +1743,7 @@ async fn peer_claim_policy_authorized(
             )
             .await?;
             let Some(contact) = contact else {
-                return Ok(false);
+                return Ok(policy_refused("direct_contact_missing"));
             };
             if contact
                 .peer_host_id
@@ -1763,7 +1751,7 @@ async fn peer_claim_policy_authorized(
                 .map(arkret_wire::DidCoreId::as_str)
                 != Some(source_id)
             {
-                return Ok(false);
+                return Ok(policy_refused("direct_contact_host_mismatch"));
             }
             let trust_domain = state.config().trust_domain.clone();
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
@@ -1784,7 +1772,7 @@ async fn peer_claim_policy_authorized(
                 || body.last_resort_allowed == Some(true)
                 || body.strand_id.is_none()
             {
-                return Ok(false);
+                return Ok(policy_refused("direct_binding_mismatch"));
             }
         }
     }
@@ -2040,8 +2028,7 @@ async fn claim_keypackage(
         .unsigned_request()
         .requester_principal_id(&body.requester_authorization)
         .ok_or_else(|| peer_claim_schema_violation("claim requester identity is incomplete"))?;
-    let target_principal_id = body
-        .unsigned_request()
+    body.unsigned_request()
         .target_principal_id()
         .ok_or_else(|| peer_claim_schema_violation("claim target identity is incomplete"))?;
     let session_actor =
@@ -2090,44 +2077,44 @@ async fn claim_keypackage(
         ));
     }
     let authorization = VerifiedClaimAuthorization::for_verified_request(&peer_body)?;
-    if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership {
-        let requester_actor = session_actor.clone();
-        let requester_is_current_member = state
-            .projections()
-            .snapshot()
-            .member(
-                body.intended_realm_id.as_str(),
-                &requester_actor.to_string(),
-            )
-            .is_some_and(|member| member.state == "join");
-        if !requester_is_current_member {
-            return Err(AppError::capability_denied(
-                "requester identity has no current source-side Realm membership",
-            ));
-        }
+    if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership
+        && !state
+            .authority_commits()
+            .accepted_current_member_joined(&body.intended_realm_id, &session_actor)
+            .await
+            .map_err(|error| AppError::internal(format!("claim membership read: {error}")))?
+    {
+        return Err(AppError::capability_denied(
+            "requester identity has no current source-side Realm membership",
+        ));
     }
     if body.service_binding.destination_id.as_str() != local_service_id {
         let destination = body.service_binding.destination_id.as_str();
-        let snapshot = state.projections().snapshot();
-        let target_actor = body
-            .target_account_id
-            .clone()
-            .map(arkret_wire::ActorId::account)
-            .or_else(|| {
-                crate::routing::federation::joined_actor_for_principal_route(
-                    state,
-                    body.intended_realm_id.as_str(),
-                    &target_principal_id,
-                    &body.service_binding.destination_id,
-                )
-            })
-            .ok_or_else(|| AppError::capability_denied("target actor route is not current"))?;
-        let target_binding = snapshot
-            .member(body.intended_realm_id.as_str(), &target_actor.to_string())
-            .filter(|member| member.state == "join")
-            .and_then(|member| serde_json::from_str::<arkret_wire::ActorId>(&member.member).ok())
-            .map(|actor| actor.route_service_id().to_string());
-        if target_binding.as_deref() != Some(destination) {
+        // The destination is the exact target account's own Station, and that
+        // account is a current joined member in this service's accepted
+        // state; nothing is inferred from a principal or an endpoint.
+        let target_actor = match (&body.target_account_id, &body.target_agent_id) {
+            (Some(account), None) => arkret_wire::ActorId::account(account.clone()),
+            (None, Some(agent_id)) => arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                agent_id.clone(),
+                body.service_binding.destination_id.clone(),
+            )),
+            _ => {
+                return Err(AppError::capability_denied(
+                    "target actor route is not current",
+                ));
+            }
+        };
+        if target_actor.route_service_id().as_str() != destination
+            || (body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership
+                && !state
+                    .authority_commits()
+                    .accepted_current_member_joined(&body.intended_realm_id, &target_actor)
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!("claim target membership read: {error}"))
+                    })?)
+        {
             return Err(AppError::capability_denied(
                 "destination Station must match the exact target account in the Realm",
             ));

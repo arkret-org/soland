@@ -9,7 +9,6 @@
 use salvo::prelude::*;
 
 pub(crate) mod erasure_receipts;
-mod inbound_policy;
 mod outbound;
 pub mod outbox;
 pub mod outbox_operator;
@@ -18,9 +17,6 @@ mod signature;
 pub(crate) mod well_known;
 mod wire;
 
-pub(crate) use inbound_policy::{
-    federation_mls_actor_route_acceptable, joined_actor_for_principal_route,
-};
 pub(crate) use outbound::{
     configured_peer_targets, peer_url_for_service_id, resolved_peer_base_url, resolved_peer_route,
     resolved_peer_target,
