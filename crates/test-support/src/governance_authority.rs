@@ -357,9 +357,7 @@ impl GovernanceChain {
             &RealmAuthorityFreshness::new(
                 now,
                 Base64UrlString::new(NONCE.to_owned()).expect("fixture nonce"),
-                Duration::seconds(300),
-            )
-            .expect("fixture freshness"),
+            ),
             &keys,
         )
         .expect("the fixture authority chain verifies");

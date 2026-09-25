@@ -166,12 +166,7 @@ pub(in crate::routing) async fn resolve_verified_authority(
         let Ok(keys) = verified_keys(state, &bundle).await else {
             continue;
         };
-        let freshness = RealmAuthorityFreshness::new(
-            crate::wire::now(),
-            request.nonce.clone(),
-            chrono::Duration::seconds(60),
-        )
-        .map_err(unavailable)?;
+        let freshness = RealmAuthorityFreshness::new(crate::wire::now(), request.nonce.clone());
         if let Ok(authority) = verify_realm_authority_bundle(&bundle, &freshness, &keys) {
             verified.push(LocatedRealmAuthority {
                 bundle,
