@@ -269,13 +269,9 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
     } else {
         error.to_string()
     };
-    res.status_code(status);
-    res.render(Json(serde_json::json!({
-        "type": format!("https://arkret.org/problems/{code}"),
-        "status": status.as_u16(),
-        "code": code,
-        "detail": detail,
-    })));
+    // The canonical Problem envelope (type, title, status, detail, code), the
+    // same one every other refusal of this operation carries.
+    crate::error::render_error(res, status, code, &detail);
 }
 
 #[handler]
