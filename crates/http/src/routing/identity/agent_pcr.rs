@@ -1074,6 +1074,12 @@ mod tests {
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
+        // The Agent Account, its controller and the generation-0 governance
+        // Station share one Station (key-management.md section 4).
+        event.actor_id = super::ActorId::account(super::AccountId::new(
+            super::DidCoreId::new(AGENT).unwrap(),
+            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
         event.executed_by = Some(super::ActorId::account(super::AccountId::new(
             super::DidCoreId::new(CONTROLLER).unwrap(),
             super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),

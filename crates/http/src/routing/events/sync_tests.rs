@@ -599,6 +599,9 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     );
 }
 
+/// `account_filter`: an absent `realm_ids` selects no Realm detail, and a
+/// selected Realm the caller cannot read is `unavailable.error_code=not_found`
+/// whether it is public or was left.
 #[tokio::test]
 async fn sync_snapshot_excludes_public_realms_without_exact_account_membership() {
     let mut config = test_config();
@@ -607,21 +610,40 @@ async fn sync_snapshot_excludes_public_realms_without_exact_account_membership()
     let session = roster_session(&state, ROSTER_CALLER);
     state.realm_directory().upsert(roster_realm(true, false));
     insert_projected_membership(&state, ROSTER_ACTOR, "join");
-    let body = roster_body(state.service_id());
+    let detail = |frame| {
+        serde_json::to_value(frame).unwrap()["realms"]
+            .get(ROSTER_REALM)
+            .cloned()
+    };
 
-    let outsider = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let outsider_json = serde_json::to_value(outsider).unwrap();
-    assert!(outsider_json["realms"].get(ROSTER_REALM).is_none());
+    let unselected = build_sync_snapshot(
+        &state,
+        Some(&session),
+        &roster_body(state.service_id()),
+        &SyncCursor::default(),
+    )
+    .await;
+    assert!(detail(unselected).is_none());
+
+    let selected: SyncRequestBody =
+        serde_json::from_value(json!({"filter": {"realm_ids": [ROSTER_REALM]}})).unwrap();
+    let not_found = json!({"unavailable": {"error_code": "not_found"}});
+    let outsider =
+        build_sync_snapshot(&state, Some(&session), &selected, &SyncCursor::default()).await;
+    assert_eq!(
+        detail(outsider),
+        Some(not_found.clone()),
+        "a public Realm is not readable without exact account membership"
+    );
+    assert!(!realm_id_accessible(&state, ROSTER_REALM, Some(&session)).await);
 
     insert_projected_membership(&state, ROSTER_CALLER, "join");
-    let member = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let member_json = serde_json::to_value(member).unwrap();
-    assert!(member_json["realms"].get(ROSTER_REALM).is_some());
+    assert!(realm_id_accessible(&state, ROSTER_REALM, Some(&session)).await);
 
     insert_projected_membership(&state, ROSTER_CALLER, "leave");
-    let left = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
-    let left_json = serde_json::to_value(left).unwrap();
-    assert!(left_json["realms"].get(ROSTER_REALM).is_none());
+    assert!(!realm_id_accessible(&state, ROSTER_REALM, Some(&session)).await);
+    let left = build_sync_snapshot(&state, Some(&session), &selected, &SyncCursor::default()).await;
+    assert_eq!(detail(left), Some(not_found));
 }
 
 #[tokio::test]

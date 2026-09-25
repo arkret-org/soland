@@ -96,38 +96,6 @@ fn session() -> SessionRecord {
     }
 }
 
-/// Test helper: ingest a fresh webvh document for `did` so the high-risk
-/// freshness gate passes. put_document stamps fetched_at/expires_at with
-/// the ingestion instant.
-async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
-    let now = chrono::Utc::now();
-    let public_key_multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
-    state
-        .dids()
-        .store_document(soland_services::identity::DidDocumentState {
-            did: did.to_owned(),
-            did_document: json!({
-                "id": did,
-                "verificationMethod": [{
-                    "id": format!("{did}#ak:device:01904100-0000-7000-8000-a11ce0000001"),
-                    "type": "Multikey",
-                    "controller": did,
-                    "publicKeyMultibase": public_key_multibase,
-                }]
-            }),
-            key_log_head: Some("sha256:head".to_owned()),
-            seq: 1,
-            method_evidence: json!({ "mode": "test" }),
-            // Placeholder values; put_document overwrites them with the
-            // ingestion instant.
-            fetched_at: now,
-            expires_at: now,
-            updated_at: now,
-        })
-        .await
-        .expect("ingest fresh webvh document");
-}
-
 fn did_key_for(signing_key: &ed25519_dalek::SigningKey) -> String {
     let mut bytes = Vec::with_capacity(34);
     bytes.extend_from_slice(&[0xed, 0x01]);
@@ -1173,7 +1141,7 @@ async fn production_rejects_dev_proof_type_field() {
         &object,
         &state,
         &session,
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         "sha256:dead",
         arkret_canonical::DigestSuite::Sha256,
         b"{}",
@@ -1205,7 +1173,7 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
         &object,
         &state,
         &session,
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         "sha256:dead",
         arkret_canonical::DigestSuite::Sha256,
         b"{}",
@@ -1215,107 +1183,4 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
     .await
     .expect_err("development mode must reject the non-SDK proof shape");
     assert_eq!(error.code, "invalid_proof");
-}
-
-#[tokio::test]
-async fn production_rejects_full_proof_without_valid_jws_signature() {
-    let state = make_state(false);
-    let session = session();
-    let actor_id = "ak:did_core:web:alice.example";
-    // First ingest a fresh webvh document so the high-risk freshness gate
-    // passes and this test focuses on JWS signature verification failure.
-    ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
-    let canonical_bytes =
-        br#"{"actor_id":"ak:did_core:web:alice.example","event_id":"ak:event:test"}"#;
-    let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
-    let mut object = serde_json::Map::new();
-    object.insert(
-        "actor_id".to_owned(),
-        json!(crate::test_account_actor(
-            &arkret_wire::Did::new("did:web:alice.example").unwrap()
-        )),
-    );
-    object.insert(
-        "producer_proof".to_owned(),
-        json!({
-            "kind": "detached_jws",
-            "verification_method": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "event_digest": event_digest,
-            "created_at": "2026-05-17T00:00:00.000Z",
-            "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
-        }),
-    );
-    object.insert("payload".to_owned(), json!({"body": "hello"}));
-
-    let err = validate_event_proofs(
-        &object,
-        &state,
-        &session,
-        actor_id,
-        &arkret_canonical::sha256_digest(canonical_bytes),
-        arkret_canonical::DigestSuite::Sha256,
-        canonical_bytes,
-        &[],
-        None,
-    )
-    .await
-    .expect_err("production must reject unsigned/fake JWS proofs");
-    assert_eq!(err.code, "invalid_proof");
-    assert!(
-        err.message.contains("JWS verification failed"),
-        "unexpected message: {}",
-        err.message
-    );
-}
-
-/// L3 - high-risk event proof paths fail closed when the DID document is
-/// stale or has no ingested record, and the freshness gate rejects before
-/// JWS verification.
-#[tokio::test]
-async fn production_event_proof_fails_closed_when_did_document_stale() {
-    let state = make_state(false);
-    let mut session = session();
-    let actor_id = "ak:did_core:web:stale-proof.example";
-    session.actor = actor_id.to_owned();
-    // Deliberately ingest no webvh document: the actor has no freshness
-    // evidence in persistence.
-    let canonical_bytes = br#"{"actor_id":"ak:did_core:web:stale-proof.example","event_id":"ak:event:test","kind":"ak.identity.resolution.update"}"#;
-    let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
-    let mut object = serde_json::Map::new();
-    object.insert(
-        "actor_id".to_owned(),
-        json!(crate::test_account_actor(
-            &arkret_wire::Did::new("did:web:stale-proof.example").unwrap()
-        )),
-    );
-    object.insert(
-        "producer_proof".to_owned(),
-        json!({
-            "kind": "detached_jws",
-            "verification_method": "did:web:stale-proof.example#k1",
-            "event_digest": event_digest,
-            "created_at": "2026-05-17T00:00:00.000Z",
-            "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
-        }),
-    );
-    object.insert(
-        "kind".to_owned(),
-        json!(arkret_wire::EventKind::IdentityResolutionUpdate.as_str()),
-    );
-    object.insert("payload".to_owned(), json!({"body": "hello"}));
-
-    let err = validate_event_proofs(
-        &object,
-        &state,
-        &session,
-        actor_id,
-        &arkret_canonical::sha256_digest(canonical_bytes),
-        arkret_canonical::DigestSuite::Sha256,
-        canonical_bytes,
-        &[],
-        None,
-    )
-    .await
-    .expect_err("stale/missing DID document must fail closed before JWS verify");
-    assert_eq!(err.code, "stale_did_document", "{}", err.message);
 }

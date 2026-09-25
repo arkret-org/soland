@@ -1390,11 +1390,9 @@ mod tests {
             sidecar_id.as_str().strip_prefix("ak:sidecar:"),
             event.event_id.as_str().strip_prefix("ak:event:")
         );
-        assert_eq!(
-            event.payload.get("encryption_profile"),
-            Some(&json!("mls_rfc9420"))
-        );
-        assert!(!event.payload.contains_key("object"));
+        // sidecar_create_payload is closed and empty; encryption is activated
+        // by the Sidecar's own ak.mls.genesis (sidecar.md section 2).
+        assert!(event.payload.is_empty());
     }
 
     #[test]

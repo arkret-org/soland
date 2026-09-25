@@ -2438,6 +2438,8 @@ fn invite_locator_not_found() -> AppError {
 mod invite_locator_security_tests {
     use salvo::test::{ResponseExt, TestClient};
     use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
+    use soland_test_support::AppStateTestExt as _;
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
 
     use super::*;
 
@@ -2585,16 +2587,69 @@ mod invite_locator_security_tests {
         state
     }
 
+    /// A production Station whose holder stands on a genuinely accepted PCR
+    /// genesis. Station-materialized fanout reaches only devices of the
+    /// holder's accepted device projection, so the founding device is the one
+    /// target (device-lifecycle.md section 7).
+    async fn accepted_holder_state() -> (AppState, String, String) {
+        let config = crate::config::AppConfig {
+            development_mode: false,
+            seed_demo_data: false,
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-invite-service-fanout-test-blobs"),
+            ),
+            ..crate::config::AppConfig::test_default()
+        };
+        let service_did =
+            AppState::new(config.clone(), soland_storage_postgres::Db { pool: None }).service_did();
+        let persisted = soland_test_support::app_state_with_service_did(
+            soland_test_support::app_config(),
+            service_did,
+        );
+        let state = AppState::new_with_persistence(
+            config,
+            soland_storage_postgres::Db { pool: None },
+            persisted.test_persistence(),
+        );
+        let fixture = PcrGenesisFixture::new(state.service_did());
+        fixture
+            .admit_into(state.test_persistence().as_ref())
+            .await
+            .expect("accepted PCR genesis");
+        let holder = fixture.history.account.principal_id.clone();
+        state
+            .identities()
+            .save_account(AccountProfileState {
+                pk: soland_storage::AccountPk(0),
+                account_id: arkret_wire::AccountId::new(holder.clone(), state.service_core_id()),
+                principal_id: holder.clone(),
+                localpart: "holder".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now(),
+            })
+            .await
+            .expect("holder account");
+        (
+            state,
+            holder.to_string(),
+            fixture.history.founding_device_id.to_string(),
+        )
+    }
+
     async fn assert_service_account_data_fanout(
         state: &AppState,
+        holder: &str,
+        devices: &[&str],
         account_data_key: &str,
         expected_revision: u64,
         expected_payload: &Value,
     ) {
-        for device_id in [PRODUCTION_DEVICE_A, PRODUCTION_DEVICE_B] {
+        for &device_id in devices {
             let queued = state
                 .deliveries()
-                .device_messages_after(PRODUCTION_HOLDER, device_id, 0, 101)
+                .device_messages_after(holder, device_id, 0, 101)
                 .await
                 .expect("holder to-device queue");
             assert_eq!(
@@ -2608,10 +2663,7 @@ mod invite_locator_security_tests {
                 );
             assert_eq!(envelopes.len(), 1, "queued service envelope is readable");
             let envelope = &envelopes[0];
-            assert_eq!(
-                envelope.recipient_account_id.principal_id.as_str(),
-                PRODUCTION_HOLDER
-            );
+            assert_eq!(envelope.recipient_account_id.principal_id.as_str(), holder);
             assert_eq!(
                 envelope.recipient_account_id.station_id.as_str(),
                 state.service_id()
@@ -2642,6 +2694,10 @@ mod invite_locator_security_tests {
     }
 
     fn production_invite_delivery(state: &AppState) -> InviteDeliveryRequestBody {
+        production_invite_delivery_for(state, PRODUCTION_HOLDER)
+    }
+
+    fn production_invite_delivery_for(state: &AppState, holder: &str) -> InviteDeliveryRequestBody {
         let event: arkret_wire::Event = serde_json::from_value(json!({
             "event_id": PRODUCTION_INVITE_EVENT,
             "kind": arkret_wire::EventKind::InviteCreate.as_str(),
@@ -2652,7 +2708,7 @@ mod invite_locator_security_tests {
             }},
             "created_at": "2026-08-21T00:00:00.000Z",
             "payload": {
-                "invitee_account_id": {"principal_id": PRODUCTION_HOLDER, "station_id": state.service_id()},
+                "invitee_account_id": {"principal_id": holder, "station_id": state.service_id()},
                 "introduction_evidence_digest": canonical::canonical_sha256(&IntroductionEvidence::ExplicitAddress).unwrap(),
                 "expires_at": "2099-01-01T00:00:00.000Z"
             }
@@ -2661,7 +2717,7 @@ mod invite_locator_security_tests {
         let service_id = DidCoreId::new(state.service_id().to_owned()).unwrap();
         let address =
             arkret_models_collaboration::governance::invite_addressing::InviteAddress::station(
-                DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                DidCoreId::new(holder.to_owned()).unwrap(),
                 service_id,
                 ServiceResolutionCarrier::ResolutionUrl {
                     resolution_url: "https://soland.test/.well-known/arkret/current".to_owned(),
@@ -3077,8 +3133,8 @@ mod invite_locator_security_tests {
 
     #[tokio::test]
     async fn production_invite_delivery_fanout_uses_a_readable_service_sender() {
-        let state = production_holder_state().await;
-        let delivery = production_invite_delivery(&state);
+        let (state, holder, device) = accepted_holder_state().await;
+        let delivery = production_invite_delivery_for(&state, &holder);
         let body = serde_json::to_value(&delivery).unwrap();
         let inviter_account_id = arkret_wire::AccountId::new(
             DidCoreId::new(PRODUCTION_INVITER.to_owned()).unwrap(),
@@ -3109,6 +3165,8 @@ mod invite_locator_security_tests {
             .expect("invite delivery write");
         assert_service_account_data_fanout(
             &state,
+            &holder,
+            &[device.as_str()],
             AccountDataKey::ACCOUNT_INVITE_DELIVERY,
             cell.revision,
             &cell.payload,
@@ -3117,7 +3175,7 @@ mod invite_locator_security_tests {
         assert!(
             state
                 .account_data()
-                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+                .entry(&holder, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
                 .await
                 .unwrap()
                 .is_none()
@@ -3402,8 +3460,8 @@ mod invite_locator_security_tests {
 
     #[tokio::test]
     async fn production_holder_quarantine_fanout_uses_a_readable_service_sender() {
-        let state = production_holder_state().await;
-        let delivery = production_invite_delivery(&state);
+        let (state, holder, device) = accepted_holder_state().await;
+        let delivery = production_invite_delivery_for(&state, &holder);
         let body = serde_json::to_value(&delivery).unwrap();
         let decision = ReceiveDecision {
             action: InviteReceiveAction::Quarantine,
@@ -3415,7 +3473,7 @@ mod invite_locator_security_tests {
         assert!(
             persist_invite_delivery_quarantine_entry(
                 &state,
-                PRODUCTION_HOLDER,
+                &holder,
                 state.service_id(),
                 PRODUCTION_INVITER,
                 &delivery,
@@ -3466,6 +3524,8 @@ mod invite_locator_security_tests {
         ));
         assert_service_account_data_fanout(
             &state,
+            &holder,
+            &[device.as_str()],
             AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             cell.revision,
             &cell.payload,
@@ -3474,7 +3534,7 @@ mod invite_locator_security_tests {
         assert!(
             state
                 .account_data()
-                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
+                .entry(&holder, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
                 .await
                 .unwrap()
                 .is_none()

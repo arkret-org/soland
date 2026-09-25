@@ -480,8 +480,10 @@ fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submissio
     assert_eq!(device_id, "ak:device:01904100-0000-7000-8000-000000000002");
 }
 
+/// The authorize Event is always signed by the controller itself: a device
+/// key rooted in another principal's DID never binds the pairing.
 #[test]
-fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
+fn service_pairing_rejects_a_proof_rooted_in_another_controller() {
     let controller_principal_id = CONTROLLER_CORE;
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
@@ -492,10 +494,9 @@ fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
         .producer_proof
         .as_mut()
         .expect("producer proof");
-    proof.verification_method = arkret_wire::DidUrl::new(format!(
-        "{}#ak:device:01904100-0000-7000-8000-000000000099",
-        web_did(controller_principal_id)
-    ))
+    proof.verification_method = arkret_wire::DidUrl::new(
+        "did:web:other-controller.example#ak:device:01904100-0000-7000-8000-000000000002",
+    )
     .unwrap();
 
     assert!(service_pairing_controller_device_id(&body, controller_principal_id).is_err());
@@ -708,6 +709,14 @@ fn key_pair_proof_of_possession_verifies_runtime_key() {
     );
 
     let request = runtime_approval_request_body(AGENT_DID, verification_method, service_id);
+    record.approval_request_id = Some(body.approval_request_id.clone());
+    record.runtime_key_binding_digest = Some(
+        request
+            .proof_of_possession
+            .runtime_key_binding_digest
+            .as_str()
+            .to_owned(),
+    );
     record.runtime_proof_verified_at = Some(request.proof_of_possession.created_at);
     record.runtime_key_request = Some(request);
     verify_runtime_key_pair_proof_of_possession(&body, &record, agent, service_id)

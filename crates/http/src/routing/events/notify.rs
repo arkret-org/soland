@@ -1061,13 +1061,19 @@ mod tests {
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
             arkret_wire::EventKind::RelationCreate.as_str(),
-            // `relation_create_payload` is `additionalProperties:false` over
-            // `{relation, rank}` and `relation_create_object` bans `id`, so the
-            // whole snapshot lives under `relation` and the Relation id is
-            // `retype(event_id)`.
+            // `relation_create_payload` requires the tuple conflict domain and
+            // an absent-row `expected_revision`; `relation_create_object` bans
+            // `id`, so the Relation id is `retype(event_id)`.
             json!({
                 "sender": sender,
                 "event_id": event_id,
+                "primary_conflict_domain": {
+                    "domain_kind": "tuple",
+                    "relation_kind": "assigned_to",
+                    "from_ref": strand_id,
+                    "to_ref": fixture_actor(assignee),
+                },
+                "expected_revision": null,
                 "relation": {
                     "relation_kind": "assigned_to",
                     "from_ref": strand_id,

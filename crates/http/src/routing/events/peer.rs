@@ -1899,11 +1899,27 @@ mod membership_identity_tests {
     fn control_plane_visibility_is_not_treated_as_private_content_processing() {
         let source = "ak:did_core:web:source.example";
         let actor = arkret_wire::ActorId::account(account(source));
-        let control = record(
+        let mut control = record(
             arkret_wire::EventKind::MemberState.as_str(),
             &actor,
             json!({"member_id": actor, "membership": "leave"}),
         );
+        // Only a complete accepted Event envelope proves its kind; a partial
+        // envelope falls back to fail-closed payload inspection.
+        control.envelope = serde_json::to_value(
+            arkret_wire::test_support::raw_event_for_actor_at(
+                arkret_wire::EventKind::MemberState.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: arkret_wire::RealmId::new(control.realm_id.as_deref().unwrap())
+                        .unwrap(),
+                },
+                actor.clone(),
+                json!({"member_id": actor, "membership": "leave"}),
+                Utc::now(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(!record_requires_private_plaintext_visibility(&control));
 
         let data = record(

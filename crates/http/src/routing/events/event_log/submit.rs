@@ -250,15 +250,6 @@ enum InternalEventBinding {
     MimiProvider {
         binding_ref: String,
     },
-    /// Caller-authored MIMI report admitted without fabricating a local
-    /// bearer/session grant. The handler has already verified the closed
-    /// reporter-authority transcript; ordinary Event admission still checks
-    /// the producer proof, Realm membership/capability, actor CAS and reducer.
-    MimiReporter {
-        signer_actor_id: arkret_wire::ActorId,
-        producer_verification_method: arkret_wire::DidUrl,
-        producer_signing_key: Option<arkret_wire::DidKey>,
-    },
     ServiceFrankingProof {
         target_event_id: String,
     },
@@ -316,30 +307,6 @@ impl InternalEventAdmission {
             device_id: String::new(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
-            },
-        }
-    }
-
-    pub(in crate::routing) fn mimi_reporter(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        signer_actor_id: arkret_wire::ActorId,
-        device_id: impl Into<String>,
-        producer_verification_method: arkret_wire::DidUrl,
-        producer_signing_key: Option<arkret_wire::DidKey>,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: signer_actor_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: arkret_wire::EventKind::SelfModerationReport
-                .as_str()
-                .to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::MimiReporter {
-                signer_actor_id,
-                producer_verification_method,
-                producer_signing_key,
             },
         }
     }
@@ -520,26 +487,6 @@ impl InternalEventAdmission {
                         .and_then(Value::as_str)
                         == Some(binding_ref.as_str())
                 }
-                InternalEventBinding::MimiReporter {
-                    signer_actor_id,
-                    producer_verification_method,
-                    ..
-                } => {
-                    let event_signer = object
-                        .get("executed_by")
-                        .cloned()
-                        .and_then(|value| {
-                            serde_json::from_value::<arkret_wire::ActorId>(value).ok()
-                        })
-                        .unwrap_or_else(|| self.actor_id.clone());
-                    event_signer == *signer_actor_id
-                        && object
-                            .get("producer_proof")
-                            .and_then(Value::as_object)
-                            .and_then(|proof| proof.get("verification_method"))
-                            .and_then(Value::as_str)
-                            == Some(producer_verification_method.as_str())
-                }
                 InternalEventBinding::ServiceFrankingProof { target_event_id } => {
                     object
                         .get("payload")
@@ -673,37 +620,6 @@ impl InternalEventAdmission {
         }
     }
 
-    pub(in crate::routing::events::event_log) fn mimi_reporter_producer_signing_key(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-        verification_method: &str,
-    ) -> Option<&arkret_wire::DidKey> {
-        if !self.matches(session, object) {
-            return None;
-        }
-        match &self.binding {
-            InternalEventBinding::MimiReporter {
-                producer_verification_method,
-                producer_signing_key: Some(producer_signing_key),
-                ..
-            } if producer_verification_method.as_str() == verification_method => {
-                Some(producer_signing_key)
-            }
-            _ => None,
-        }
-    }
-
-    pub(in crate::routing::events::event_log) fn is_mimi_agent_reporter(&self) -> bool {
-        matches!(
-            self.binding,
-            InternalEventBinding::MimiReporter {
-                producer_signing_key: Some(_),
-                ..
-            }
-        )
-    }
-
     pub(in crate::routing::events::event_log) fn authorizes_mimi_facade_write(
         &self,
         session: &SessionRecord,
@@ -742,7 +658,6 @@ impl InternalEventAdmission {
                 &self.binding,
                 InternalEventBinding::PeerFederatedEvent { .. }
                     | InternalEventBinding::ProofAuthenticatedEvent { .. }
-                    | InternalEventBinding::MimiReporter { .. }
             )
     }
 

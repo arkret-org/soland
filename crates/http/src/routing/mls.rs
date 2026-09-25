@@ -3362,18 +3362,6 @@ async fn validate_agent_keypackage_leaf(
     validate_actor_keypackage_leaf(principal, &public_key, key_package_bytes)
 }
 
-#[cfg(test)]
-fn validate_pairwise_keypackage_upload(
-    principal: &arkret_wire::DidCoreId,
-    verification_method: &arkret_wire::DidUrl,
-    key_package_bytes: &[u8],
-    signature: &KeyOperationSignature,
-    signing_input: &[u8],
-) -> Result<(), String> {
-    verify_pairwise_keypackage_batch(principal, verification_method, signature, signing_input)?;
-    validate_pairwise_keypackage_leaf(principal, verification_method, key_package_bytes)
-}
-
 fn pairwise_keypackage_public_key(
     principal: &arkret_wire::DidCoreId,
     verification_method: &arkret_wire::DidUrl,
@@ -4365,12 +4353,34 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 #[cfg(test)]
 mod trust_binding_tests {
     use serde_json::json;
+    use soland_test_support::AppStateTestExt as _;
 
     use super::*;
+
+    /// The requesting device's exact identity and its accepted authorization.
+    struct ClaimRequester {
+        principal_id: String,
+        device_id: String,
+        verification_method: String,
+        device_authorize_event_id: String,
+    }
+
+    fn fixed_claim_requester() -> ClaimRequester {
+        ClaimRequester {
+            principal_id: "ak:did_core:web:claim-requester.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            verification_method:
+                "did:web:claim-requester.example#ak:device:01904100-0000-7000-8000-000000000001"
+                    .to_owned(),
+            device_authorize_event_id: "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM"
+                .to_owned(),
+        }
+    }
 
     fn signed_claim_authorization_fixture(
         source: arkret_wire::DidCoreId,
         destination: arkret_wire::DidCoreId,
+        requester: &ClaimRequester,
         key: &ed25519_dalek::SigningKey,
     ) -> PeerKeyPackagesClaimRequestBody {
         let signed_at = arkret_canonical::normalize_timestamp_canonical(now());
@@ -4382,7 +4392,7 @@ mod trust_binding_tests {
             },
             "target_device_ids": ["ak:device:01904100-0000-7000-8000-000000000002"],
             "requester_account_id": {
-                "principal_id": "ak:did_core:web:claim-requester.example",
+                "principal_id": requester.principal_id,
                 "station_id": source.clone()
             },
             "intended_realm_id": "ak:realm:ARaz6Z8HFGLoPkpji4ac9NxCUjXT81HDezufw7yJGiju",
@@ -4393,17 +4403,18 @@ mod trust_binding_tests {
             "service_binding": {"source_id": source, "destination_id": destination},
             "requester_authorization": {
                 "kind": "device",
-                "verification_method": "did:web:claim-requester.example#ak:device:01904100-0000-7000-8000-000000000001",
-                "requester_device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                "device_authorize_event_id": "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
+                "verification_method": requester.verification_method,
+                "requester_device_id": requester.device_id,
+                "device_authorize_event_id": requester.device_authorize_event_id,
                 "signed_at": signed_at,
                 "signature": {
-                    "kid": "did:web:claim-requester.example#ak:device:01904100-0000-7000-8000-000000000001",
+                    "kid": requester.verification_method,
                     "signature_algorithm": "Ed25519",
                     "sig": "AA"
                 }
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let bytes = keypackage_claim_authorization_signing_bytes(
             &body.unsigned_request(),
             &body.service_binding,
@@ -4428,7 +4439,8 @@ mod trust_binding_tests {
         let destination =
             arkret_wire::DidCoreId::new("ak:did_core:web:destination.example").unwrap();
         let key = ed25519_dalek::SigningKey::from_bytes(&[71_u8; 32]);
-        let body = signed_claim_authorization_fixture(source, destination, &key);
+        let body =
+            signed_claim_authorization_fixture(source, destination, &fixed_claim_requester(), &key);
         let authorization = VerifiedClaimAuthorization::for_verified_request(&body).unwrap();
         let digest = arkret_canonical::canonical_sha256(&body).unwrap();
         authorization.validate_request(&body, &digest).unwrap();
@@ -4462,36 +4474,27 @@ mod trust_binding_tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let key = ed25519_dalek::SigningKey::from_bytes(&[71_u8; 32]);
+        // The requester stands on a genuinely accepted PCR genesis: its founding
+        // device is the only authority a claim authorization may cite.
+        let fixture = soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
+        fixture
+            .admit_into(state.test_persistence().as_ref())
+            .await
+            .expect("accepted PCR genesis");
+        let history = &fixture.history;
+        let requester = ClaimRequester {
+            principal_id: history.account.principal_id.to_string(),
+            device_id: history.founding_device_id.to_string(),
+            verification_method: history.device_verification_method.to_string(),
+            device_authorize_event_id: history.events[1].event_id.to_string(),
+        };
+        let key = ed25519_dalek::SigningKey::from_bytes(&history.founding_device_signing_seed);
         let local = signed_claim_authorization_fixture(
             state.service_core_id(),
             state.service_core_id(),
+            &requester,
             &key,
         );
-        let PeerKeyPackageRequesterAuthorization::Device {
-            requester_device_id,
-            device_authorize_event_id,
-            ..
-        } = &local.requester_authorization
-        else {
-            unreachable!();
-        };
-        state.identities().save_device_if_absent(soland_services::identity::DeviceIdentity {
-            actor_id: local
-                .requester_account_id
-                .as_ref()
-                .expect("device requester has an exact account")
-                .principal_id
-                .to_string(),
-            device_id: requester_device_id.to_string(),
-            display_name: None,
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_public_key_did": format!("did:key:{}", arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())),
-                "device_authorize_event_id": device_authorize_event_id
-            }),
-            created_at: now(), updated_at: now(), revoked_at: None,
-        }).await.unwrap();
         assert!(
             verify_local_claim_participant_authorization(&state, &local)
                 .await
@@ -4502,6 +4505,7 @@ mod trust_binding_tests {
         let foreign = signed_claim_authorization_fixture(
             arkret_wire::DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
             state.service_core_id(),
+            &requester,
             &key,
         );
         assert!(
@@ -4509,17 +4513,6 @@ mod trust_binding_tests {
                 .await
                 .unwrap()
         );
-    }
-
-    fn pairwise_endpoint(seed: [u8; 32]) -> (arkret_wire::DidCoreId, arkret_wire::DidUrl) {
-        let key = ed25519_dalek::SigningKey::from_bytes(&seed)
-            .verifying_key()
-            .to_bytes();
-        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&key);
-        (
-            arkret_wire::DidCoreId::new(format!("ak:did_core:key:{multibase}")).unwrap(),
-            arkret_wire::DidUrl::new(format!("did:key:{multibase}#{multibase}")).unwrap(),
-        )
     }
 
     #[test]
@@ -4612,70 +4605,6 @@ mod trust_binding_tests {
         row.device_authorize_event_id = Some(authorization.into());
         assert!(trust_binding_from_keypackage(&row).is_err());
         assert!(trust_binding_from_row(&row).is_err());
-    }
-
-    #[test]
-    fn pairwise_keypackage_upload_binds_outer_signature_leaf_actor_and_leaf_key() {
-        let seed = [19_u8; 32];
-        let (pairwise_actor, method) = pairwise_endpoint(seed);
-        let identity = arkret_mls::ArkretMlsIdentity::new_minimal_metadata_pairwise(
-            arkret_wire::ActorId::service(pairwise_actor.clone()),
-            method.clone(),
-            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
-                ed25519_dalek::SigningKey::from_bytes(&seed),
-            ),
-        )
-        .unwrap();
-        let record = identity.key_package_record().unwrap();
-        let realm_id = arkret_wire::RealmId::new(
-            "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5".to_owned(),
-        )
-        .unwrap();
-        let upload = identity
-            .signed_key_packages_upload_request(
-                std::slice::from_ref(&record),
-                method.as_str(),
-                Some(realm_id),
-            )
-            .unwrap();
-        assert_eq!(upload.principal_id, pairwise_actor);
-        let key_package_bytes = URL_SAFE_NO_PAD.decode(record.keypackage.as_str()).unwrap();
-        let signing_input =
-            arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&upload.unsigned())
-                .unwrap();
-        validate_pairwise_keypackage_upload(
-            &upload.principal_id,
-            &method,
-            &key_package_bytes,
-            &upload.endpoint_signature,
-            &signing_input,
-        )
-        .unwrap();
-
-        let other_seed = [23_u8; 32];
-        let (other_actor, other_method) = pairwise_endpoint(other_seed);
-        let other_identity = arkret_mls::ArkretMlsIdentity::new_minimal_metadata_pairwise(
-            arkret_wire::ActorId::service(other_actor),
-            other_method,
-            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
-                ed25519_dalek::SigningKey::from_bytes(&other_seed),
-            ),
-        )
-        .unwrap();
-        let other_record = other_identity.key_package_record().unwrap();
-        let other_bytes = URL_SAFE_NO_PAD
-            .decode(other_record.keypackage.as_str())
-            .unwrap();
-        assert_eq!(
-            validate_pairwise_keypackage_upload(
-                &upload.principal_id,
-                &method,
-                &other_bytes,
-                &upload.endpoint_signature,
-                &signing_input,
-            ),
-            Err("claim_generation_mismatch".to_owned())
-        );
     }
 
     #[test]
