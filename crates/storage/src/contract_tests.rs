@@ -137,23 +137,42 @@ pub async fn assert_device_message_snapshot_guard_contract(
     assert_eq!(authorization_a.principal_id, authorization_b.principal_id);
     let device_a = authorization_a.device_id.clone();
     let device_b = authorization_b.device_id.clone();
-    let devices = inventory.list_for_actor(&actor).await.unwrap();
-    let snapshot = devices
-        .iter()
-        .filter(|d| d.verification_state == "verified" && d.revoked_at.is_none())
-        .map(|d| (d.device_id.clone(), d.updated_at))
-        .collect::<Vec<_>>();
+    let snapshot = || async {
+        inventory
+            .list_for_actor(&actor)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|d| d.verification_state == "verified" && d.revoked_at.is_none())
+            .map(|d| (d.device_id, d.updated_at))
+            .collect::<Vec<_>>()
+    };
+    // Moving the target's inventory row is what invalidates a snapshot; a
+    // metadata refresh through the production write path moves it the same
+    // way a revocation does, without fabricating a revocation.
+    let touch_target = |at: chrono::DateTime<Utc>| {
+        let record = crate::DeviceInventoryMetadata {
+            actor: actor.clone(),
+            device_id: device_b.clone(),
+            display_name: None,
+            last_seen_at: Some(at),
+            last_key_upload_at: None,
+            updated_at: at,
+        };
+        async move { inventory.put_metadata(&record).await }
+    };
+    let stale_snapshot = snapshot().await;
     let request_key = format!("repair:{namespace}");
     let request_digest = format!("sha256:{namespace}");
     let expires_at = now + Duration::days(1);
-    let batch = DeviceMessageBatchRecord {
+    let mut batch = DeviceMessageBatchRecord {
         request_key: request_key.clone(),
         request_digest: request_digest.clone(),
         idempotency_expires_at: expires_at,
         per_device_queue_capacity: 10_000,
         target_snapshot_guard: Some(DeviceMessageTargetSnapshotGuard {
             recipient: actor.clone(),
-            devices: snapshot,
+            devices: stale_snapshot,
         }),
         device_revocation_gate: Some(authorization_a.clone()),
         sender_agent_guard: None,
@@ -191,18 +210,9 @@ pub async fn assert_device_message_snapshot_guard_contract(
             .collect(),
     };
 
-    let mut revoked = inventory
-        .get(&actor, &device_b)
+    touch_target(now + Duration::seconds(1))
         .await
-        .expect("read target device")
-        .expect("target exists");
-    let original_updated_at = revoked.updated_at;
-    revoked.revoked_at = Some(now + Duration::seconds(1));
-    revoked.updated_at = now + Duration::seconds(1);
-    inventory
-        .seed_test_record(&revoked)
-        .await
-        .expect("revoke target device");
+        .expect("move the target device row");
     assert_eq!(
         messages
             .commit_batch(batch.clone())
@@ -219,12 +229,10 @@ pub async fn assert_device_message_snapshot_guard_contract(
         "snapshot conflict must enqueue zero targets"
     );
 
-    revoked.revoked_at = None;
-    revoked.updated_at = original_updated_at;
-    inventory
-        .seed_test_record(&revoked)
-        .await
-        .expect("restore original snapshot");
+    batch.target_snapshot_guard = Some(DeviceMessageTargetSnapshotGuard {
+        recipient: actor.clone(),
+        devices: snapshot().await,
+    });
     let stored = messages
         .commit_batch(batch.clone())
         .await
@@ -262,12 +270,9 @@ pub async fn assert_device_message_snapshot_guard_contract(
         DeviceMessageBatchInspection::Fresh { .. }
     ));
 
-    revoked.revoked_at = Some(now + Duration::seconds(2));
-    revoked.updated_at = now + Duration::seconds(2);
-    inventory
-        .seed_test_record(&revoked)
+    touch_target(now + Duration::seconds(2))
         .await
-        .expect("revoke after durable commit");
+        .expect("move the target device row after durable commit");
     let replay = messages
         .commit_batch(batch.clone())
         .await

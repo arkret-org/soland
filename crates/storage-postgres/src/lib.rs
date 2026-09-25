@@ -41,7 +41,11 @@ mod committed_disclosure;
 mod contacts;
 #[cfg(test)]
 #[path = "../../test-support/src/device_authorization_history.rs"]
-mod device_history_fixture;
+mod device_authorization_history;
+#[cfg(test)]
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 mod device_pairing_row;
 mod device_pairings;
 mod device_revocations;

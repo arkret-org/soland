@@ -1776,13 +1776,13 @@ mod tests {
     use arkret_models_integration::PushRegistrationHandoffState;
     use arkret_wire::{AccountId, Audience, DeviceId, DidUrl, PayloadProof};
     use serde_json::json;
-    use soland_storage::{DeviceInventoryStore, DeviceRevocationStore, PushDeviceStore};
+    use soland_storage::{DeviceRevocationStore, PushDeviceStore};
     use tokio::sync::Barrier;
 
     use super::*;
-    use crate::{
-        PgDeviceInventoryStore, PgDeviceRevocationStore, PgPushDeviceStore, device_history_fixture,
-    };
+    use crate::device_authorization_history::did_web_station;
+    use crate::pcr_genesis::PcrGenesisFixture;
+    use crate::{PgDeviceRevocationStore, PgPersistenceStore, PgPushDeviceStore};
 
     fn active_request() -> PushRegistrationHandoffRequestBody {
         active_request_with_id("registration_0123456789abcdef", None)
@@ -1804,20 +1804,6 @@ mod tests {
             "supersedes_registration_id": supersedes_registration_id
         }))
         .unwrap()
-    }
-
-    fn local_route(
-        source: &DidCoreId,
-        destination: &DidCoreId,
-    ) -> PushRegistrationHandoffRouteLocator {
-        local_route_for_account(
-            AccountId::new(
-                DidCoreId::new("ak:did_core:web:account.example").unwrap(),
-                source.clone(),
-            ),
-            DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap(),
-            destination,
-        )
     }
 
     fn local_route_for_account(
@@ -1846,34 +1832,43 @@ mod tests {
         .unwrap();
     }
 
-    fn client_input_digest(byte: char) -> Hash {
-        Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
+    /// Admit a genuinely signed PCR genesis at `source` and return the local
+    /// route of its founding device with the selector the Station accepted.
+    async fn accepted_local_route(
+        pool: &PgPool,
+        source: &DidCoreId,
+        destination: &DidCoreId,
+    ) -> (
+        PushRegistrationHandoffRouteLocator,
+        soland_storage::DeviceRevocationGateSelector,
+    ) {
+        {
+            let mut conn = pool.get().await.unwrap();
+            sql_query(
+                "INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1) \
+                 ON CONFLICT(singleton) DO NOTHING",
+            )
+            .bind::<Text, _>(source.as_str())
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        }
+        let fixture = PcrGenesisFixture::new(did_web_station(source));
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
+        let route = local_route_for_account(
+            fixture.history.account.clone(),
+            fixture.history.founding_device_id.clone(),
+            destination,
+        );
+        seed_account(pool, &route.account_id).await;
+        (route, authorization)
     }
 
-    fn device_authorization(
-        route: &PushRegistrationHandoffRouteLocator,
-    ) -> soland_storage::DeviceRevocationGateSelector {
-        let event_id =
-            arkret_wire::EventId::new("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD")
-                .unwrap();
-        soland_storage::DeviceRevocationGateSelector {
-            principal_id: route.account_id.principal_id.clone(),
-            station_id: route.account_id.station_id.clone(),
-            device_id: route.device_id.as_str().to_owned(),
-            authorization_ref: arkret_wire::CommittedEventRef {
-                commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-                    event_id.as_str().as_bytes(),
-                )),
-                stream_ref: arkret_wire::CommitStreamRef::Realm {
-                    realm_id: arkret_wire::RealmId::new(
-                        "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
-                    )
-                    .unwrap(),
-                },
-                stream_position: 1,
-                event_id,
-            },
-        }
+    fn client_input_digest(byte: char) -> Hash {
+        Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
     }
 
     fn active_request_for_device(
@@ -2100,8 +2095,7 @@ mod tests {
         let pool = database.pool();
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
-        let route = local_route(&source, &destination);
-        seed_account(&pool, &route.account_id).await;
+        let (route, authorization) = accepted_local_route(&pool, &source, &destination).await;
         let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
         let active = active_request();
         let at = chrono::Utc::now();
@@ -2109,7 +2103,7 @@ mod tests {
             .ensure_desired_intent(
                 &source,
                 &route,
-                &device_authorization(&route),
+                &authorization,
                 &client_input_digest('1'),
                 &active,
                 Some("org.arkret.coauth.browser_session:fixture"),
@@ -2154,7 +2148,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &client_input_digest('1'),
                     &active_request(),
                     Some(&record.revocation_ref),
@@ -2173,7 +2167,7 @@ mod tests {
                     active.registration_id(),
                     &active.request_digest().unwrap(),
                     &receipt,
-                    &device_authorization(&route),
+                    &authorization,
                     &registration,
                     Some(&record.revocation_ref),
                     at,
@@ -2211,8 +2205,7 @@ mod tests {
         let pool = database.pool();
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
-        let route = local_route(&source, &destination);
-        seed_account(&pool, &route.account_id).await;
+        let (route, authorization) = accepted_local_route(&pool, &source, &destination).await;
         let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
         let active = active_request();
         let at = chrono::Utc::now();
@@ -2220,7 +2213,7 @@ mod tests {
             .ensure_desired_intent(
                 &source,
                 &route,
-                &device_authorization(&route),
+                &authorization,
                 &client_input_digest('1'),
                 &active,
                 None,
@@ -2249,7 +2242,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &client_input_digest('2'),
                     &new_active,
                     None,
@@ -2268,7 +2261,7 @@ mod tests {
                     active.registration_id(),
                     &active.request_digest().unwrap(),
                     &receipt,
-                    &device_authorization(&route),
+                    &authorization,
                     &registration,
                     None,
                     at,
@@ -2303,9 +2296,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -2315,15 +2307,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route_for_account(
             source.account.clone(),
@@ -2398,8 +2385,7 @@ mod tests {
         let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
-        let route = local_route(&source, &destination);
-        seed_account(&pool, &route.account_id).await;
+        let (route, authorization) = accepted_local_route(&pool, &source, &destination).await;
         let active_client_digest = client_input_digest('1');
         let active = active_request();
         let active_digest = active.request_digest().unwrap();
@@ -2409,7 +2395,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &active_client_digest,
                     &active,
                     None,
@@ -2439,6 +2425,7 @@ mod tests {
             let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
             let source = source.clone();
             let route = route.clone();
+            let authorization = authorization.clone();
             let revoked = revoked.clone();
             tokio::spawn(async move {
                 barrier.wait().await;
@@ -2446,7 +2433,7 @@ mod tests {
                     .ensure_desired_intent(
                         &source,
                         &route,
-                        &device_authorization(&route),
+                        &authorization,
                         &client_input_digest('2'),
                         &revoked,
                         None,
@@ -2514,7 +2501,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &client_input_digest('2'),
                     &revoked,
                     None,
@@ -2529,7 +2516,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &active_client_digest,
                     &active,
                     None,
@@ -2547,8 +2534,7 @@ mod tests {
         let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
-        let route = local_route(&source, &destination);
-        seed_account(&pool, &route.account_id).await;
+        let (route, authorization) = accepted_local_route(&pool, &source, &destination).await;
         let same_client_input = client_input_digest('3');
         let first = active_request_with_id("registration_aaaaaaaaaaaaaaaa", None);
         let retry = active_request_with_id("registration_bbbbbbbbbbbbbbbb", None);
@@ -2560,6 +2546,7 @@ mod tests {
             let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
             let source = source.clone();
             let route = route.clone();
+            let authorization = authorization.clone();
             let digest = same_client_input.clone();
             let request = first.clone();
             tokio::spawn(async move {
@@ -2568,7 +2555,7 @@ mod tests {
                     .ensure_desired_intent(
                         &source,
                         &route,
-                        &device_authorization(&route),
+                        &authorization,
                         &digest,
                         &request,
                         None,
@@ -2582,6 +2569,7 @@ mod tests {
             let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
             let source = source.clone();
             let route = route.clone();
+            let authorization = authorization.clone();
             let digest = same_client_input.clone();
             let request = retry;
             tokio::spawn(async move {
@@ -2590,7 +2578,7 @@ mod tests {
                     .ensure_desired_intent(
                         &source,
                         &route,
-                        &device_authorization(&route),
+                        &authorization,
                         &digest,
                         &request,
                         None,
@@ -2653,7 +2641,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &successor_input,
                     &successor,
                     None,
@@ -2696,7 +2684,7 @@ mod tests {
                 .ensure_desired_intent(
                     &source,
                     &route,
-                    &device_authorization(&route),
+                    &authorization,
                     &successor_input,
                     &successor,
                     None,
@@ -2732,9 +2720,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -2744,15 +2731,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route_for_account(
             source.account.clone(),
@@ -3011,9 +2993,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3023,15 +3004,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route_a = local_route_for_account(
             source.account.clone(),
@@ -3372,9 +3348,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3384,15 +3359,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route_for_account(
             source.account.clone(),
@@ -3465,9 +3435,7 @@ mod tests {
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
-        let route = local_route(&station_id, &destination);
-        seed_account(&pool, &route.account_id).await;
-        let authorization = device_authorization(&route);
+        let (route, authorization) = accepted_local_route(&pool, &station_id, &destination).await;
         let existing = active_request_with_id("registration_cccccccccccccccc", None);
         let store = PgPushRegistrationHandoffStore { pool: pool.clone() };
         let started_at = chrono::DateTime::parse_from_rfc3339("2026-09-23T00:15:00Z")
@@ -3568,9 +3536,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3580,15 +3547,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route_for_account(
             source.account.clone(),
@@ -3773,9 +3735,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3785,15 +3746,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route_for_account(
             source.account.clone(),
@@ -3909,9 +3865,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -3921,15 +3876,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let expiry = chrono::DateTime::parse_from_rfc3339("2026-09-23T02:00:00Z")
             .unwrap()
@@ -4012,9 +3962,8 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let fixture = PcrGenesisFixture::new(did_web_station(&station_id));
+        let source = &fixture.history;
         seed_account(&pool, &source.account).await;
         {
             let mut conn = pool.get().await.unwrap();
@@ -4024,15 +3973,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == source.founding_device_id.as_str())
-            .unwrap();
+        let authorization = fixture
+            .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let destination = DidCoreId::new("ak:did_core:web:gateway.example").unwrap();
         let route = local_route_for_account(
             source.account.clone(),
@@ -4071,14 +4015,11 @@ mod tests {
             .await
             .unwrap();
         }
+        // The revocation is refused before its reference is recorded, so any
+        // committed reference of this PCR serves as the attempted revoke.
         let transition = soland_storage::DeviceRevocationTransition {
+            revoke_ref: authorization.authorization_ref.clone(),
             selector: authorization,
-            revoke_ref: source
-                .gate_selectors()
-                .into_iter()
-                .find(|selector| selector.device_id == source.founding_device_id.as_str())
-                .unwrap()
-                .authorization_ref,
             committed_at: started_at + chrono::Duration::seconds(1),
         };
         assert!(matches!(

@@ -6,7 +6,11 @@
 //! case an isolated, freshly migrated database.
 
 #[path = "../../test-support/src/device_authorization_history.rs"]
-mod device_history_fixture;
+#[allow(dead_code)]
+mod device_authorization_history;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 
 use arkret_models_collaboration::device_messages::RecipientDelivery;
 use chrono::{Duration, Utc};
@@ -15,28 +19,34 @@ use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use soland_storage::contract_tests::test_device_message_envelope;
 use soland_storage::{
-    DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
-    DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageIntentRecord,
-    DeviceMessageRecord, DeviceMessageStore, DeviceRevocationGateSelector, PersistenceError,
-    RecipientQueueSelector,
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    DeviceRevocationGateSelector, PersistenceError, RecipientQueueSelector,
 };
 use soland_storage_postgres::test_database::TestDatabase;
-use soland_storage_postgres::{Db, PgDeviceInventoryStore, PgDeviceMessageStore, PgPool};
+use soland_storage_postgres::{Db, PgDeviceMessageStore, PgPool};
 
 const STATION: &str = "ak:did_core:web:device-message-queue.example";
 
-/// Two accepted devices of one account, seeded from genuinely signed history.
+/// Two devices of one account, both accepted by the Station: the founding
+/// device through the PCR genesis unit, the second through the registered
+/// `accepted_device` unit on the founding device's approval.
 async fn two_device_authorities(
     pool: &PgPool,
 ) -> (DeviceRevocationGateSelector, DeviceRevocationGateSelector) {
-    let source = two_device_history(pool).await;
-    let mut selectors = source.gate_selectors().into_iter();
-    (selectors.next().unwrap(), selectors.next().unwrap())
+    let devices = two_device_history(pool).await;
+    (devices.founding, devices.second)
 }
 
-/// The signed history behind [`two_device_authorities`], with its founding
+/// The accepted history behind [`two_device_authorities`], with its founding
 /// device key still available to author further Events.
-async fn two_device_history(pool: &PgPool) -> device_history_fixture::DeviceHistoryFixture {
+struct TwoDeviceHistory {
+    history: device_authorization_history::DeviceHistoryFixture,
+    founding: DeviceRevocationGateSelector,
+    second: DeviceRevocationGateSelector,
+}
+
+async fn two_device_history(pool: &PgPool) -> TwoDeviceHistory {
     let mut conn = pool.get().await.unwrap();
     sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
         .bind::<Text, _>(STATION)
@@ -44,24 +54,24 @@ async fn two_device_history(pool: &PgPool) -> device_history_fixture::DeviceHist
         .await
         .unwrap();
     drop(conn);
-    let mut source = device_history_fixture::DeviceHistoryFixture::new(
-        device_history_fixture::did_web_station(&STATION.parse().unwrap()),
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    let mut fixture = pcr_genesis::PcrGenesisFixture::new(
+        device_authorization_history::did_web_station(&STATION.parse().unwrap()),
     );
-    let second = source.event(
-        arkret_wire::EventKind::DeviceAuthorize,
-        serde_json::to_value(device_history_fixture::possession(
-            &source.account,
-            2,
-            arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice,
-        ))
-        .unwrap(),
-    );
-    source.append(vec![second]);
-    let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-    for device in source.device_inventory_records() {
-        inventory.seed_test_record(&device).await.unwrap();
+    let founding = fixture
+        .admit_founding_device(&persistence)
+        .await
+        .expect("accepted PCR genesis");
+    let second = fixture
+        .admit_accepted_device(&persistence, [97; 32])
+        .await
+        .expect("accepted second device")
+        .authorization;
+    TwoDeviceHistory {
+        history: fixture.history,
+        founding,
+        second,
     }
-    source
 }
 
 fn message(
@@ -129,6 +139,138 @@ async fn queue_row_count(pool: &PgPool) -> i64 {
         .await
         .unwrap()
         .count
+}
+
+/// A selector counts only as the Station accepted it. A genuinely signed
+/// authorize Event the Station never committed, an older Commit of the same
+/// PCR cited for the founding device, and the founding authorization claimed
+/// at another Station are each refused by the queue's device gate and leave
+/// no row; the Station's PCR status admits only the accepted device.
+#[tokio::test]
+async fn queue_refuses_device_authorizations_the_station_did_not_accept() {
+    use arkret_models_collaboration::events_payloads::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
+    };
+    use soland_storage::DeviceRevocationStore;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut conn = pool.get().await.unwrap();
+    sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+        .bind::<Text, _>(STATION)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let mut fixture = pcr_genesis::PcrGenesisFixture::new(
+        device_authorization_history::did_web_station(&STATION.parse().unwrap()),
+    );
+    let founding = fixture
+        .admit_founding_device(&soland_storage_postgres::PgPersistenceStore::new(
+            pool.clone(),
+        ))
+        .await
+        .expect("accepted PCR genesis");
+
+    let unaccepted_device =
+        arkret_wire::DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let payload = device_authorization_history::possession_with(
+        &fixture.history.account,
+        device_authorization_history::DeviceAuthorizationSpec {
+            device_id: unaccepted_device.clone(),
+            signing_seed: [98; 32],
+            hpke_seed: [99; 32],
+            authorized_by: DeviceOrPrincipalRef::DeviceId(
+                fixture.history.founding_device_id.clone(),
+            ),
+            not_before: fixture.history.events[1].created_at,
+            expires_at: None,
+            binding: DeviceAuthorizationBindingKind::AcceptedDevice,
+            authorized_generation_ref: 1,
+            applet_id: None,
+        },
+    );
+    let authorize = fixture.history.event(
+        arkret_wire::EventKind::DeviceAuthorize,
+        serde_json::to_value(payload).unwrap(),
+    );
+    fixture.history.append(vec![authorize.clone()]);
+    let uncommitted = fixture.history.commits.last().unwrap();
+    let unaccepted = DeviceRevocationGateSelector {
+        device_id: unaccepted_device.to_string(),
+        authorization_ref: arkret_wire::CommittedEventRef {
+            event_id: authorize.event_id.clone(),
+            commit_id: uncommitted.commit_id.clone(),
+            stream_ref: uncommitted.stream_ref.clone(),
+            stream_position: uncommitted.stream_position,
+        },
+        ..founding.clone()
+    };
+    let create = &fixture.history.commits[0];
+    let superseded = DeviceRevocationGateSelector {
+        authorization_ref: arkret_wire::CommittedEventRef {
+            event_id: create.event_ref.clone(),
+            commit_id: create.commit_id.clone(),
+            stream_ref: create.stream_ref.clone(),
+            stream_position: create.stream_position,
+        },
+        ..founding.clone()
+    };
+    let foreign = DeviceRevocationGateSelector {
+        station_id: "ak:did_core:web:foreign-station.example".parse().unwrap(),
+        ..founding.clone()
+    };
+
+    // The Station's PCR status admits the founding device only.
+    let status = soland_storage_postgres::PgDeviceRevocationStore { pool: pool.clone() };
+    let account = fixture.history.account.clone();
+    let at = Utc::now();
+    assert_eq!(
+        status
+            .pcr_device_admission(&account, &fixture.history.founding_device_id, at)
+            .await
+            .unwrap(),
+        arkret_wire::DeviceRevocationAdmissionDecision::Allow
+    );
+    let unaccepted_status = status
+        .pcr_device_admission(&account, &unaccepted_device, at)
+        .await;
+    assert!(
+        !matches!(
+            unaccepted_status,
+            Ok(arkret_wire::DeviceRevocationAdmissionDecision::Allow)
+        ),
+        "a device without an accepted authorization is not admitted: {unaccepted_status:?}"
+    );
+
+    let store = PgDeviceMessageStore { pool: pool.clone() };
+    for (label, recipient) in [
+        ("unaccepted", &unaccepted),
+        ("superseded", &superseded),
+        ("foreign", &foreign),
+    ] {
+        let envelope = test_device_message_envelope(&founding, recipient, Utc::now());
+        let outcome = store
+            .commit_batch(batch(label, message(&founding, recipient, envelope)))
+            .await;
+        assert!(
+            !matches!(outcome, Ok(DeviceMessageBatchCommitOutcome::Stored(_))),
+            "{label} recipient authorization must not be queued: {outcome:?}"
+        );
+    }
+    assert_eq!(queue_row_count(&pool).await, 0);
+
+    // The accepted selector itself is queued: the refusals above are the
+    // gate's, not a broken fixture's.
+    let envelope = test_device_message_envelope(&founding, &founding, Utc::now());
+    assert!(matches!(
+        store
+            .commit_batch(batch("accepted", message(&founding, &founding, envelope)))
+            .await
+            .unwrap(),
+        DeviceMessageBatchCommitOutcome::Stored(_)
+    ));
+    assert_eq!(queue_row_count(&pool).await, 1);
 }
 
 #[tokio::test]
@@ -363,7 +505,7 @@ const AGENT_RUNTIME_SEED: [u8; 32] = [91; 32];
 /// the queue's endpoint recheck reads exactly what a production commit wrote.
 struct CommittedAgent {
     authority: soland_services::authority_commit::AuthorityCommitApplication,
-    controller: device_history_fixture::DeviceHistoryFixture,
+    controller: device_authorization_history::DeviceHistoryFixture,
     station: arkret_wire::DidCoreId,
     agent_account: arkret_wire::AccountId,
     pcr_realm_id: arkret_wire::RealmId,
@@ -378,8 +520,11 @@ impl CommittedAgent {
             AgentKeyApprovalEvidence, AgentKeyApprovalEvidenceKind, AgentKeyAuthorizePayload,
         };
 
-        let controller = two_device_history(pool).await;
-        let recipient = controller.gate_selectors().pop().unwrap();
+        let TwoDeviceHistory {
+            history: controller,
+            second: recipient,
+            ..
+        } = two_device_history(pool).await;
         let authority = soland_services::authority_commit::AuthorityCommitApplication::new(
             soland_services::persistence::PersistenceHandle::new(std::sync::Arc::new(
                 soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
@@ -604,7 +749,7 @@ impl CommittedAgent {
 /// controller account executes it under the managed-controller delegation,
 /// and the controller's accepted device signs the producer proof.
 fn controller_signed(
-    controller: &device_history_fixture::DeviceHistoryFixture,
+    controller: &device_authorization_history::DeviceHistoryFixture,
     agent_account: &arkret_wire::AccountId,
     kind: arkret_wire::EventKind,
     scope_ref: arkret_wire::ScopeRef,
@@ -625,7 +770,7 @@ fn controller_signed(
             .unwrap()
             .into(),
     );
-    device_history_fixture::sign_event(
+    device_authorization_history::sign_event(
         event,
         controller.device_verification_method.clone(),
         controller.founding_device_signing_seed,
@@ -641,7 +786,7 @@ async fn admit(
 ) -> arkret_wire::RealmCommit {
     let method = arkret_wire::DidUrl::new(format!(
         "{}#authority",
-        device_history_fixture::did_web_station(station)
+        device_authorization_history::did_web_station(station)
     ))
     .unwrap();
     let outcome = authority

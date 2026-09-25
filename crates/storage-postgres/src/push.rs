@@ -320,10 +320,9 @@ impl PushDeviceStore for PgPushDeviceStore {
 }
 #[cfg(test)]
 mod tests {
-    use soland_storage::DeviceInventoryStore;
-
     use super::*;
-    use crate::{PgDeviceInventoryStore, device_history_fixture};
+    use crate::device_authorization_history::{device, did_web_station};
+    use crate::pcr_genesis::PcrGenesisFixture;
 
     #[tokio::test]
     async fn postgres_push_registration_atomic_rotation_and_exact_account_removal() {
@@ -333,9 +332,7 @@ mod tests {
         };
         let station_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:push-registration.example").unwrap();
-        let source = device_history_fixture::DeviceHistoryFixture::new(
-            device_history_fixture::did_web_station(&station_id),
-        );
+        let source = PcrGenesisFixture::new(did_web_station(&station_id));
         {
             let mut conn = store.pool.get().await.unwrap();
             sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -344,12 +341,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let inventory = PgDeviceInventoryStore {
-            pool: store.pool.clone(),
-        };
-        for device in source.device_inventory_records() {
-            inventory.seed_test_record(&device).await.unwrap();
-        }
+        let authorization = source
+            .admit_founding_device(&crate::PgPersistenceStore::new(store.pool.clone()))
+            .await
+            .expect("accepted PCR genesis");
         let mut record: arkret_models_integration::PushRegistrationRecord = serde_json::from_value(serde_json::json!({
             "registration_id":"push_registration:first", "account_id":{"principal_id":"ak:did_core:web:alice.example", "station_id":"ak:did_core:web:station.example"},
             "device_id":"ak:device:0196419b-0000-7000-8000-000000000001",
@@ -358,13 +353,9 @@ mod tests {
             "push_target_id":"ak:pseudonym:push:kosc9iQ4gVct1OB-b6X364WIFIsJFVbVzn7BMBs1sm8",
             "salt_epoch_id":"first", "expires_at":null, "retained_push_targets":[]
         })).unwrap();
-        record.account_id = source.account.clone();
-        record.device_id = device_history_fixture::device(1);
-        let authorization = source
-            .gate_selectors()
-            .into_iter()
-            .find(|selector| selector.device_id == record.device_id.as_str())
-            .expect("the founding device carries a committed authorization");
+        record.account_id = source.history.account.clone();
+        record.device_id = device(1);
+        assert_eq!(authorization.device_id, record.device_id.as_str());
         store
             .register(&authorization, serde_json::to_value(&record).unwrap())
             .await

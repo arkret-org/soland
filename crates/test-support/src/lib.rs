@@ -385,6 +385,16 @@ pub trait AppStateTestExt {
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
 }
 
+impl pcr_genesis::PcrGenesisFixture {
+    /// [`Self::admit_into`] against the persistence behind `state`.
+    pub async fn admit(
+        &self,
+        state: &AppState,
+    ) -> soland_storage::PersistenceResult<soland_storage::PcrGenesisCommitOutcome> {
+        self.admit_into(state.test_persistence().as_ref()).await
+    }
+}
+
 pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceStore>) {
     register_state_resources(
         app_state_key(state),

@@ -2675,6 +2675,26 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         Some(ConflictCode::DeviceRevoked)
     );
 
+    // Replaying B's accepted authorization after the revocation returns the
+    // stored Commit and re-admits nothing: B stays revoked at the new cut.
+    assert_eq!(
+        PgAuthorityCommitStore { pool: pool.clone() }
+            .admit_accepted_device_authorization(
+                &tx(authorize_b.clone(), commit_b.clone()),
+                decided_at,
+            )
+            .await
+            .unwrap(),
+        AcceptedDeviceAuthorizationOutcome::Duplicate(commit_b.clone())
+    );
+    assert!(
+        status
+            .pcr_device_admission(&account, &device_b, decided_at)
+            .await
+            .unwrap()
+            != arkret_wire::DeviceRevocationAdmissionDecision::Allow
+    );
+
     // The rotation reserved its own pointer Event: the self path cannot
     // switch it outside the rotation's switch step, and writes nothing.
     let before_reserved = pointer_footprint(&pool, &realm_id).await;

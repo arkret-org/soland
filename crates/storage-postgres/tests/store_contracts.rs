@@ -1,7 +1,11 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
-mod device_history_fixture;
+#[allow(dead_code)]
+mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
 mod ordinary_realm;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 mod support;
 
 use soland_storage::contract_tests::{
@@ -58,7 +62,6 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
     }
     use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
-    use soland_storage::DeviceInventoryStore;
     #[derive(diesel::QueryableByName)]
     struct Station {
         #[diesel(sql_type=Text)]
@@ -73,35 +76,30 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
     drop(conn);
     let namespace = format!("postgres-repair-snapshot-{}", uuid::Uuid::now_v7());
     // A device queue is keyed by (actor, device_id), and the contract leaves one
-    // durable message in that queue on purpose. The fixture's default identity is
-    // deterministic, so the run would read the previous run's queue as its own
-    // and see a non-empty queue where the snapshot guard must show none. The
-    // WebVH local id therefore carries this run's namespace, which reaches the
-    // SCID and so gives this run its own principal id.
-    let mut source = device_history_fixture::DeviceHistoryFixture::new_with(
-        device_history_fixture::did_web_station(&station.station_id.parse().unwrap()),
-        device_history_fixture::DeviceHistoryFixtureOptions {
-            local_id: namespace.replace('-', ""),
-            ..Default::default()
-        },
+    // durable message in that queue on purpose; the fixture's fresh WebVH local
+    // id gives every run its own principal, so no run reads a previous run's
+    // queue. Both devices are accepted by the Station: the founding device by
+    // the PCR genesis unit, the second by the accepted_device unit.
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    let mut source = pcr_genesis::PcrGenesisFixture::new(
+        device_authorization_history::did_web_station(&station.station_id.parse().unwrap()),
     );
-    let second = source.event(arkret_wire::EventKind::DeviceAuthorize,
-        serde_json::to_value(device_history_fixture::possession(&source.account, 2,
-            arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice)).unwrap());
-    source.append(vec![second]);
-    // Already-confirmed storage fixture; all source signatures are real.
+    let founding = source
+        .admit_founding_device(&persistence)
+        .await
+        .expect("accepted PCR genesis");
+    let second = source
+        .admit_accepted_device(&persistence, [97; 32])
+        .await
+        .expect("accepted second device");
     let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-    for device in source.device_inventory_records() {
-        inventory.seed_test_record(&device).await.unwrap();
-    }
-    let selectors = source.gate_selectors();
     let messages = PgDeviceMessageStore { pool };
     assert_device_message_snapshot_guard_contract(
         &inventory,
         &messages,
         &namespace,
-        &selectors[0],
-        &selectors[1],
+        &founding,
+        &second.authorization,
     )
     .await;
 }
@@ -109,17 +107,13 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
 /// One confirmed, unrevoked human device authorization in this Station's
 /// current device inventory.
 ///
-/// The authorization is real signed PCR material from the device-history
-/// fixture, committed under the local inventory Station. The WebVH local id
-/// carries the run's namespace so every run owns its own principal (and so its
-/// own Account) in the shared contract database.
-async fn confirmed_contract_device(
-    pool: &PgPool,
-    namespace: &str,
-) -> soland_storage::DeviceRevocationGateSelector {
+/// The founding device of a genuinely signed PCR genesis the Station admitted
+/// through its registered unit; the fixture's fresh WebVH local id gives every
+/// run its own principal (and so its own Account) in the shared contract
+/// database.
+async fn confirmed_contract_device(pool: &PgPool) -> soland_storage::DeviceRevocationGateSelector {
     use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
-    use soland_storage::DeviceInventoryStore;
     #[derive(diesel::QueryableByName)]
     struct Station {
         #[diesel(sql_type = Text)]
@@ -136,22 +130,14 @@ async fn confirmed_contract_device(
             .await
             .unwrap();
     drop(conn);
-    let source = device_history_fixture::DeviceHistoryFixture::new_with(
-        device_history_fixture::did_web_station(&station.station_id.parse().unwrap()),
-        device_history_fixture::DeviceHistoryFixtureOptions {
-            local_id: namespace.replace('-', ""),
-            ..Default::default()
-        },
-    );
-    let inventory = PgDeviceInventoryStore { pool: pool.clone() };
-    for device in source.device_inventory_records() {
-        inventory.seed_test_record(&device).await.unwrap();
-    }
-    source
-        .gate_selectors()
-        .into_iter()
-        .next()
-        .expect("the fixture commits its founding device authorization")
+    pcr_genesis::PcrGenesisFixture::new(device_authorization_history::did_web_station(
+        &station.station_id.parse().unwrap(),
+    ))
+    .admit_founding_device(&soland_storage_postgres::PgPersistenceStore::new(
+        pool.clone(),
+    ))
+    .await
+    .expect("accepted PCR genesis")
 }
 
 static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
@@ -2652,7 +2638,7 @@ async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract() {
     let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
     let accounts = soland_storage_postgres::PgAccountStore { pool: pool.clone() };
-    let device = confirmed_contract_device(&pool, &namespace).await;
+    let device = confirmed_contract_device(&pool).await;
     assert_mls_keypackage_retirement_contract(&store, &accounts, &namespace, &device).await;
 
     let restarted_store = PgMlsKeyPackageStore { pool };
@@ -2672,7 +2658,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract() {
     let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
     let accounts = soland_storage_postgres::PgAccountStore { pool: pool.clone() };
-    let device = confirmed_contract_device(&pool, &namespace).await;
+    let device = confirmed_contract_device(&pool).await;
     assert_last_resort_claim_ledger_contract(&store, &accounts, &namespace, &device).await;
 
     let restarted_store = PgMlsKeyPackageStore { pool };

@@ -26,15 +26,19 @@ use soland_storage_postgres::{
 };
 
 #[path = "../../test-support/src/device_authorization_history.rs"]
-mod device_history_fixture;
+#[allow(dead_code)]
+mod device_authorization_history;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 
-/// Seed the confirmed-storage boundary from genuinely signed fixture history.
-/// Direct inventory seeding here does not stand in for HTTP admission coverage.
+/// The founding device of a genuinely signed PCR genesis the Station admitted
+/// through its registered unit. Storage admission here does not stand in for
+/// HTTP admission coverage.
 async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGateSelector {
     use diesel::sql_query;
     use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
-    use soland_storage::DeviceInventoryStore;
     #[derive(diesel::QueryableByName)]
     struct Station {
         #[diesel(sql_type=Text)]
@@ -47,18 +51,14 @@ async fn device_authority(pool: &PgPool) -> soland_storage::DeviceRevocationGate
         .await
         .unwrap();
     drop(conn);
-    let source = device_history_fixture::DeviceHistoryFixture::new(
-        device_history_fixture::did_web_station(&station.station_id.parse().unwrap()),
-    );
-    let inventory = soland_storage_postgres::PgDeviceInventoryStore { pool: pool.clone() };
-    for device in source.device_inventory_records() {
-        inventory.seed_test_record(&device).await.unwrap();
-    }
-    source
-        .gate_selectors()
-        .into_iter()
-        .next()
-        .expect("the founding device carries a committed authorization")
+    pcr_genesis::PcrGenesisFixture::new(device_authorization_history::did_web_station(
+        &station.station_id.parse().unwrap(),
+    ))
+    .admit_founding_device(&soland_storage_postgres::PgPersistenceStore::new(
+        pool.clone(),
+    ))
+    .await
+    .expect("accepted PCR genesis")
 }
 
 /// Build a fresh pool against the configured database. Migrations are

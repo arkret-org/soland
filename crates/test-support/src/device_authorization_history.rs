@@ -1,11 +1,18 @@
 //! Signed canonical PCR material for device persistence/recovery tests.
 //!
-//! Every signature the SDK can still produce is real: the webvh principal
-//! inception, the device-possession signature over the authorize payload, and
-//! the producer detached JWS on each Event. Ordering is the authority-commit
+//! Every signature is real: the webvh principal inception, the
+//! device-possession signature over the authorize payload, the producer
+//! detached JWS on each Event, and the governance Station's detached signature
+//! on each `RealmCommit` (under the fixture authority key
+//! [`STATION_AUTHORITY_SEED`]). Ordering is the authority-commit
 //! model -- the current governance Station appends exactly one `RealmCommit`
 //! per Event on the Realm's stream -- so a consumer that has to prove a device
 //! authorization was accepted cites its `CommittedEventRef`.
+//!
+//! This material makes no acceptance claim on its own. A device counts as
+//! authorized only once a Station admitted it through a registered unit;
+//! `pcr_genesis` does that and hands out selectors built from the admission
+//! result.
 
 use arkret_canonical::DigestSuite;
 use arkret_models_collaboration::events_payloads::*;
@@ -17,6 +24,9 @@ use ed25519_dalek::{Signer, SigningKey};
 fn hash(label: &str) -> Hash {
     Hash::new(arkret_canonical::sha256_digest(label.as_bytes())).unwrap()
 }
+/// The governance Station authority key that signs every fixture Commit.
+pub const STATION_AUTHORITY_SEED: [u8; 32] = [83; 32];
+
 pub fn device(index: u8) -> DeviceId {
     DeviceId::new(format!("ak:device:01904100-0000-7000-8000-{index:012}")).unwrap()
 }
@@ -34,31 +44,6 @@ pub fn did_web_station(core_id: &DidCoreId) -> Did {
         .expect("only a did:web Station core id projects back to its DID");
     Did::new(format!("did:web:{host}")).expect("did:web Station DID")
 }
-pub fn possession(
-    account: &AccountId,
-    index: u8,
-    binding: DeviceAuthorizationBindingKind,
-) -> DeviceAuthorizePayload {
-    possession_with(
-        account,
-        DeviceAuthorizationSpec {
-            device_id: device(index),
-            signing_seed: [80 + index; 32],
-            hpke_seed: [index; 32],
-            authorized_by: if binding == DeviceAuthorizationBindingKind::AcceptedDevice {
-                DeviceOrPrincipalRef::DeviceId(device(1))
-            } else {
-                DeviceOrPrincipalRef::Principal(account.principal_id.clone())
-            },
-            not_before: at(),
-            expires_at: None,
-            binding,
-            authorized_generation_ref: 1,
-            applet_id: None,
-        },
-    )
-}
-
 #[derive(Clone)]
 pub struct DeviceAuthorizationSpec {
     pub device_id: DeviceId,
@@ -173,19 +158,6 @@ pub fn sign_event(mut event: Event, method: DidUrl, seed: [u8; 32]) -> Event {
     .unwrap();
     event.producer_proof = Some(proof);
     event
-}
-
-/// One device authorization the governance Station accepted, together with the
-/// commit that ordered it.
-///
-/// The committed reference is the whole evidence: the revocation gate compares
-/// it against the reference the durable device row carries, so a replacement
-/// authorization cannot alias its predecessor.
-#[derive(Clone, Debug)]
-pub struct CommittedDeviceAuthorization {
-    pub device_id: DeviceId,
-    pub authorization_ref: CommittedEventRef,
-    pub payload: DeviceAuthorizePayload,
 }
 
 pub struct DeviceHistoryFixture {
@@ -384,7 +356,7 @@ impl DeviceHistoryFixture {
                 CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
                     .expect("a fixture Event scope always names one commit stream");
             let stream_position = self.commits.len() as u64;
-            let commit = RealmCommit {
+            let mut commit = RealmCommit {
                 commit_id: RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
                     format!("{}:{stream_position}", event.event_id).as_bytes(),
                 )),
@@ -396,8 +368,16 @@ impl DeviceHistoryFixture {
                 governance_generation: 0,
                 authority_ref: authority_ref.clone(),
                 committed_at: self.created_at,
-                signature: self.authority_signature(),
+                signature: DetachedObjectSignature {
+                    context: DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: self.authority_method(),
+                    signed_digest: hash("unsigned"),
+                    created_at: self.created_at,
+                    sig: Base64UrlString::new("AA".to_owned()).unwrap(),
+                },
             };
+            commit.signature = self.authority_signature(&commit);
             commit
                 .validate_shape()
                 .expect("a fixture RealmCommit is well shaped");
@@ -406,93 +386,24 @@ impl DeviceHistoryFixture {
         }
     }
 
-    /// The governance Station's detached signature over a fixture commit.
-    ///
-    /// Ordering authority is not what these storage fixtures assert, so the
-    /// signature names the Station's real controller and carries a placeholder
-    /// signature value rather than a key the fixture would also have to mint.
-    fn authority_signature(&self) -> DetachedObjectSignature {
-        DetachedObjectSignature {
-            context: DetachedSignatureContext::RealmCommit,
-            signature_algorithm: DetachedSignatureAlgorithm::Ed25519,
-            verification_method: DidUrl::new(format!("{}#authority", self.station_did))
-                .expect("a Station DID names a DID URL"),
-            signed_digest: hash("fixture-realm-commit"),
-            created_at: self.created_at,
-            sig: Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
-        }
+    /// The governance Station authority method every fixture Commit names.
+    pub fn authority_method(&self) -> DidUrl {
+        DidUrl::new(format!("{}#authority", self.station_did))
+            .expect("a Station DID names a DID URL")
     }
 
-    /// The commit that ordered `event_id`.
-    pub fn committed_ref(&self, event_id: &EventId) -> CommittedEventRef {
-        let commit = self
-            .commits
-            .iter()
-            .find(|commit| &commit.event_ref == event_id)
-            .expect("the fixture only hands out committed Event ids");
-        CommittedEventRef {
-            event_id: event_id.clone(),
-            commit_id: commit.commit_id.clone(),
-            stream_ref: commit.stream_ref.clone(),
-            stream_position: commit.stream_position,
-        }
-    }
-
-    /// Every device authorization this fixture committed, oldest first.
-    pub fn authorizations(&self) -> Vec<CommittedDeviceAuthorization> {
-        self.events
-            .iter()
-            .filter(|event| event.kind == EventKind::DeviceAuthorize)
-            .map(|event| {
-                let payload = DeviceAuthorizePayload::try_from(event)
-                    .expect("a fixture authorize Event carries a typed payload");
-                CommittedDeviceAuthorization {
-                    device_id: payload.device_id.clone(),
-                    authorization_ref: self.committed_ref(&event.event_id),
-                    payload,
-                }
-            })
-            .collect()
-    }
-
-    /// Durable device-inventory rows for every committed authorization.
-    ///
-    /// The revocation gate reads the committed reference back out of the row
-    /// and compares it whole, so a seeded row carries the exact commit that
-    /// ordered its authorize Event.
-    pub fn device_inventory_records(&self) -> Vec<soland_storage::DeviceInventoryRecord> {
-        self.authorizations()
-            .into_iter()
-            .map(|authorization| soland_storage::DeviceInventoryRecord {
-                actor: self.account.principal_id.to_string(),
-                device_id: authorization.device_id.to_string(),
-                display_name: None,
-                verification_state: "verified".to_owned(),
-                payload: serde_json::json!({
-                    "device_id": authorization.device_id,
-                    "device_authorization_ref": authorization.authorization_ref,
-                    "device_authorize_payload": authorization.payload,
-                }),
-                created_at: self.created_at,
-                updated_at: self.created_at,
-                revoked_at: None,
-            })
-            .collect()
-    }
-
-    /// The revocation-gate selector for every committed authorization, in the
-    /// same order as [`Self::authorizations`].
-    pub fn gate_selectors(&self) -> Vec<soland_storage::DeviceRevocationGateSelector> {
-        self.authorizations()
-            .into_iter()
-            .map(
-                |authorization| soland_storage::DeviceRevocationGateSelector {
-                    principal_id: self.account.principal_id.clone(),
-                    station_id: self.account.station_id.clone(),
-                    device_id: authorization.device_id.to_string(),
-                    authorization_ref: authorization.authorization_ref,
-                },
-            )
-            .collect()
+    /// The governance Station's detached signature over `commit`, made with
+    /// [`STATION_AUTHORITY_SEED`] under [`Self::authority_method`].
+    fn authority_signature(&self, commit: &RealmCommit) -> DetachedObjectSignature {
+        let unsigned = arkret_canonical::canonical::unsigned_value(commit, &["signature"])
+            .expect("a fixture RealmCommit serializes as an object");
+        arkret_signatures::detached_object::sign_detached_object(
+            &unsigned,
+            DetachedSignatureContext::RealmCommit,
+            self.authority_method(),
+            commit.committed_at,
+            &SigningKey::from_bytes(&STATION_AUTHORITY_SEED),
+        )
+        .expect("fixture RealmCommit authority signature")
     }
 }
