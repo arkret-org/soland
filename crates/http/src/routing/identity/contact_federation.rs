@@ -1807,7 +1807,6 @@ async fn finalize_glare_contact_round(
     remote_attestation: &GlareConcurrencyAttestation,
     contact_address: &PeerContactAddress,
 ) -> Result<PeerContactSubmitOutcome, AppError> {
-    require_contact_commit_prefix_provider()?;
     let local_holder = request_receipts
         .iter()
         .find(|receipt| receipt.core.issuer_id.as_str() == state.service_id())
@@ -1921,13 +1920,28 @@ async fn finalize_glare_contact_round(
         "counterpart_mirror_receipt",
     )?;
 
-    let mut observed_commit_event_ids = request_receipts
+    let remote_request_ref = request_receipts
+        .iter()
+        .find(|receipt| receipt.core.holder.contact_actor_id() == remote_holder)
+        .map(|receipt| receipt.core.request_event_ref.clone())
+        .ok_or_else(|| {
+            super::super::events::peer::schema_violation(
+                "glare receipts have no remote-holder request",
+            )
+        })?;
+    let (observed_commit_event_ids, complete_through) = glare_slot_observation(
+        &record,
+        &local_holder,
+        &remote_holder,
+        local_request,
+        &remote_request_ref,
+    )?;
+    let mut request_refs = request_receipts
         .iter()
         .map(|receipt| receipt.core.request_event_ref.clone())
         .collect::<Vec<_>>();
-    observed_commit_event_ids
-        .sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    let ordered_digests: [Hash; 2] = observed_commit_event_ids
+    request_refs.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    let ordered_digests: [Hash; 2] = request_refs
         .iter()
         .map(|event_ref| {
             request_receipts
@@ -1943,7 +1957,6 @@ async fn finalize_glare_contact_round(
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
         .map_err(|_| AppError::internal("glare receipt digest cardinality invalid"))?;
-    let complete_through = local_request.core.slot_version;
     let checkpoint = glare_unconsumed_slot_checkpoint(
         &local_holder,
         &remote_holder,
@@ -2117,18 +2130,43 @@ fn sign_contact_evidence_bytes(
     })
 }
 
-fn terminal_ack_contact_current_proof(
-    _state: &AppState,
-    _peer: ContactPeer,
-    _source: &ContactCurrentProof,
+/// The local direction's terminal acknowledgement of a verified remote
+/// tombstone (contact-and-direct-conversation.md section 3): it names the
+/// shared source tombstone head and retains the local direction's last
+/// confirmed version, read from this Station's own committed direction head.
+/// Without that committed local material no completeness proof is signed.
+async fn terminal_ack_contact_current_proof(
+    state: &AppState,
+    row: &ContactRecord,
+    local_holder: &arkret_wire::ActorId,
+    peer: ContactPeer,
+    source: &ContactCurrentProof,
 ) -> Result<ContactCurrentProof, AppError> {
-    // A remote terminal proof does not reveal the local direction's last
-    // accepted version. Only the local durable lineage current reader can
-    // authorize this acknowledgement without overstating completeness.
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "local Contact lineage current provider is unavailable for terminal acknowledgement"
-    ))
+    let (local_head, complete_through) =
+        super::account::local_direction_current(state, row, local_holder)
+            .await?
+            .ok_or_else(|| {
+                crate::app_error!(
+                    TemporarilyUnavailable,
+                    "local Contact direction history is incomplete for terminal acknowledgement"
+                )
+            })?;
+    let issued_at = now();
+    ContactCurrentProof::sign_with(
+        source.contact_round_id.clone(),
+        state.service_core_id(),
+        peer,
+        true,
+        source.head_event_ref.clone(),
+        soland_domain::identity::contact_event_prefix([&local_head, &source.head_event_ref]),
+        complete_through,
+        issued_at + chrono::Duration::minutes(10),
+        |bytes| {
+            sign_contact_evidence_bytes(state, issued_at, bytes)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+        },
+    )
+    .map_err(|error| AppError::internal(error.to_string()))
 }
 
 fn normal_contact_round(
@@ -2399,16 +2437,15 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         peer_id,
         "glare_remote_mirror_receipt",
     )?;
-    require_contact_commit_prefix_provider()?;
+    let (observed_commit_event_ids, complete_through) = glare_slot_observation(
+        &record,
+        holder,
+        peer,
+        local_request,
+        &request_receipts[1].core.request_event_ref,
+    )?;
 
     let (contact_round_id, _basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
-    let mut observed_commit_event_ids = request_receipts
-        .iter()
-        .map(|receipt| receipt.core.request_event_ref.clone())
-        .collect::<Vec<_>>();
-    observed_commit_event_ids
-        .sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
-    let complete_through = local_request.core.slot_version;
     let observed_at = record.updated_at;
     let checkpoint = glare_unconsumed_slot_checkpoint(
         holder,
@@ -2457,13 +2494,41 @@ fn derive_glare_basis(
     Ok((contact_round_id, contact_round, receipt_digests))
 }
 
-fn require_contact_commit_prefix_provider() -> Result<(), AppError> {
-    // Request receipts prove two accepted facts but cannot enumerate the exact
-    // Commit prefix this Station observed for a glare decision. Signing a
-    // prefix synthesized from the receipts would misstate the transcript.
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "durable Contact Commit-prefix provider is unavailable"
+/// The glare observation of `subject`'s own request slot toward `peer`
+/// (contact-and-direct-conversation.md section 2): the slot must still stand
+/// exactly at the CAS that accepted `own_request` (`pending_unconsumed`), and
+/// the observed Commit prefix is the slot's durable accepted Event prefix
+/// plus the concurrent `peer_request_ref`. Returns that prefix and the slot's
+/// `complete_through` sequence.
+fn glare_slot_observation(
+    record: &ContactRecord,
+    subject: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
+    own_request: &RequestAcceptanceReceipt,
+    peer_request_ref: &arkret_wire::EventId,
+) -> Result<(Vec<arkret_wire::EventId>, u64), AppError> {
+    let slot = record
+        .request_slot_states
+        .iter()
+        .find(|state| &state.owner_id == subject && &state.peer_id == peer)
+        .ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                "glare local request slot is unavailable",
+            )
+        })?;
+    if slot.accepted_sequence != own_request.core.slot_version
+        || !slot
+            .accepted_event_refs
+            .contains(&own_request.core.request_event_ref)
+    {
+        return Err(AppError::conflict(
+            "Contact request slot is already consumed",
+        ));
+    }
+    Ok((
+        slot.prefix_with(std::slice::from_ref(peer_request_ref)),
+        slot.accepted_sequence,
     ))
 }
 
@@ -2529,7 +2594,6 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 current_proof: Some(remote_proof),
             }),
         ) => {
-            require_contact_commit_prefix_provider()?;
             validate_outbound_control_receipt(
                 state,
                 request,
@@ -3947,7 +4011,14 @@ async fn project_delivered_contact_fact(
                         "terminal Contact acknowledgement cannot derive the remote peer",
                     )
                 })?;
-            let local_proof = terminal_ack_contact_current_proof(state, remote_peer, remote_proof)?;
+            let local_proof = terminal_ack_contact_current_proof(
+                state,
+                &row,
+                subject_actor_id,
+                remote_peer,
+                remote_proof,
+            )
+            .await?;
             bundle
                 .current_proofs
                 .retain(|proof| proof.peer != remote_proof.peer && proof.peer != local_proof.peer);

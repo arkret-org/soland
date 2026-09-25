@@ -145,6 +145,31 @@ pub struct ContactRequestSlotState {
     pub peer_id: ActorId,
     pub accepted_sequence: u64,
     pub head_digest: Hash,
+    /// The slot's accepted Contact Event prefix: every committed Event this
+    /// slot's CAS sequence accepted (the owner's requests, the peer requests it
+    /// consumed and the owner's responses), strictly ascending by EventId
+    /// UTF-8 bytes. It is the exact `cas_revision` / glare
+    /// `observed_commit_event_ids` observation of the next CAS
+    /// (contact-and-direct-conversation.md section 2), frozen in the same
+    /// transaction as the accepting Commit.
+    pub accepted_event_refs: Vec<EventId>,
+}
+
+impl ContactRequestSlotState {
+    /// The slot's accepted prefix extended by `observed`, strictly ascending
+    /// and duplicate-free.
+    #[must_use]
+    pub fn prefix_with(&self, observed: &[EventId]) -> Vec<EventId> {
+        contact_event_prefix(self.accepted_event_refs.iter().chain(observed))
+    }
+}
+
+/// One Contact Event prefix, strictly ascending by EventId UTF-8 bytes.
+pub fn contact_event_prefix<'a>(refs: impl IntoIterator<Item = &'a EventId>) -> Vec<EventId> {
+    let mut prefix: Vec<EventId> = refs.into_iter().cloned().collect();
+    prefix.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    prefix.dedup();
+    prefix
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

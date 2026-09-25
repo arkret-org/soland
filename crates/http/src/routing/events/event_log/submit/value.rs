@@ -3,7 +3,7 @@ use super::*;
 /// The named admission context of one Event submit.
 ///
 /// Everything here participates in admission judgement. Commit-only data
-/// (idempotency records, contact projections, extra deliveries) is not
+/// (idempotency records, extra deliveries) is not
 /// admission context; it travels inside [`SubmitMode::Commit`] so a
 /// prepare-only admission cannot silently carry commit effects.
 pub(super) struct SubmitEventContext<'a> {
@@ -48,8 +48,6 @@ pub(super) enum SubmitCommitIdempotency {
 /// admission judgement; it lands on the commit command / response.
 pub(super) struct SubmitCommitOptions<'a> {
     pub(super) idempotency: Option<SubmitCommitIdempotency>,
-    pub(super) contact_completion_draft: Option<&'a soland_storage::ContactCompletionDraft>,
-    pub(super) contact_projection: Option<&'a soland_services::events::CommitContactProjection>,
     pub(super) additional_deliveries: &'a [soland_services::federation::FederationDeliveryRecord],
 }
 
@@ -57,8 +55,6 @@ impl SubmitCommitOptions<'_> {
     pub(super) fn none() -> Self {
         Self {
             idempotency: None,
-            contact_projection: None,
-            contact_completion_draft: None,
             additional_deliveries: &[],
         }
     }
@@ -215,28 +211,6 @@ fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
     SubmitOneError::new(status, code, message)
 }
 
-pub(in crate::routing) async fn submit_initial_event_submission_with_contact_projection(
-    _state: &AppState,
-    _session: &SessionRecord,
-    submission: arkret_wire::EventAdmissionSubmission,
-    _contact_projection: soland_services::events::CommitContactProjection,
-    _completion_draft: soland_storage::ContactCompletionDraft,
-    _deliveries: Vec<soland_services::federation::FederationDeliveryRecord>,
-    _idempotency: Option<soland_services::events::IdempotentResponse>,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    submission.validate().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "schema_violation",
-            format!("invalid Contact Event submission: {error}"),
-        )
-    })?;
-    Err(SubmitOneError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "service_unavailable",
-        "Contact atomic Event/RealmCommit admission is unavailable",
-    ))
-}
 pub(in crate::routing) async fn prepare_service_franking_proof_event_value(
     state: &AppState,
     session: &SessionRecord,
@@ -758,7 +732,9 @@ mod member_identity_state_guard_tests {
                 .as_deref(),
             Some(empty)
         );
-        assert!(preflight_member_identity_state_guard(&state, &guard_operation(Some(empty))).is_ok());
+        assert!(
+            preflight_member_identity_state_guard(&state, &guard_operation(Some(empty))).is_ok()
+        );
         assert!(
             preflight_member_identity_state_guard(
                 &state,

@@ -9,6 +9,7 @@ mod actor_private;
 mod app_state;
 mod authority_accountability_grant;
 mod authority_bootstrap_validation;
+mod authority_contact;
 mod authority_direct_conversation;
 mod authority_forward;
 mod authority_key_backup_pointer;
@@ -31,6 +32,9 @@ pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
     getrandom_seed, realm_genesis_payload,
+};
+pub(crate) use authority_contact::{
+    ContactProducer, commit_contact_event_unit, verify_contact_producer,
 };
 #[cfg(feature = "test-support")]
 pub(crate) use authority_forward::{admit_forwarded_event, fresh_producer_device_evidence};

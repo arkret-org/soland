@@ -1,0 +1,526 @@
+//! Contact admission at the governing Station's transaction cut
+//! (`contact-and-direct-conversation.md` sections 2 and 3.1).
+//!
+//! A Contact Event, its covering `RealmCommit`, the holder-private Contact row
+//! and the frozen completion intent commit in one transaction. The request-slot
+//! CAS the intent signs -- a request's slot version and predecessor, a normal
+//! response's `cas_sequence`, `slot_predecessor` and `cas_revision` -- is
+//! recomputed from the row that transaction locks, so a stale, foreign or
+//! rewritten observation refuses the whole unit with zero writes.
+
+#[path = "support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
+
+use arkret_models_collaboration::contact_operations::{
+    ContactPeer, ContactProducerSigner, ContactRound, OutgoingRequestState,
+    OutgoingSlotAbsenceTranscript, RequestAcceptanceReceipt,
+};
+use arkret_models_collaboration::governance::peer_contact::{
+    ContactIntroductionEvidence, PeerContactAddress,
+};
+use arkret_models_identity::ServiceResolutionCarrier;
+use arkret_wire::{AccountId, DidCoreId, DidUrl, EventId, EventKind, Hash};
+use chrono::{DateTime, Duration, Utc};
+use diesel::sql_types::{BigInt, Text};
+use diesel_async::RunQueryDsl;
+use soland_storage::{
+    AuthorityCommitStore, AuthorityCommitTransaction, ContactCompletionAction,
+    ContactCompletionBinding, ContactCompletionDraft, ContactCompletionIntent,
+    ContactDeliveryTarget, ContactProjectionCommit, ContactRecord, ContactRequestSlotState,
+    ContactStore, EventCommitRequest, EventCommitUnitOfWork,
+};
+use soland_storage_postgres::test_database::TestDatabase;
+use soland_storage_postgres::{
+    PgAuthorityCommitStore, PgContactStore, PgEventCommitUnitOfWork, PgPool,
+};
+
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+fn alice() -> ContactPeer {
+    ContactPeer::Human {
+        account_id: AccountId::new(ordinary_realm::founder(), ordinary_realm::station()),
+    }
+}
+
+fn bob() -> ContactPeer {
+    ContactPeer::Human {
+        account_id: AccountId::new(
+            DidCoreId::new("ak:did_core:web:contact-bob.example").unwrap(),
+            ordinary_realm::station(),
+        ),
+    }
+}
+
+fn producer(holder: &ContactPeer) -> ContactProducerSigner {
+    let principal = holder.contact_actor_id().signing_principal_id().clone();
+    ContactProducerSigner::direct(
+        DidUrl::new(format!(
+            "did:{}#key",
+            principal.as_str().strip_prefix("ak:did_core:").unwrap()
+        ))
+        .unwrap(),
+        arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            ed25519_dalek::SigningKey::from_bytes(&[7_u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+/// The next Contact Event on the fixture stream, authored by `holder`.
+fn contact_request(
+    previous: &AuthorityCommitTransaction,
+    kind: EventKind,
+    holder: &ContactPeer,
+    payload: serde_json::Value,
+    at: DateTime<Utc>,
+) -> EventCommitRequest {
+    ordinary_realm::next_request_for_actor(previous, kind, holder.contact_actor_id(), payload, at)
+}
+
+/// The completion intent the serving layer freezes for `event`.
+fn intent(
+    event: &arkret_wire::Event,
+    holder: &ContactPeer,
+    peer: &ContactPeer,
+    action: ContactCompletionAction,
+    accepted_at: DateTime<Utc>,
+) -> ContactCompletionIntent {
+    let request = matches!(action, ContactCompletionAction::Request { .. });
+    let mut intent = ContactCompletionDraft {
+        event: event.clone(),
+        operation_id: arkret_wire::ProtocolOperationId::new(format!(
+            "ak:operation:contact-{}",
+            event
+                .event_id
+                .event_digest()
+                .as_str()
+                .trim_start_matches("sha256:")
+        ))
+        .unwrap(),
+        holder: holder.clone(),
+        action,
+        response_binding: ContactCompletionBinding {
+            authenticated_actor: holder.contact_actor_id(),
+            idempotency_key: format!("contact-commit:{}", event.event_id),
+            request_hash: format!("sha256:{}", "a".repeat(64)),
+        },
+        target: ContactDeliveryTarget {
+            contact_address: PeerContactAddress::for_recipient(
+                peer.clone(),
+                ServiceResolutionCarrier::ResolutionUrl {
+                    resolution_url: "https://ordinary-station.example/.well-known/resolution"
+                        .to_owned(),
+                },
+            ),
+            introduction_evidence: request.then_some(ContactIntroductionEvidence::SameStation),
+            idempotency_key: arkret_wire::IdempotencyKey::new(format!(
+                "peer-contact:{}",
+                event.event_id
+            ))
+            .unwrap(),
+        },
+        local_mirror_target: None,
+    }
+    .bind_producer(producer(holder))
+    .unwrap();
+    intent.freeze_acceptance_time(accepted_at).unwrap();
+    intent
+}
+
+fn slot(
+    owner: &ContactPeer,
+    peer: &ContactPeer,
+    sequence: u64,
+    head: Hash,
+    refs: &[&EventId],
+) -> ContactRequestSlotState {
+    ContactRequestSlotState {
+        owner_id: owner.contact_actor_id(),
+        peer_id: peer.contact_actor_id(),
+        accepted_sequence: sequence,
+        head_digest: head,
+        accepted_event_refs: soland_domain::identity::contact_event_prefix(refs.iter().copied()),
+    }
+}
+
+/// Alice's committed request to Bob and the Contact row it wrote.
+struct Requested {
+    pool: PgPool,
+    request: EventCommitRequest,
+    request_intent: ContactCompletionIntent,
+    row: ContactRecord,
+}
+
+async fn requested(database: &TestDatabase, seed: &str) -> Requested {
+    let pool = database.pool();
+    let unit = ordinary_realm::bootstrap_unit(seed);
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .expect("admit the fixture stream");
+    let at = unit.transactions[0].commit.committed_at + Duration::seconds(1);
+    let accepted_at = arkret_canonical::normalize_timestamp_canonical(at);
+    let mut request = contact_request(
+        unit.transactions.last().unwrap(),
+        EventKind::ContactRequested,
+        &alice(),
+        serde_json::json!({
+            "peer": bob(),
+            "granted_to_peer_scopes": ["direct_message"],
+            "introduction_evidence_digest": format!("sha256:{}", "e".repeat(64)),
+        }),
+        at,
+    );
+    let event = request.authority_commit.event.clone();
+    let request_intent = intent(
+        &event,
+        &alice(),
+        &bob(),
+        ContactCompletionAction::Request {
+            slot_version: 1,
+            slot_predecessor: None,
+        },
+        accepted_at,
+    );
+    let row = ContactRecord {
+        requester_id: alice().contact_actor_id(),
+        target_id: bob().contact_actor_id(),
+        contact_round_id: None,
+        version: None,
+        granted_to_target_scopes: vec!["direct_message".to_owned()],
+        granted_to_requester_scopes: Vec::new(),
+        status: "pending".to_owned(),
+        pending_incoming_admitted: true,
+        request_event_ref: Some(event.event_id.clone()),
+        request_slot_states: vec![slot(
+            &alice(),
+            &bob(),
+            1,
+            request_intent.request_core_digest().unwrap(),
+            &[&event.event_id],
+        )],
+        request_receipts: Vec::new(),
+        request_mirror_receipts: Vec::new(),
+        contact_round_evidence: None,
+        contact_round_evidence_history: Vec::new(),
+        control_outcomes: Vec::new(),
+        response_event_ref: None,
+        tombstone_event_ref: None,
+        message: None,
+        peer_host_id: None,
+        peer_service_resolution: None,
+        created_at: accepted_at,
+        updated_at: accepted_at,
+    };
+    request.contact_projection = Some(ContactProjectionCommit {
+        completion_intent: Some(request_intent.clone()),
+        record: row.clone(),
+        expected_updated_at: None,
+        conflict_code: "contact_round_conflict".to_owned(),
+        verified_mirror: None,
+        invite_policy: None,
+    });
+    request.projections.clear();
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request.clone())
+        .await
+        .expect("the request unit commits");
+    Requested {
+        pool,
+        request,
+        request_intent,
+        row,
+    }
+}
+
+/// Bob's normal response to `requested`, planned against its current row.
+/// `edit` rewrites the frozen absence observation before the unit is built.
+fn response(
+    requested: &Requested,
+    edit: impl FnOnce(&mut OutgoingSlotAbsenceTranscript),
+) -> EventCommitRequest {
+    let request_event = &requested.request.authority_commit.event;
+    let accepted_at = requested.row.updated_at + Duration::seconds(1);
+    let key = ed25519_dalek::SigningKey::from_bytes(&[9_u8; 32]);
+    let receipt = RequestAcceptanceReceipt::sign_with(
+        requested.request_intent.request_receipt_core().unwrap(),
+        |bytes| {
+            Ok(arkret_wire::ProtocolSignature {
+                verification_method: DidUrl::new("did:web:ordinary-station.example#receipt")
+                    .unwrap(),
+                created_at: accepted_at,
+                jws: arkret_signatures::sign_ed25519_detached_jws(&key, bytes).unwrap(),
+            })
+        },
+    )
+    .unwrap();
+    let mut pair = [alice().contact_actor_id(), bob().contact_actor_id()];
+    if arkret_canonical::canonical_json_bytes(&pair[0]).unwrap()
+        > arkret_canonical::canonical_json_bytes(&pair[1]).unwrap()
+    {
+        pair.swap(0, 1);
+    }
+    let receipt_digest = receipt.computed_receipt_digest().unwrap();
+    let round = ContactRound::Normal {
+        sorted_pair_member_ids: pair.clone(),
+        request_event_ref: request_event.event_id.clone(),
+        request_acceptance_receipt_digest: receipt_digest.clone(),
+    };
+    let contact_round_id = Hash::new(
+        arkret_canonical::domain_prefixed_canonical_sha256("ak.contact.round.v1", &round).unwrap(),
+    )
+    .unwrap();
+    let mut absence = OutgoingSlotAbsenceTranscript {
+        sorted_pair_member_ids: pair,
+        request_slot_owner: bob().contact_actor_id(),
+        contact_round_id: contact_round_id.clone(),
+        slot_predecessor: None,
+        cas_sequence: 1,
+        cas_revision: vec![request_event.event_id.clone()],
+        observed_at: arkret_canonical::normalize_timestamp_canonical(accepted_at),
+        outgoing_request_state: OutgoingRequestState::Absent,
+    };
+    edit(&mut absence);
+    let mut unit = contact_request(
+        &requested.request.authority_commit,
+        EventKind::ContactAccepted,
+        &bob(),
+        serde_json::json!({
+            "peer": alice(),
+            "contact_round_id": contact_round_id,
+            "version": 1,
+            "request_event_ref": request_event.event_id,
+            "request_acceptance_receipt_digest": receipt_digest,
+            "granted_to_peer_scopes": ["direct_message"],
+        }),
+        accepted_at,
+    );
+    let event = unit.authority_commit.event.clone();
+    let response_intent = intent(
+        &event,
+        &bob(),
+        &alice(),
+        ContactCompletionAction::Response {
+            request_receipt: receipt,
+            absence: absence.clone(),
+        },
+        absence.observed_at,
+    );
+    let mut row = requested.row.clone();
+    row.status = "accepted".to_owned();
+    row.contact_round_id = Some(contact_round_id);
+    row.version = Some(1);
+    row.granted_to_requester_scopes = vec!["direct_message".to_owned()];
+    row.response_event_ref = Some(event.event_id.clone());
+    row.updated_at = accepted_at;
+    row.request_slot_states.push(ContactRequestSlotState {
+        owner_id: bob().contact_actor_id(),
+        peer_id: alice().contact_actor_id(),
+        accepted_sequence: absence.cas_sequence,
+        head_digest: absence.digest().unwrap(),
+        accepted_event_refs: soland_domain::identity::contact_event_prefix(
+            absence.cas_revision.iter().chain([&event.event_id]),
+        ),
+    });
+    unit.contact_projection = Some(ContactProjectionCommit {
+        completion_intent: Some(response_intent),
+        record: row,
+        expected_updated_at: Some(requested.row.updated_at),
+        conflict_code: "contact_lineage_conflict".to_owned(),
+        verified_mirror: None,
+        invite_policy: None,
+    });
+    unit.projections.clear();
+    unit
+}
+
+async fn count(pool: &PgPool, query: &str, value: &str) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(query)
+        .bind::<Text, _>(value)
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
+/// Nothing of a refused unit is durable: no Event, no Commit, no completion
+/// intent, and the Contact row still at its planned pre-state.
+async fn assert_zero_writes(requested: &Requested, refused: &EventCommitRequest) {
+    let event_id = refused.authority_commit.event.event_id.clone();
+    assert!(
+        PgAuthorityCommitStore {
+            pool: requested.pool.clone(),
+        }
+        .committed_event(&event_id)
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        count(
+            &requested.pool,
+            "SELECT count(*) AS count FROM contact_completion_intents WHERE event_id = $1",
+            event_id.as_str(),
+        )
+        .await,
+        0
+    );
+    let row = PgContactStore {
+        pool: requested.pool.clone(),
+    }
+    .get(&requested.row.requester_id, &requested.row.target_id)
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(row.updated_at, requested.row.updated_at);
+    assert_eq!(row.status, "pending");
+    assert_eq!(row.request_slot_states, requested.row.request_slot_states);
+}
+
+#[tokio::test]
+async fn request_and_normal_response_commit_with_the_slot_cas_they_sign() {
+    let database = TestDatabase::lease().await;
+    let requested = requested(&database, "contact-admission-success").await;
+    let request_id = requested.request.authority_commit.event.event_id.clone();
+    let committed = PgAuthorityCommitStore {
+        pool: requested.pool.clone(),
+    }
+    .committed_event(&request_id)
+    .await
+    .unwrap()
+    .expect("the request Event is committed with its Commit");
+    assert_eq!(committed.commit.event_ref, request_id);
+    let contacts = PgContactStore {
+        pool: requested.pool.clone(),
+    };
+    assert_eq!(
+        contacts
+            .get(&requested.row.requester_id, &requested.row.target_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .request_slot_states,
+        requested.row.request_slot_states
+    );
+    let staged = contacts
+        .committed_completion_intents(8, None)
+        .await
+        .unwrap();
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].committed_ref.event_id, request_id);
+    assert_eq!(
+        staged[0].committed_ref.commit_id,
+        committed.commit.commit_id
+    );
+
+    let response = response(&requested, |_| {});
+    PgEventCommitUnitOfWork::new(requested.pool.clone())
+        .commit_event(response.clone())
+        .await
+        .expect("the normal response unit commits");
+    let row = contacts
+        .get(&requested.row.requester_id, &requested.row.target_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let response_id = response.authority_commit.event.event_id.clone();
+    assert_eq!(row.status, "accepted");
+    assert_eq!(row.response_event_ref, Some(response_id.clone()));
+    let responder_slot = row
+        .request_slot_states
+        .iter()
+        .find(|state| state.owner_id == bob().contact_actor_id())
+        .unwrap();
+    assert_eq!(responder_slot.accepted_sequence, 1);
+    assert_eq!(
+        responder_slot.accepted_event_refs,
+        soland_domain::identity::contact_event_prefix([&request_id, &response_id])
+    );
+    assert_eq!(
+        contacts
+            .committed_completion_intents(8, None)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn wrong_revision_foreign_slot_and_lost_row_cas_refuse_with_zero_writes() {
+    let database = TestDatabase::lease().await;
+    let requested = requested(&database, "contact-admission-refusals").await;
+    let uow = PgEventCommitUnitOfWork::new(requested.pool.clone());
+
+    // A revision naming anything but the slot prefix plus the consumed request.
+    let stale = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [3_u8; 32]);
+    let wrong_revision = response(&requested, |absence| {
+        absence.cas_revision = vec![stale.clone()];
+    });
+    assert!(uow.commit_event(wrong_revision.clone()).await.is_err());
+    assert_zero_writes(&requested, &wrong_revision).await;
+
+    // The requester's slot is not the responder's CAS observation.
+    let foreign_slot = response(&requested, |absence| {
+        absence.request_slot_owner = alice().contact_actor_id();
+    });
+    assert!(uow.commit_event(foreign_slot.clone()).await.is_err());
+    assert_zero_writes(&requested, &foreign_slot).await;
+
+    // A predecessor or sequence the slot never accepted.
+    let skipped = response(&requested, |absence| {
+        absence.cas_sequence = 2;
+    });
+    assert!(uow.commit_event(skipped.clone()).await.is_err());
+    assert_zero_writes(&requested, &skipped).await;
+
+    // The row moved after the plan read it: the planned revision is gone.
+    let mut concurrent = response(&requested, |_| {});
+    let projection = concurrent.contact_projection.as_mut().unwrap();
+    projection.expected_updated_at = Some(requested.row.updated_at - Duration::seconds(1));
+    assert!(uow.commit_event(concurrent.clone()).await.is_err());
+    assert_zero_writes(&requested, &concurrent).await;
+
+    // The exact planned unit still commits afterwards.
+    uow.commit_event(response(&requested, |_| {}))
+        .await
+        .expect("the untouched response commits");
+}
+
+#[tokio::test]
+async fn exact_replay_of_the_accepting_unit_installs_nothing_twice() {
+    let database = TestDatabase::lease().await;
+    let requested = requested(&database, "contact-admission-replay").await;
+    let outcome = PgEventCommitUnitOfWork::new(requested.pool.clone())
+        .commit_event(requested.request.clone())
+        .await
+        .expect("an exact replay observes the committed unit");
+    assert!(!outcome.event_inserted);
+    let contacts = PgContactStore {
+        pool: requested.pool.clone(),
+    };
+    assert_eq!(
+        contacts
+            .committed_completion_intents(8, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let row = contacts
+        .get(&requested.row.requester_id, &requested.row.target_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.updated_at, requested.row.updated_at);
+    assert_eq!(row.request_slot_states, requested.row.request_slot_states);
+}

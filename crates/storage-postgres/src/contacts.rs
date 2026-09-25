@@ -289,6 +289,52 @@ pub(crate) async fn pair_contacts_in_connection(
     .collect()
 }
 
+/// The one Contact row of a pair, in either orientation, locked for update.
+pub(crate) async fn lock_pair_contact_in_connection(
+    conn: &mut AsyncPgConnection,
+    left: &ActorId,
+    right: &ActorId,
+) -> PersistenceResult<Option<ContactRecord>> {
+    sql_query(format!(
+        "SELECT {CONTACT_COLUMNS} FROM contacts \
+         WHERE (requester_id = $1 AND target_id = $2) OR (requester_id = $2 AND target_id = $1) \
+         FOR UPDATE"
+    ))
+    .bind::<Text, _>(left.to_string())
+    .bind::<Text, _>(right.to_string())
+    .get_result::<ContactRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(contact_record_from_row)
+    .transpose()
+}
+
+/// The exact Contact row of a pair at revision `updated_at`, locked for the
+/// accepting transaction. `None` when no row of the pair has that revision.
+pub(crate) async fn lock_pair_contact_at_in_connection(
+    conn: &mut AsyncPgConnection,
+    left: &ActorId,
+    right: &ActorId,
+    updated_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Option<ContactRecord>> {
+    sql_query(format!(
+        "SELECT {CONTACT_COLUMNS} FROM contacts \
+         WHERE ((requester_id = $1 AND target_id = $2) OR (requester_id = $2 AND target_id = $1)) \
+           AND updated_at = $3 \
+         FOR UPDATE"
+    ))
+    .bind::<Text, _>(left.to_string())
+    .bind::<Text, _>(right.to_string())
+    .bind::<diesel::sql_types::Timestamptz, _>(updated_at)
+    .get_result::<ContactRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(contact_record_from_row)
+    .transpose()
+}
+
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn completion_for_request(
@@ -311,8 +357,11 @@ impl ContactStore for PgContactStore {
         ready: &soland_storage::CommittedContactCompletionIntent,
         result: &soland_storage::ContactCompletionResult,
         record: Option<&soland_storage::FederationOutboxRecord>,
+        counterpart_proof: Option<
+            &arkret_models_collaboration::contact_operations::ContactCurrentProof,
+        >,
     ) -> PersistenceResult<bool> {
-        completion::finalize(&self.pool, ready, result, record).await
+        completion::finalize(&self.pool, ready, result, record, counterpart_proof).await
     }
     async fn get(
         &self,

@@ -273,11 +273,17 @@ pub trait ContactStore: Send + Sync {
     /// before invoking this storage boundary. This method supplies no proof and
     /// never treats the local decision as a transferable authorization.
     /// Atomically freeze HTTP results, source evidence, optional outbox and intent.
+    ///
+    /// `counterpart_proof` is the requester direction's current proof this
+    /// Station issued when it hosts both members of a normally accepted pair.
     async fn finalize_completion_intent(
         &self,
         ready: &CommittedContactCompletionIntent,
         result: &ContactCompletionResult,
         delivery: Option<&crate::FederationOutboxRecord>,
+        counterpart_proof: Option<
+            &arkret_models_collaboration::contact_operations::ContactCurrentProof,
+        >,
     ) -> PersistenceResult<bool>;
 
     async fn get(

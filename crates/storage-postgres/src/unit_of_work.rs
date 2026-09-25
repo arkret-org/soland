@@ -1259,18 +1259,41 @@ fn contact_event_ref(
 
 /// Install one committed Contact mutation, its verified request mirror, and the
 /// holder-private invite policy the same command decided.
-async fn commit_contact_projection(
+///
+/// A command's completion intent is staged only after its request-slot CAS is
+/// recomputed from the pair row this transaction locks at the planned
+/// revision, so the signed slot transcript is exactly the accepting cut.
+pub(crate) async fn commit_contact_projection(
     conn: &mut AsyncPgConnection,
-    committed_ref: &arkret_wire::CommittedEventRef,
+    committed_ref: Option<&arkret_wire::CommittedEventRef>,
     commit: soland_storage::ContactProjectionCommit,
 ) -> PersistenceResult<()> {
     if let Some(intent) = commit.completion_intent.as_ref() {
+        let committed_ref = committed_ref.ok_or_else(|| {
+            PersistenceError::SchemaViolation(
+                "a Contact completion intent needs its accepting Commit".to_owned(),
+            )
+        })?;
         intent.validate_event_binding()?;
         if intent.plan.event.event_id != committed_ref.event_id {
             return Err(PersistenceError::SchemaViolation(
                 "Contact delivery intent does not bind the committed Event".to_owned(),
             ));
         }
+        let pre_state = match commit.expected_updated_at {
+            Some(expected) => Some(
+                crate::contacts::lock_pair_contact_at_in_connection(
+                    conn,
+                    &commit.record.requester_id,
+                    &commit.record.target_id,
+                    expected,
+                )
+                .await?
+                .ok_or_else(|| conflict(commit.conflict_code.clone()))?,
+            ),
+            None => None,
+        };
+        intent.validate_slot_cas(pre_state.as_ref(), &commit.record)?;
         crate::contacts::completion::stage_in_transaction(conn, committed_ref, intent).await?;
     }
     let conflict_code = commit.conflict_code;
@@ -2411,8 +2434,12 @@ async fn commit_one_in_connection(
     if let Some(transition) = request.device_revocation_transition.as_ref() {
         commit_revocation_in_connection(conn, transition).await?;
     }
-    if let Some(commit) = request.contact_projection {
-        commit_contact_projection(conn, &committed_ref, commit).await?;
+    // An exact replay of the accepting Commit found the Contact effect
+    // already installed by the first transaction.
+    if let Some(commit) = request.contact_projection
+        && matches!(authority_write, AuthorityCommitWriteOutcome::Committed)
+    {
+        commit_contact_projection(conn, Some(&committed_ref), commit).await?;
     }
     if let Some(commit) = request.consent_projection {
         commit_consent_projection(conn, commit).await?;

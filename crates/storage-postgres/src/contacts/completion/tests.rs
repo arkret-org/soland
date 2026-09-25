@@ -222,8 +222,53 @@ fn worker(ready: &CommittedContactCompletionIntent, signed_at: DateTime<Utc>) ->
     }
 }
 
+/// The pending Contact row the accepting unit wrote with the intent.
+fn pending_row(intent: &ContactCompletionIntent) -> soland_storage::ContactRecord {
+    let peer: ContactPeer =
+        serde_json::from_value(intent.plan.event.payload.get("peer").cloned().unwrap()).unwrap();
+    let accepted_at = intent.accepted_at().unwrap();
+    soland_storage::ContactRecord {
+        requester_id: intent.plan.event.actor_id.clone(),
+        target_id: peer.contact_actor_id(),
+        contact_round_id: None,
+        version: None,
+        granted_to_target_scopes: vec!["direct_message".to_owned()],
+        granted_to_requester_scopes: Vec::new(),
+        status: "pending".to_owned(),
+        pending_incoming_admitted: false,
+        request_event_ref: Some(intent.plan.event.event_id.clone()),
+        request_slot_states: Vec::new(),
+        request_receipts: Vec::new(),
+        request_mirror_receipts: Vec::new(),
+        contact_round_evidence: None,
+        contact_round_evidence_history: Vec::new(),
+        control_outcomes: Vec::new(),
+        response_event_ref: None,
+        tombstone_event_ref: None,
+        message: None,
+        peer_host_id: None,
+        peer_service_resolution: None,
+        created_at: accepted_at,
+        updated_at: accepted_at,
+    }
+}
+
 async fn stage(pool: &PgPool, fixture: &Fixture) {
     let mut conn = pg_conn(pool).await.unwrap();
+    crate::unit_of_work::commit_contact_projection(
+        &mut conn,
+        None,
+        soland_storage::ContactProjectionCommit {
+            completion_intent: None,
+            record: pending_row(&fixture.ready.intent),
+            expected_updated_at: None,
+            conflict_code: "contact_round_conflict".to_owned(),
+            verified_mirror: None,
+            invite_policy: None,
+        },
+    )
+    .await
+    .unwrap();
     stage_in_transaction(
         &mut conn,
         &fixture.ready.committed_ref,
@@ -243,6 +288,7 @@ async fn run(pool: &PgPool, fixture: &Fixture) -> PersistenceResult<bool> {
         &fixture.ready,
         &fixture.result,
         fixture.delivery.as_ref(),
+        None,
     )
     .await
 }

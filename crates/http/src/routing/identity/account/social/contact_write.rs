@@ -165,7 +165,10 @@ pub(crate) fn verify_contact_service_signature_bytes(
             format!("{evidence_field}.signature.verification_method controller is invalid"),
         )
     })?;
-    if controller_core.as_str() != expected_service_id || fragment != "federation-fanout-key" {
+    // A source signs receipts with the assertion method its DID history held
+    // at the evidence time, and lineage / current proofs with its federation
+    // method; both name the issuer Station as controller.
+    if controller_core.as_str() != expected_service_id || fragment.is_empty() {
         return Err(crate::app_error!(
             FailedPrecondition,
             format!(
@@ -984,12 +987,21 @@ fn next_request_slot_coordinates(
     Ok((next_sequence, Some(current.head_digest.clone())))
 }
 
-fn contact_slot_cas_revision_unavailable() -> Result<Vec<EventId>, AppError> {
-    Err(AppError::from_rejection(
-        soland_http::error::ErrorCode::ServiceUnavailable,
-        "Contact request-slot exact CAS revision is unavailable",
-    )
-    .with_rejection_code("service_unavailable"))
+/// The slot's accepted Contact Event prefix extended by `observed`: the exact
+/// Commit prefix a CAS of this `(owner, peer)` slot observes.
+fn request_slot_prefix(
+    states: &[soland_services::identity::ContactRequestSlotState],
+    owner_id: &arkret_wire::ActorId,
+    peer_id: &arkret_wire::ActorId,
+    observed: &[EventId],
+) -> Vec<EventId> {
+    match states
+        .iter()
+        .find(|state| &state.owner_id == owner_id && &state.peer_id == peer_id)
+    {
+        Some(current) => current.prefix_with(observed),
+        None => soland_domain::identity::contact_event_prefix(observed),
+    }
 }
 
 fn accept_request_slot_transition(
@@ -999,6 +1011,7 @@ fn accept_request_slot_transition(
     accepted_sequence: u64,
     slot_predecessor: Option<&Hash>,
     head_digest: Hash,
+    accepted_event_refs: Vec<EventId>,
 ) -> Result<(), AppError> {
     let expected = next_request_slot_coordinates(states, owner_id, peer_id)?;
     if expected.0 != accepted_sequence || expected.1.as_ref() != slot_predecessor {
@@ -1012,12 +1025,14 @@ fn accept_request_slot_transition(
     {
         current.accepted_sequence = accepted_sequence;
         current.head_digest = head_digest;
+        current.accepted_event_refs = accepted_event_refs;
     } else {
         states.push(soland_services::identity::ContactRequestSlotState {
             owner_id: owner_id.clone(),
             peer_id: peer_id.clone(),
             accepted_sequence,
             head_digest,
+            accepted_event_refs,
         });
         states.sort_by(|left, right| {
             (&left.owner_id, &left.peer_id).cmp(&(&right.owner_id, &right.peer_id))
@@ -1139,6 +1154,47 @@ fn signed_lineage(
         },
     )
     .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// The exact current reader of one local issuer direction
+/// `(contact_round_id, holder, peer)`: its committed head Event on this
+/// Station and that head's confirmed direction version
+/// (contact-and-direct-conversation.md section 3). A request head is the
+/// founding edge at version 1. `None` when the head is not a Commit of this
+/// Station authored by `holder`.
+pub(crate) async fn local_direction_current(
+    state: &AppState,
+    record: &ContactRecord,
+    holder: &arkret_wire::ActorId,
+) -> Result<Option<(EventId, u64)>, AppError> {
+    let head = if &record.requester_id == holder {
+        record.request_event_ref.as_ref()
+    } else if &record.target_id == holder {
+        record.response_event_ref.as_ref()
+    } else {
+        None
+    };
+    let Some(head) = head else {
+        return Ok(None);
+    };
+    let Some(committed) = state
+        .authority_commits()
+        .committed_event(head)
+        .await
+        .map_err(|error| AppError::internal(format!("Contact direction head lookup: {error}")))?
+    else {
+        return Ok(None);
+    };
+    if &committed.event.event_id != head
+        || committed.commit.event_ref != *head
+        || &committed.event.actor_id != holder
+    {
+        return Ok(None);
+    }
+    Ok(Some((
+        head.clone(),
+        contact_direction_version(&committed.event)?,
+    )))
 }
 
 pub(crate) async fn local_requester_current_proof(
@@ -1288,8 +1344,17 @@ async fn commit(
         }
         _ => {}
     }
-    let (contact_projection, action, local_mirror_target) =
-        match plan_contact_commit(state, &reservation, &body.signed_event).await? {
+    // The holder's producer is verified before planning: its exact key is
+    // frozen into every source carrier of this Event, and the accepting
+    // transaction rechecks the same guard.
+    let producer = crate::state::verify_contact_producer(state, session, &body.signed_event)
+        .await
+        .map_err(contact_admission_error)?;
+    // One linearization instant: the slot CAS observation, every receipt's
+    // `accepted_at` and the covering Commit.
+    let accepted_at = arkret_canonical::normalize_timestamp_canonical(now());
+    let (mut contact_projection, action, local_mirror_target) =
+        match plan_contact_commit(state, &reservation, &body.signed_event, accepted_at).await? {
             ContactCommitPlan::Failed(failed) => {
                 let outcome = ContactOperationOutcome::Failed { outcome: failed };
                 persist_final(
@@ -1309,7 +1374,7 @@ async fn commit(
                 local_mirror_target,
             } => (projection, action, local_mirror_target),
         };
-    let completion_draft = prepare_contact_completion_draft(
+    let mut intent = prepare_contact_completion_draft(
         state,
         &reservation,
         &body.signed_event,
@@ -1317,21 +1382,71 @@ async fn commit(
         response_binding.clone(),
         local_mirror_target,
     )
-    .await?;
-    crate::routing::events::event_log::submit_initial_event_submission_with_contact_projection(
+    .await?
+    .bind_producer(producer.signer)
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    intent
+        .freeze_acceptance_time(accepted_at)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let soland_storage::ContactCompletionAction::Request {
+        slot_version,
+        slot_predecessor,
+    } = &intent.plan.action
+    {
+        // The request's own slot advances to its receipt core digest.
+        let holder = reservation.holder.contact_actor_id();
+        let peer = reservation.branch.peer().contact_actor_id();
+        let accepted_event_refs = request_slot_prefix(
+            &contact_projection.record.request_slot_states,
+            &holder,
+            &peer,
+            std::slice::from_ref(&body.signed_event.event_id),
+        );
+        accept_request_slot_transition(
+            &mut contact_projection.record.request_slot_states,
+            &holder,
+            &peer,
+            *slot_version,
+            slot_predecessor.as_ref(),
+            intent
+                .request_core_digest()
+                .map_err(|error| AppError::internal(error.to_string()))?,
+            accepted_event_refs,
+        )?;
+    }
+    contact_projection.completion_intent = Some(intent);
+    crate::state::commit_contact_event_unit(
         state,
-        session,
-        arkret_wire::EventAdmissionSubmission::new(body.signed_event.clone()),
+        &arkret_wire::EventAdmissionSubmission::new(body.signed_event.clone()),
+        producer.guard,
         contact_projection,
-        completion_draft,
-        Vec::new(),
-        None,
+        accepted_at,
     )
     .await
-    .map_err(|error| {
-        crate::app_error!(FailedPrecondition, error.message()).with_rejection_code(error.code())
-    })?;
+    .map_err(contact_admission_error)?;
     completion::resolve_completion(state, &response_binding).await
+}
+
+/// Map a refused Contact admission onto its registered wire code. A lost
+/// row or slot CAS keeps the Contact code the planner named; producer and
+/// authority-cut refusals keep their registered code.
+fn contact_admission_error(error: soland_services::ServiceError) -> AppError {
+    use soland_services::ServiceError;
+    match &error {
+        ServiceError::Conflict(detail) => {
+            let (code, message) = detail.split_once(": ").unwrap_or((detail.as_str(), ""));
+            if let Some(mapped) = soland_http::error::ErrorCode::from_wire(code) {
+                return AppError::from_rejection(mapped, message.to_owned());
+            }
+            if code.starts_with("contact_") {
+                return AppError::conflict(detail.clone()).with_wire_code(code);
+            }
+            AppError::capability_denied(detail.clone())
+        }
+        ServiceError::SchemaViolation(detail) => AppError::schema_violation(detail.clone()),
+        ServiceError::NotFound(detail) => AppError::not_found(detail.clone()),
+        _ => AppError::internal(error.to_string()),
+    }
 }
 
 enum ContactCommitPlan {
@@ -1346,6 +1461,7 @@ async fn plan_contact_commit(
     state: &AppState,
     reservation: &ContactReservation,
     event: &Event,
+    accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ContactCommitPlan, AppError> {
     use soland_storage::ContactCompletionAction;
     let holder = reservation.holder.contact_actor_id().clone();
@@ -1585,7 +1701,6 @@ async fn plan_contact_commit(
                     "Contact response contact_round does not match the accepted request receipt",
                 ));
             }
-            let accepted_at = now();
             let expected_updated_at = record.updated_at;
             let sorted_pair_member_ids = match &contact_round {
                 ContactRound::Normal {
@@ -1594,11 +1709,15 @@ async fn plan_contact_commit(
                 } => sorted_pair_member_ids.clone(),
                 ContactRound::Glare { .. } => unreachable!("normal basis returned glare"),
             };
-            // The retired Event.prev_refs frontier was not a Contact
-            // request-slot CAS observation. The durable slot currently stores
-            // only its sequence and digest, so it cannot provide the exact
-            // EventId revision required by the signed absence transcript.
-            let cas_revision = contact_slot_cas_revision_unavailable()?;
+            // The CAS observes the responder slot's accepted Contact Event
+            // prefix and the request it consumes; the accepting transaction
+            // recomputes both from the row it locks.
+            let cas_revision = request_slot_prefix(
+                &record.request_slot_states,
+                &holder,
+                &peer,
+                std::slice::from_ref(&request_receipt.core.request_event_ref),
+            );
             let (cas_sequence, slot_predecessor) =
                 next_request_slot_coordinates(&record.request_slot_states, &holder, &peer)?;
             let absence = OutgoingSlotAbsenceTranscript {
@@ -1614,6 +1733,12 @@ async fn plan_contact_commit(
             let outgoing_slot_absence_digest = absence
                 .digest()
                 .map_err(|error| AppError::internal(error.to_string()))?;
+            let accepted_event_refs = soland_domain::identity::contact_event_prefix(
+                absence
+                    .cas_revision
+                    .iter()
+                    .chain(std::iter::once(&event.event_id)),
+            );
             accept_request_slot_transition(
                 &mut record.request_slot_states,
                 &holder,
@@ -1621,6 +1746,7 @@ async fn plan_contact_commit(
                 cas_sequence,
                 slot_predecessor.as_ref(),
                 outgoing_slot_absence_digest.clone(),
+                accepted_event_refs,
             )?;
             record.status = "accepted".to_owned();
             record.request_receipts.clear();
@@ -2905,12 +3031,14 @@ mod device_authorization_account_tests {
                 peer_id: bob.clone(),
                 accepted_sequence: 7,
                 head_digest: alice_head.clone(),
+                accepted_event_refs: Vec::new(),
             },
             soland_services::identity::ContactRequestSlotState {
                 owner_id: bob.clone(),
                 peer_id: alice.clone(),
                 accepted_sequence: 3,
                 head_digest: bob_head.clone(),
+                accepted_event_refs: Vec::new(),
             },
         ];
 
@@ -2931,6 +3059,7 @@ mod device_authorization_account_tests {
             8,
             Some(&alice_head),
             accepted_head.clone(),
+            Vec::new(),
         )
         .unwrap();
         assert_eq!(
@@ -2975,6 +3104,7 @@ mod device_authorization_account_tests {
             peer_id: bob.clone(),
             accepted_sequence: 7,
             head_digest: durable_head.clone(),
+            accepted_event_refs: Vec::new(),
         }];
 
         for (sequence, predecessor) in [(7, Some(durable_head.clone())), (8, Some(hash('b')))] {
@@ -2987,6 +3117,7 @@ mod device_authorization_account_tests {
                     sequence,
                     predecessor.as_ref(),
                     hash('c'),
+                    Vec::new(),
                 )
                 .is_err()
             );

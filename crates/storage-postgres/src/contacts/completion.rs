@@ -1,5 +1,9 @@
 //! Contact command completion keyed by the authority's committed Event ref.
 
+use arkret_models_collaboration::contact_operations::{
+    ContactAcceptedOutcome, ContactCurrentProof, ContactPeer, ContactRound,
+    ContactRoundEvidenceBundle,
+};
 use arkret_wire::{ActorId, Hash};
 use diesel::sql_types::{BigInt, Integer, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
@@ -181,6 +185,7 @@ pub(super) async fn finalize(
     ready: &CommittedContactCompletionIntent,
     result: &ContactCompletionResult,
     delivery: Option<&FederationOutboxRecord>,
+    counterpart_proof: Option<&ContactCurrentProof>,
 ) -> PersistenceResult<bool> {
     ready.intent.validate_event_binding()?;
     let ContactCompletionResult::Accepted { outcome } = result else {
@@ -253,6 +258,7 @@ pub(super) async fn finalize(
         } else {
             None
         };
+        install_evidence(conn, &ready.intent, outcome, counterpart_proof).await?;
         persist_result(
             conn,
             ready.event_digest.as_str(),
@@ -265,6 +271,177 @@ pub(super) async fn finalize(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+/// Install the finalized source evidence on the pair row in the transaction
+/// that fixes the command's result: the request receipt (and a same-Station
+/// target's verified request mirror), a normal round's evidence bundle, or a
+/// successor's refreshed directional current proof. A current proof must name
+/// the row's exact directional head.
+///
+/// `counterpart_proof` is the requester direction's proof this Station issued
+/// itself when both pair members are its holders; a normal round is complete
+/// only with both directions.
+async fn install_evidence(
+    conn: &mut AsyncPgConnection,
+    intent: &ContactCompletionIntent,
+    outcome: &ContactAcceptedOutcome,
+    counterpart_proof: Option<&ContactCurrentProof>,
+) -> PersistenceResult<()> {
+    let event = &intent.plan.event;
+    let peer: ContactPeer = serde_json::from_value(
+        event
+            .payload
+            .get("peer")
+            .cloned()
+            .ok_or_else(|| invalid("Contact Event omits peer"))?,
+    )
+    .map_err(invalid)?;
+    let holder = &event.actor_id;
+    let peer_actor = peer.contact_actor_id();
+    let mut record = crate::contacts::lock_pair_contact_in_connection(conn, holder, &peer_actor)
+        .await?
+        .ok_or_else(|| invalid("committed Contact row is absent"))?;
+    let expected = record.updated_at;
+    let head_of = |record: &soland_storage::ContactRecord, issuer: &arkret_wire::ActorId| {
+        if &record.requester_id == issuer {
+            record.request_event_ref.clone()
+        } else {
+            record.response_event_ref.clone()
+        }
+    };
+    let binds_head = |record: &soland_storage::ContactRecord, proof: &ContactCurrentProof| {
+        let issuer = if proof.peer.contact_actor_id() == record.requester_id {
+            &record.target_id
+        } else {
+            &record.requester_id
+        };
+        record.contact_round_id.as_ref() == Some(&proof.contact_round_id)
+            && head_of(record, issuer).as_ref() == Some(&proof.head_event_ref)
+    };
+    let mut mirror = None;
+    match outcome {
+        ContactAcceptedOutcome::Request {
+            request_acceptance_receipt: receipt,
+            ..
+        } => {
+            if let Some(prior) = record
+                .request_receipts
+                .iter()
+                .find(|prior| prior.core.request_event_ref == event.event_id)
+            {
+                if prior != receipt {
+                    return Err(invalid("Contact source receipt is immutable"));
+                }
+            } else {
+                record.request_receipts.push(receipt.clone());
+            }
+            if let Some(target) = &intent.plan.local_mirror_target {
+                mirror = Some(soland_storage::ContactVerifiedMirrorRecord {
+                    target_holder_principal_id: target.clone(),
+                    request_event_id: event.event_id.to_string(),
+                    request_digest: event.event_id.event_digest().to_string(),
+                    canonical_event_bytes: arkret_canonical::canonical_json_bytes(event)
+                        .map_err(invalid)?,
+                    source_receipt: receipt.clone(),
+                    issuer_id: receipt.core.issuer_id.to_string(),
+                    verified_at: intent.accepted_at()?,
+                });
+            }
+        }
+        ContactAcceptedOutcome::Response {
+            normal_response_acceptance_receipt: receipt,
+            current_proof,
+            ..
+        } => {
+            let payload: arkret_models_collaboration::events_payloads::contact::ContactAcceptedPayload =
+                serde_json::from_value(serde_json::to_value(&event.payload).map_err(invalid)?)
+                    .map_err(invalid)?;
+            if !binds_head(&record, current_proof) {
+                return Err(PersistenceError::Conflict(
+                    "Contact current head changed before signature publication".into(),
+                ));
+            }
+            let mut current_proofs = vec![current_proof.clone()];
+            if let Some(counterpart) = counterpart_proof {
+                if counterpart.terminal
+                    || counterpart.peer != intent.plan.holder
+                    || !binds_head(&record, counterpart)
+                {
+                    return Err(invalid(
+                        "Contact requester proof does not bind its accepted request head",
+                    ));
+                }
+                current_proofs.push(counterpart.clone());
+            }
+            current_proofs.sort_by_key(|proof| proof.peer.contact_actor_id());
+            let mut pair = [
+                receipt.request_receipt.core.holder.contact_actor_id(),
+                receipt.request_receipt.core.peer.contact_actor_id(),
+            ];
+            if arkret_canonical::canonical_json_bytes(&pair[0]).map_err(invalid)?
+                > arkret_canonical::canonical_json_bytes(&pair[1]).map_err(invalid)?
+            {
+                pair.swap(0, 1);
+            }
+            record.contact_round_evidence = Some(ContactRoundEvidenceBundle {
+                contact_round_id: receipt.contact_round_id.clone(),
+                previous_terminal_contact_round_id: payload.previous_terminal_contact_round_id,
+                contact_round: ContactRound::Normal {
+                    sorted_pair_member_ids: pair,
+                    request_event_ref: payload.request_event_ref,
+                    request_acceptance_receipt_digest: payload.request_acceptance_receipt_digest,
+                },
+                request_receipts: vec![receipt.request_receipt.clone()],
+                normal_response_receipt: Some(receipt.clone()),
+                glare_concurrency_attestations: None,
+                current_proofs,
+                continuity_checkpoint: record
+                    .contact_round_evidence_history
+                    .iter()
+                    .find_map(|bundle| bundle.continuity_checkpoint.clone()),
+            });
+        }
+        ContactAcceptedOutcome::ScopeUpdate { current_proof, .. }
+        | ContactAcceptedOutcome::Tombstone { current_proof, .. } => {
+            let terminal = matches!(outcome, ContactAcceptedOutcome::Tombstone { .. });
+            if record.contact_round_id.as_ref() != Some(&current_proof.contact_round_id)
+                || (!terminal && !binds_head(&record, current_proof))
+                || (terminal
+                    && record.tombstone_event_ref.as_ref() != Some(&current_proof.head_event_ref))
+            {
+                return Err(PersistenceError::Conflict(
+                    "Contact current head changed before signature publication".into(),
+                ));
+            }
+            let bundle = record
+                .contact_round_evidence
+                .as_mut()
+                .ok_or_else(|| invalid("Contact original round evidence has not completed"))?;
+            bundle
+                .current_proofs
+                .retain(|proof| proof.peer != current_proof.peer);
+            bundle.current_proofs.push(current_proof.clone());
+            bundle
+                .current_proofs
+                .sort_by_key(|proof| proof.peer.contact_actor_id());
+        }
+        ContactAcceptedOutcome::Reject { .. } => return Ok(()),
+    }
+    record.updated_at = chrono::Utc::now().max(expected + chrono::Duration::microseconds(1));
+    crate::unit_of_work::commit_contact_projection(
+        conn,
+        None,
+        soland_storage::ContactProjectionCommit {
+            completion_intent: None,
+            record,
+            expected_updated_at: Some(expected),
+            conflict_code: "contact_lineage_conflict".into(),
+            verified_mirror: mirror,
+            invite_policy: None,
+        },
+    )
+    .await
 }
 
 /// Returns the durable outbox row bound to this delivery's peer and

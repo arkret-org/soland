@@ -88,6 +88,22 @@ async fn materialize_one(
         ));
     }
     let outcome = sign_outcome(state, &ready.intent).await?;
+    // A normal round whose requester is also this Station's holder completes
+    // both directions here: the requester's own request is its direction head.
+    let counterpart_proof = match &outcome {
+        ContactAcceptedOutcome::Response {
+            normal_response_acceptance_receipt,
+            ..
+        } => {
+            super::local_requester_current_proof(
+                state,
+                &normal_response_acceptance_receipt.contact_round_id,
+                &normal_response_acceptance_receipt.request_receipt,
+            )
+            .await?
+        }
+        _ => None,
+    };
     let delivery = if ready.intent.requires_delivery() {
         let target = &ready.intent.plan.target;
         let carrier = ready
@@ -120,6 +136,7 @@ async fn materialize_one(
             ready,
             &ContactCompletionResult::Accepted { outcome },
             delivery.as_ref(),
+            counterpart_proof.as_ref(),
         )
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -323,7 +340,11 @@ async fn latest_direction_proof(
             "Contact current round is unavailable"
         ));
     }
-    let head = if &record.requester_id == holder {
+    // A tombstone terminates the whole round; its direction head is the
+    // holder's own tombstone.
+    let head = if record.status == "tombstoned" {
+        record.tombstone_event_ref.as_ref()
+    } else if &record.requester_id == holder {
         record.request_event_ref.as_ref()
     } else {
         record.response_event_ref.as_ref()

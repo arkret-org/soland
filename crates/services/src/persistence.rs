@@ -363,11 +363,14 @@ impl PersistenceHandle {
         ready: &soland_storage::CommittedContactCompletionIntent,
         result: &soland_storage::ContactCompletionResult,
         delivery: Option<&soland_storage::FederationOutboxRecord>,
+        counterpart_proof: Option<
+            &arkret_models_collaboration::contact_operations::ContactCurrentProof,
+        >,
     ) -> crate::ServiceResult<bool> {
         Ok(self
             .persistence
             .contacts()
-            .finalize_completion_intent(ready, result, delivery)
+            .finalize_completion_intent(ready, result, delivery, counterpart_proof)
             .await?)
     }
 

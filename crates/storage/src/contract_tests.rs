@@ -2448,10 +2448,10 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .is_some()
     );
 
-    // Contact admission persists the canonical Event and peer carrier while
-    // its holder projection remains invisible until an exact committed decision. Reading all three
-    // back only through durable stores models a process restart with no in-memory planning
-    // state.
+    // Contact admission installs the canonical Event, its Commit, the holder's
+    // Contact row and the peer carrier in one unit. Reading them back only
+    // through durable stores models a process restart with no in-memory
+    // planning state.
     let contact_event = canonical_wire_event_record(
         arkret_wire::EventKind::ContactRequested.as_str(),
         &principal_id,
@@ -2488,6 +2488,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             )),
             accepted_sequence: 7,
             head_digest: Hash::new(format!("sha256:{}", "7".repeat(64))).unwrap(),
+            accepted_event_refs: Vec::new(),
         }],
         request_receipts: Vec::new(),
         request_mirror_receipts: Vec::new(),
@@ -2557,14 +2558,15 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .await
         .expect("Contact response-loss replay observes the committed unit");
     assert!(stores.events.contains(&contact_event_id).await.unwrap());
-    assert!(
+    assert_eq!(
         stores
             .contacts
             .get(&contact_record.requester_id, &contact_record.target_id)
             .await
             .unwrap()
-            .is_none(),
-        "pending Contact has no visible business mirror"
+            .expect("the committed Contact row is visible with its Commit")
+            .request_event_ref,
+        Some(contact_event_ref.clone()),
     );
     assert!(
         stores
@@ -2633,11 +2635,11 @@ pub async fn assert_event_commit_unit_of_work_contract(
         })
         .await;
     assert!(
-        failed_contact_commit.is_ok(),
-        "admission stages a command; an old mirror CAS is not a terminal decision"
+        failed_contact_commit.is_err(),
+        "a lost Contact row CAS refuses the whole accepting unit"
     );
     assert!(
-        stores
+        !stores
             .events
             .contains(&failed_contact_event_id)
             .await
@@ -2649,15 +2651,17 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .get(&failed_contact_outbox_id)
             .await
             .unwrap()
-            .is_some()
+            .is_none()
     );
-    assert!(
+    assert_eq!(
         stores
             .contacts
             .get(&contact_record.requester_id, &contact_record.target_id)
             .await
             .unwrap()
-            .is_none()
+            .expect("the first Contact row survives the refused unit")
+            .updated_at,
+        contact_record.updated_at,
     );
 
     let rollback_uuid = uuid::Uuid::now_v7();
