@@ -13,7 +13,9 @@ use arkret_wire::{
     AuthorityBundleRequest, Base64UrlString, Did, DidUrl, RealmAuthorityBundle, RealmId, RequestId,
 };
 
-use super::{AppError, AppState, invalid_request, nonce_for_request, unavailable};
+use super::{
+    AppError, AppState, invalid_request, local_authority_bundle, nonce_for_request, unavailable,
+};
 
 const MAX_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -144,20 +146,15 @@ pub(in crate::routing) async fn resolve_verified_authority(
     };
     let mut verified: Vec<LocatedRealmAuthority> = Vec::new();
     for candidate in hints {
-        let endpoint = match &candidate.endpoint_url {
-            Some(url) => url.clone(),
-            None => crate::routing::federation::resolved_peer_route(
-                state,
-                candidate.service_id.as_str(),
-                "station",
-                false,
-            )
-            .await
-            .map_err(unavailable)?
-            .base_url()
-            .to_owned(),
+        // A locator naming this Station is answered on the equivalent local
+        // path: the bundle is still verified like any other candidate, but no
+        // request is sent to this Station's own public endpoint.
+        let fetched = if candidate.service_id == state.service_core_id() {
+            local_authority_bundle(state, realm_id, nonce).await
+        } else {
+            fetch_remote_candidate(state, candidate, &request).await
         };
-        let Ok(bundle) = fetch_candidate(state, &endpoint, &request).await else {
+        let Ok(bundle) = fetched else {
             continue;
         };
         if bundle.realm_id != *realm_id {
@@ -186,6 +183,27 @@ pub(in crate::routing) async fn resolve_verified_authority(
         .into_iter()
         .find(|located| located.authority == converged)
         .ok_or_else(|| invalid_request("verified Realm authority did not converge"))
+}
+
+async fn fetch_remote_candidate(
+    state: &AppState,
+    candidate: &RealmJoinCandidate,
+    request: &AuthorityBundleRequest,
+) -> Result<RealmAuthorityBundle, AppError> {
+    let endpoint = match &candidate.endpoint_url {
+        Some(url) => url.clone(),
+        None => crate::routing::federation::resolved_peer_route(
+            state,
+            candidate.service_id.as_str(),
+            "station",
+            false,
+        )
+        .await
+        .map_err(unavailable)?
+        .base_url()
+        .to_owned(),
+    };
+    fetch_candidate(state, &endpoint, request).await
 }
 
 pub(super) async fn resolve_authority_bundle(

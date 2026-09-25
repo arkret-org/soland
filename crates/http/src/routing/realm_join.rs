@@ -15,15 +15,20 @@ use soland_http::result::{JsonResult, json_ok};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 mod authority;
+mod preview;
 
 pub(in crate::routing) use authority::{insert_method_key, resolve_verified_authority};
 
 pub(super) fn self_router() -> Router {
-    Router::new().push(Router::with_path("realm-joins/prepare").post(prepare))
+    Router::new()
+        .push(Router::with_path("realm-joins/preview").post(preview::self_preview))
+        .push(Router::with_path("realm-joins/prepare").post(prepare))
 }
 
 pub(super) fn peer_router() -> Router {
-    Router::new().push(Router::with_path("realm-joins/bootstrap").post(peer_bootstrap))
+    Router::new()
+        .push(Router::with_path("realm-joins/preview").post(preview::peer_preview))
+        .push(Router::with_path("realm-joins/bootstrap").post(peer_bootstrap))
 }
 
 fn invalid_request(error: impl std::fmt::Display) -> AppError {
@@ -39,10 +44,13 @@ fn nonce_for_request(request_id: &arkret_wire::RequestId) -> Result<Base64UrlStr
         .map_err(invalid_request)
 }
 
+/// This Station's own nonce-bound bundle for a Realm it currently governs.
+/// A Realm governed elsewhere fails here, so the result is never a claim of
+/// authority this Station does not hold.
 async fn local_authority_bundle(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
-    request_id: &arkret_wire::RequestId,
+    nonce: &Base64UrlString,
 ) -> Result<arkret_wire::RealmAuthorityBundle, AppError> {
     let route =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
@@ -56,7 +64,7 @@ async fn local_authority_bundle(
         .authority_bundle(
             &AuthorityBundleRequest {
                 realm_id: realm_id.clone(),
-                nonce: nonce_for_request(request_id)?,
+                nonce: nonce.clone(),
             },
             &state.service_core_id(),
             route,
@@ -137,7 +145,9 @@ async fn peer_bootstrap(
     {
         return Err(AppError::not_found("Realm join bootstrap not found"));
     }
-    let bundle = local_authority_bundle(state, &body.realm_id, &body.request_id).await?;
+    let bundle =
+        local_authority_bundle(state, &body.realm_id, &nonce_for_request(&body.request_id)?)
+            .await?;
     let mut material = state
         .authority_commits()
         .realm_state_snapshot_material(&body.realm_id)

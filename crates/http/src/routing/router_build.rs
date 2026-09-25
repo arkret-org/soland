@@ -635,20 +635,10 @@ mod tests {
     /// false claim: `service-surface.md` §3 allows advertising only bundles
     /// the deployment really implements. This existing implementation backlog
     /// must shrink as the remaining current-v1 operations are mounted.
-    const KNOWN_ADVERTISED_UNMOUNTED: &[(&str, arkret_wire::ServiceOperationId)] = &[
-        (
-            "ak.operation_bundle.station.applet.v1",
-            arkret_wire::ServiceOperationId::EdgeAppletManagedActorCommandAuthorV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::PeerRealmJoinReadPreviewV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::SelfRealmJoinReadPreviewV1,
-        ),
-    ];
+    const KNOWN_ADVERTISED_UNMOUNTED: &[(&str, arkret_wire::ServiceOperationId)] = &[(
+        "ak.operation_bundle.station.applet.v1",
+        arkret_wire::ServiceOperationId::EdgeAppletManagedActorCommandAuthorV1,
+    )];
 
     /// Advertised Station members served by the co-located Account Authority
     /// of the same Station TCB (device-lifecycle.md §2.1.1): the deployment
