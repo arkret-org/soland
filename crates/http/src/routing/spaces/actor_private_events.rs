@@ -188,23 +188,7 @@ async fn admit_effect(
             Ok(ActorPrivateEventEffect::AgentActionRequest(payload))
         }
         DecodedEffect::ActionReject(payload) => {
-            let request_id = match (&payload.request_id, &payload.draft_id) {
-                (Some(request_id), None) => request_id.clone(),
-                (None, Some(_)) => {
-                    // A draft is held only as a Station-private pending
-                    // intent, whose closed live | terminal-redacted union has
-                    // no `rejected` state; it cannot be rejected here.
-                    return Err(crate::app_error!(
-                        FailedPrecondition,
-                        "an Agent draft pending intent is not rejectable at the Station",
-                    ));
-                }
-                _ => {
-                    return Err(AppError::param_invalid(
-                        "an Agent rejection names exactly one of request_id and draft_id",
-                    ));
-                }
-            };
+            let request_id = payload.request_id.clone();
             require_agent_controller(state, &payload.agent_id, owner, accepted_at).await?;
             Ok(ActorPrivateEventEffect::AgentActionReject {
                 payload,

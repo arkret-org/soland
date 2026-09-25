@@ -97,8 +97,7 @@ fn bind_effect(submission: &ActorPrivateEventSubmission) -> PersistenceResult<()
         } => {
             submission.event.kind == EventKind::AgentActionReject
                 && submission.event.actor_id.as_account_id() == Some(owner)
-                && payload.request_id.as_deref() == Some(request_id.as_str())
-                && payload.draft_id.is_none()
+                && payload.request_id == *request_id
         }
         ActorPrivateEventEffect::AgentDraftPropose(commit) => {
             submission.event.kind == EventKind::AgentDraftPropose
