@@ -89,8 +89,9 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "reaction add",
             kind: arkret_wire::EventKind::ReactionAdd,
-            // reaction_payload: required {target_ref, key}, additionalProperties=false.
-            payload: json!({"target_ref": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR", "key": "+1"}),
+            // reaction_payload: required {target_ref, key}, additionalProperties=false;
+            // v1 core reactions target only a Message (strand-and-message.md 9.8.2).
+            payload: json!({"target_ref": "ak:message:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR", "key": "+1"}),
             valid: true,
         },
         OperationVector {
@@ -98,27 +99,27 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             kind: arkret_wire::EventKind::ReactionRemove,
             // reaction_payload: same schema as add (remove tombstones the (actor,target_ref,key)
             // add).
-            payload: json!({"target_ref": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR", "key": "+1"}),
+            payload: json!({"target_ref": "ak:message:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR", "key": "+1"}),
             valid: true,
         },
         OperationVector {
             name: "relation create",
             kind: arkret_wire::EventKind::RelationCreate,
-            // relation_create_payload requires the whole relation object under
-            // `relation`: the registered effect_projection is
-            // `set value = payload.relation`, and event-and-patch.md 2.4.2 lets
-            // a projection move an existing root path wholesale but never
-            // assemble one, so the old flat {relation_id, kind, from_ref,
-            // to_ref} form has no derivable cell value.
+            // relation_create_payload: the signed primary conflict domain, the
+            // null CAS opening of a never-written domain, and the closed
+            // authoring region; materialized Relation members are forbidden.
             payload: json!({
-                "relation": {
-                    "schema": "ak.schema.relation.v1",
-                    "realm_id": "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5",
+                "primary_conflict_domain": {
+                    "domain_kind": "tuple",
                     "relation_kind": "blocks",
                     "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
-                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb",
-                    "created_by": account_actor("ak:did_core:web:alice.example"),
-                    "created_at": "2026-08-18T00:00:00.000Z"
+                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb"
+                },
+                "expected_revision": null,
+                "relation": {
+                    "relation_kind": "blocks",
+                    "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
+                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb"
                 }
             }),
             valid: true,
@@ -126,8 +127,8 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "relation create with a flat assembled payload",
             kind: arkret_wire::EventKind::RelationCreate,
-            // The negative half of the same rule: a payload the registered
-            // projection would have to assemble is not derivable.
+            // The negative half of the same rule: a flat payload without the
+            // signed domain and CAS basis is not a closed create.
             payload: json!({
                 "relation_id": "ak:relation:AQwWjzRLsPZDMwr_k34oj279cixhgwgnqTCDF9OPB6aA",
                 "kind": "blocks",
@@ -139,18 +140,41 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "relation update",
             kind: arkret_wire::EventKind::RelationUpdate,
-            // relation_update_payload: anyOf {relation_id, patch} | {target_ref, patch} |
-            // {relation_id, status}. patch is a ak.patch.v1 map (path -> patch_value);
-            // a plain value is shorthand for {$op:set,value}.
-            payload: json!({"relation_id": "ak:relation:AQwWjzRLsPZDMwr_k34oj279cixhgwgnqTCDF9OPB6aA", "patch": {"weight": 1}}),
+            // relation_update_payload: domain, exact revision, relation_id and
+            // an ak.patch.v1 map over the updatable members.
+            payload: json!({
+                "primary_conflict_domain": {
+                    "domain_kind": "tuple",
+                    "relation_kind": "blocks",
+                    "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
+                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb"
+                },
+                "expected_revision": {
+                    "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                    "stream_position": 4
+                },
+                "relation_id": "ak:relation:AQwWjzRLsPZDMwr_k34oj279cixhgwgnqTCDF9OPB6aA",
+                "patch": {"fields.weight": 1}
+            }),
             valid: true,
         },
         OperationVector {
             name: "relation delete",
             kind: arkret_wire::EventKind::RelationTombstone,
-            // relation tombstones are validated by relation.schema.json and
-            // identify the edge with relation_id.
-            payload: json!({"relation_id": "ak:relation:AQwWjzRLsPZDMwr_k34oj279cixhgwgnqTCDF9OPB6aA"}),
+            // relation_tombstone_payload: domain, exact revision and relation_id.
+            payload: json!({
+                "primary_conflict_domain": {
+                    "domain_kind": "tuple",
+                    "relation_kind": "blocks",
+                    "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
+                    "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb"
+                },
+                "expected_revision": {
+                    "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+                    "stream_position": 4
+                },
+                "relation_id": "ak:relation:AQwWjzRLsPZDMwr_k34oj279cixhgwgnqTCDF9OPB6aA"
+            }),
             valid: true,
         },
         OperationVector {

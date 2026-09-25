@@ -2662,15 +2662,12 @@ mod invite_locator_security_tests {
             "actor_id": {"kind": "account", "account_id": {
                 "principal_id": PRODUCTION_INVITER, "station_id": state.service_id()
             }},
-            "actor_seq": 0,
             "created_at": "2026-08-21T00:00:00.000Z",
-            "prev_refs": [],
             "payload": {
                 "invitee_account_id": {"principal_id": PRODUCTION_HOLDER, "station_id": state.service_id()},
                 "introduction_evidence_digest": canonical::canonical_sha256(&IntroductionEvidence::ExplicitAddress).unwrap(),
                 "expires_at": "2099-01-01T00:00:00.000Z"
-            },
-            "proofs": []
+            }
         }))
         .expect("invite Event");
         let service_id = DidCoreId::new(state.service_id().to_owned()).unwrap();

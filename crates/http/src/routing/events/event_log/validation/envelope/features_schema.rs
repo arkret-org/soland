@@ -166,27 +166,6 @@ pub(crate) fn validate_event_time_fields(
         None => {}
     }
 
-    let hlc_value = object.get("hlc");
-    if hlc_value.is_some_and(|value| !value.is_string()) {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "hlc must be a string",
-        ));
-    }
-    match hlc_value.and_then(Value::as_str) {
-        Some(value) => {
-            Hlc::new(value).map_err(|_| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    "hlc must use canonical lower-hex HLC form",
-                )
-            })?;
-        }
-        None => {}
-    }
-
     Ok(())
 }
 

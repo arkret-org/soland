@@ -48,15 +48,36 @@ fn dev_proof_envelope() -> serde_json::Map<String, Value> {
         )),
     );
     object.insert(
-        "proofs".to_owned(),
-        json!([{
+        "producer_proof".to_owned(),
+        json!({
             "type": "dev-proof",
             "verification_method": "did:web:alice.example#dev_alice",
             "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-        }]),
+        }),
     );
     object.insert("payload".to_owned(), json!({"body": "hello"}));
     object
+}
+
+/// Project an accepted ordinary collaboration Realm genesis: the lifecycle
+/// write gate fails closed as `realm_frozen` for a Realm the projection never
+/// accepted, which would mask the admission rule a case exercises.
+fn install_collaboration_realm(state: &AppState, realm_id: &str) {
+    state.test_projection().lock().set_realm_facet(
+        realm_id,
+        soland_domain::reducer::facet::REALM_GENESIS,
+        json!({
+            "schema": "ak.schema.realm_genesis.v1",
+            "purpose": "collaboration",
+            "genesis_salt": "X-kS8-uBvWQ_iuRqO7Rsv0WGBjZG2S2wJ533Tk2SJJ4",
+            "trust_domain": "ak:trust_domain:policy.example",
+            "security_class": "high_assurance",
+            "governance_station_id": crate::test_event::station_id(),
+            "initial_join_rule": "invite",
+            "initial_history_access": "since_join",
+            "initial_discoverability": "invite_only"
+        }),
+    );
 }
 
 fn session() -> SessionRecord {
@@ -341,6 +362,7 @@ async fn circle_scoped_write_requires_circle_membership() {
     // bot / Ghost Actor) could inject content into a Circle it never joined.
     let state = make_state(true);
     let realm_id = "ak:realm:AU3fkxq_f4TuVlpZppN3pSPHhVOTTikXW_-Hw0vr9XCp";
+    install_collaboration_realm(&state, realm_id);
     let circle_id = "ak:circle:AZT0NDzMS5h5Oz8ih_r5JqLxOrZZy4HxcAEY5s1MbM9K";
     let member = "ak:did_core:web:alice.example";
     // An Applet bot that holds a Realm-wide grant but never joined the Circle.
@@ -425,6 +447,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     // scope, so reacting to a Circle message requires Circle membership too.
     let state = make_state(true);
     let realm_id = "ak:realm:Af5kTRq88MZ71EExjwb7Pm9AHmO7tPZB470XwPwDiYge";
+    install_collaboration_realm(&state, realm_id);
     let circle_id = "ak:circle:AS5EmLqkRoAqtHJcDm0xGwZ8A-MgC4120y4IpSAbqFCJ";
     let strand_id = "ak:strand:AekvaCkXy9kgtwfnxzaKIOIIHF_-HZpSbCakATPdwWMH";
     let event_id = "ak:event:ATISmX7h_m-9AlDVmW5cqCG9eM06QsDQFjEjG675Jf3A";
@@ -534,6 +557,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     // under a Circle scope.
     let state = make_state(true);
     let realm_id = "ak:realm:ASTX9r6c7ZMAY74JFAIh5TyBTiwEqs5oy5TCX7ubmLVB";
+    install_collaboration_realm(&state, realm_id);
     let circle_id = "ak:circle:AQIjwhwC5jFHrCd985kMq2m5ahV3nG7qBK-aMMYLbgAt";
     let scoped_morph_id = "ak:morph:AXlXsex0Kgdp6mgmqub7aKP53d1_Zp7PifQwrYfC-8HO";
     let realm_morph_id = "ak:morph:AXg0u_PNFrZzEeHPh_4tFOFF7XNlDbiHiSewgv_unmDK";
@@ -645,6 +669,7 @@ async fn applet_registration_requires_realm_admin() {
     // capability; an active `ak.realm.admin` grant is required.
     let state = make_state(true);
     let realm_id = "ak:realm:Aaleb4QrS8SxR5KXmKfDQZMNxW8WlSaUaySdeWV2-hVl";
+    install_collaboration_realm(&state, realm_id);
     let owner = "ak:did_core:web:alice.example";
     let outsider = "ak:did_core:web:mallory.example";
     let now = chrono::Utc::now();
@@ -743,17 +768,9 @@ fn production_requires_canonical_event_time_fields() {
         .expect_err("microseconds are not canonical milliseconds");
     assert_eq!(err.code, "param_invalid");
 
+    // The Event envelope carries no producer HLC: the governance Station's
+    // RealmCommit is the single clock, so a canonical created_at suffices.
     object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00.000Z"));
-    let err = validate_event_time_fields(&state, &object).expect_err("production requires hlc");
-    assert_eq!(err.code, "param_missing");
-    assert!(err.message.contains("hlc"));
-
-    object.insert("hlc".to_owned(), json!("019041000000-0000-AABBCCDD"));
-    let err =
-        validate_event_time_fields(&state, &object).expect_err("uppercase HLC is not canonical");
-    assert_eq!(err.code, "param_invalid");
-
-    object.insert("hlc".to_owned(), json!("019041000000-0000-aabbccdd"));
     validate_event_time_fields(&state, &object).expect("canonical timestamps accepted");
 }
 
@@ -1178,9 +1195,9 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
     // durable Event protocol.
     let payload_bytes = canonical::canonical_json_bytes(&object["payload"]).unwrap();
     let payload_digest = arkret_canonical::sha256_digest(&payload_bytes);
-    if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
-        && let Some(proof) = proofs.first_mut()
-        && let Some(map) = proof.as_object_mut()
+    if let Some(map) = object
+        .get_mut("producer_proof")
+        .and_then(Value::as_object_mut)
     {
         map.insert("payload_digest".to_owned(), json!(payload_digest));
     }
@@ -1219,14 +1236,14 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         )),
     );
     object.insert(
-        "proofs".to_owned(),
-        json!([{
+        "producer_proof".to_owned(),
+        json!({
             "kind": "detached_jws",
             "verification_method": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
             "event_digest": event_digest,
             "created_at": "2026-05-17T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
-        }]),
+        }),
     );
     object.insert("payload".to_owned(), json!({"body": "hello"}));
 
@@ -1272,14 +1289,14 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         )),
     );
     object.insert(
-        "proofs".to_owned(),
-        json!([{
+        "producer_proof".to_owned(),
+        json!({
             "kind": "detached_jws",
             "verification_method": "did:web:stale-proof.example#k1",
             "event_digest": event_digest,
             "created_at": "2026-05-17T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
-        }]),
+        }),
     );
     object.insert(
         "kind".to_owned(),
