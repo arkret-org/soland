@@ -2437,7 +2437,7 @@ fn invite_locator_not_found() -> AppError {
 #[cfg(test)]
 mod invite_locator_security_tests {
     use salvo::test::{ResponseExt, TestClient};
-    use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
+    use soland_services::identity::AccountProfileState;
     use soland_test_support::AppStateTestExt as _;
     use soland_test_support::pcr_genesis::PcrGenesisFixture;
 
@@ -2445,8 +2445,6 @@ mod invite_locator_security_tests {
 
     const PRODUCTION_HOLDER: &str = "ak:did_core:web:holder.example";
     const PRODUCTION_INVITER: &str = "ak:did_core:web:inviter_id.example";
-    const PRODUCTION_DEVICE_A: &str = "ak:device:01904100-0000-7000-8000-0000000000e1";
-    const PRODUCTION_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-0000000000e2";
     const PRODUCTION_REALM: &str = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
     const PRODUCTION_INVITE_EVENT: &str = "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2";
 
@@ -2563,27 +2561,6 @@ mod invite_locator_security_tests {
             })
             .await
             .expect("holder account");
-        for device_id in [PRODUCTION_DEVICE_A, PRODUCTION_DEVICE_B] {
-            state
-                .identities()
-                .save_device(SaveDeviceCommand {
-                    actor_id: PRODUCTION_HOLDER.to_owned(),
-                    device_id: device_id.to_owned(),
-                    display_name: None,
-                    device: DeviceIdentity {
-                        actor_id: PRODUCTION_HOLDER.to_owned(),
-                        device_id: device_id.to_owned(),
-                        display_name: None,
-                        verification_state: "verified".to_owned(),
-                        payload: json!({"device_id": device_id}),
-                        created_at,
-                        updated_at: created_at,
-                        revoked_at: None,
-                    },
-                })
-                .await
-                .expect("holder device");
-        }
         state
     }
 
