@@ -1006,6 +1006,20 @@ async fn deliver_invite_credential(
             .map_err(|error| {
                 AppError::internal(format!("invite delivery cell does not parse: {error}"))
             })?;
+        // The Invite id is the stable private-delivery key: an exact retry of
+        // an already delivered Invite rewrites nothing and wakes no device.
+        if existing_cell.as_ref().is_some_and(|cell| {
+            cell.delivery_entries.iter().any(|entry| {
+                entry.invite_id == new_entry.invite_id
+                    && entry.realm_id == new_entry.realm_id
+                    && entry.inviter_account_id == new_entry.inviter_account_id
+                    && entry.authority_locator_hints == new_entry.authority_locator_hints
+                    && entry.expires_at == new_entry.expires_at
+                    && invite_delivery_entry_active(entry, received_at)
+            })
+        }) {
+            return Ok(false);
+        }
         let cell = merge_invite_delivery_cell(existing_cell, new_entry.clone(), received_at)?;
         let payload = serde_json::to_value(&cell).map_err(|error| {
             AppError::internal(format!("invite delivery cell serialize: {error}"))
