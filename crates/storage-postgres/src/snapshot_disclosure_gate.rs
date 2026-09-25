@@ -365,6 +365,7 @@ pub(crate) async fn single_member_bootstrap_material_in_connection(
         // Audited: moderator-only (content-moderation.md §3.3); never disclosed
         // by this caller-unaware subset, so any row refuses the cut below.
         "moderation_report_current_results",
+        "moderation_state_current_results",
         "realm_bootstrap_current_results",
         "agent_status_current_results",
         "agent_key_current_results",
@@ -386,7 +387,8 @@ pub(crate) async fn single_member_bootstrap_material_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_generation_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1)) AS present",
+            OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1)) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
     .get_result::<PresenceRow>(&mut *conn)

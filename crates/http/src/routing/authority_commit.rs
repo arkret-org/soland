@@ -140,6 +140,7 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
             Some(
                 code @ (soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired
+                | soland_storage::ConflictCode::JoinRulePolicyMismatch
                 | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid),
             ) => {
                 return crate::error::render_error_with_reason_code(

@@ -44,9 +44,11 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
     use arkret_wire::EventKind;
     match kind {
         EventKind::KeyBackupActiveSeries => Ok(SelfEventRoute::KeyBackupPointer),
-        EventKind::StrandCreate | EventKind::RealmSetDefaultStrand | EventKind::MessageCreate => {
-            Ok(SelfEventRoute::GuardedUnit)
-        }
+        EventKind::StrandCreate
+        | EventKind::RealmSetDefaultStrand
+        | EventKind::MessageCreate
+        | EventKind::ModerationDecision
+        | EventKind::ModerationDecisionLift => Ok(SelfEventRoute::GuardedUnit),
         EventKind::Unknown(raw) => Err(ServiceError::SchemaViolation(format!(
             "self Event kind {raw} is not registered"
         ))),
@@ -381,6 +383,8 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
+            EventKind::ModerationDecision,
+            EventKind::ModerationDecisionLift,
         ] {
             assert_eq!(
                 self_event_route(&kind).unwrap(),
@@ -396,6 +400,8 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
+            EventKind::ModerationDecision,
+            EventKind::ModerationDecisionLift,
         ];
         let mut refused = 0;
         for kind in EventKind::ALL.iter().filter(|kind| !routed.contains(kind)) {

@@ -58,7 +58,7 @@ async fn present(
 
 /// Prove the signed `target_ref` names an accepted Realm-scope object of this
 /// Realm strictly before the report's own Commit on the same Realm stream.
-async fn ensure_realm_scope_target(
+pub(crate) async fn ensure_realm_scope_target(
     conn: &mut AsyncPgConnection,
     realm_id: &str,
     target_ref: &str,

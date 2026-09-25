@@ -88,6 +88,8 @@ async fn ensure_local_only_realm_source_cut(
             | arkret_wire::EventKind::RealmSetDefaultStrand
             | arkret_wire::EventKind::MessageCreate
             | arkret_wire::EventKind::SelfModerationReport
+            | arkret_wire::EventKind::ModerationDecision
+            | arkret_wire::EventKind::ModerationDecisionLift
     ) {
         return Ok(());
     }
@@ -2381,6 +2383,10 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::moderation_report_current_results::commit_moderation_report_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::moderation_state_current_results::commit_moderation_state_current_result_in_connection(
             conn, event, commit,
         )
         .await?;

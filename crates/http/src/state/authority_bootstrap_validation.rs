@@ -1,6 +1,7 @@
 //! Preflight for the closed ordinary Realm bootstrap authority unit.
 
 use arkret_models_collaboration::authority_commit::OrdinaryRealmBootstrapUnitSubmission;
+use arkret_models_collaboration::events_payloads::join_policy::JoinPolicyGate;
 use arkret_models_collaboration::events_payloads::realm::{
     RealmCreatePayload, RealmPolicyBundlePayload, RealmPurpose,
 };
@@ -81,9 +82,20 @@ pub(super) async fn verify_ordinary_realm_bootstrap(
             "ordinary Realm bootstrap policy_revision must begin at 1".to_owned(),
         ));
     }
-    if policy.join_policy.is_some() {
-        return Err(ServiceError::Conflict(
-            "ordinary Realm bootstrap join policy dependency gate is unavailable".to_owned(),
+    // join-policy.md §3.1: a parent_membership source needs a current active
+    // `join_gate_from` Realm link from this Realm, and a Realm being created
+    // has none, so such a policy cannot be written by its bootstrap.
+    let gates = policy
+        .join_policy
+        .as_ref()
+        .map_or(&[][..], |join_policy| join_policy.gates.as_slice());
+    if gates
+        .iter()
+        .any(|gate| matches!(gate, JoinPolicyGate::ParentMembership { .. }))
+    {
+        return Err(ServiceError::protocol(
+            arkret_wire::ErrorCode::FailedPrecondition,
+            "a parent_membership gate needs join_gate_from links the new Realm cannot have",
         ));
     }
     let join_rule_event = submission
@@ -91,6 +103,8 @@ pub(super) async fn verify_ordinary_realm_bootstrap(
         .iter()
         .find(|submitted| submitted.event.kind == EventKind::RealmJoinRule)
         .expect("validated required join-rule slot");
+    // join-policy.md §2: `restricted` and `knock_restricted` need at least one
+    // automatic gate; with only hard gates they would admit the `public` set.
     if matches!(
         join_rule_event
             .event
@@ -98,11 +112,16 @@ pub(super) async fn verify_ordinary_realm_bootstrap(
             .get("value")
             .and_then(serde_json::Value::as_str),
         Some("restricted" | "knock_restricted")
-    ) {
-        return Err(ServiceError::Conflict(
-            "join_rule_policy_mismatch: restricted bootstrap requires a verified automatic join policy"
-                .to_owned(),
-        ));
+    ) && !gates.iter().any(|gate| {
+        matches!(
+            gate,
+            JoinPolicyGate::ClaimRequired { .. } | JoinPolicyGate::ChallengeResponse { .. }
+        )
+    }) {
+        return Err(ServiceError::Conflict(format!(
+            "{}: a restricted bootstrap declares no automatic join gate",
+            soland_storage::ConflictCode::JoinRulePolicyMismatch
+        )));
     }
     let mut guards = Vec::with_capacity(submission.events.len());
     let mut operations = Vec::with_capacity(submission.events.len());

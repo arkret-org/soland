@@ -4366,6 +4366,25 @@ CREATE TABLE moderation_report_current_results (
 );
 CREATE INDEX moderation_report_current_results_realm ON moderation_report_current_results(realm_id,report_event_id);
 
+-- `moderation_state` typed current: the canonically sorted set of committed
+-- `ak.moderation.decision` / `.lift` assertions on one moderated target, each
+-- tagged by its accepting Event's `<event_id>:0` dot with the complete payload.
+-- No element is ever removed; the active fold and the queue item status are
+-- read-side derivations.
+CREATE TABLE moderation_state_current_results (
+ realm_id TEXT NOT NULL,
+ target_ref TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,target_ref),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK((value - 'assertions')='{}'::jsonb),
+ CHECK(jsonb_typeof(value->'assertions')='array'),
+ CHECK(jsonb_array_length(value->'assertions')>0)
+);
+
 -- Ordinary Realm bootstrap singleton families share one physical table. Each
 -- row is keyed by its registered typed-current-result selector kind and by
 -- the exact RealmCommit that first established it.

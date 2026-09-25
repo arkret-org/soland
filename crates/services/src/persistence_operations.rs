@@ -377,7 +377,9 @@ impl crate::governance::ModerationPort for PersistenceModeration {
         &self,
         actor: &arkret_wire::ActorId,
         realm_id: Option<&arkret_wire::RealmId>,
-    ) -> crate::ServiceResult<soland_storage::ModerationQueueRead> {
+    ) -> crate::ServiceResult<
+        Vec<arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem>,
+    > {
         Ok(self
             .0
             .moderation()

@@ -204,9 +204,10 @@ impl ProjectionState {
         }
         let target_ref_key = target_ref.clone();
         let mut items = self.moderation_entries(&realm_id, &target_ref);
-        // `content-moderation.md` §2.6 — the keyed-set add tag is
-        // `(issuer_id, request_canonical_digest)`.
-        let tag = format!("{issuer}/{request_digest}");
+        // The element tag is the accepting Event's canonical `<event_id>:0`
+        // dot (`typed-current-result.schema.json#/$defs/canonical_event_dot`);
+        // no payload member, issuer or digest enters set identity.
+        let tag = format!("{decision_id}:0");
         let Ok(decision) = operation.typed_payload::<arkret_wire::event_spec::ModerationDecision>()
         else {
             return ProjectionEffect::Rejected {
@@ -228,9 +229,9 @@ impl ProjectionState {
             map.entry("realm_id".to_owned())
                 .or_insert_with(|| Value::String(realm_id.clone()));
         }
-        items.retain(|item| item.get("tag").and_then(Value::as_str) != Some(tag.as_str()));
+        items.retain(|item| item.get("tag_id").and_then(Value::as_str) != Some(tag.as_str()));
         items.push(serde_json::json!({
-            "tag": tag,
+            "tag_id": tag,
             "value": value,
         }));
         self.set_facet(
@@ -269,22 +270,22 @@ impl ProjectionState {
                 reason: "moderation_lift_target_ref_missing".to_owned(),
             };
         };
-        let Some(expected_revision) = operation
+        // `expected_revision` is the typed `{commit_id, stream_position}` of
+        // the durable `moderation_state` result. The governing Station
+        // compares it at the accepting Commit cut; this cache only removes the
+        // lifted decision from the active set it folds.
+        if operation
             .payload
             .get("expected_revision")
-            .and_then(Value::as_u64)
-        else {
+            .and_then(Value::as_object)
+            .is_none()
+        {
             return ProjectionEffect::Rejected {
                 reason: "moderation_lift_expected_revision_missing".to_owned(),
             };
-        };
+        }
         let realm_id = operation.realm_id.to_string();
         let target = FacetRef::new(facet::MODERATION_STATE, &target_ref);
-        if self.facet_revision(&realm_id, &target) != expected_revision {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
-            };
-        }
         let _ = now;
         let mut items = self.moderation_entries(&realm_id, &target_ref);
         let before = items.len();

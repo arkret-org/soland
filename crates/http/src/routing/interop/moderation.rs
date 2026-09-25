@@ -807,18 +807,11 @@ pub(crate) async fn moderation_queue_for_session(
         principal,
         state.service_core_id().clone(),
     ));
-    match state
+    state
         .governance()
         .moderation_queue_for_actor(&actor, realm_filter)
         .await
-        .map_err(|error| AppError::internal(format!("moderation queue read failed: {error}")))?
-    {
-        soland_storage::ModerationQueueRead::Items(items) => Ok(items),
-        soland_storage::ModerationQueueRead::StatusUnavailable => Err(AppError::new(
-            soland_http::error::ErrorCode::RevisionUnavailable,
-            "moderation_state current result is unavailable at this cut",
-        )),
-    }
+        .map_err(|error| AppError::internal(format!("moderation queue read failed: {error}")))
 }
 
 #[cfg(test)]

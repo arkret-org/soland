@@ -221,6 +221,9 @@ pub enum ConflictCode {
     SnapshotCapacityExceeded,
     /// A plaintext application body targets a scope with accepted MLS genesis.
     MlsActivationRequired,
+    /// A `restricted` / `knock_restricted` join rule has no automatic gate in
+    /// the Realm's join policy (`join-policy.md` §2).
+    JoinRulePolicyMismatch,
     /// Membership compensation evidence changed, expired, or was consumed.
     MembershipCompensationConflict,
     /// MIMI migration lineage, selected topology, or current MLS binding fails.
@@ -264,7 +267,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
@@ -283,6 +286,7 @@ impl ConflictCode {
         Self::FailedPrecondition,
         Self::SnapshotCapacityExceeded,
         Self::MlsActivationRequired,
+        Self::JoinRulePolicyMismatch,
         Self::MembershipCompensationConflict,
         Self::MimiRoomBindingMigrationProofInvalid,
         Self::RecipientQueueAtCapacity,
@@ -325,6 +329,7 @@ impl ConflictCode {
             Self::FailedPrecondition => "failed_precondition",
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
+            Self::JoinRulePolicyMismatch => arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH,
             Self::MembershipCompensationConflict => "membership_compensation_conflict",
             Self::MimiRoomBindingMigrationProofInvalid => {
                 arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID

@@ -2944,12 +2944,13 @@ async fn concurrent_self_reports_on_one_stream_head_leave_one_winner_and_a_retry
 /// `moderation_report` family. The Realm root controller sees every report as
 /// a closed `moderation-queue-item` with the retyped id, the exact payload and
 /// the accepting Commit time; any other caller sees nothing; the full Realm
-/// snapshot material carries each report under its registered selector; and an
-/// accepted moderation decision makes item status unprovable instead of
-/// `submitted`.
+/// snapshot material carries each report under its registered selector; the
+/// committed decisions fold item status from moderation_state; and a same-cut
+/// moderation grant makes its subject a moderator of the queue.
 #[tokio::test]
 async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
-    use soland_storage::{ModerationQueueRead, ModerationStore as _};
+    use arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem;
+    use soland_storage::ModerationStore as _;
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
@@ -2974,10 +2975,7 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
         controller.as_account_id().unwrap().station_id.clone(),
     ));
 
-    let items = |read: ModerationQueueRead| match read {
-        ModerationQueueRead::Items(items) => items,
-        ModerationQueueRead::StatusUnavailable => panic!("status must be provable"),
-    };
+    let items = |read: Vec<ModerationQueueItem>| read;
     assert!(items(queue.queue_view_for_actor(&controller, None).await.unwrap()).is_empty());
 
     let first = moderation_report_request(
@@ -3075,8 +3073,8 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
         );
     }
 
-    // A committed decision needs the moderation_state fold this Station
-    // cannot yet produce; only a visible Realm makes the read unavailable.
+    // A dismiss naming the first report resolves exactly that item and is
+    // recorded as one assertion of the report's moderation_state.
     let dismiss = realm_self_event_request(
         &second,
         &reporter,
@@ -3088,12 +3086,193 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
             "request_canonical_digest": format!("sha256:{}", "00".repeat(32)),
         }),
     );
-    uow.commit_event(dismiss).await.unwrap();
-    assert!(matches!(
-        queue.queue_view_for_actor(&controller, None).await.unwrap(),
-        ModerationQueueRead::StatusUnavailable
-    ));
+    uow.commit_event(dismiss.clone()).await.unwrap();
+    let statuses = |view: Vec<ModerationQueueItem>| {
+        view.iter()
+            .map(|item| serde_json::to_value(&item.status).unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        statuses(queue.queue_view_for_actor(&controller, None).await.unwrap()),
+        [
+            serde_json::json!("resolved"),
+            serde_json::json!("submitted")
+        ]
+    );
     assert!(items(queue.queue_view_for_actor(&stranger, None).await.unwrap()).is_empty());
+
+    // An issuer without a same-cut moderation capability writes nothing.
+    let stranger_principal = stranger.signing_principal_id().clone();
+    let unauthorized = realm_self_event_request(
+        &dismiss,
+        &stranger_principal,
+        arkret_wire::EventKind::ModerationDecision,
+        serde_json::json!({
+            "target_ref": second.authority_commit.event.event_id,
+            "decision": "dismiss",
+            "issuer_id": stranger_principal,
+            "request_canonical_digest": format!("sha256:{}", "01".repeat(32)),
+        }),
+    );
+    assert!(uow.commit_event(unauthorized.clone()).await.is_err());
+    assert!(
+        store
+            .committed_event(&unauthorized.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(moderation_state_rows(&pool).await, 1);
+
+    // A require_review on the second report's target, committed after that
+    // report, resolves it too.
+    let review = realm_self_event_request(
+        &dismiss,
+        &reporter,
+        arkret_wire::EventKind::ModerationDecision,
+        serde_json::json!({
+            "target_ref": realm_id,
+            "decision": "require_review",
+            "issuer_id": reporter,
+            "request_canonical_digest": format!("sha256:{}", "02".repeat(32)),
+        }),
+    );
+    uow.commit_event(review.clone()).await.unwrap();
+    assert_eq!(
+        statuses(queue.queue_view_for_actor(&controller, None).await.unwrap()),
+        [serde_json::json!("resolved"), serde_json::json!("resolved")]
+    );
+
+    // A lift is compare-and-set on the durable moderation_state revision and
+    // appends an assertion; it never removes the decision nor reopens items.
+    let lift = |previous: &EventCommitRequest,
+                stream_position: u64,
+                commit_id: &arkret_wire::RealmCommitId| {
+        realm_self_event_request(
+            previous,
+            &reporter,
+            arkret_wire::EventKind::ModerationDecisionLift,
+            serde_json::json!({
+                "target_ref": realm_id,
+                "decision_ref": review.authority_commit.event.event_id,
+                "expected_revision": {
+                    "commit_id": commit_id,
+                    "stream_position": stream_position,
+                },
+            }),
+        )
+    };
+    let stale = lift(&review, 0, &dismiss.authority_commit.commit.commit_id);
+    let refusal = uow.commit_event(stale.clone()).await.unwrap_err();
+    assert_eq!(
+        refusal.conflict_code(),
+        Some(soland_storage::ConflictCode::CasConflict),
+        "{refusal:?}"
+    );
+    let current = lift(
+        &review,
+        review.authority_commit.commit.stream_position,
+        &review.authority_commit.commit.commit_id,
+    );
+    uow.commit_event(current.clone()).await.unwrap();
+    let material = store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let selector = arkret_wire::CurrentSelector::ModerationState {
+        target_ref: realm_id.to_string(),
+    };
+    let Some(arkret_wire::TypedCurrentResult::Value {
+        revision, value, ..
+    }) = material.current_state_entries.iter().find(|entry| {
+        matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: found, .. } if found == &selector)
+    })
+    else {
+        panic!("snapshot material carries the moderation_state row");
+    };
+    assert_eq!(
+        revision.commit_id,
+        current.authority_commit.commit.commit_id
+    );
+    let tags = value["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["tag_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let mut expected = vec![
+        format!("{}:0", review.authority_commit.event.event_id),
+        format!("{}:0", current.authority_commit.event.event_id),
+    ];
+    expected.sort();
+    assert_eq!(tags, expected);
+    assert_eq!(
+        statuses(queue.queue_view_for_actor(&controller, None).await.unwrap()),
+        [serde_json::json!("resolved"), serde_json::json!("resolved")]
+    );
+
+    // The root controller grants the decision action on this Realm: the
+    // grantee is a moderator of the queue at the same cut.
+    let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
+    let grant = realm_self_event_request(
+        &current,
+        &reporter,
+        arkret_wire::EventKind::CapabilityGrant,
+        serde_json::json!({
+            "grant": {
+                "schema": "ak.schema.capability.v1",
+                "realm_id": realm_id,
+                "issuer_id": controller,
+                "subject": stranger,
+                "actions": ["ak.moderation.decision"],
+                "resources": [{"kind": "realm", "realm_id": realm_id}],
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": realm_id,
+                    "authority_event_ref": root_event_ref,
+                    "authority_generation": 0
+                }],
+                "issued_at": arkret_canonical::format_timestamp_canonical(
+                    current.authority_commit.commit.committed_at
+                ),
+            }
+        }),
+    );
+    uow.commit_event(grant).await.unwrap();
+    assert_eq!(
+        items(queue.queue_view_for_actor(&stranger, None).await.unwrap()).len(),
+        2
+    );
+}
+
+async fn moderation_state_rows(pool: &soland_storage_postgres::PgPool) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM moderation_state_current_results")
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
+async fn realm_root_authority_event_ref(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> String {
+    #[derive(diesel::QueryableByName)]
+    struct RootRow {
+        #[diesel(sql_type = Text)]
+        authority_event_ref: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT authority_event_ref FROM realm_authority_root_current_results WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<RootRow>(&mut *conn)
+    .await
+    .unwrap()
+    .authority_event_ref
 }
 
 /// Real PostgreSQL: the exact self reads decide visibility, generation, head

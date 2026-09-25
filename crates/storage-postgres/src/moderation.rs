@@ -5,18 +5,18 @@
 //! records that point at it; the Station keeps no independently writable queue
 //! state. Every member is derived here from one REPEATABLE READ snapshot:
 //!
-//! - visibility of a Realm's reports is limited to its moderators; the current
-//!   Realm root controller is the moderator this cut can prove, so a caller that
-//!   is not it sees nothing for that Realm (no existence oracle);
-//! - `status` folds the report family with `moderation_state`. No durable
-//!   `moderation_state` writer exists, so a visible Realm holding any accepted
-//!   moderation decision Event makes the read unavailable instead of claiming
-//!   `submitted`;
-//! - `visibility` takes the first matching branch of §3.3 item 3 (the
-//!   supported reports target Realm-scope content only);
+//! - visibility of a Realm's reports is limited to its moderators: the current Realm root
+//!   controller or the Actor subject of an active, chain-intact Capability Grant for the moderation
+//!   decision on the Realm, both judged at this same cut; any other caller sees nothing for that
+//!   Realm (no existence oracle);
+//! - `status` folds the report family with `moderation_state`: an item is `resolved` once a
+//!   committed decision names the report itself, or names the reported target after the report was
+//!   accepted; lifts never reopen it;
+//! - `visibility` takes the first matching branch of §3.3 item 3 (the supported reports target
+//!   Realm-scope content only);
 //! - `created_at` is the accepting RealmCommit time;
-//! - local workflow members (`priority`, `assigned_to_ids`, `audit_refs`) and
-//!   the optional `evidence_policy` are omitted: this Station has none.
+//! - local workflow members (`priority`, `assigned_to_ids`, `audit_refs`) and the optional
+//!   `evidence_policy` are omitted: this Station has none.
 
 use arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload;
 use arkret_models_collaboration::governance::moderation_queue::{
@@ -25,9 +25,9 @@ use arkret_models_collaboration::governance::moderation_queue::{
 use diesel::sql_types::Nullable;
 
 use super::{
-    AsyncConnection, AsyncPgConnection, BigInt, Bool, Jsonb, ModerationQueueRead, ModerationStore,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    Text, Timestamptz, Value, async_trait, pg_conn, sql_query,
+    AsyncConnection, AsyncPgConnection, BigInt, Bool, Jsonb, ModerationStore, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    Value, async_trait, pg_conn, sql_query,
 };
 
 pub struct PgModerationStore {
@@ -38,12 +38,6 @@ pub struct PgModerationStore {
 struct RealmRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
-}
-
-#[derive(QueryableByName)]
-struct ControllerRow {
-    #[diesel(sql_type = Jsonb)]
-    controller_actor_id: Value,
 }
 
 #[derive(QueryableByName)]
@@ -60,6 +54,8 @@ struct ReportRow {
     value: Value,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     committed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
 }
 
 #[derive(QueryableByName)]
@@ -85,26 +81,33 @@ async fn present(
         .present)
 }
 
-/// The Realm root controller at this cut, covered by its Realm-stream Commit.
-async fn realm_root_controller(
+#[derive(QueryableByName)]
+struct DecisionRow {
+    #[diesel(sql_type = Text)]
+    target_ref: String,
+    #[diesel(sql_type = BigInt)]
+    stream_position: i64,
+}
+
+/// Every committed decision assertion of the Realm with the target it was
+/// recorded under and its accepting Realm-stream position.
+async fn realm_decisions(
     conn: &mut AsyncPgConnection,
     realm_id: &str,
-) -> PersistenceResult<Option<arkret_wire::ActorId>> {
-    use diesel::OptionalExtension as _;
+) -> PersistenceResult<Vec<DecisionRow>> {
     sql_query(
-        "SELECT r.controller_actor_id FROM realm_authority_root_current_results r \
-         JOIN realm_commits c ON c.commit_id=r.current_commit_id \
-         WHERE r.realm_id=$1 AND c.realm_id=r.realm_id \
-           AND c.stream_position=r.current_stream_position \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=r.realm_id",
+        "SELECT s.target_ref, c.stream_position \
+         FROM moderation_state_current_results s \
+         CROSS JOIN LATERAL jsonb_array_elements(s.value->'assertions') a \
+         JOIN realm_commits c ON c.realm_id=s.realm_id \
+          AND c.commit_json->>'event_ref'=left(a->>'tag_id', length(a->>'tag_id')-2) \
+          AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=c.realm_id \
+         WHERE s.realm_id=$1 AND a->'value' ? 'decision'",
     )
     .bind::<Text, _>(realm_id)
-    .get_result::<ControllerRow>(&mut *conn)
+    .load::<DecisionRow>(&mut *conn)
     .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .map(|row| serde_json::from_value(row.controller_actor_id).map_err(corrupt))
-    .transpose()
+    .map_err(PersistenceError::database)
 }
 
 async fn realm_queue_items(
@@ -122,7 +125,7 @@ async fn realm_queue_items(
     )
     .await?;
     let rows = sql_query(
-        "SELECT r.report_event_id, r.value, c.committed_at \
+        "SELECT r.report_event_id, r.value, c.committed_at, r.current_stream_position \
          FROM moderation_report_current_results r \
          LEFT JOIN realm_commits c ON c.commit_id=r.current_commit_id \
           AND c.realm_id=r.realm_id AND c.stream_position=r.current_stream_position \
@@ -134,6 +137,7 @@ async fn realm_queue_items(
     .load::<ReportRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
+    let decisions = realm_decisions(conn, realm_id).await?;
     rows.into_iter()
         .map(|row| {
             let committed_at = row
@@ -142,6 +146,11 @@ async fn realm_queue_items(
             let event_id = arkret_wire::EventId::new(row.report_event_id).map_err(corrupt)?;
             let report: ModerationReportPayload =
                 serde_json::from_value(row.value).map_err(corrupt)?;
+            let resolved = decisions.iter().any(|decision| {
+                decision.target_ref == event_id.as_str()
+                    || (decision.target_ref == report.target_ref.as_str()
+                        && decision.stream_position > row.current_stream_position)
+            });
             let visibility = if !encrypted {
                 ModerationQueueVisibility::PlaintextEvidence
             } else if report.evidence_package.is_some() {
@@ -154,7 +163,11 @@ async fn realm_queue_items(
             Ok(ModerationQueueItem {
                 id: ModerationQueueItem::id_for_report(&event_id),
                 report,
-                status: ModerationQueueStatus::Submitted,
+                status: if resolved {
+                    ModerationQueueStatus::Resolved
+                } else {
+                    ModerationQueueStatus::Submitted
+                },
                 priority: None,
                 visibility,
                 assigned_to_ids: None,
@@ -171,7 +184,8 @@ async fn queue_view_in_connection(
     conn: &mut AsyncPgConnection,
     actor: &arkret_wire::ActorId,
     realm_filter: Option<&arkret_wire::RealmId>,
-) -> PersistenceResult<ModerationQueueRead> {
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Vec<ModerationQueueItem>> {
     let realms = sql_query(
         "SELECT DISTINCT realm_id FROM moderation_report_current_results \
          WHERE $1::text IS NULL OR realm_id=$1 ORDER BY realm_id",
@@ -182,23 +196,24 @@ async fn queue_view_in_connection(
     .map_err(PersistenceError::database)?;
     let mut items = Vec::new();
     for RealmRow { realm_id } in realms {
-        if realm_root_controller(conn, &realm_id).await?.as_ref() != Some(actor) {
-            continue;
-        }
-        let decided = present(
+        let realm = arkret_wire::RealmId::new(realm_id.clone()).map_err(corrupt)?;
+        if !crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
             conn,
-            "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
-             WHERE c.realm_id=$1 AND e.state='committed' \
-               AND e.kind IN ('ak.moderation.decision','ak.moderation.decision.lift')) AS present",
-            &realm_id,
+            &realm,
+            actor,
+            &[
+                arkret_wire::CapabilityActionId::POLICY_MANAGE,
+                arkret_wire::CapabilityActionId::MODERATION_DECISION,
+            ],
+            at,
         )
-        .await?;
-        if decided {
-            return Ok(ModerationQueueRead::StatusUnavailable);
+        .await?
+        {
+            continue;
         }
         items.extend(realm_queue_items(conn, &realm_id).await?);
     }
-    Ok(ModerationQueueRead::Items(items))
+    Ok(items)
 }
 
 #[async_trait]
@@ -207,13 +222,14 @@ impl ModerationStore for PgModerationStore {
         &self,
         actor: &arkret_wire::ActorId,
         realm_id: Option<&arkret_wire::RealmId>,
-    ) -> PersistenceResult<ModerationQueueRead> {
+    ) -> PersistenceResult<Vec<ModerationQueueItem>> {
+        let at = chrono::Utc::now();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
                 .execute(&mut *conn)
                 .await?;
-            queue_view_in_connection(conn, actor, realm_id)
+            queue_view_in_connection(conn, actor, realm_id, at)
                 .await
                 .map_err(Into::into)
         })

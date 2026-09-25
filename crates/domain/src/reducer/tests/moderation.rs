@@ -19,11 +19,10 @@ fn mod_decision_facet() -> FacetRef {
     FacetRef::new(facet::MODERATION_STATE, MOD_TARGET_REF)
 }
 
-/// The keyed-set add tag of a decision: `content-moderation.md` section 2.6
-/// makes it the `(issuer_id, request_canonical_digest)` pair, so re-issuing the
-/// same review replaces its own entry and never another issuer's.
-fn entry_tag(issuer: &str, request_digest: &str) -> String {
-    format!("{issuer}/{request_digest}")
+/// The element tag of a decision: the accepting Event's canonical
+/// `<event_id>:0` dot, never a payload composite.
+fn entry_tag(decision_id: &str) -> String {
+    format!("{decision_id}:0")
 }
 
 fn moderation_decision_operation(
@@ -57,7 +56,7 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
     );
 }
 
-fn lift_operation(decision_id: &str, expected_revision: u64) -> Operation {
+fn lift_operation(decision_id: &str, expected_revision: Value) -> Operation {
     make_operation(
         arkret_wire::EventKind::ModerationDecisionLift,
         MOD_REALM,
@@ -68,6 +67,14 @@ fn lift_operation(decision_id: &str, expected_revision: u64) -> Operation {
             "realm_id": MOD_REALM,
         }),
     )
+}
+
+/// The typed `{commit_id, stream_position}` revision a lift names.
+fn typed_revision() -> Value {
+    serde_json::json!({
+        "commit_id": "ak:realm_commit:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxI-",
+        "stream_position": 7,
+    })
 }
 
 #[test]
@@ -119,26 +126,24 @@ fn moderation_decision_then_lift_converges_on_the_target_facet() {
         Some(Value::Array(items)) => items.clone(),
         other => panic!("moderation target facet should hold a keyed set, got {other:?}"),
     };
-    // The add tag is the registered `(issuer_id, request_canonical_digest)`
-    // pair, not a decision/issuer/digest triple: it is what scopes a lift to
-    // one issuer's review (`content-moderation.md` section 2.6).
+    // The element tag is the accepting Event's dot, not an issuer/digest
+    // composite (`typed-current-result.schema.json` canonical_event_dot).
     assert_eq!(
-        items[0].get("tag").and_then(Value::as_str),
-        Some(entry_tag("ak:did_core:web:mod.example", MOD_REQUEST_DIGEST).as_str())
+        items[0].get("tag_id").and_then(Value::as_str),
+        Some(entry_tag(MOD_DECISION_ID).as_str())
     );
-    assert_eq!(state.facet_revision(MOD_REALM, &mod_decision_facet()), 1);
 
-    // Section 2.6 -- a lift names the exact revision it observed, and a stale
-    // one is rejected with zero writes.
-    let stale = lift_operation(MOD_DECISION_ID, 0);
+    // A lift carries the typed revision of the durable result it observed;
+    // an untyped counter is not a revision and is rejected.
+    let untyped = lift_operation(MOD_DECISION_ID, serde_json::json!(1));
     assert!(matches!(
-        state.apply(&stale, &hlc),
+        state.apply(&untyped, &hlc),
         ProjectionEffect::Rejected { ref reason }
-            if reason.as_str() == arkret_wire::ErrorCode::CAS_CONFLICT
+            if reason.as_str() == "moderation_lift_expected_revision_missing"
     ));
     assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
 
-    let lift = lift_operation(MOD_DECISION_ID, 1);
+    let lift = lift_operation(MOD_DECISION_ID, typed_revision());
     let effect = state.apply(&lift, &hlc);
     assert!(matches!(
         effect,
@@ -169,7 +174,7 @@ fn lifting_one_review_never_lifts_another_issuers_decision() {
     assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
     assert!(state.moderation_decision_is_live(OTHER_DECISION_ID));
 
-    let lift = lift_operation(MOD_DECISION_ID, 2);
+    let lift = lift_operation(MOD_DECISION_ID, typed_revision());
     assert!(matches!(
         state.apply(&lift, &hlc),
         ProjectionEffect::ModerationDecisionLifted { .. }
@@ -187,7 +192,7 @@ fn lifting_one_review_never_lifts_another_issuers_decision() {
     };
     assert_eq!(items.len(), 1);
     assert_eq!(
-        items[0].get("tag").and_then(Value::as_str),
-        Some(entry_tag("ak:did_core:web:other-mod.example", OTHER_REQUEST_DIGEST).as_str())
+        items[0].get("tag_id").and_then(Value::as_str),
+        Some(entry_tag(OTHER_DECISION_ID).as_str())
     );
 }
