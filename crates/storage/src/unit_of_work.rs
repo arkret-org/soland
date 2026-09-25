@@ -103,9 +103,6 @@ pub struct EventCommitRequest {
     /// Structured Station-private result of an accepted Agent draft proposal.
     /// It is neither account data nor a shared reducer projection.
     pub agent_draft_pending_intent: Option<AgentDraftPendingIntentCommit>,
-    /// Holder-private account-data effect installed atomically with its
-    /// accepted canonical Event. It is not a shared reducer projection.
-    pub actor_private_account_data: Option<AccountDataCasCommit>,
     /// Holder-private consent mutation plus its eager cache
     /// invalidation, committed with the Event that authorizes them.
     pub consent_projection: Option<ConsentProjectionCommit>,

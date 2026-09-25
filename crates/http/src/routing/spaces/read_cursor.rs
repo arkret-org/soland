@@ -60,12 +60,9 @@ pub(super) async fn set_read_cursor(
     }
     let producer_guard = crate::state::verify_self_event_producer(state, &session, &event)
         .await
-        .map_err(advance_service_error)?;
-    let canonical_event_digest = arkret_canonical::sha256_bytes(
-        &arkret_canonical::canonical_json_bytes(&event)
-            .map_err(|error| AppError::schema_violation(error.to_string()))?,
-    )
-    .to_vec();
+        .map_err(crate::state::actor_private_refusal)?;
+    let canonical_event_digest = crate::state::canonical_event_digest(&event)
+        .map_err(crate::state::actor_private_refusal)?;
     let advance = soland_storage::ReadCursorAdvance {
         event,
         canonical_event_digest,
@@ -79,7 +76,7 @@ pub(super) async fn set_read_cursor(
         .persistence()
         .advance_read_cursor(&advance)
         .await
-        .map_err(|error| advance_service_error(error.into()))?;
+        .map_err(|error| crate::state::actor_private_refusal(error.into()))?;
     let marker = match outcome {
         ReadCursorAdvanceOutcome::Accepted {
             marker,
@@ -155,38 +152,6 @@ fn advance_refusal(refusal: ReadCursorAdvanceRefusal) -> AppError {
                 TemporarilyUnavailable,
                 "read cursor position unproved: {detail}"
             )
-        }
-    }
-}
-
-/// Producer and storage refusals keep their registered device, signature and
-/// schema codes; any other producer binding refusal is `capability_denied`.
-fn advance_service_error(error: soland_services::ServiceError) -> AppError {
-    use soland_services::ServiceError;
-    use soland_storage::ConflictCode;
-    match &error {
-        ServiceError::SchemaViolation(detail) => AppError::schema_violation(detail.clone()),
-        ServiceError::Conflict(detail) => match error.conflict_code() {
-            Some(
-                code @ (ConflictCode::DeviceRevoked
-                | ConflictCode::DeviceRevocationPending
-                | ConflictCode::DeviceGenerationFenced
-                | ConflictCode::DeviceUnauthorized
-                | ConflictCode::SignatureInvalid
-                | ConflictCode::SchemaViolation
-                | ConflictCode::TemporarilyUnavailable),
-            ) => soland_http::error::ErrorCode::from_wire(code.as_str()).map_or_else(
-                || AppError::internal(format!("unregistered refusal code {code}")),
-                |wire| AppError::from_rejection(wire, detail.clone()),
-            ),
-            _ => AppError::capability_denied(detail.clone()),
-        },
-        ServiceError::NotFound(detail) => AppError::capability_denied(detail.clone()),
-        ServiceError::UnsupportedEventKind(detail) => {
-            crate::app_error!(UnsupportedEventKind, "{detail}")
-        }
-        ServiceError::Database(_) | ServiceError::Internal(_) => {
-            AppError::internal(error.to_string())
         }
     }
 }

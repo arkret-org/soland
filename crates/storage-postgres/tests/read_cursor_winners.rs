@@ -165,7 +165,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
         (position, device.as_str(), won),
         (second.clone(), DEVICE_A, false)
     );
-    let ledger = count(&pool, "read_cursor_advances").await;
+    let ledger = count(&pool, "actor_private_events").await;
 
     // The byte-identical retry returns the first saved outcome and writes
     // nothing more.
@@ -176,7 +176,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
         }
         other => panic!("expected the first outcome, got {other:?}"),
     }
-    assert_eq!(count(&pool, "read_cursor_advances").await, ledger);
+    assert_eq!(count(&pool, "actor_private_events").await, ledger);
 
     // The same Event identity with other canonical bytes is a duplicate
     // conflict with zero writes.
@@ -186,7 +186,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
         refused(store.advance(&divergent).await.unwrap()),
         ReadCursorAdvanceRefusal::DuplicateConflict
     );
-    assert_eq!(count(&pool, "read_cursor_advances").await, ledger);
+    assert_eq!(count(&pool, "actor_private_events").await, ledger);
 
     // Positions that are causally equal are concurrent: the greater HLC
     // wins, and an equal HLC falls to the greater device id.
@@ -289,12 +289,12 @@ async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
         ReadCursorAdvanceRefusal::Unproved(_)
     ));
 
-    assert_eq!(count(&pool, "read_cursor_advances").await, 0);
+    assert_eq!(count(&pool, "actor_private_events").await, 0);
     assert_eq!(count(&pool, "read_cursor_winners").await, 0);
 
     // An owner that is not the payload actor never reaches the transaction.
     let mut unbound = advance(&discussion, &founder(), DEVICE_A, &second, hlc, 5);
     unbound.owner = owner(&stranger);
     assert!(store.advance(&unbound).await.is_err());
-    assert_eq!(count(&pool, "read_cursor_advances").await, 0);
+    assert_eq!(count(&pool, "actor_private_events").await, 0);
 }

@@ -52,6 +52,28 @@ pub trait AccountLifecycleStore: Send + Sync {
     async fn delete(&self, account_pk: AccountPk) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(AccountId, AccountLifecycleRecord)>>;
 }
+/// One producer-verified actor-private account-data Event and the holder CAS
+/// it asks for.
+#[derive(Clone, Debug)]
+pub struct ActorPrivateAccountDataAdmission {
+    pub event: arkret_wire::Event,
+    /// SHA-256 of the complete canonical Event bytes.
+    pub canonical_event_digest: Vec<u8>,
+    pub cas: crate::AccountDataCasCommit,
+    /// The producer authorization pinned by the preflight; only a storage
+    /// fixture without a PCR device omits it.
+    pub producer_guard: Option<crate::SelfProducerCommitGuard>,
+    pub accepted_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActorPrivateAccountDataOutcome {
+    /// The CAS succeeded and the value was published to the holder.
+    Applied,
+    /// The byte-identical Event was already accepted; nothing was written.
+    Replayed,
+}
+
 /// Trait for actor-private account data storage.
 ///
 /// `account_data_key` is the canonical wire key (e.g. `ak.contacts.actor.<did>`,
@@ -75,13 +97,19 @@ pub trait AccountDataStore: Send + Sync {
         record: &AccountDataRecord,
         expected_revision: u64,
     ) -> PersistenceResult<AccountDataCasResult>;
-    /// Commit the holder CAS and its exact accepted source Event as one write.
-    async fn compare_and_set_holder_event(
+    /// Admit one producer-verified actor-private `ak.account_data.set` or
+    /// `ak.account.blocklist` Event (actor-private-effects.md section 3.1) in
+    /// one private transaction: an exact retry of the same Event bytes
+    /// returns `Replayed` before any other check, the same Event identity with
+    /// other bytes is `duplicate_conflict`, the producer guard is rechecked,
+    /// and the Event is recorded in the actor-private ledger together with the
+    /// holder CAS and its account sync publication. A CAS mismatch is
+    /// `cas_conflict`. No RealmCommit is involved and every refusal writes
+    /// nothing.
+    async fn admit_actor_private_event(
         &self,
-        record: &AccountDataRecord,
-        expected_revision: u64,
-        source_event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<AccountDataCasResult>;
+        admission: &ActorPrivateAccountDataAdmission,
+    ) -> PersistenceResult<ActorPrivateAccountDataOutcome>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
     async fn changes_after(
         &self,

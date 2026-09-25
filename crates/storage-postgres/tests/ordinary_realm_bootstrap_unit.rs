@@ -854,7 +854,6 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
-        actor_private_account_data: None,
         consent_projection: None,
         device_revocation_transition: None,
         device_revocation_gate: None,

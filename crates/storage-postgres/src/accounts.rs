@@ -3,10 +3,10 @@ use soland_storage::AccountPk;
 use super::{
     AccountDataCasResult, AccountDataChangeRecord, AccountDataRecord, AccountDataStore,
     AccountLifecycleRecord, AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore,
-    AccountRecord, AccountStore, BigInt, BlobRef, Bool, Jsonb, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
-    Uuid, Value, account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query,
-    sql_types,
+    AccountRecord, AccountStore, AsyncConnection, BigInt, BlobRef, Bool, Jsonb, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
+    Text, Timestamptz, Uuid, Value, account_with_primary_localpart_select, async_trait, ids,
+    pg_conn, sql_query, sql_types,
 };
 pub struct PgAccountStore {
     pub pool: PgPool,
@@ -452,17 +452,22 @@ impl AccountDataStore for PgAccountDataStore {
         record: &AccountDataRecord,
         expected_revision: u64,
     ) -> PersistenceResult<AccountDataCasResult> {
-        self.compare_and_set_inner(record, expected_revision, None)
-            .await
+        self.compare_and_set_inner(record, expected_revision).await
     }
-    async fn compare_and_set_holder_event(
+    async fn admit_actor_private_event(
         &self,
-        record: &AccountDataRecord,
-        expected_revision: u64,
-        source_event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<AccountDataCasResult> {
-        self.compare_and_set_inner(record, expected_revision, Some(source_event_id))
+        admission: &soland_storage::ActorPrivateAccountDataAdmission,
+    ) -> PersistenceResult<soland_storage::ActorPrivateAccountDataOutcome> {
+        let mut conn = pg_conn(&self.pool)
             .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+            crate::unit_of_work::admit_actor_private_account_data_in_connection(conn, admission)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
@@ -858,13 +863,11 @@ impl PgAccountDataStore {
         &self,
         record: &AccountDataRecord,
         expected_revision: u64,
-        source_event_id: Option<&arkret_wire::EventId>,
     ) -> PersistenceResult<AccountDataCasResult> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        compare_account_data_in_transaction(&mut conn, record, expected_revision, source_event_id)
-            .await
+        compare_account_data_in_transaction(&mut conn, record, expected_revision, None).await
     }
 }
 pub(crate) async fn compare_account_data_in_transaction(
@@ -889,9 +892,8 @@ pub(crate) async fn compare_account_data_in_transaction(
         ));
     }
     let applied = sql_query(
-            "WITH source AS MATERIALIZED ( SELECT e.envelope FROM canonical_events e \
-                 WHERE e.id=$9 AND e.state='committed' AND e.actor_id=$2 \
-                   AND e.realm_id IS NOT DISTINCT FROM e.envelope->>'realm_id' \
+            "WITH source AS MATERIALIZED ( SELECT e.envelope FROM actor_private_events e \
+                 WHERE e.id=$9 AND e.actor_id=$2 \
                    AND ( \
                      (e.kind='ak.account_data.set' \
                        AND e.envelope->'payload'->>'key'=$3 \
@@ -904,7 +906,7 @@ pub(crate) async fn compare_account_data_in_transaction(
                        AND e.envelope->'payload'=$5 \
                        AND (jsonb_array_length(e.envelope->'payload'->'entries')=0)=$6) \
                    ) \
-                   AND EXISTS (SELECT 1 FROM committed_events a WHERE a.id=e.id) FOR SHARE OF e \
+                   FOR SHARE OF e \
              ), updated AS ( \
                  UPDATE account_datas SET revision = $4, payload = $5, tombstone = $6, updated_at = $7 \
                  WHERE actor_id = $2 AND account_data_key = $3 AND revision = $8 AND ($9::bytea IS NULL OR EXISTS (SELECT 1 FROM source)) \

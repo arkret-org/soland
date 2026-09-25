@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use soland_http::config::AppConfig;
 use soland_http::service;
 use soland_http::state::AppState;
+use soland_test_support::AppStateTestExt as _;
 use soland_test_support::pcr_genesis::PcrGenesisFixture;
 
 fn test_config() -> AppConfig {
@@ -134,15 +135,19 @@ async fn verified_device_summary_carries_only_authorization_provenance() {
     );
 }
 
+/// An account-data write is an actor-private Event whose producer is the
+/// holder's device under a standard DPoP SessionGrant. A development bearer
+/// session binds no device grant, so it cannot produce the Event and nothing
+/// is stored. The admitted path runs live in Cotest `protocol_payloads`.
 #[tokio::test]
-async fn signed_account_data_set_uses_the_accepted_pcr_and_cas_revision() {
+async fn development_bearer_session_cannot_produce_account_data_events() {
     let state = soland_test_support::app_state(test_config());
     let fixture = PcrGenesisFixture::new(state.service_did());
     let token = account_session(&state, &fixture).await;
     let app = service(state.clone());
     let key = arkret_wire::AccountDataKey::PUSH_RULES;
     let event = signed_account_data_event(&state, &fixture, key);
-    let mut response = TestClient::put(format!("http://server/_arkret/self/account_data/{key}"))
+    let response = TestClient::put(format!("http://server/_arkret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "Arkret-Operation",
@@ -152,15 +157,18 @@ async fn signed_account_data_set_uses_the_accepted_pcr_and_cas_revision() {
         .json(&json!({"set_event": event}))
         .send(&app)
         .await;
-    let status = response.status_code;
-    let body: Value = response.take_json().await.expect("account-data outcome");
-    assert_eq!(
-        status,
-        Some(StatusCode::OK),
-        "signed Event admission: {body}"
+    assert_eq!(response.status_code, Some(StatusCode::FORBIDDEN));
+    let actor = arkret_wire::ActorId::account(fixture.history.account.clone()).to_string();
+    assert!(
+        state
+            .test_persistence()
+            .account_data()
+            .get(&actor, key)
+            .await
+            .expect("account data read")
+            .is_none(),
+        "a refused producer writes nothing"
     );
-    assert_eq!(body["revision"], 1);
-    assert_eq!(body["account_data_key"], key);
 }
 
 #[tokio::test]

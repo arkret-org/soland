@@ -63,6 +63,18 @@ impl PersistenceHandle {
         self.persistence.read_cursors().advance(advance).await
     }
 
+    /// Admit one producer-verified actor-private account-data Event and its
+    /// holder CAS in one private transaction.
+    pub async fn admit_actor_private_account_data(
+        &self,
+        admission: &soland_storage::ActorPrivateAccountDataAdmission,
+    ) -> PersistenceResult<soland_storage::ActorPrivateAccountDataOutcome> {
+        self.persistence
+            .account_data()
+            .admit_actor_private_event(admission)
+            .await
+    }
+
     /// The owner's durable read cursor winners.
     pub async fn read_cursor_winners(
         &self,

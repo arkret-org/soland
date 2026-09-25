@@ -19,9 +19,9 @@ use soland_storage::{
 };
 
 use super::{
-    AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, Jsonb, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    Text, Timestamptz, async_trait, ids, pg_conn, sql_query,
+    AsyncConnection, AsyncPgConnection, BigInt, Binary, Jsonb, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    async_trait, ids, pg_conn, sql_query,
 };
 
 #[derive(Clone)]
@@ -40,8 +40,8 @@ impl PgReadCursorStore {
 struct LedgerRow {
     #[diesel(sql_type = Binary)]
     canonical_event_digest: Vec<u8>,
-    #[diesel(sql_type = Jsonb)]
-    outcome: serde_json::Value,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+    outcome: Option<serde_json::Value>,
 }
 
 #[derive(QueryableByName)]
@@ -192,7 +192,8 @@ async fn advance_in_connection(
         .execute(&mut *conn)
         .await?;
     if let Some(row) = sql_query(
-        "SELECT canonical_event_digest, outcome FROM read_cursor_advances WHERE event_id=$1",
+        "SELECT canonical_event_digest, outcome FROM actor_private_events \
+         WHERE event_id=$1 AND kind='ak.read_cursor.advance'",
     )
     .bind::<Text, _>(advance.event.event_id.as_str())
     .get_result::<LedgerRow>(&mut *conn)
@@ -205,7 +206,9 @@ async fn advance_in_connection(
             ));
         }
         return Ok(ReadCursorAdvanceOutcome::Replayed(decode(
-            row.outcome,
+            row.outcome.ok_or_else(|| {
+                PersistenceError::Internal("read cursor advance has no outcome".to_owned())
+            })?,
             "read cursor advance outcome",
         )?));
     }
@@ -291,18 +294,22 @@ async fn advance_in_connection(
         .await?;
     }
     sql_query(
-        "INSERT INTO read_cursor_advances \
-         (event_id, canonical_event_digest, account_key, outcome, candidate_won, accepted_at) \
-         VALUES ($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO actor_private_events \
+         (id, event_id, actor_id, kind, canonical_event_digest, envelope, outcome, accepted_at) \
+         VALUES ($1,$2,$3,'ak.read_cursor.advance',$4,$5,$6,$7)",
     )
+    .bind::<Binary, _>(advance.event.event_id.token_bytes().to_vec())
     .bind::<Text, _>(advance.event.event_id.as_str())
+    .bind::<Text, _>(advance.event.actor_id.to_string())
     .bind::<Binary, _>(&advance.canonical_event_digest)
-    .bind::<Text, _>(&account_key)
+    .bind::<Jsonb, _>(
+        serde_json::to_value(&advance.event)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
     .bind::<Jsonb, _>(
         serde_json::to_value(&outcome)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
-    .bind::<Bool, _>(candidate_won)
     .bind::<Timestamptz, _>(advance.accepted_at)
     .execute(&mut *conn)
     .await?;

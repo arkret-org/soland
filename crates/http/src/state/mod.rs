@@ -5,6 +5,7 @@
 pub mod did_resolver_chain;
 
 mod account_authority_device_pairing;
+mod actor_private;
 mod app_state;
 mod authority_bootstrap_validation;
 mod authority_forward;
@@ -19,6 +20,9 @@ mod service_route_fetcher;
 #[doc(hidden)]
 pub use account_authority_device_pairing::AccountAuthorityDevicePairingPort;
 pub(crate) use account_authority_device_pairing::PrivateAccountAuthorityDevicePairing;
+pub(crate) use actor_private::{
+    actor_private_refusal, admit_account_data_set, canonical_event_digest,
+};
 pub use app_state::{
     AppState, AppStateRuntime, ConnectionDrain, DEVELOPMENT_DEMO_SUBJECT_DID,
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,

@@ -1092,7 +1092,6 @@ fn franking_event_request(
         device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
-        actor_private_account_data: None,
         consent_projection: None,
         event: soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),

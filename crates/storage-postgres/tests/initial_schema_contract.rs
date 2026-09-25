@@ -61,15 +61,17 @@ fn agent_draft_pending_intent_is_a_separate_private_state_machine() {
 }
 
 #[test]
-fn read_cursor_winner_is_an_account_private_store_with_an_exact_retry_ledger() {
+fn actor_private_effects_share_one_exact_retry_ledger_outside_realm_history() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.read_cursor_winners"));
     assert!(INITIAL_UP.contains(
         "CONSTRAINT read_cursor_winners_pk PRIMARY KEY (account_key, realm_id, read_scope_key)"
     ));
-    assert!(INITIAL_UP.contains("CREATE TABLE public.read_cursor_advances"));
-    assert!(INITIAL_UP.contains("octet_length(canonical_event_digest) = 32"));
-    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS read_cursor_advances CASCADE"));
+    assert!(INITIAL_UP.contains("CREATE TABLE public.actor_private_events"));
+    assert!(INITIAL_UP.contains("(kind = 'ak.read_cursor.advance') = (outcome IS NOT NULL)"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS actor_private_events CASCADE"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS read_cursor_winners CASCADE"));
+    assert!(!INITIAL_UP.contains("canonical_account_data_source_id"));
+    assert!(INITIAL_UP.contains("OR NOT EXISTS(SELECT 1 FROM actor_private_events e"));
 }
 
 #[test]
@@ -297,9 +299,11 @@ fn recovery_policy_uses_the_protocol_acceptance_basis_name_at_creation() {
 
 #[test]
 fn actor_private_blocklist_shares_the_account_data_source_guard() {
-    assert!(INITIAL_UP.contains("OLD.kind IN ('ak.account_data.set','ak.account.blocklist')"));
-    assert!(
-        INITIAL_UP.contains("COALESCE(OLD.envelope->'payload'->>'key','ak.account.blocklist')")
-    );
+    assert!(INITIAL_UP.contains(
+        "kind IN ('ak.account_data.set', 'ak.account.blocklist', 'ak.read_cursor.advance')"
+    ));
     assert!(INITIAL_UP.contains("e.kind IN ('ak.account_data.set','ak.account.blocklist')"));
+    // A ledger source is immutable, so no withdrawal can invalidate it.
+    assert!(!INITIAL_UP.contains("invalidate_account_global_event"));
+    assert!(INITIAL_UP.contains("CREATE TRIGGER immutable_actor_private_events"));
 }

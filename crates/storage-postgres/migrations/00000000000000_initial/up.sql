@@ -128,17 +128,45 @@ CREATE TABLE public.read_cursor_winners (
     CONSTRAINT read_cursor_winners_position_check CHECK (position_stream_position >= 0)
 );
 
--- Exact-retry ledger of accepted ak.read_cursor.advance Events: the first
--- saved outcome, returned for a byte-identical retry without another write.
-CREATE TABLE public.read_cursor_advances (
-    event_id text PRIMARY KEY,
+-- Accepted actor-private Events (actor-private-effects.md section 1): the
+-- exact signed bytes each account-private effect was admitted from, keyed by
+-- the Event identity for exact retry. No RealmCommit covers these Events and
+-- no Realm stream carries them. `outcome` is the first saved response for
+-- kinds whose outcome is not re-derivable from the Event itself.
+CREATE TABLE public.actor_private_events (
+    id bytea PRIMARY KEY,
+    event_id text NOT NULL,
+    actor_id text NOT NULL,
+    kind text NOT NULL,
     canonical_event_digest bytea NOT NULL,
-    account_key text NOT NULL,
-    outcome jsonb NOT NULL,
-    candidate_won boolean NOT NULL,
+    envelope jsonb NOT NULL,
+    outcome jsonb,
     accepted_at timestamp with time zone NOT NULL,
-    CONSTRAINT read_cursor_advances_digest_length CHECK (octet_length(canonical_event_digest) = 32)
+    CONSTRAINT actor_private_events_event_id_key UNIQUE (event_id),
+    CONSTRAINT actor_private_events_id_length CHECK (octet_length(id) = 33),
+    CONSTRAINT actor_private_events_digest_length CHECK (octet_length(canonical_event_digest) = 32),
+    CONSTRAINT actor_private_events_kind_check CHECK (
+        kind IN ('ak.account_data.set', 'ak.account.blocklist', 'ak.read_cursor.advance')
+    ),
+    CONSTRAINT actor_private_events_envelope_check CHECK (
+        envelope->>'event_id' = event_id AND envelope->>'kind' = kind
+    ),
+    CONSTRAINT actor_private_events_outcome_check CHECK (
+        (kind = 'ak.read_cursor.advance') = (outcome IS NOT NULL)
+    )
 );
+
+-- An accepted actor-private Event and its first outcome never change: exact
+-- retry reads them back and account sync publishes the Event as its source.
+CREATE FUNCTION public.reject_actor_private_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'accepted actor-private Events are immutable';
+END;
+$$;
+
+CREATE TRIGGER immutable_actor_private_events
+    BEFORE UPDATE OR DELETE ON public.actor_private_events
+    FOR EACH ROW EXECUTE FUNCTION public.reject_actor_private_event_mutation();
 
 CREATE TABLE public.account_data_changes (
     position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -3994,27 +4022,6 @@ $$;
 CREATE TRIGGER preserve_agent_draft_pending_intent_identity
 BEFORE DELETE ON agent_draft_pending_intents
 FOR EACH ROW EXECUTE FUNCTION reject_agent_draft_pending_intent_delete();
--- Only withdrawal invalidates an already published CAS winner. Admission alone
--- is not a successful holder CAS and must never select the current value.
-CREATE FUNCTION invalidate_account_global_event() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF OLD.kind IN ('ak.account_data.set','ak.account.blocklist')
-       AND OLD.state='committed' AND NEW.state<>'committed' THEN
-        -- Serialize the current-source comparison with all CAS publications.
-        -- A withdrawal must not invalidate a newer source installed while waiting.
-        PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
-        IF EXISTS (SELECT 1 FROM account_global_versions WHERE actor_key=OLD.actor_id
-            AND channel='account_data_events' AND valid_until IS NULL
-            AND payload->'value'->>'event_id'=OLD.envelope->>'event_id') THEN
-            PERFORM project_account_global_value(OLD.actor_id,'account_data_events',
-                'event:'||COALESCE(OLD.envelope->'payload'->>'key','ak.account.blocklist'),
-                jsonb_build_object('source','invalidated'),TRUE);
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-CREATE TRIGGER account_global_event_withdrawal AFTER UPDATE OF state ON canonical_events FOR EACH ROW EXECUTE FUNCTION invalidate_account_global_event();
 CREATE FUNCTION project_account_global_cas() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM project_account_global_value(NEW.actor_id,'station_cas',NEW.account_data_key,to_jsonb(NEW),NEW.tombstone);
@@ -4128,18 +4135,15 @@ $$;
 CREATE TRIGGER account_global_membership AFTER INSERT OR UPDATE ON account_summary_current FOR EACH ROW EXECUTE FUNCTION project_account_global_membership();
 
 
-CREATE INDEX canonical_account_data_source_id ON canonical_events ((envelope->>'event_id'))
-    WHERE kind IN ('ak.account_data.set','ak.account.blocklist');
-
 -- A withdrawn holder source is unavailable, not an invented tombstone/revision.
 -- Invoked inside the value read statement so guard and content share its MVCC cut.
 CREATE FUNCTION account_data_source_current(a TEXT,k TEXT) RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM account_global_versions v WHERE actor_key=a AND channel='account_data_events'
         AND item_key='event:'||k AND valid_until IS NULL AND (payload->>'source'='invalidated'
-        OR NOT EXISTS(SELECT 1 FROM committed_events e
+        OR NOT EXISTS(SELECT 1 FROM actor_private_events e
             WHERE e.kind IN ('ak.account_data.set','ak.account.blocklist')
-            AND e.envelope->>'event_id'=v.payload->'value'->>'event_id'))) THEN
+            AND e.event_id=v.payload->'value'->>'event_id'))) THEN
         RAISE EXCEPTION 'account data current source is unavailable';
     END IF;
     RETURN TRUE;

@@ -161,9 +161,9 @@ mod submit;
 pub(in crate::routing) use submit::{
     DevicePairingAdmission, EventCommitIdempotency, EventValidationError, InternalEventAdmission,
     ValidatedEventEnvelope, prepare_service_franking_proof_event_value,
-    service_event_authoring_lock, submit_account_data_event_value, submit_agent_membership_cascade,
-    submit_applet_install_batch, submit_event_value, submit_ghost_provision_batch,
-    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
+    service_event_authoring_lock, submit_agent_membership_cascade, submit_applet_install_batch,
+    submit_event_value, submit_ghost_provision_batch, submit_initial_event_submission,
+    submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_one_error_to_app_error,
     submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
 };

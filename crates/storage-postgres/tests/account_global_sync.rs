@@ -216,6 +216,7 @@ async fn account_global_snapshot_is_frozen_and_changes_are_page_bounded() {
     );
 }
 
+/// One committed shared Event row, for Realm-membership fixtures.
 async fn insert_source(
     pool: &PgPool,
     actor: &str,
@@ -247,23 +248,124 @@ async fn insert_source(
     id
 }
 
+/// The fixture principal-control Realm of `principal` at `station`.
+fn pcr_realm(
+    principal: &arkret_wire::DidCoreId,
+    station: &arkret_wire::DidCoreId,
+) -> arkret_wire::RealmId {
+    arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(format!("fixture-pcr:{principal}:{station}").as_bytes()),
+    ))
+}
+
+/// Resolve the Account to its fixture principal-control Realm, where its
+/// account data lives.
+async fn seed_pcr(
+    pool: &PgPool,
+    principal: &arkret_wire::DidCoreId,
+    station: &arkret_wire::DidCoreId,
+) {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO principal_resolutions \
+         (principal_id, station_id, pcr_realm_id, genesis_event_id, current_event_id, projection, updated_at) \
+         VALUES ($1,$2,$3,'fixture-genesis','fixture-current','{}'::jsonb,now()) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(principal.as_str())
+    .bind::<Text, _>(station.as_str())
+    .bind::<Text, _>(pcr_realm(principal, station).as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+}
+
+/// One structurally signed actor-private Event of `principal` at `station`
+/// on its principal-control Realm.
+fn private_event(
+    kind: arkret_wire::EventKind,
+    principal: &arkret_wire::DidCoreId,
+    station: &arkret_wire::DidCoreId,
+    payload: serde_json::Value,
+    at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::Event {
+    arkret_wire::test_support::raw_event_at(
+        kind.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: pcr_realm(principal, station),
+        },
+        principal.clone(),
+        station.clone(),
+        payload,
+        at,
+    )
+    .unwrap()
+}
+
+/// Admit `event` through the actor-private transaction with the holder CAS
+/// it asks for; no producer guard, no RealmCommit.
+async fn admit(
+    store: &PgAccountDataStore,
+    event: &arkret_wire::Event,
+    key: &str,
+    expected_revision: u64,
+    payload: serde_json::Value,
+    tombstone: bool,
+) -> soland_storage::PersistenceResult<soland_storage::ActorPrivateAccountDataOutcome> {
+    store
+        .admit_actor_private_event(&soland_storage::ActorPrivateAccountDataAdmission {
+            canonical_event_digest: arkret_canonical::sha256_bytes(
+                &arkret_canonical::canonical_json_bytes(event).unwrap(),
+            )
+            .to_vec(),
+            cas: soland_storage::AccountDataCasCommit {
+                record: AccountDataRecord {
+                    actor: event.actor_id.to_string(),
+                    account_data_key: key.into(),
+                    revision: expected_revision + 1,
+                    payload,
+                    tombstone,
+                    updated_at: event.created_at,
+                },
+                expected_revision,
+                conflict_code: "cas_conflict".to_owned(),
+            },
+            event: event.clone(),
+            producer_guard: None,
+            accepted_at: event.created_at,
+        })
+        .await
+}
+
 #[tokio::test]
-async fn holder_current_event_changes_only_with_successful_cas_and_committed_source_is_immutable() {
+async fn holder_current_event_changes_only_with_successful_cas_and_the_private_source_is_immutable()
+{
     use diesel::sql_types::Binary;
     use diesel_async::RunQueryDsl;
+    use soland_storage::ActorPrivateAccountDataOutcome::{Applied, Replayed};
     let pool = pool().await;
     let cas = PgAccountDataStore { pool: pool.clone() };
     let sync = PgSyncCursorStore { pool: pool.clone() };
-    let actor = serde_json::json!({"kind":"account","account_id":{"principal_id":format!("ak:did_core:web:{}.example",uuid::Uuid::now_v7()),"station_id":"ak:did_core:web:station.example"}}).to_string();
+    let principal =
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{}.example", uuid::Uuid::now_v7()))
+            .unwrap();
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
     let key = "ak.dnd_schedule";
-    let first = insert_source(
-        &pool,
-        &actor,
-        None,
-        "ak.account_data.set",
-        serde_json::json!({"key":key,"expected_server_revision":0,"body":{"v":1}}),
-    )
-    .await;
+    let now = chrono::Utc::now();
+    seed_pcr(&pool, &principal, &station).await;
+    let set = |expected: u64, value: u64, offset: i64| {
+        private_event(
+            arkret_wire::EventKind::AccountDataSet,
+            &principal,
+            &station,
+            serde_json::json!({"key":key,"expected_server_revision":expected,"body":{"v":value}}),
+            now + chrono::Duration::milliseconds(offset),
+        )
+    };
+    let first = set(0, 1, 1);
+    let actor = first.actor_id.to_string();
     let before = sync.account_global_watermark().await.unwrap();
     assert!(
         sync.account_global_page(&actor, "account_data_events", before, "", None, 100)
@@ -271,63 +373,39 @@ async fn holder_current_event_changes_only_with_successful_cas_and_committed_sou
             .unwrap()
             .is_empty()
     );
-    let mut row = AccountDataRecord {
-        actor: actor.clone(),
-        account_data_key: key.into(),
-        revision: 1,
-        payload: serde_json::json!({"v":1}),
-        tombstone: false,
-        updated_at: chrono::Utc::now(),
-    };
-    assert!(matches!(
-        cas.compare_and_set_holder_event(&row, 0, &first)
+    assert_eq!(
+        admit(&cas, &first, key, 0, serde_json::json!({"v":1}), false)
             .await
             .unwrap(),
-        AccountDataCasResult::Applied(_)
-    ));
-    let second = insert_source(
-        &pool,
-        &actor,
-        None,
-        "ak.account_data.set",
-        serde_json::json!({"key":key,"expected_server_revision":1,"body":{"v":2}}),
-    )
-    .await;
-    row.revision = 2;
-    row.payload = serde_json::json!({"v":2});
-    assert!(matches!(
-        cas.compare_and_set_holder_event(&row, 1, &second)
+        Applied
+    );
+    let second = set(1, 2, 2);
+    assert_eq!(
+        admit(&cas, &second, key, 1, serde_json::json!({"v":2}), false)
             .await
             .unwrap(),
-        AccountDataCasResult::Applied(_)
-    ));
+        Applied
+    );
     let cut = sync.account_global_watermark().await.unwrap();
-    row.revision = 1;
-    row.payload = serde_json::json!({"v":1});
-    assert!(matches!(
-        cas.compare_and_set_holder_event(&row, 0, &first)
+    // The byte-identical first Event is an exact retry: its first outcome,
+    // nothing written and nothing published.
+    assert_eq!(
+        admit(&cas, &first, key, 0, serde_json::json!({"v":1}), false)
             .await
             .unwrap(),
-        AccountDataCasResult::Conflict(_)
-    ));
-    let late = insert_source(
-        &pool,
-        &actor,
-        None,
-        "ak.account_data.set",
-        serde_json::json!({"key":key,"expected_server_revision":0,"body":{"v":9}}),
-    )
-    .await;
-    row.payload = serde_json::json!({"v":9});
-    assert!(matches!(
-        cas.compare_and_set_holder_event(&row, 0, &late)
-            .await
-            .unwrap(),
-        AccountDataCasResult::Conflict(_)
-    ));
+        Replayed
+    );
+    let late = set(0, 9, 3);
+    let refused = admit(&cas, &late, key, 0, serde_json::json!({"v":9}), false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.conflict_code(),
+        Some(soland_storage::ConflictCode::CasConflict)
+    );
     // The clock is Station-wide, and other tests legitimately publish for
-    // different accounts concurrently. A failed CAS must leave this account's
-    // register and change stream untouched, rather than freeze that clock.
+    // different accounts concurrently. A replay or a failed CAS must leave
+    // this account's register and change stream untouched.
     let after_conflicts = sync.account_global_watermark().await.unwrap();
     assert!(
         sync.account_global_page(
@@ -341,7 +419,7 @@ async fn holder_current_event_changes_only_with_successful_cas_and_committed_sou
         .await
         .unwrap()
         .is_empty(),
-        "conflicting or late source must not publish an account change"
+        "a replay or a conflicting source must not publish an account change"
     );
     let current = cas.get(&actor, key).await.unwrap().unwrap();
     assert_eq!(current.revision, 2);
@@ -352,32 +430,28 @@ async fn holder_current_event_changes_only_with_successful_cas_and_committed_sou
         .unwrap();
     assert_eq!(
         page[0].payload["value"]["event_id"],
-        serde_json::json!(second)
+        serde_json::json!(second.event_id)
     );
     let mut conn = pool.get().await.unwrap();
-    let quarantine =
-        diesel::sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
-            .bind::<Binary, _>(second.token_bytes().to_vec())
-            .execute(&mut *conn)
-            .await;
-    assert!(
-        quarantine.is_err(),
-        "committed Event cannot become quarantined"
-    );
-    let now = sync.account_global_watermark().await.unwrap();
-    let changes = sync
-        .account_global_page(&actor, "account_data_events", now, "", Some(cut), 100)
+    let rows = diesel::sql_query("SELECT count(*) AS count FROM actor_private_events WHERE id=$1")
+        .bind::<Binary, _>(late.event_id.token_bytes().to_vec())
+        .get_result::<Count>(&mut *conn)
         .await
         .unwrap();
-    assert!(
-        changes.is_empty(),
-        "rejected mutation must publish no effect"
-    );
-    let old = sync
-        .account_global_page(&actor, "account_data_events", cut, "", None, 100)
-        .await
-        .unwrap();
-    assert!(!old[0].deleted, "committed source remains visible");
+    assert_eq!(rows.count, 0, "a refused source leaves no ledger row");
+    for statement in [
+        "UPDATE actor_private_events SET accepted_at=now() WHERE id=$1",
+        "DELETE FROM actor_private_events WHERE id=$1",
+    ] {
+        assert!(
+            diesel::sql_query(statement)
+                .bind::<Binary, _>(second.event_id.token_bytes().to_vec())
+                .execute(&mut *conn)
+                .await
+                .is_err(),
+            "the accepted actor-private source is immutable: {statement}"
+        );
+    }
     assert_eq!(cas.get(&actor, key).await.unwrap().unwrap().revision, 2);
 }
 
@@ -623,7 +697,6 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             device_pairing_authorization: None,
             contact_projection: None,
             agent_draft_pending_intent: None,
-            actor_private_account_data: None,
             consent_projection: None,
             device_revocation_transition: None,
             device_revocation_gate: None,
@@ -687,241 +760,96 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
 }
 
 #[tokio::test]
-async fn account_blocklist_commit_replays_exactly_and_cas_conflict_rolls_back_every_write() {
+async fn account_blocklist_replays_exactly_and_cas_conflict_rolls_back_every_write() {
     use diesel_async::RunQueryDsl;
-    use soland_storage::{AccountDataStore, AuthorityCommitStore, EventCommitUnitOfWork};
+    use soland_storage::ActorPrivateAccountDataOutcome::{Applied, Replayed};
 
     let pool = pool().await;
-    let mut conn = pool.get().await.unwrap();
-    let station = diesel::sql_query(
-        "SELECT COALESCE(current_device_inventory_station(),'ak:did_core:web:storage-contract.example') AS station",
-    )
-    .get_result::<Station>(&mut *conn)
-    .await
-    .unwrap()
-    .station;
-    diesel::sql_query("INSERT INTO service_identity(id,identity) VALUES('self',jsonb_build_object('identity',jsonb_build_object('service_id',$1))) ON CONFLICT(id) DO NOTHING")
-        .bind::<diesel::sql_types::Text,_>(&station)
-        .execute(&mut *conn)
-        .await
-        .unwrap();
+    let store = PgAccountDataStore { pool: pool.clone() };
     let principal = arkret_wire::DidCoreId::new(format!(
         "ak:did_core:web:blocklist-{}.example",
         uuid::Uuid::now_v7()
     ))
     .unwrap();
-    let station = arkret_wire::DidCoreId::new(station).unwrap();
-    let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
-        arkret_canonical::DigestSuite::Sha256,
-        arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
-    ));
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
     let now = chrono::Utc::now();
-    let authority = soland_storage::CurrentRealmAuthority {
-        realm_id: realm.clone(),
-        generation: 0,
-        service_id: station.clone(),
-        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
-            arkret_identifiers::EventIdentityKey::new(
-                realm.digest_suite_code(),
-                realm.digest_bytes(),
-            )
-            .event_id(),
-        ),
-        last_handoff_ref: None,
-    };
-    AuthorityCommitStore::install_genesis_authority(
-        &soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() },
-        &authority,
-    )
-    .await
-    .unwrap();
-
-    let make = |version: u64,
-                position: u64,
-                previous_commit_ref: Option<arkret_wire::RealmCommitId>| {
+    let key = arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST;
+    seed_pcr(&pool, &principal, &station).await;
+    let blocklist = |version: u64, offset: i64| {
         let payload = serde_json::json!({"version": version, "entries": []});
-        let event_created_at =
-            now + chrono::Duration::seconds(i64::try_from(version * 10 + position).unwrap());
-        let mut event = arkret_wire::test_support::raw_event_at(
-            arkret_wire::EventKind::AccountBlocklist.as_str(),
-            arkret_wire::ScopeRef::Realm {
-                realm_id: realm.clone(),
-            },
-            principal.clone(),
-            station.clone(),
-            payload.clone(),
-            event_created_at,
-        )
-        .unwrap();
-        let event_digest = arkret_wire::Hash::new(
-            event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .unwrap(),
-        )
-        .unwrap();
-        event.producer_proof = Some(arkret_wire::ProducerEventProof {
-            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "did:{}#blocklist-device",
-                principal.as_str().strip_prefix("ak:did_core:").unwrap()
-            ))
-            .unwrap(),
-            event_digest: event_digest.clone(),
-            created_at: event.created_at,
-            domain: None,
-            audience: None,
-            proof_purpose: None,
-            jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
-        });
-        let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-            event.event_id.as_str().as_bytes(),
-        ));
-        let record = soland_storage::CanonicalEventRecord {
-            event_id: event.event_id.to_string(),
-            actor_id: event.actor_id.to_string(),
-            realm_id: Some(realm.to_string()),
-            kind: event.kind.to_string(),
-            schema_id: "schemas/event-payload.schema.json#/$defs/account_blocklist_payload".into(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .unwrap(),
-            canonical_bytes: arkret_canonical::canonical_json_bytes(
-                &event.digest_payload().unwrap(),
-            )
-            .unwrap(),
-            envelope: serde_json::to_value(&event).unwrap(),
-            received_at: event.created_at,
-        };
-        let actor = event.actor_id.to_string();
         (
-            soland_storage::EventCommitRequest {
-                authority_commit: soland_storage::AuthorityCommitTransaction {
-                    expected_authority: authority.clone(),
-                    commit: arkret_wire::RealmCommit {
-                        commit_id: commit_id.clone(),
-                        realm_id: realm.clone(),
-                        stream_ref: arkret_wire::CommitStreamRef::Realm {
-                            realm_id: realm.clone(),
-                        },
-                        stream_position: position,
-                        previous_commit_ref,
-                        event_ref: event.event_id.clone(),
-                        governance_generation: 0,
-                        authority_ref: authority.authority_ref.clone(),
-                        committed_at: event.created_at,
-                        signature: arkret_wire::DetachedObjectSignature {
-                            context: arkret_wire::DetachedSignatureContext::RealmCommit,
-                            signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
-                            verification_method: arkret_wire::DidUrl::new(format!(
-                                "did:{}#authority",
-                                station.as_str().strip_prefix("ak:did_core:").unwrap()
-                            ))
-                            .unwrap(),
-                            signed_digest: event_digest,
-                            created_at: event.created_at,
-                            sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned())
-                                .unwrap(),
-                        },
-                    },
-                    event,
-                    mls_state: None,
-                    welcomes: Vec::new(),
-                    recipient_queue_capacity: 0,
-                },
-                self_producer_guard: None,
-                forwarded_producer_evidence: None,
-                parent_membership_admission: None,
-                event: record,
-                device_pairing_authorization: None,
-                contact_projection: None,
-                agent_draft_pending_intent: None,
-                actor_private_account_data: Some(soland_storage::AccountDataCasCommit {
-                    record: AccountDataRecord {
-                        actor: actor.clone(),
-                        account_data_key: arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST.into(),
-                        revision: version,
-                        payload,
-                        tombstone: true,
-                        updated_at: event_created_at,
-                    },
-                    expected_revision: version - 1,
-                    conflict_code: "cas_conflict".to_owned(),
-                }),
-                consent_projection: None,
-                device_revocation_transition: None,
-                device_revocation_gate: None,
-                projections: Vec::new(),
-                idempotency: None,
-                outbox: Vec::new(),
-            },
-            commit_id,
-            actor,
+            private_event(
+                arkret_wire::EventKind::AccountBlocklist,
+                &principal,
+                &station,
+                payload.clone(),
+                now + chrono::Duration::milliseconds(offset),
+            ),
+            payload,
         )
     };
-    let uow = soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone());
-    let (first, first_commit_id, actor) = make(1, 0, None);
-    let first_event_id = first.event.event_id.clone();
-    uow.commit_event(first.clone()).await.unwrap();
-    let changes_after_first = diesel::sql_query(
-        "SELECT count(*) AS count FROM account_data_changes WHERE actor_id=$1 AND account_data_key=$2",
-    )
-    .bind::<diesel::sql_types::Text, _>(&actor)
-    .bind::<diesel::sql_types::Text, _>(arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST)
-    .get_result::<Count>(&mut *conn)
-    .await
-    .unwrap()
-    .count;
-    uow.commit_event(first)
-        .await
-        .expect("exact retry is a no-op");
-    let changes_after_replay = diesel::sql_query(
-        "SELECT count(*) AS count FROM account_data_changes WHERE actor_id=$1 AND account_data_key=$2",
-    )
-    .bind::<diesel::sql_types::Text, _>(&actor)
-    .bind::<diesel::sql_types::Text, _>(arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST)
-    .get_result::<Count>(&mut *conn)
-    .await
-    .unwrap()
-    .count;
-    assert_eq!(changes_after_replay, changes_after_first);
+    let changes = |actor: String| {
+        let pool = pool.clone();
+        async move {
+            let mut conn = pool.get().await.unwrap();
+            diesel::sql_query(
+                "SELECT count(*) AS count FROM account_data_changes WHERE actor_id=$1 AND account_data_key=$2",
+            )
+            .bind::<diesel::sql_types::Text, _>(actor)
+            .bind::<diesel::sql_types::Text, _>(arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST)
+            .get_result::<Count>(&mut *conn)
+            .await
+            .unwrap()
+            .count
+        }
+    };
 
-    let (conflict, ..) = make(1, 1, Some(first_commit_id.clone()));
-    let conflict_event_id = conflict.event.event_id.clone();
-    let error = uow.commit_event(conflict).await.unwrap_err();
+    let (first, first_payload) = blocklist(1, 1);
+    let actor = first.actor_id.to_string();
+    assert_eq!(
+        admit(&store, &first, key, 0, first_payload.clone(), true)
+            .await
+            .unwrap(),
+        Applied
+    );
+    let after_first = changes(actor.clone()).await;
+    assert_eq!(
+        admit(&store, &first, key, 0, first_payload, true)
+            .await
+            .unwrap(),
+        Replayed
+    );
+    assert_eq!(changes(actor.clone()).await, after_first);
+
+    let (conflict, conflict_payload) = blocklist(1, 2);
+    let error = admit(&store, &conflict, key, 0, conflict_payload, true)
+        .await
+        .unwrap_err();
     assert_eq!(
         error.conflict_code(),
         Some(soland_storage::ConflictCode::CasConflict)
     );
-    let rolled_back = diesel::sql_query(
-        "SELECT count(*) AS count FROM canonical_events WHERE envelope->>'event_id'=$1",
-    )
-    .bind::<diesel::sql_types::Text, _>(&conflict_event_id)
-    .get_result::<Count>(&mut *conn)
-    .await
-    .unwrap();
-    assert_eq!(rolled_back.count, 0);
-    assert_eq!(
-        PgAccountDataStore { pool: pool.clone() }
-            .get(&actor, arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST)
+    let mut conn = pool.get().await.unwrap();
+    let rolled_back =
+        diesel::sql_query("SELECT count(*) AS count FROM actor_private_events WHERE event_id=$1")
+            .bind::<diesel::sql_types::Text, _>(conflict.event_id.as_str())
+            .get_result::<Count>(&mut *conn)
             .await
-            .unwrap()
-            .unwrap()
-            .revision,
-        1
-    );
+            .unwrap();
+    assert_eq!(rolled_back.count, 0);
+    assert_eq!(store.get(&actor, key).await.unwrap().unwrap().revision, 1);
 
-    let (second, ..) = make(2, 1, Some(first_commit_id));
-    uow.commit_event(second).await.unwrap();
-    let current = PgAccountDataStore { pool: pool.clone() }
-        .get(&actor, arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST)
-        .await
-        .unwrap()
-        .unwrap();
+    let (second, second_payload) = blocklist(2, 3);
+    assert_eq!(
+        admit(&store, &second, key, 1, second_payload, true)
+            .await
+            .unwrap(),
+        Applied
+    );
+    let current = store.get(&actor, key).await.unwrap().unwrap();
     assert_eq!(current.revision, 2);
     assert_eq!(
         current.payload,
         serde_json::json!({"version": 2, "entries": []})
     );
-    assert_ne!(first_event_id, conflict_event_id);
 }

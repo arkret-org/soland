@@ -1685,6 +1685,118 @@ async fn commit_account_data_cas(
     }
 }
 
+#[derive(diesel::QueryableByName)]
+struct PrincipalControlRealmRow {
+    #[diesel(sql_type = Text)]
+    pcr_realm_id: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ActorPrivateLedgerRow {
+    #[diesel(sql_type = Binary)]
+    canonical_event_digest: Vec<u8>,
+}
+
+/// Admit one actor-private account-data Event outside any RealmCommit: exact
+/// retry first, then the producer guard, then the ledger row and the holder
+/// CAS it sources, all in the caller's transaction.
+pub(crate) async fn admit_actor_private_account_data_in_connection(
+    conn: &mut AsyncPgConnection,
+    admission: &soland_storage::ActorPrivateAccountDataAdmission,
+) -> PersistenceResult<soland_storage::ActorPrivateAccountDataOutcome> {
+    let event = &admission.event;
+    if !matches!(
+        event.kind,
+        arkret_wire::EventKind::AccountDataSet | arkret_wire::EventKind::AccountBlocklist
+    ) || admission.cas.record.actor != event.actor_id.to_string()
+        || admission.canonical_event_digest.len() != 32
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "actor-private account data admission is not bound to its Event".to_owned(),
+        ));
+    }
+    let token = event.event_id.token_bytes().to_vec();
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind::<Text, _>(format!("actor-private-event:{}", event.event_id))
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    if let Some(existing) =
+        sql_query("SELECT canonical_event_digest FROM actor_private_events WHERE id=$1")
+            .bind::<Binary, _>(&token)
+            .get_result::<ActorPrivateLedgerRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+    {
+        return if existing.canonical_event_digest == admission.canonical_event_digest {
+            Ok(soland_storage::ActorPrivateAccountDataOutcome::Replayed)
+        } else {
+            Err(conflict(
+                "duplicate_conflict: the actor-private Event identity carries other bytes",
+            ))
+        };
+    }
+    if let Some(guard) = &admission.producer_guard {
+        crate::authority_commit::check_self_producer_guard_in_connection(
+            conn,
+            event,
+            guard,
+            admission.accepted_at,
+        )
+        .await?;
+    }
+    // The holder's account data lives on its own principal-control Realm.
+    let owner = event.actor_id.as_account_id().ok_or_else(|| {
+        PersistenceError::SchemaViolation("account data is owned by an Account".to_owned())
+    })?;
+    let pcr = sql_query(
+        "SELECT pcr_realm_id FROM principal_resolutions WHERE principal_id=$1 AND station_id=$2",
+    )
+    .bind::<Text, _>(owner.principal_id.as_str())
+    .bind::<Text, _>(owner.station_id.as_str())
+    .get_result::<PrincipalControlRealmRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if pcr.is_none_or(|row| row.pcr_realm_id != event.realm_id.as_str()) {
+        return Err(PersistenceError::SchemaViolation(
+            "the account data Event realm is not the holder's principal-control Realm".to_owned(),
+        ));
+    }
+    sql_query(
+        "INSERT INTO actor_private_events \
+         (id, event_id, actor_id, kind, canonical_event_digest, envelope, outcome, accepted_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,NULL,$7)",
+    )
+    .bind::<Binary, _>(&token)
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Text, _>(event.actor_id.to_string())
+    .bind::<Text, _>(event.kind.as_str())
+    .bind::<Binary, _>(&admission.canonical_event_digest)
+    .bind::<Jsonb, _>(serde_json::to_value(event).map_err(PersistenceError::database)?)
+    .bind::<Timestamptz, _>(admission.accepted_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    match commit_actor_private_account_data(
+        conn,
+        admission.cas.clone(),
+        event,
+        admission.accepted_at,
+    )
+    .await?
+    {
+        AccountDataCommitOutcome::Applied => {
+            Ok(soland_storage::ActorPrivateAccountDataOutcome::Applied)
+        }
+        // A fresh ledger row cannot already be the published source.
+        AccountDataCommitOutcome::ExactReplay => Err(PersistenceError::Internal(
+            "a new actor-private Event was already the published account data source".to_owned(),
+        )),
+    }
+}
+
 /// Install one actor-private Account Data effect. Initial Agent draft creates
 /// additionally consume their Station-private proposal source under the same
 /// PostgreSQL transaction and row lock. Later revisions remain ordinary
@@ -1694,11 +1806,9 @@ async fn commit_actor_private_account_data(
     cas: soland_storage::AccountDataCasCommit,
     event: &arkret_wire::Event,
     protocol_time: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<()> {
+) -> PersistenceResult<AccountDataCommitOutcome> {
     if event.kind != arkret_wire::EventKind::AccountDataSet {
-        return commit_account_data_cas(conn, cas, Some(&event.event_id))
-            .await
-            .map(|_| ());
+        return commit_account_data_cas(conn, cas, Some(&event.event_id)).await;
     }
 
     let payload: arkret_models_collaboration::events_payloads::account_data::AccountDataSetPayload =
@@ -1728,9 +1838,7 @@ async fn commit_actor_private_account_data(
     let initial_agent_draft = payload.key.as_str().starts_with("ak.agent.draft.v1:")
         && payload.expected_server_revision == 0;
     if !initial_agent_draft {
-        return commit_account_data_cas(conn, cas, Some(&event.event_id))
-            .await
-            .map(|_| ());
+        return commit_account_data_cas(conn, cas, Some(&event.event_id)).await;
     }
     if !payload.body.is_absent() || payload.encrypted_payload.is_none() || payload.tombstone {
         return Err(PersistenceError::SchemaViolation(
@@ -1770,9 +1878,12 @@ async fn commit_actor_private_account_data(
                 1,
                 protocol_time,
             )
-            .await
+            .await?;
+            Ok(AccountDataCommitOutcome::Applied)
         }
-        (AgentDraftConsumptionLock::ExactReplay, AccountDataCommitOutcome::ExactReplay) => Ok(()),
+        (AgentDraftConsumptionLock::ExactReplay, AccountDataCommitOutcome::ExactReplay) => {
+            Ok(AccountDataCommitOutcome::ExactReplay)
+        }
         _ => Err(PersistenceError::Conflict(
             "duplicate_conflict: Agent draft Account Data and pending source outcomes diverged"
                 .to_owned(),
@@ -2417,9 +2528,6 @@ async fn commit_one_in_connection(
         }
         commit_agent_draft_pending_intent_in_connection(conn, commit).await?;
     }
-    if let Some(commit) = request.actor_private_account_data {
-        commit_actor_private_account_data(conn, commit, event, request.event.received_at).await?;
-    }
     if let Some(commit) = request.consent_projection {
         commit_consent_projection(conn, commit).await?;
     }
@@ -2611,6 +2719,29 @@ mod agent_draft_consumption_tests {
         }
     }
 
+    /// The fixture principal-control Realm of `account`.
+    fn pcr_realm(account: &arkret_wire::AccountId) -> arkret_wire::RealmId {
+        arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(format!("fixture-pcr:{account}").as_bytes()),
+        ))
+    }
+
+    /// Resolve `account` to its fixture principal-control Realm.
+    async fn seed_pcr(conn: &mut AsyncPgConnection, account: &arkret_wire::AccountId) {
+        sql_query(
+            "INSERT INTO principal_resolutions \
+             (principal_id, station_id, pcr_realm_id, genesis_event_id, current_event_id, projection, updated_at) \
+             VALUES ($1,$2,$3,'fixture-genesis','fixture-current','{}'::jsonb,now()) ON CONFLICT DO NOTHING",
+        )
+        .bind::<Text, _>(account.principal_id.as_str())
+        .bind::<Text, _>(account.station_id.as_str())
+        .bind::<Text, _>(pcr_realm(account).as_str())
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
     fn account_data_event(
         controller: &arkret_wire::AccountId,
         key: &str,
@@ -2623,7 +2754,9 @@ mod agent_draft_consumption_tests {
         });
         let event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::AccountDataSet.as_str(),
-            arkret_wire::ScopeRef::RealmGenesis,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: pcr_realm(controller),
+            },
             controller.principal_id.clone(),
             controller.station_id.clone(),
             serde_json::json!({
@@ -2705,18 +2838,27 @@ mod agent_draft_consumption_tests {
         Ok(())
     }
 
+    /// Admit one account-data Event through the private actor-private
+    /// transaction the self operation uses, without a producer guard.
     async fn apply_account_data_in_transaction(
         conn: &mut AsyncPgConnection,
         event: arkret_wire::Event,
         mutation: soland_storage::AccountDataCasCommit,
-        insert_source: bool,
-    ) -> Result<(), PersistenceError> {
+    ) -> Result<soland_storage::ActorPrivateAccountDataOutcome, PersistenceError> {
+        let admission = soland_storage::ActorPrivateAccountDataAdmission {
+            canonical_event_digest: arkret_canonical::sha256_bytes(
+                &arkret_canonical::canonical_json_bytes(&event).unwrap(),
+            )
+            .to_vec(),
+            accepted_at: event.created_at,
+            event,
+            cas: mutation,
+            producer_guard: None,
+        };
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            if insert_source {
-                insert_committed_source(conn, &event).await?;
-            }
-            commit_actor_private_account_data(conn, mutation, &event, event.created_at).await?;
-            Ok(())
+            admit_actor_private_account_data_in_connection(conn, &admission)
+                .await
+                .map_err(Into::into)
         })
         .await
         .map_err(PgTransactionError::into_persistence)
@@ -2740,6 +2882,7 @@ mod agent_draft_consumption_tests {
         )
         .unwrap();
         let mut conn = crate::pg_conn(&pool).await.unwrap();
+        seed_pcr(&mut conn, &controller).await;
         insert_committed_source(&mut conn, &proposal).await.unwrap();
         commit_agent_draft_pending_intent_in_connection(
             &mut conn,
@@ -2755,7 +2898,7 @@ mod agent_draft_consumption_tests {
         );
         let mutation = cas(&event, &key, encrypted_payload.clone());
         let event_for_commit = event.clone();
-        apply_account_data_in_transaction(&mut conn, event_for_commit, mutation, true)
+        apply_account_data_in_transaction(&mut conn, event_for_commit, mutation)
             .await
             .unwrap();
 
@@ -2804,9 +2947,12 @@ mod agent_draft_consumption_tests {
         let before_replay = sync.account_global_watermark().await.unwrap();
         let replay_event = event.clone();
         let replay_mutation = cas(&replay_event, &key, stored.payload.clone());
-        apply_account_data_in_transaction(&mut conn, replay_event, replay_mutation, false)
-            .await
-            .expect("byte-identical replay returns the original outcome");
+        assert_eq!(
+            apply_account_data_in_transaction(&mut conn, replay_event, replay_mutation)
+                .await
+                .expect("byte-identical replay returns the original outcome"),
+            soland_storage::ActorPrivateAccountDataOutcome::Replayed
+        );
         assert_eq!(
             sync.account_global_watermark().await.unwrap(),
             before_replay
@@ -2820,16 +2966,15 @@ mod agent_draft_consumption_tests {
         );
         let second_id = second_event.event_id.clone();
         let second_mutation = cas(&second_event, &key, second_payload);
-        let error =
-            apply_account_data_in_transaction(&mut conn, second_event, second_mutation, true)
-                .await
-                .unwrap_err();
+        let error = apply_account_data_in_transaction(&mut conn, second_event, second_mutation)
+            .await
+            .unwrap_err();
         assert_eq!(
             error.conflict_code(),
             Some(soland_storage::ConflictCode::DuplicateConflict)
         );
         let second_count =
-            sql_query("SELECT count(*)::bigint AS count FROM canonical_events WHERE id=$1")
+            sql_query("SELECT count(*)::bigint AS count FROM actor_private_events WHERE id=$1")
                 .bind::<Binary, _>(second_id.token_bytes().to_vec())
                 .get_result::<CountRow>(&mut conn)
                 .await
@@ -2858,6 +3003,7 @@ mod agent_draft_consumption_tests {
         )
         .unwrap();
         let mut conn = crate::pg_conn(&pool).await.unwrap();
+        seed_pcr(&mut conn, &controller).await;
         insert_committed_source(&mut conn, &proposal).await.unwrap();
         commit_agent_draft_pending_intent_in_connection(
             &mut conn,
@@ -2892,7 +3038,7 @@ mod agent_draft_consumption_tests {
         let rejected_event_id = event.event_id.clone();
         let rejected_event = event.clone();
         let mutation = cas(&event, &key, encrypted_payload);
-        let error = apply_account_data_in_transaction(&mut conn, rejected_event, mutation, true)
+        let error = apply_account_data_in_transaction(&mut conn, rejected_event, mutation)
             .await
             .unwrap_err();
         assert_eq!(
@@ -2908,7 +3054,7 @@ mod agent_draft_consumption_tests {
         assert!(source.content_handoff.is_some());
         assert!(source.consumption.is_none());
         let event_count =
-            sql_query("SELECT count(*)::bigint AS count FROM canonical_events WHERE id=$1")
+            sql_query("SELECT count(*)::bigint AS count FROM actor_private_events WHERE id=$1")
                 .bind::<Binary, _>(rejected_event_id.token_bytes().to_vec())
                 .get_result::<CountRow>(&mut conn)
                 .await
@@ -2925,6 +3071,7 @@ mod agent_draft_consumption_tests {
         );
 
         let foreign = account("draft-foreign");
+        seed_pcr(&mut conn, &foreign).await;
         let (foreign_event, foreign_payload) = account_data_event(
             &foreign,
             &key,
@@ -2934,16 +3081,15 @@ mod agent_draft_consumption_tests {
         let foreign_id = foreign_event.event_id.clone();
         let foreign_actor = foreign_event.actor_id.to_string();
         let foreign_mutation = cas(&foreign_event, &key, foreign_payload);
-        let error =
-            apply_account_data_in_transaction(&mut conn, foreign_event, foreign_mutation, true)
-                .await
-                .unwrap_err();
+        let error = apply_account_data_in_transaction(&mut conn, foreign_event, foreign_mutation)
+            .await
+            .unwrap_err();
         assert_eq!(
             error.conflict_code(),
             Some(soland_storage::ConflictCode::FailedPrecondition)
         );
         let foreign_count =
-            sql_query("SELECT count(*)::bigint AS count FROM canonical_events WHERE id=$1")
+            sql_query("SELECT count(*)::bigint AS count FROM actor_private_events WHERE id=$1")
                 .bind::<Binary, _>(foreign_id.token_bytes().to_vec())
                 .get_result::<CountRow>(&mut conn)
                 .await
@@ -2975,7 +3121,7 @@ mod agent_draft_consumption_tests {
         let wrong_key_mutation = cas(&wrong_key_event, &wrong_key, wrong_key_payload);
         let mut conn = crate::pg_conn(&pool).await.unwrap();
         let error =
-            apply_account_data_in_transaction(&mut conn, wrong_key_event, wrong_key_mutation, true)
+            apply_account_data_in_transaction(&mut conn, wrong_key_event, wrong_key_mutation)
                 .await
                 .unwrap_err();
         assert_eq!(
@@ -2983,7 +3129,7 @@ mod agent_draft_consumption_tests {
             Some(soland_storage::ConflictCode::FailedPrecondition)
         );
         let wrong_key_count =
-            sql_query("SELECT count(*)::bigint AS count FROM canonical_events WHERE id=$1")
+            sql_query("SELECT count(*)::bigint AS count FROM actor_private_events WHERE id=$1")
                 .bind::<Binary, _>(wrong_key_id.token_bytes().to_vec())
                 .get_result::<CountRow>(&mut conn)
                 .await

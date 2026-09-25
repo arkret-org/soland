@@ -298,22 +298,10 @@ async fn session_is_agent_context(
 
 /// Admit the holder-signed `ak.account_data.set` the caller submitted.
 ///
-/// The service used to build and sign this Event itself, under its own DID with
-/// the notary key, leaving the real holder in `payload.owner`. That is not a
-/// missing-signature nit: `ak.account_data.set`'s actor-private cell subject is
-/// `composite[envelope.actor_id, payload.key]` and `owner` is not part of it, so
-/// every holder's value for one key projected into a single cell keyed by the
-/// service DID, sharing one `server_revision_cas` counter. It stayed invisible
-/// because the CAS check below reads soland's own per-(actor, key) table: the
-/// server was self-consistent, and only a receiver replaying the Events saw the
-/// collapse.
-///
-/// Five places in the spec forbid the service producing that signature
-/// (`capabilities.md` §118/§361, `conformance-profiles.md` §638,
-/// `applet-schema.md` §234, `key-management.md` §411), and `event-and-patch.md`
-/// §342 says actor-private does not excuse a missing signed envelope. So the
-/// holder signs and this function only checks the Event says what the endpoint
-/// promised, then hands the caller's exact bytes to ordinary Event admission.
+/// The holder signs; the service never authors this Event. This function
+/// checks the Event says what the endpoint promised and then admits the
+/// caller's exact bytes as an actor-private Event whose only effect is the
+/// holder's account-data register.
 ///
 /// Returns the accepted revision.
 async fn admit_caller_signed_account_data_set(
@@ -374,68 +362,32 @@ async fn admit_caller_signed_account_data_set(
             )
         })?;
 
-    let current = state
-        .account_data()
-        .entry(&account_key, account_data_key)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let current_revision = current.as_ref().map_or(0, |record| record.revision);
-    if current_revision != expected_revision {
-        return Err(account_data_cas_conflict(
-            account_data_key,
-            current.as_ref(),
-        ));
-    }
+    // The store judges the CAS after exact retry, so a byte-identical retry of
+    // an accepted write returns its revision instead of a conflict.
     let revision = expected_revision.checked_add(1).ok_or_else(|| {
         crate::app_error!(
             CasConflict,
             "account data revision high-water mark is exhausted",
         )
     })?;
-    let realm_id = event.realm_id.clone();
-    if !state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string())
-    {
-        return Err(crate::app_error!(
-            SchemaViolation,
-            "set_event.realm_id must be the holder's principal-control Realm",
-        ));
-    }
 
-    // The caller's exact bytes. Re-serializing the parsed Event would be the service
-    // rebuilding it, and the proof covers the bytes as submitted.
-    let envelope = serde_json::to_value(&set_event).map_err(|error| {
-        AppError::internal(format!("account_data Event serialize failed: {error}"))
-    })?;
-    crate::routing::events::event_log::submit_account_data_event_value(
-        state,
-        session,
-        envelope,
-        realm_id.as_str(),
-        &session_actor,
-        account_data_key,
-    )
-    .await
-    .map_err(|error| {
-        if error.code() == "cas_conflict" {
-            let mut mapped = crate::app_error!(CasConflict, error.message());
-            if let Some(details) = error.details().and_then(Value::as_object) {
-                for (key, value) in details {
-                    mapped = mapped.with_wire_detail(key, value);
-                }
-            }
-            return mapped;
+    // The caller's exact signed bytes are admitted as an actor-private Event:
+    // no RealmCommit covers them (actor-private-effects.md section 1).
+    match crate::state::admit_account_data_set(state, session, &set_event).await {
+        Ok(_) => {}
+        Err(error) if error.conflict_code() == Some(soland_storage::ConflictCode::CasConflict) => {
+            let current = state
+                .account_data()
+                .entry(&account_key, account_data_key)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            return Err(account_data_cas_conflict(
+                account_data_key,
+                current.as_ref(),
+            ));
         }
-        // A registered top-level rejection keeps its registry status.
-        AppError::from_rejection(
-            soland_http::error::ErrorCode::from_wire(&error.code())
-                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-            format!("account_data Event admission failed: {}", error.message()),
-        )
-        .with_rejection_code(error.code())
-    })?;
+        Err(error) => return Err(crate::state::actor_private_refusal(error)),
+    }
     Ok(revision)
 }
 
@@ -527,14 +479,35 @@ async fn put_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some_and(|record| !record.tombstone);
 
-    admit_caller_signed_account_data_set(state, &session, &account_data_key, body.set_event, false)
-        .await?;
-    let record = state
-        .account_data()
-        .entry(&account_key, &account_data_key)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::internal("account_data Event projection is missing"))?;
+    // The accepted row is the signed write itself, so an exact retry answers
+    // with the value it wrote even after a later revision replaced it.
+    let updated_at = body
+        .set_event
+        .payload
+        .get("updated_at")
+        .cloned()
+        .map(serde_json::from_value::<chrono::DateTime<chrono::Utc>>)
+        .transpose()
+        .map_err(|error| {
+            AppError::schema_violation(format!("set_event payload.updated_at: {error}"))
+        })?
+        .unwrap_or(body.set_event.created_at);
+    let revision = admit_caller_signed_account_data_set(
+        state,
+        &session,
+        &account_data_key,
+        body.set_event,
+        false,
+    )
+    .await?;
+    let record = AccountDataState {
+        actor_id: account_key,
+        account_data_key: account_data_key.clone(),
+        revision,
+        payload: content,
+        tombstone: false,
+        updated_at,
+    };
 
     super::append_audit_log(
         state,

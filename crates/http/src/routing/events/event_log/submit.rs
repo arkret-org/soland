@@ -250,9 +250,6 @@ enum InternalEventBinding {
     MimiProvider {
         binding_ref: String,
     },
-    AccountData {
-        key: String,
-    },
     /// Caller-authored MIMI report admitted without fabricating a local
     /// bearer/session grant. The handler has already verified the closed
     /// reporter-authority transcript; ordinary Event admission still checks
@@ -320,22 +317,6 @@ impl InternalEventAdmission {
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
             },
-        }
-    }
-
-    pub(in crate::routing) fn account_data(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        device_id: impl Into<String>,
-        key: impl Into<String>,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: arkret_wire::EventKind::AccountDataSet.as_str().to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::AccountData { key: key.into() },
         }
     }
 
@@ -538,11 +519,6 @@ impl InternalEventAdmission {
                         .and_then(|provenance| provenance.get("room_binding_ref"))
                         .and_then(Value::as_str)
                         == Some(binding_ref.as_str())
-                }
-                InternalEventBinding::AccountData { key } => {
-                    object.get("payload").is_some_and(|payload| {
-                        payload.get("key").and_then(Value::as_str) == Some(key.as_str())
-                    })
                 }
                 InternalEventBinding::MimiReporter {
                     signer_actor_id,
@@ -1298,9 +1274,8 @@ use post_commit::*;
 pub(super) use value::validate_membership_compensation_live_state;
 use value::*;
 pub(in crate::routing) use value::{
-    DevicePairingAdmission, prepare_service_franking_proof_event_value,
-    submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
-    submit_initial_event_submission_with_contact_projection,
+    DevicePairingAdmission, prepare_service_franking_proof_event_value, submit_event_value,
+    submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no

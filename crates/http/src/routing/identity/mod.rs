@@ -15,7 +15,7 @@ pub(crate) mod consent;
 pub(crate) mod contact_federation;
 pub(crate) mod current_signer_evidence;
 pub(crate) mod device_generation;
-pub(super) mod device_messages;
+pub(crate) mod device_messages;
 pub(crate) mod device_pairing_open;
 pub(crate) mod device_signing;
 pub(super) mod did;
