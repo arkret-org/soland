@@ -2054,46 +2054,6 @@ CREATE INDEX device_revocation_cleanup_intents_pending_idx
     ON public.device_revocation_cleanup_intents USING btree (created_at)
     WHERE material_cleanup_completed_at IS NULL OR mls_obligation_completed_at IS NULL;
 
-CREATE TABLE public.device_pairing_outcomes (
-    request_id text PRIMARY KEY,
-    terminal_record jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL
-);
-
-CREATE TABLE public.device_pairings (
-    device_pairing_request_id text NOT NULL,
-    pairing_code text NOT NULL,
-    new_device_pubkey jsonb NOT NULL,
-    client_nonce text NOT NULL,
-    gate_audience text NOT NULL,
-    server_nonce text NOT NULL,
-    display_name text,
-    device_metadata jsonb,
-    account_id text,
-    target_proof jsonb,
-    state text DEFAULT 'staged' NOT NULL,
-    device_id text,
-    authorized_by_actor_id text,
-    authorized_event_ref text,
-    expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (device_pairing_request_id),
-    CONSTRAINT device_pairings_state_check
-        CHECK (state = ANY (ARRAY['staged', 'ready_for_claim', 'authorized', 'expired'])),
-    -- `staged` is account-less by construction; every later state carries the
-    -- exact account its signed target proof binds.
-    CONSTRAINT device_pairings_account_binding_check
-        CHECK ((state = 'staged') = (account_id IS NULL AND target_proof IS NULL))
-);
-
-CREATE INDEX device_pairings_expiry_idx
-    ON public.device_pairings (expires_at);
-
--- The eight-character code is the sole lookup key of the authenticated code
--- claim, so it must resolve to at most one live request.
-CREATE UNIQUE INDEX device_pairings_pairing_code_key
-    ON public.device_pairings (pairing_code);
-
 CREATE TABLE public.device_messages (
     id uuid PRIMARY KEY,
     idempotency_key text NOT NULL,

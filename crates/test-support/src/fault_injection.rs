@@ -404,9 +404,6 @@ impl soland_storage::IdentityStoreRegistry for FaultInjectingStore {
     fn devices(&self) -> &dyn soland_storage::DeviceInventoryStore {
         self.inner.devices()
     }
-    fn device_pairings(&self) -> &dyn soland_storage::DevicePairingStore {
-        self.inner.device_pairings()
-    }
     fn device_revocations(&self) -> &dyn soland_storage::DeviceRevocationStore {
         self.inner.device_revocations()
     }

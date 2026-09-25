@@ -35,7 +35,6 @@ pub struct PgPersistenceStore {
     messages: PgMessageStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
-    device_pairings: PgDevicePairingStore,
     device_revocations: PgDeviceRevocationStore,
     federation_outbox: PgFederationOutboxStore,
     handle_releases: PgHandleReleaseStore,
@@ -119,7 +118,6 @@ impl PgPersistenceStore {
             messages: PgMessageStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
-            device_pairings: PgDevicePairingStore { pool: pool.clone() },
             device_revocations: PgDeviceRevocationStore { pool: pool.clone() },
             federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
             handle_releases: PgHandleReleaseStore { pool: pool.clone() },
@@ -271,10 +269,6 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
-    }
-
-    fn device_pairings(&self) -> &dyn DevicePairingStore {
-        &self.device_pairings
     }
 
     fn device_revocations(&self) -> &dyn DeviceRevocationStore {

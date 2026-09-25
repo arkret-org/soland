@@ -342,7 +342,6 @@ pub fn next_request_for_actor(
         forwarded_producer_evidence: None,
         event: record,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
         consent_projection: None,

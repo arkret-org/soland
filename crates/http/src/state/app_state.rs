@@ -36,9 +36,8 @@ use soland_services::governance::{GovernanceService, RuntimeSettingsPort};
 use soland_services::hydration::HydrationProjectionAdapter;
 use soland_services::identity::{
     AccountDataService, AgentPairingService, AgentParticipationService, ConsentService,
-    ContactService, DevicePairingService, DidService, IdentityService, KeyBackupService,
-    KeyMaterialService, RecoveryPolicyService, RecoverySessionService, SecurityTransactionService,
-    SessionService,
+    ContactService, DidService, IdentityService, KeyBackupService, KeyMaterialService,
+    RecoveryPolicyService, RecoverySessionService, SecurityTransactionService, SessionService,
 };
 use soland_services::jobs::{JobsService, RuntimeHealthPort};
 use soland_services::organization_registration::OrganizationRegistrationService;
@@ -120,7 +119,6 @@ pub struct AppState {
     consents: ConsentService,
     contacts: ContactService,
     agent_pairings: AgentPairingService,
-    device_pairings: DevicePairingService,
     account_authority_device_pairing: Arc<dyn AccountAuthorityDevicePairingPort>,
     agent_participations: AgentParticipationService,
     key_backups: KeyBackupService,
@@ -1100,7 +1098,6 @@ impl AppState {
             consent: consents,
             contact: contacts,
             agent_pairing: agent_pairings,
-            device_pairing: device_pairings,
             agent_participation: agent_participations,
             key_backup: key_backups,
             session: sessions,
@@ -1160,7 +1157,6 @@ impl AppState {
             consents,
             contacts,
             agent_pairings,
-            device_pairings,
             account_authority_device_pairing: Arc::new(PrivateAccountAuthorityDevicePairing),
             agent_participations,
             key_backups,
@@ -1454,10 +1450,6 @@ impl AppState {
         &self.agent_pairings
     }
 
-    pub(crate) fn device_pairings(&self) -> &DevicePairingService {
-        &self.device_pairings
-    }
-
     pub(crate) fn account_authority_device_pairing(
         &self,
     ) -> &dyn AccountAuthorityDevicePairingPort {
@@ -1521,12 +1513,6 @@ impl AppState {
     #[doc(hidden)]
     pub fn test_projections(&self) -> &ProjectionService {
         &self.projections
-    }
-
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn test_device_pairings(&self) -> &DevicePairingService {
-        &self.device_pairings
     }
 
     pub(crate) fn persistence(&self) -> &PersistenceHandle {

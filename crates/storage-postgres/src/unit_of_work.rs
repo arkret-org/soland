@@ -50,7 +50,7 @@ impl PgEventCommitUnitOfWork {
 }
 
 #[derive(diesel::QueryableByName)]
-struct DevicePairingCasRow {
+struct AcceptedFlagRow {
     #[diesel(sql_type = Bool)]
     accepted: bool,
 }
@@ -868,7 +868,7 @@ async fn commit_relation_current_result_in_connection(
     let lock_key = format!("relation:{}:{domain_key}", event.realm_id);
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0)) IS NULL AS accepted")
         .bind::<Text, _>(&lock_key)
-        .get_result::<DevicePairingCasRow>(&mut *conn)
+        .get_result::<AcceptedFlagRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
 
@@ -1322,64 +1322,6 @@ fn closed_applet_install_contains_event(
             })
 }
 
-/// Consume one staged device-pairing authorization.
-///
-/// The CAS and the terminal replay ledger share the Event transaction, so a
-/// refused commit leaves the staged request claimable exactly once more.
-async fn commit_device_pairing_authorization(
-    conn: &mut AsyncPgConnection,
-    commit: &soland_storage::DevicePairingAuthorizationCommit,
-) -> PersistenceResult<()> {
-    let new_device_pubkey = serde_json::to_value(&commit.new_device_pubkey).map_err(|error| {
-        PersistenceError::Internal(format!(
-            "cannot encode device pairing authorization public key: {error}"
-        ))
-    })?;
-    let cas = sql_query(
-        "WITH candidate AS ( \
-             SELECT state, pairing_code, new_device_pubkey, device_id, \
-                    authorized_by_actor_id, authorized_event_ref, expires_at \
-             FROM device_pairings WHERE device_pairing_request_id = $1 FOR UPDATE \
-         ), updated AS ( \
-             UPDATE device_pairings AS pairing SET \
-                 state = 'authorized', device_id = $4, \
-                 authorized_by_actor_id = $5, authorized_event_ref = $6 \
-             FROM candidate \
-             WHERE pairing.device_pairing_request_id = $1 \
-               AND candidate.pairing_code = $2 \
-               AND candidate.new_device_pubkey = $3 \
-               AND candidate.state = 'ready_for_claim' \
-               AND candidate.expires_at > $7 \
-             RETURNING 1 \
-         ) \
-         SELECT EXISTS(SELECT 1 FROM updated) AS accepted",
-    )
-    .bind::<Text, _>(&commit.device_pairing_request_id)
-    .bind::<Text, _>(&commit.pairing_code)
-    .bind::<Jsonb, _>(&new_device_pubkey)
-    .bind::<Text, _>(&commit.device_id)
-    .bind::<Text, _>(commit.authorized_by_actor_id.as_str())
-    .bind::<Text, _>(&commit.authorized_event_ref)
-    .bind::<Timestamptz, _>(commit.changed_at)
-    .get_result::<DevicePairingCasRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if !cas.accepted {
-        return Err(conflict("device_pairing_not_found"));
-    }
-    sql_query(
-        "INSERT INTO device_pairing_outcomes (request_id, terminal_record, created_at) \
-         VALUES ($1, $2, $3)",
-    )
-    .bind::<Text, _>(&commit.device_pairing_request_id)
-    .bind::<Jsonb, _>(&commit.terminal_record)
-    .bind::<Timestamptz, _>(commit.changed_at)
-    .execute(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    Ok(())
-}
-
 fn contact_event_ref(
     value: Option<&arkret_identifiers::EventId>,
 ) -> PersistenceResult<Option<Vec<u8>>> {
@@ -1669,7 +1611,7 @@ async fn commit_account_data_cas(
                 .bind::<Jsonb, _>(&record.payload)
                 .bind::<Bool, _>(record.tombstone)
                 .bind::<Text, _>(event_id.as_str())
-                .get_result::<DevicePairingCasRow>(&mut *conn)
+                .get_result::<AcceptedFlagRow>(&mut *conn)
                 .await
                 .map_err(PersistenceError::database)?
                 .accepted
@@ -2432,15 +2374,6 @@ async fn commit_one_in_connection(
 
     prepare_parent_membership_transaction(conn, &request).await?;
 
-    if let Some(commit) = request.device_pairing_authorization.as_ref() {
-        if commit.authorized_event_ref != request.event.event_id {
-            return Err(PersistenceError::SchemaViolation(
-                "device pairing authorization does not bind committed Event".to_owned(),
-            )
-            .into());
-        }
-        commit_device_pairing_authorization(conn, commit).await?;
-    }
     if let Some(selector) = request.device_revocation_gate.as_ref() {
         ensure_gate_allowed_in_transaction(conn, selector).await?;
     }

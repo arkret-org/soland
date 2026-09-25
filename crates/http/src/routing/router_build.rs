@@ -650,6 +650,14 @@ mod tests {
         ),
     ];
 
+    /// Advertised Station members served by the co-located Account Authority
+    /// of the same Station TCB (device-lifecycle.md §2.1.1): the deployment
+    /// gateway routes them to that process, which owns the pending pairing
+    /// ledger, while this Station admits the relayed authorization over the
+    /// private admission channel. They are not an implementation backlog.
+    const SERVED_BY_ACCOUNT_AUTHORITY: &[arkret_wire::ServiceOperationId] =
+        &[arkret_wire::ServiceOperationId::GateAccountCommandPairDeviceV1];
+
     /// `service-surface.md` §3: Describe advertises only bundles this
     /// deployment really implements, and the expanded `(operation_id,
     /// binding_kind)` union is the reachability source. Every advertised JSON
@@ -667,6 +675,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("unregistered advertised bundle {bundle_id}"));
             for member in bundle.members {
                 if member.binding_kind == arkret_wire::BindingKind::HttpJson
+                    && !SERVED_BY_ACCOUNT_AUTHORITY.contains(&member.operation_id)
                     && !is_mounted(&routes, member.operation_id)
                 {
                     unmounted.push((bundle_id.as_str(), member.operation_id));

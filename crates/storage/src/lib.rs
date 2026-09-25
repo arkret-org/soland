@@ -41,7 +41,6 @@ mod contacts;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod contract_tests;
-mod device_pairings;
 mod device_revocations;
 mod devices;
 mod events;
@@ -87,7 +86,6 @@ pub use authority_commit::*;
 pub use backup_series_erase::*;
 pub use blobs::*;
 pub use contacts::*;
-pub use device_pairings::*;
 pub use device_revocations::*;
 pub use devices::*;
 pub use events::*;
@@ -192,8 +190,6 @@ pub enum ConflictCode {
     CasConflict,
     /// An exact source needed for a current reducer result is unavailable.
     DependencyMissing,
-    /// The device pairing request the Event refers to does not exist.
-    DevicePairingNotFound,
     /// The exact device generation is no longer current or is conflicted.
     DeviceGenerationFenced,
     /// The exact device generation has an unresolved revoke proposal.
@@ -270,13 +266,12 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 38] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::BackupRevisionStale,
         Self::CasConflict,
         Self::DependencyMissing,
-        Self::DevicePairingNotFound,
         Self::DeviceGenerationFenced,
         Self::DeviceRevocationPending,
         Self::DeviceRevoked,
@@ -320,7 +315,6 @@ impl ConflictCode {
             Self::BackupRevisionStale => arkret_wire::ReasonCode::BACKUP_REVISION_STALE,
             Self::CasConflict => "cas_conflict",
             Self::DependencyMissing => "dependency_missing",
-            Self::DevicePairingNotFound => "device_pairing_not_found",
             Self::DeviceGenerationFenced => arkret_wire::ErrorCode::DEVICE_GENERATION_FENCED,
             Self::DeviceRevocationPending => "device_revocation_pending",
             Self::DeviceRevoked => "device_revoked",
@@ -398,7 +392,6 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn member_identity(&self) -> &dyn MemberIdentityStore;
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
-    fn device_pairings(&self) -> &dyn DevicePairingStore;
     fn device_revocations(&self) -> &dyn DeviceRevocationStore;
 }
 

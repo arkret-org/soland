@@ -14,12 +14,9 @@
 //! - `authenticated_session` — the underlying session-lookup pipeline
 //! - `session_credential_hash` / `token_for` — credential derivation primitives
 
-use arkret_identifiers::{DeviceId, EventId};
+use arkret_identifiers::DeviceId;
 use arkret_models_collaboration::account_lifecycle::{
     SessionRevokeOutcome, SessionRevokeRequestBody,
-};
-use arkret_models_collaboration::device_pairing::{
-    AccountDevicePairOutcome, AccountDevicePairRequestBody,
 };
 use arkret_models_identity::AccountLogoutOutcome;
 use base64::Engine;
@@ -41,7 +38,6 @@ use crate::state::AppState;
 use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
 use crate::{JsonResult, ids, json_ok};
 
-mod device_pair;
 mod login;
 mod logout;
 pub(crate) use logout::revoke_sessions_for_actor_device as revoke_sessions_for_hard_logout_device;
@@ -55,17 +51,15 @@ mod sessions;
 // External-visibility surface (referenced from other modules at the original
 // `identity::auth::<name>` path).
 // Router-mounted handlers (used by the `*_router` fns below).
-use device_pair::account_device_pair;
 // Cross-submodule private helpers, re-exported at `pub(super)` so every
 // submodule's `use super::*;` glob can see them.
-pub(super) use device_pair::initial_session_device_verification_state;
 pub(super) use login::account_existing_session_error;
 use login::dev_login;
 use logout::session_revoke;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
-    active_delegated_sessions_for_actor, revoke_devices_for_actor,
-    revoke_sessions_for_actor, session_credential_hash, token_for,
+    active_delegated_sessions_for_actor, revoke_devices_for_actor, revoke_sessions_for_actor,
+    session_credential_hash, token_for,
 };
 pub(super) use sessions::request_requires_fresh_introspection;
 pub(crate) use sessions::revalidate_stream_session;
@@ -95,7 +89,6 @@ pub(super) fn protocol_account_router() -> Router {
         // gateways route this longer prefix to soland even though `/_arkret/gate/`
         // otherwise goes to the Account Authority process.
         .push(Router::with_path("logout").post(logout::logout))
-        .push(Router::with_path("device-pair").post(account_device_pair))
 }
 
 pub(super) fn local_router() -> Router {

@@ -4,7 +4,6 @@ use arkret_models_collaboration::account_status::{
     AccountStatusReceipt, AccountStatusRecord, UnsignedAccountStatusReceipt,
     UnsignedAccountStatusRecord,
 };
-use arkret_models_collaboration::device_pairing::DevicePairingState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_identity::{
     OrganizationControlProofKind, OrganizationRegistrationChallenge,
@@ -26,11 +25,10 @@ use super::{
     ContactRecord, ContactStore, CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit, DevicePairingRecord,
-    DevicePairingStore, DeviceRevocationGateSelector, EventBatchCommitRequest, EventCommitRequest,
-    EventCommitUnitOfWork, EventStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    DeviceMessageTargetSnapshotGuard, DeviceRevocationGateSelector, EventBatchCommitRequest,
+    EventCommitRequest, EventCommitUnitOfWork, EventStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
     InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
     MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
@@ -1129,236 +1127,6 @@ pub async fn assert_mimi_consent_correlation_store_contract(
     );
 }
 
-/// `device-lifecycle.md` 2.1.1 step 2 -- one successful `finalize` retires every
-/// other approvable pairing request of the same `AccountId` inside the same
-/// durable transaction.
-///
-/// The supersession key is the `AccountId` alone: the refreshed-page case (the
-/// same candidate key staged twice) and the new-device case (a different
-/// candidate key) must produce byte-identical outcomes. Retired rows stay as
-/// `expired` tombstones so the code cannot become unknown -- and therefore
-/// re-mintable -- before its own `expires_at`.
-pub async fn assert_device_pairing_finalize_supersession_contract(
-    store: &dyn DevicePairingStore,
-    namespace: &str,
-) {
-    let now = database_timestamp_now();
-    let station = DidCoreId::new("ak:did_core:web:soland.example").expect("station id");
-    let account = |principal: &str| {
-        arkret_wire::AccountId::new(
-            DidCoreId::new(format!("ak:did_core:web:{namespace}-{principal}.example"))
-                .expect("pairing principal id"),
-            station.clone(),
-        )
-    };
-    let owner = account("owner");
-    let other = account("other");
-    // The pairing code is unique across every retained row, tombstones
-    // included, so each fixture row claims its own code.
-    let code = |slot: &str| format!("{namespace}-{slot}");
-    let candidate_key = |kid: &str| {
-        serde_json::json!({
-            "algorithm": "Ed25519",
-            "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
-            "kid": format!("ak:device:{kid}"),
-            "kty": "OKP"
-        })
-    };
-    let proof = |slot: &str| serde_json::json!({"pairing_target_proof": slot});
-    async fn stage(store: &dyn DevicePairingStore, record: DevicePairingRecord) -> String {
-        let request_id = record.device_pairing_request_id.clone();
-        store.put(record).await.expect("stage pairing request");
-        request_id
-    }
-    let staged = |slot: &str, kid: &str| {
-        DevicePairingRecord::new(
-            format!("device_pairing_request:{namespace}:{slot}"),
-            code(slot),
-            candidate_key(kid),
-            "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
-            "https://account.example".to_owned(),
-            "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
-            None,
-            None,
-            DevicePairingState::Staged,
-            now,
-            now + Duration::minutes(10),
-        )
-    };
-    async fn state_of(store: &dyn DevicePairingStore, request_id: &str) -> DevicePairingState {
-        store
-            .get_by_request_id(request_id)
-            .await
-            .expect("read pairing request")
-            .expect("pairing row is retained")
-            .state
-    }
-
-    // A record already accepted by `pair_device` must never be rewritten
-    // retroactively, and an account-less `staged` row of a third party must not
-    // be touched either.
-    let accepted_id = stage(
-        store,
-        staged("accepted", "01964137-0000-7000-8000-00000000d000"),
-    )
-    .await;
-    store
-        .finalize(&accepted_id, &owner, proof("accepted"), now)
-        .await
-        .expect("finalize the record that later gets authorized");
-    let mut accepted = store
-        .get_by_request_id(&accepted_id)
-        .await
-        .expect("read authorized fixture")
-        .expect("authorized fixture exists");
-    accepted.state = DevicePairingState::Authorized;
-    accepted.device_id = Some("ak:device:01964137-0000-7000-8000-00000000d000".to_owned());
-    accepted.authorized_event_ref = Some(format!("ak:event:{namespace}:authorized"));
-    store
-        .put(accepted)
-        .await
-        .expect("mark the fixture record authorized");
-    let foreign_id = stage(
-        store,
-        staged("foreign", "01964137-0000-7000-8000-00000000d001"),
-    )
-    .await;
-    store
-        .finalize(&foreign_id, &other, proof("foreign"), now)
-        .await
-        .expect("finalize another account's request");
-    let untouched_staged_id = stage(
-        store,
-        staged("untouched", "01964137-0000-7000-8000-00000000d002"),
-    )
-    .await;
-
-    // Case 1 -- the refreshed pairing page: the same candidate key staged again.
-    let first_id = stage(
-        store,
-        staged("first", "01964137-0000-7000-8000-00000000d003"),
-    )
-    .await;
-    store
-        .finalize(&first_id, &owner, proof("first"), now)
-        .await
-        .expect("finalize the first approvable request");
-    assert_eq!(
-        state_of(store, &first_id).await,
-        DevicePairingState::ReadyForClaim
-    );
-    let refreshed_id = stage(
-        store,
-        staged("refreshed", "01964137-0000-7000-8000-00000000d003"),
-    )
-    .await;
-    store
-        .finalize(&refreshed_id, &owner, proof("refreshed"), now)
-        .await
-        .expect("finalize the refreshed request");
-    assert_eq!(
-        state_of(store, &first_id).await,
-        DevicePairingState::Expired,
-        "the previous approvable record is retired by the same candidate key"
-    );
-    assert_eq!(
-        state_of(store, &refreshed_id).await,
-        DevicePairingState::ReadyForClaim
-    );
-
-    // Case 2 -- a genuinely different device: a different candidate key must
-    // retire the previous record identically. The supersession key is the
-    // account, not `(account, device_id)` and not the candidate key.
-    let second_device_id = stage(
-        store,
-        staged("second-device", "01964137-0000-7000-8000-00000000d004"),
-    )
-    .await;
-    store
-        .finalize(&second_device_id, &owner, proof("second-device"), now)
-        .await
-        .expect("finalize the second device's request");
-    assert_eq!(
-        state_of(store, &refreshed_id).await,
-        DevicePairingState::Expired,
-        "a different candidate key retires the previous record the same way"
-    );
-    assert_eq!(
-        state_of(store, &second_device_id).await,
-        DevicePairingState::ReadyForClaim
-    );
-
-    // Neither the already-authorized record, the other account's record, nor an
-    // account-less staged row may be disturbed.
-    assert_eq!(
-        state_of(store, &accepted_id).await,
-        DevicePairingState::Authorized,
-        "an accepted record is never rewritten retroactively"
-    );
-    assert_eq!(
-        state_of(store, &foreign_id).await,
-        DevicePairingState::ReadyForClaim,
-        "supersession is scoped to one AccountId"
-    );
-    assert_eq!(
-        state_of(store, &untouched_staged_id).await,
-        DevicePairingState::Staged,
-        "a staged row carries no account and is out of scope"
-    );
-
-    // An exact retry replays the stored outcome and MUST NOT supersede a second
-    // time. The witness is a record that became approvable after the first
-    // finalize: a second pass would retire it.
-    let witness_id = stage(
-        store,
-        staged("witness", "01964137-0000-7000-8000-00000000d005"),
-    )
-    .await;
-    let witness = DevicePairingRecord {
-        account_id: Some(owner.clone()),
-        target_proof: Some(proof("witness")),
-        state: DevicePairingState::ReadyForClaim,
-        ..store
-            .get_by_request_id(&witness_id)
-            .await
-            .expect("read witness row")
-            .expect("witness row exists")
-    };
-    store.put(witness).await.expect("install the witness row");
-    let replay = store
-        .finalize(&second_device_id, &owner, proof("second-device"), now)
-        .await
-        .expect("exact finalize retry replays its stored outcome");
-    assert_eq!(replay.state, DevicePairingState::ReadyForClaim);
-    assert_eq!(replay.account_id.as_ref(), Some(&owner));
-    assert_eq!(
-        state_of(store, &witness_id).await,
-        DevicePairingState::ReadyForClaim,
-        "an exact retry must not run supersession a second time"
-    );
-
-    // The retired row stays as a tombstone: it is not deleted, so its code
-    // cannot be minted again inside the window it could still be replayed in.
-    assert!(
-        store
-            .get_by_request_id(&first_id)
-            .await
-            .expect("read the retired code")
-            .is_some_and(|record| {
-                record.pairing_code == code("first") && record.state == DevicePairingState::Expired
-            }),
-        "a superseded code keeps a tombstone until its own expires_at"
-    );
-    // A retired record can never be finalized back into the approvable set.
-    assert!(
-        store
-            .finalize(&first_id, &owner, proof("first"), now)
-            .await
-            .is_err(),
-        "a superseded record is terminal"
-    );
-}
-
 pub struct EventCommitContractStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
     pub authority: &'a dyn AuthorityCommitStore,
@@ -1366,7 +1134,6 @@ pub struct EventCommitContractStores<'a> {
     pub projections: &'a dyn ProjectionEventStore,
     pub idempotency: &'a dyn IdempotencyStore,
     pub outbox: &'a dyn FederationOutboxStore,
-    pub device_pairings: &'a dyn DevicePairingStore,
     pub contacts: &'a dyn ContactStore,
     pub invite_policies: &'a dyn InviteReceivePolicyStore,
 }
@@ -1690,7 +1457,6 @@ fn contract_applet_event_request(
         self_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
         consent_projection: None,
@@ -2579,7 +2345,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         self_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
         consent_projection: None,
@@ -2683,172 +2448,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .is_some()
     );
 
-    // Accepted-device pairing is consumed in the exact Event unit of work.
-    // A response-loss retry reads the durable terminal ledger. Bypassing that
-    // read and attempting a second stage consumption must fail atomically.
-    let pairing_request_id = format!("device-pairing:{namespace}:{event_uuid}");
-    // The pairing code is unique across the live pending set, so two contract
-    // runs sharing a database cannot share a fixture code.
-    let pairing_code: String = event_uuid
-        .simple()
-        .to_string()
-        .chars()
-        .filter(|character| character.is_ascii_hexdigit() && !matches!(character, '0' | '1'))
-        .map(|character| character.to_ascii_uppercase())
-        .take(8)
-        .collect();
-    let pairing_key_value = serde_json::json!({
-        "algorithm": "Ed25519",
-        "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
-        "kid": "ak:device:01964137-0000-7000-8000-0000000000b2",
-        "kty": "OKP"
-    });
-    let pairing_key =
-        serde_json::from_value(pairing_key_value.clone()).expect("contract pairing public key");
-    // The commit predicate only fires on a finalized record, so the fixture
-    // carries the account binding finalize attaches.
-    let mut pairing_record = DevicePairingRecord::new(
-        pairing_request_id.clone(),
-        pairing_code.clone(),
-        pairing_key_value,
-        "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
-        "https://account.example".to_owned(),
-        "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
-        None,
-        None,
-        DevicePairingState::ReadyForClaim,
-        now,
-        now + Duration::minutes(10),
-    );
-    pairing_record.account_id = Some(arkret_wire::AccountId::new(
-        DidCoreId::new(principal_id.clone()).expect("pairing principal id"),
-        DidCoreId::new("ak:did_core:web:soland.example").expect("pairing station id"),
-    ));
-    pairing_record.target_proof = Some(serde_json::json!({
-        "pairing_challenge_transcript_digest": format!("sha256:{}", "c".repeat(64))
-    }));
-    stores
-        .device_pairings
-        .put(pairing_record)
-        .await
-        .expect("stage contract pairing");
-    let pairing_event = canonical_wire_event_record(
-        arkret_wire::EventKind::DeviceAuthorize.as_str(),
-        &principal_id,
-        &realm_id,
-        1,
-        now,
-    );
-    let pairing_event_id = pairing_event.event_id.clone();
-    let pairing_commit = EventCommitRequest {
-        authority_commit: stream.accept(&pairing_event),
-        self_producer_guard: None,
-        forwarded_producer_evidence: None,
-        parent_membership_admission: None,
-        device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
-            device_pairing_request_id: pairing_request_id.clone(),
-            pairing_code: pairing_code.clone(),
-            new_device_pubkey: pairing_key,
-            device_id: "ak:device:01964137-0000-7000-8000-0000000000b2".to_owned(),
-            authorized_by_actor_id: arkret_wire::DidCoreId::new(principal_id.clone()).unwrap(),
-            authorized_event_ref: pairing_event_id.clone(),
-            changed_at: now,
-            terminal_record: serde_json::json!({"test": "exact-terminal"}),
-        }),
-        contact_projection: None,
-        agent_draft_pending_intent: None,
-        consent_projection: None,
-        event: pairing_event,
-        device_revocation_transition: None,
-        device_revocation_gate: None,
-        projections: vec![ProjectionEventRecord {
-            event_id: pairing_event_id.clone(),
-            realm_id: realm_id.clone(),
-            event_kind: "ak.device.authorize".to_owned(),
-            operation_kind: "authorize".to_owned(),
-            operation_id: None,
-            sender: Some(principal_id.clone()),
-            payload: serde_json::json!({"device_id": "ak:device:01964137-0000-7000-8000-0000000000b2"}),
-            created_at: now,
-            received_at: now,
-        }],
-        idempotency: None,
-        outbox: Vec::new(),
-    };
-    stores
-        .unit_of_work
-        .commit_event(pairing_commit.clone())
-        .await
-        .expect("pairing Event and staged CAS commit together");
-    assert_eq!(
-        stores
-            .device_pairings
-            .get_terminal(&pairing_request_id)
-            .await
-            .unwrap(),
-        Some(serde_json::json!({"test": "exact-terminal"}))
-    );
-    stores
-        .device_pairings
-        .delete_expired_before(now + Duration::days(1))
-        .await
-        .unwrap();
-    assert!(
-        stores
-            .device_pairings
-            .get_by_request_id(&pairing_request_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        stores
-            .device_pairings
-            .get_terminal(&pairing_request_id)
-            .await
-            .unwrap(),
-        Some(serde_json::json!({"test": "exact-terminal"})),
-        "terminal replay survives anonymous-stage cleanup"
-    );
-    assert!(
-        stores
-            .unit_of_work
-            .commit_event(pairing_commit)
-            .await
-            .is_err(),
-        "direct second stage consumption must not be accepted"
-    );
-    assert!(
-        stores
-            .events
-            .contains(&pairing_event_id)
-            .await
-            .expect("read paired Event")
-    );
-    assert_eq!(
-        stores
-            .projections
-            .snapshot_all()
-            .await
-            .expect("read paired projections")
-            .iter()
-            .filter(|projection| projection.event_id == pairing_event_id)
-            .count(),
-        1,
-        "response-loss replay must not duplicate the pairing projection"
-    );
-    let pairing = stores
-        .device_pairings
-        .get_by_request_id(&pairing_request_id)
-        .await
-        .expect("read consumed pairing")
-        .expect("pairing row retained for status/audit");
-    assert_eq!(pairing.state, DevicePairingState::Authorized);
-    assert_eq!(
-        pairing.authorized_event_ref.as_deref(),
-        Some(pairing_event_id.as_str())
-    );
-
     // Contact admission persists the canonical Event and peer carrier while
     // its holder projection remains invisible until an exact committed decision. Reading all three
     // back only through durable stores models a process restart with no in-memory planning
@@ -2913,7 +2512,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         self_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: Some(ContactProjectionCommit {
             completion_intent: None,
             record: contact_record.clone(),
@@ -3008,7 +2606,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
             self_producer_guard: None,
             forwarded_producer_evidence: None,
             parent_membership_admission: None,
-            device_pairing_authorization: None,
             contact_projection: Some(ContactProjectionCommit {
                 completion_intent: None,
                 record: conflicting_contact,
@@ -3073,7 +2670,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
         self_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
         consent_projection: None,
@@ -5275,7 +4871,6 @@ fn consent_commit_request(
         self_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
         consent_projection: Some(consent_projection),

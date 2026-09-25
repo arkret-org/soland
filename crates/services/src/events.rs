@@ -478,7 +478,6 @@ pub struct CommitAcceptedEventCommand {
     pub forwarded_producer_evidence: Option<soland_storage::ForwardedProducerDeviceEvidence>,
     pub event: AcceptedEvent,
     pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
-    pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
     /// Station-private pending intent created by `ak.agent.draft.propose`.
     pub agent_draft_pending_intent: Option<soland_storage::AgentDraftPendingIntentCommit>,
@@ -515,7 +514,6 @@ pub use soland_storage::{
     AppletAuthoringPreviewCommit as CommitAppletAuthoringPreview,
     AppletIdentityCommit as CommitAppletIdentity, AppletRecordCommit as CommitAppletRecord,
     ContactProjectionCommit as CommitContactProjection,
-    DevicePairingAuthorizationCommit as CommitDevicePairingAuthorization,
 };
 
 #[derive(Clone, Debug)]
@@ -1820,7 +1818,6 @@ mod tests {
                 self_producer_guard: None,
                 forwarded_producer_evidence: None,
                 parent_membership_admission: None,
-                device_pairing_authorization: None,
                 contact_projection: None,
                 agent_draft_pending_intent: None,
                 consent_projection: None,

@@ -17,7 +17,6 @@ struct PersistenceInviteReceivePolicies(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceDirectory(Arc<dyn PersistenceStore>);
 struct PersistenceAgentDirectory(Arc<dyn PersistenceStore>);
 struct PersistenceAgentPairing(Arc<dyn PersistenceStore>);
-struct PersistenceDevicePairing(Arc<dyn PersistenceStore>);
 struct PersistenceSidecars(Arc<dyn PersistenceStore>);
 struct PersistenceAgentParticipation(Arc<dyn PersistenceStore>);
 struct PersistenceKeyBackups(Arc<dyn PersistenceStore>);
@@ -829,62 +828,6 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             .0
             .agents()
             .enqueue_runtime_message_if_current(command)
-            .await?)
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
-    async fn get_terminal(
-        &self,
-        request_id: &str,
-    ) -> crate::ServiceResult<Option<serde_json::Value>> {
-        Ok(self.0.device_pairings().get_terminal(request_id).await?)
-    }
-
-    async fn stage(&self, record: crate::identity::DevicePairingState) -> crate::ServiceResult<()> {
-        self.0.device_pairings().put(record).await?;
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        device_pairing_request_id: &str,
-    ) -> crate::ServiceResult<Option<crate::identity::DevicePairingState>> {
-        Ok(self
-            .0
-            .device_pairings()
-            .get_by_request_id(device_pairing_request_id)
-            .await?)
-    }
-
-    async fn finalize(
-        &self,
-        device_pairing_request_id: &str,
-        account_id: &arkret_wire::AccountId,
-        target_proof: serde_json::Value,
-        finalized_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<crate::identity::DevicePairingState> {
-        Ok(self
-            .0
-            .device_pairings()
-            .finalize(
-                device_pairing_request_id,
-                account_id,
-                target_proof,
-                finalized_at,
-            )
-            .await?)
-    }
-
-    async fn prune_expired_before(
-        &self,
-        cutoff: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ServiceResult<u64> {
-        Ok(self
-            .0
-            .device_pairings()
-            .delete_expired_before(cutoff)
             .await?)
     }
 }
@@ -1773,7 +1716,6 @@ pub struct PersistenceIdentityServices {
     pub consent: ConsentService,
     pub contact: ContactService,
     pub agent_pairing: AgentPairingService,
-    pub device_pairing: DevicePairingService,
     pub agent_participation: AgentParticipationService,
     pub key_backup: KeyBackupService,
     pub session: SessionService,
@@ -1818,9 +1760,6 @@ pub fn build_persistence_identity_services(
             Arc::new(PersistenceAgentPairing(persistence.clone())),
             Arc::new(PersistenceSidecars(persistence.clone())),
         ),
-        device_pairing: DevicePairingService::new(Arc::new(PersistenceDevicePairing(
-            persistence.clone(),
-        ))),
         agent_participation: AgentParticipationService::new(Arc::new(
             PersistenceAgentParticipation(persistence.clone()),
         )),

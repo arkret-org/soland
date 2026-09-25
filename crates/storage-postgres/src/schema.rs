@@ -604,27 +604,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_pairings (device_pairing_request_id) {
-        device_pairing_request_id -> Text,
-        pairing_code -> Text,
-        new_device_pubkey -> Jsonb,
-        client_nonce -> Text,
-        gate_audience -> Text,
-        server_nonce -> Text,
-        display_name -> Nullable<Text>,
-        device_metadata -> Nullable<Jsonb>,
-        account_id -> Nullable<Text>,
-        target_proof -> Nullable<Jsonb>,
-        state -> Text,
-        device_id -> Nullable<Text>,
-        authorized_by_actor_id -> Nullable<Text>,
-        authorized_event_ref -> Nullable<Text>,
-        expires_at -> Timestamptz,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     device_history_projections (principal_id, station_id) {
         principal_id -> Text,
         station_id -> Text,
@@ -2010,7 +1989,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     device_message_lost_watermarks,
     device_message_txns,
     device_messages,
-    device_pairings,
     device_revocation_cleanup_intents,
     device_revocation_gate_receipts,
     device_revocation_linearization_heads,

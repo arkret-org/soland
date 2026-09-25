@@ -1075,7 +1075,6 @@ fn franking_event_request(
         self_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
-        device_pairing_authorization: None,
         contact_projection: None,
         agent_draft_pending_intent: None,
         consent_projection: None,
@@ -2484,7 +2483,6 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
     let projections = PgProjectionEventStore { pool: pool.clone() };
     let idempotency = PgIdempotencyStore { pool: pool.clone() };
     let outbox = PgFederationOutboxStore { pool: pool.clone() };
-    let device_pairings = soland_storage_postgres::PgDevicePairingStore { pool: pool.clone() };
     let contacts = PgContactStore { pool: pool.clone() };
     let invite_policies = PgInviteReceivePolicyStore { pool: pool.clone() };
     let namespace = format!("postgres-event-commit-{}", uuid::Uuid::now_v7());
@@ -2496,7 +2494,6 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
             projections: &projections,
             idempotency: &idempotency,
             outbox: &outbox,
-            device_pairings: &device_pairings,
             contacts: &contacts,
             invite_policies: &invite_policies,
         },

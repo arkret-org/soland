@@ -321,10 +321,10 @@ fn profile_limitations() -> Vec<Value> {
         }),
         json!({
             "area": "account_auth.device_pair",
-            "status": "standard_gate_supported",
+            "status": "account_authority_owned",
             "spec_operation": arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_DEVICE_V1,
             "canonical_path": "/_arkret/gate/account/device-pair",
-            "reason": "ak.gate.account.command.pair_device.v1 is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499)."
+            "reason": "ak.gate.account.command.pair_device.v1 and its pending pairing ledger belong to the Account Authority; this Station only admits the relayed accepted_device ak.device.authorize through its registered accepted-device unit over the private admission channel (device-lifecycle.md §2.1.1, §5.4)."
         }),
         json!({
             "area": "consent.scope_any_cross_service_cascade",

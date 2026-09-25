@@ -1274,9 +1274,8 @@ use post_commit::*;
 pub(super) use value::validate_membership_compensation_live_state;
 use value::*;
 pub(in crate::routing) use value::{
-    DevicePairingAdmission, prepare_service_franking_proof_event_value, submit_event_value,
+    prepare_service_franking_proof_event_value, submit_event_value,
     submit_initial_event_submission, submit_initial_event_submission_with_contact_projection,
-    submit_initial_event_submission_with_device_pairing,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.

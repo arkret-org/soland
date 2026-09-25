@@ -46,8 +46,6 @@ mod device_authorization_history;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
-mod device_pairing_row;
-mod device_pairings;
 mod device_revocations;
 mod devices;
 mod event_notifications;
@@ -122,8 +120,6 @@ pub use authority_commit::*;
 pub use blobs::*;
 pub use capability_grant_current_results::*;
 pub use contacts::*;
-pub(crate) use device_pairing_row::DevicePairingRow;
-pub use device_pairings::*;
 pub use device_revocations::*;
 pub(crate) use device_revocations::{
     ensure_gate_allowed_in_transaction, gate_status_in_transaction,

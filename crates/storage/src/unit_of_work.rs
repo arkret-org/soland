@@ -4,9 +4,9 @@ use serde_json::Value;
 
 use crate::{
     AccountDataRecord, AgentDraftPendingIntentCommit, CanonicalEventRecord, ConsentGrantRecord,
-    ContactRecord, ContactVerifiedMirrorRecord, DevicePairingAuthorizationCommit,
-    DeviceRevocationGateSelector, DeviceRevocationTransition, FederationOutboxRecord,
-    IdempotencyRecord, PersistenceError, PersistenceResult, ProjectionEventRecord,
+    ContactRecord, ContactVerifiedMirrorRecord, DeviceRevocationGateSelector,
+    DeviceRevocationTransition, FederationOutboxRecord, IdempotencyRecord, PersistenceError,
+    PersistenceResult, ProjectionEventRecord,
 };
 
 /// Project an already-admitted Agent cascade Event onto the frozen Agent ActorId
@@ -96,9 +96,6 @@ pub struct EventCommitRequest {
     /// authority: PostgreSQL must lock the exact policy named by the digest
     /// and re-evaluate all `parent_membership` dependencies before writing.
     pub parent_membership_admission: Option<ParentMembershipAdmissionCheck>,
-    /// Optional staged device-pairing CAS consumed in the same durable
-    /// boundary as the canonical Event and its reducer projection.
-    pub device_pairing_authorization: Option<DevicePairingAuthorizationCommit>,
     pub contact_projection: Option<ContactProjectionCommit>,
     /// Structured Station-private result of an accepted Agent draft proposal.
     /// It is neither account data nor a shared reducer projection.

@@ -36,19 +36,6 @@ impl SubmitEventContext<'_> {
     }
 }
 
-/// Marker that the atomic `pair_device` admission gate verified this
-/// submission.
-///
-/// The gate is what entitles an `ak.device.authorize` Event to declare the
-/// `accepted_device` authorization binding, so the marker doubles as the
-/// admission input for that payload class. The paired commit authorization is
-/// commit data: it is present exactly when the pair request named a
-/// `device_pairing_request_id` to close out.
-pub(in crate::routing) struct DevicePairingAdmission {
-    pub(in crate::routing) commit_authorization:
-        Option<soland_services::events::CommitDevicePairingAuthorization>,
-}
-
 /// The one idempotency record a commit may persist. Two idempotency sources
 /// on one commit were only ever a caller bug; the enum makes that state
 /// unrepresentable instead of a runtime rejection.
@@ -61,7 +48,6 @@ pub(super) enum SubmitCommitIdempotency {
 /// admission judgement; it lands on the commit command / response.
 pub(super) struct SubmitCommitOptions<'a> {
     pub(super) idempotency: Option<SubmitCommitIdempotency>,
-    pub(super) device_pairing: Option<&'a DevicePairingAdmission>,
     pub(super) contact_completion_draft: Option<&'a soland_storage::ContactCompletionDraft>,
     pub(super) contact_projection: Option<&'a soland_services::events::CommitContactProjection>,
     pub(super) additional_deliveries: &'a [soland_services::federation::FederationDeliveryRecord],
@@ -71,7 +57,6 @@ impl SubmitCommitOptions<'_> {
     pub(super) fn none() -> Self {
         Self {
             idempotency: None,
-            device_pairing: None,
             contact_projection: None,
             contact_completion_draft: None,
             additional_deliveries: &[],
@@ -228,15 +213,6 @@ fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
         }
     };
     SubmitOneError::new(status, code, message)
-}
-
-pub(in crate::routing) async fn submit_initial_event_submission_with_device_pairing(
-    state: &AppState,
-    session: &SessionRecord,
-    submission: arkret_wire::EventAdmissionSubmission,
-    _device_pairing: DevicePairingAdmission,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    submit_initial_event_submission(state, session, submission).await
 }
 
 pub(in crate::routing) async fn submit_initial_event_submission_with_contact_projection(
