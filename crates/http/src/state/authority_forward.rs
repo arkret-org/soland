@@ -113,6 +113,25 @@ pub(crate) async fn admit_forwarded_event(
     if let Some(outcome) = super::authority_port::refuse_unrouted_event(state, event).await? {
         return Ok(outcome);
     }
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+    ) {
+        if request.event_submission.approval_signatures.is_some() {
+            return Err(ServiceError::SchemaViolation(
+                "an MLS Event carries no approval signatures".to_owned(),
+            ));
+        }
+        let key = forwarded_producer_key(request.producer_device_evidence.as_ref())?;
+        return super::authority_mls_unit::admit_mls_event(
+            state,
+            event,
+            &[],
+            super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+            &key,
+        )
+        .await;
+    }
     super::authority_port::require_guarded_unit_event(&request.event_submission)?;
     super::authority_self_event_unit::commit_event_unit(
         state,
@@ -124,8 +143,8 @@ pub(crate) async fn admit_forwarded_event(
 }
 
 /// B: admit one forwarded MLS Commit submission at `now`. The Commit Event's
-/// producer is verified exactly like an ordinary Event; the MLS group
-/// installation itself shares the still-closed self MLS authority cut.
+/// producer is verified exactly like an ordinary Event, then the Commit and
+/// every Welcome enter the same MLS unit as a self submission.
 pub(super) async fn admit_forwarded_mls(
     state: &AppState,
     peer: &AuthenticatedPeerContext,
@@ -137,16 +156,52 @@ pub(super) async fn admit_forwarded_mls(
         return Ok(outcome);
     }
     request.validate().map_err(wire_refusal)?;
-    verify_forwarded_producer(
+    let Some(evidence) = verify_forwarded_producer(
         state,
         peer,
         event,
         request.producer_device_evidence.as_ref(),
         now,
-    )?;
-    Err(ServiceError::internal(
-        "MLS authority cut and atomic group installation are unavailable",
-    ))
+    )?
+    else {
+        return Err(ServiceError::internal(
+            "cross-Station Agent or Service producer resolution is not connected",
+        ));
+    };
+    let key = forwarded_producer_key(request.producer_device_evidence.as_ref())?;
+    super::authority_mls_unit::admit_mls_event(
+        state,
+        event,
+        &request.mls_submission.welcomes,
+        super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+        &key,
+    )
+    .await
+}
+
+/// The attested device key a verified forwarded producer proof verified
+/// under; the same producer seals the Commit's Welcomes with it.
+fn forwarded_producer_key(
+    evidence: Option<&AccountDeviceSignerEvidence>,
+) -> ServiceResult<arkret_signatures::PublicKeyMaterial> {
+    let evidence = evidence.ok_or_else(|| {
+        ServiceError::internal("a verified forwarded human producer carries its evidence")
+    })?;
+    let multibase = evidence
+        .device_projection_attestation
+        .attestation
+        .device_signing_key_did
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| {
+            ServiceError::protocol(
+                ErrorCode::SignatureInvalid,
+                "attested device signing key is not did:key",
+            )
+        })?;
+    Ok(arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
+        value: multibase.to_owned(),
+    })
 }
 
 /// A: sign and persist fresh `producer_device_evidence` for this attempt.

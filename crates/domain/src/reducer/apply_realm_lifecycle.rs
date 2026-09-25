@@ -454,13 +454,6 @@ impl ProjectionState {
             _ => now,
         };
         let event_ref = Some(operation.context.event_id.to_string());
-        let remove_membership_frontier = matches!(new_state.as_str(), "leave" | "ban").then(|| {
-            vec![
-                event_ref
-                    .clone()
-                    .unwrap_or_else(|| operation.operation_id.as_str().to_owned()),
-            ]
-        });
 
         if new_state == "join" {
             let binding = payload
@@ -504,19 +497,11 @@ impl ProjectionState {
         );
         if matches!(new_state.as_str(), "leave" | "ban") {
             let updated_by = operation.context.sender.to_string();
-            self.enqueue_realm_mls_member_removal(
-                &realm_id,
-                &member,
-                new_state.as_str(),
-                remove_membership_frontier.clone().unwrap_or_default(),
-                now,
-            );
             self.cascade_realm_member_removal_to_circles(
                 &realm_id,
                 &member,
                 new_state.as_str(),
                 &updated_by,
-                remove_membership_frontier.unwrap_or_default(),
                 now,
             );
         }
@@ -545,61 +530,12 @@ impl ProjectionState {
         }
     }
 
-    /// Queue the cryptographic removal for every Realm-default MLS group.
-    ///
-    /// Realm membership and MLS membership are separate state machines.  The
-    /// accepted `ak.member.state` transition advances the governance frontier;
-    /// it must not silently leave the removed principal in the Realm-default
-    /// MLS group.  Circle obligations are queued separately by
-    /// `cascade_realm_member_removal_to_circles`.
-    fn enqueue_realm_mls_member_removal(
-        &mut self,
-        realm_id: &str,
-        member: &str,
-        trigger_membership: &str,
-        membership_frontier: Vec<String>,
-        now: chrono::DateTime<chrono::Utc>,
-    ) {
-        let group_refs = self
-            .mls_commit_epochs
-            .values()
-            .filter(|row| {
-                row.effective_scope.get("kind").and_then(Value::as_str) == Some("realm")
-                    && row.effective_scope.get("realm_id").and_then(Value::as_str) == Some(realm_id)
-            })
-            .map(|row| row.group_id.clone())
-            .collect::<Vec<_>>();
-        for group_ref in group_refs {
-            let duplicate = self.pending_mls_removals.iter().any(|obligation| {
-                obligation.realm_id == realm_id
-                    && obligation.circle_id.is_none()
-                    && obligation.mls_group_ref.as_deref() == Some(group_ref.as_str())
-                    && obligation.actor_id == member
-                    && obligation.membership_frontier == membership_frontier
-            });
-            if duplicate {
-                continue;
-            }
-            self.pending_mls_removals.push(MlsRemoveObligation {
-                realm_id: realm_id.to_owned(),
-                circle_id: None,
-                mls_group_ref: Some(group_ref),
-                actor_id: member.to_owned(),
-                device_id: None,
-                membership_frontier: membership_frontier.clone(),
-                trigger_membership: trigger_membership.to_owned(),
-                triggered_at: now,
-            });
-        }
-    }
-
     fn cascade_realm_member_removal_to_circles(
         &mut self,
         realm_id: &str,
         member: &str,
         trigger_membership: &str,
         updated_by: &str,
-        membership_frontier: Vec<String>,
         now: chrono::DateTime<chrono::Utc>,
     ) {
         let mut removed_circle_ids = Vec::new();
@@ -614,18 +550,6 @@ impl ProjectionState {
             removed_circle_ids.push(circle.circle_id.clone());
             circle.updated_by = Some(updated_by.to_owned());
             circle.updated_at = Some(now);
-            if circle.mls_group_ref.is_some() {
-                self.pending_mls_removals.push(MlsRemoveObligation {
-                    realm_id: realm_id.to_owned(),
-                    circle_id: Some(circle.circle_id.clone()),
-                    mls_group_ref: circle.mls_group_ref.clone(),
-                    actor_id: member.to_owned(),
-                    device_id: None,
-                    membership_frontier: membership_frontier.clone(),
-                    trigger_membership: trigger_membership.to_owned(),
-                    triggered_at: now,
-                });
-            }
         }
         for circle_id in removed_circle_ids {
             let previous = self

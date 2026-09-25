@@ -345,27 +345,31 @@ async fn signal_peer_roles_body() {
         .get_mut(&member_key)
         .unwrap()
         .state = "join".to_owned();
-    source.test_projection().lock().pending_mls_removals.push(
-        soland_domain::reducer::MlsRemoveObligation {
-            realm_id: demo_realm_id().to_owned(),
-            circle_id: None,
-            mls_group_ref: Some(scope.canonical_mls_group_id().unwrap()),
-            actor_id: sender.to_string(),
-            device_id: Some(DEVICE.to_owned()),
-            membership_frontier: Vec::new(),
-            trigger_membership: "leave".to_owned(),
-            triggered_at: Utc::now(),
+    let covered = source
+        .test_persistence()
+        .mls_groups()
+        .current(&scope)
+        .await
+        .unwrap()
+        .expect("the Signal scope has an accepted MLS group")
+        .value;
+    seed_mls_group_current(
+        &source,
+        arkret_wire::MlsGroupCurrent {
+            current_key_access_revision: covered.current_key_access_revision + 1,
+            ..covered.clone()
         },
-    );
+    )
+    .await;
     assert!(
         source
             .test_admit_outbound_signal(destination.service_id(), &envelope)
             .await
             .unwrap_err()
             .message
-            .contains("pending removal")
+            .contains("uncovered key-access revision")
     );
-    source.test_projection().lock().pending_mls_removals.clear();
+    seed_mls_group_current(&source, covered).await;
 
     // Dispatch revisits current device authority; an old ingress result cannot authorize a send.
     let mut device = source

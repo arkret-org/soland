@@ -1,9 +1,6 @@
 use arkret_wire::{MlsGroupId, RealmId};
 
-use super::{
-    AccountPk, DeviceRevocationGateSelector, PersistenceError, PersistenceResult, Uuid, Value,
-    async_trait,
-};
+use super::{AccountPk, DeviceRevocationGateSelector, PersistenceResult, Value, async_trait};
 /// G3.S1 — durable KeyPackage row.
 ///
 /// The Pg backend's `(actor_id, device_id, id)` composite key is what
@@ -541,22 +538,18 @@ pub enum PeerKeyPackageClaimLedgerWriteResult {
     Inserted,
     Existing(Box<PeerKeyPackageClaimLedgerRecord>),
 }
-/// G3.S1 — durable per-group commit epoch row. The protocol identity is
-/// the tagged `effective_scope` plus `mls_group_id`; the row's `epoch`
-/// is bumped monotonically by the CAS-protected `try_bump` path. `id`
-/// is the database row identity, not the protocol identity.
+/// The accepted public MLS group of one effective scope: the registered
+/// `mls_group` typed current (encryption-and-audit.md §2.5) with the covering
+/// Commit of its current revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MlsCommitEpochRecord {
-    pub id: Uuid,
-    pub group_id: String,
-    pub effective_scope: Value,
-    pub epoch: u64,
-    pub leader_actor_id: String,
-    pub creator_device_id: String,
-    pub genesis_event_ref: String,
-    pub governance_binding: Value,
-    pub accepted_commit_ref: Option<String>,
-    pub committed_at: i64,
+pub struct MlsGroupCurrentRecord {
+    pub realm_id: RealmId,
+    pub value: arkret_wire::MlsGroupCurrent,
+    pub current_commit_id: arkret_wire::RealmCommitId,
+    pub current_stream_position: u64,
+    /// Station-private public RFC 9420 tracker state at `value.epoch`, the
+    /// base the next transition is verified from. Never a wire value.
+    pub public_state: Vec<u8>,
 }
 /// G3.S1 — KeyPackage store. The `try_claim` CAS path is what
 /// guarantees at-most-one Welcome per published KeyPackage.
@@ -592,6 +585,12 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         source_id: &str,
         claim_request_id: &str,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// Resolve the ledger row whose stored success outcome issued the exact
+    /// `KeypackageClaimId` a Welcome names (`keypackage_claim_ref`).
+    async fn get_peer_claim_by_claim_id(
+        &self,
+        claim_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
     /// Resolve the unique durable ordinary single-use peer-claim fact that
     /// owns a KeyPackage. Reusable last-resort packages intentionally have
@@ -667,138 +666,24 @@ pub trait MlsKeyPackageStore: Send + Sync {
         mls_group_id: &str,
     ) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
 }
-/// G3.S1 — per-group MLS commit epoch store.
-pub struct MlsCommitEpochAdvance<'a> {
-    pub effective_scope: &'a Value,
-    pub group_id: &'a str,
-    pub leader_actor_id: &'a str,
-    pub governance_binding: &'a Value,
-    pub accepted_commit_ref: &'a str,
-    pub committed_at: i64,
-}
-
-pub struct MlsCommitGenesis<'a> {
-    pub effective_scope: &'a Value,
-    pub group_id: &'a str,
-    pub leader_actor_id: &'a str,
-    pub creator_device_id: &'a str,
-    pub genesis_event_ref: &'a str,
-    pub governance_binding: &'a Value,
-    pub committed_at: i64,
-}
-
+/// Durable reads of the `mls_group` typed current. Only the accepting
+/// transactions of `ak.mls.genesis`, `ak.mls.commit` and the membership
+/// changes that advance a key-access revision write it.
 #[async_trait]
-pub trait MlsCommitStore: Send + Sync {
-    async fn get(
+pub trait MlsGroupCurrentStore: Send + Sync {
+    /// The current group of `effective_scope`, if its Genesis is accepted.
+    async fn current(
         &self,
-        effective_scope: &Value,
-        group_id: &str,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
-    /// Initialize a group at epoch 0. Returns `Ok(None)` when the group
-    /// already has an epoch row.
-    async fn initialize_genesis(
+        effective_scope: &arkret_wire::ScopeRef,
+    ) -> PersistenceResult<Option<MlsGroupCurrentRecord>>;
+    /// Every current group of one Realm, Realm scope first.
+    async fn realm_currents(
         &self,
-        genesis: MlsCommitGenesis<'_>,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
-    /// Atomically advance the group's epoch IFF `expected_prev_epoch`
-    /// matches the existing row's current epoch.
-    /// Returns `Ok(Some(new_record))` on success, `Ok(None)` on a
-    /// missing genesis row or stale `expected_prev_epoch`.
-    async fn try_bump(
-        &self,
-        expected_prev_epoch: u64,
-        advance: MlsCommitEpochAdvance<'_>,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>>;
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[doc(hidden)]
-pub struct MlsCommitEpochStoreKey {
-    pub effective_scope_kind: String,
-    pub realm_id: String,
-    pub circle_id: Option<String>,
-    pub mls_group_id: String,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct MlsEffectiveScopeParts {
-    pub kind: String,
-    pub realm_id: String,
-    pub circle_id: Option<String>,
-}
-impl MlsEffectiveScopeParts {
-    fn store_key(&self, group_id: &str) -> MlsCommitEpochStoreKey {
-        MlsCommitEpochStoreKey {
-            effective_scope_kind: self.kind.clone(),
-            realm_id: self.realm_id.clone(),
-            circle_id: self.circle_id.clone(),
-            mls_group_id: group_id.to_owned(),
-        }
-    }
-}
-#[doc(hidden)]
-pub fn mls_epoch_key(
-    effective_scope: &Value,
-    group_id: &str,
-) -> PersistenceResult<MlsCommitEpochStoreKey> {
-    Ok(mls_effective_scope_parts(effective_scope)?.store_key(group_id))
-}
-#[doc(hidden)]
-pub fn mls_effective_scope_parts(
-    effective_scope: &Value,
-) -> PersistenceResult<MlsEffectiveScopeParts> {
-    let object = effective_scope.as_object().ok_or_else(|| {
-        PersistenceError::Internal("MLS effective_scope must be an object".to_owned())
-    })?;
-    let kind = object
-        .get("kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| PersistenceError::Internal("MLS effective_scope missing kind".to_owned()))?;
-    let realm_id = object
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            PersistenceError::Internal("MLS effective_scope missing realm_id".to_owned())
-        })?;
-    if realm_id.is_empty() {
-        return Err(PersistenceError::Internal(
-            "MLS effective_scope has empty realm_id".to_owned(),
-        ));
-    }
-    match kind {
-        "realm" => {
-            if object.len() != 2 || object.contains_key("circle_id") {
-                return Err(PersistenceError::Internal(
-                    "MLS realm effective_scope must only contain kind and realm_id".to_owned(),
-                ));
-            }
-            Ok(MlsEffectiveScopeParts {
-                kind: kind.to_owned(),
-                realm_id: realm_id.to_owned(),
-                circle_id: None,
-            })
-        }
-        "circle" => {
-            let circle_id = object
-                .get("circle_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    PersistenceError::Internal("MLS effective_scope missing circle_id".to_owned())
-                })?;
-            if circle_id.is_empty() || object.len() != 3 {
-                return Err(PersistenceError::Internal(
-                    "MLS circle effective_scope must only contain kind, realm_id, and circle_id"
-                        .to_owned(),
-                ));
-            }
-            Ok(MlsEffectiveScopeParts {
-                kind: kind.to_owned(),
-                realm_id: realm_id.to_owned(),
-                circle_id: Some(circle_id.to_owned()),
-            })
-        }
-        _ => Err(PersistenceError::Internal(
-            "MLS effective_scope has invalid kind".to_owned(),
-        )),
-    }
+        realm_id: &RealmId,
+    ) -> PersistenceResult<Vec<MlsGroupCurrentRecord>>;
+    /// Install one current group row directly, for fixtures that exercise
+    /// its readers without an accepted MLS Event.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    async fn seed_test_current(&self, record: &MlsGroupCurrentRecord) -> PersistenceResult<()>;
 }

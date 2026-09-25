@@ -27,7 +27,7 @@ use soland_services::authorization::{
 };
 use soland_services::delivery::{DeliveryService, ObjectStoragePort};
 use soland_services::events::{
-    EventQueryService, EventService, MlsCommitQueryService, MlsKeyPackageService,
+    EventQueryService, EventService, MlsGroupQueryService, MlsKeyPackageService,
     RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryService, RealmInviteService,
     RealmQueryService,
 };
@@ -108,7 +108,7 @@ pub struct AppState {
     authority_commits: AuthorityCommitApplication,
     events: EventService,
     event_queries: EventQueryService,
-    mls_commits: MlsCommitQueryService,
+    mls_groups: MlsGroupQueryService,
     mls_key_packages: MlsKeyPackageService,
     realms: RealmQueryService,
     realm_invites: RealmInviteService,
@@ -1085,7 +1085,7 @@ impl AppState {
         let PersistenceEventServices {
             events,
             queries: event_queries,
-            mls_commits,
+            mls_groups,
             mls_key_packages,
             realm_queries: realms,
             realm_invites,
@@ -1146,7 +1146,7 @@ impl AppState {
             authority_commits,
             events,
             event_queries,
-            mls_commits,
+            mls_groups,
             mls_key_packages,
             realms,
             realm_invites,
@@ -1233,8 +1233,8 @@ impl AppState {
         &self.event_queries
     }
 
-    pub(crate) fn mls_commits(&self) -> &MlsCommitQueryService {
-        &self.mls_commits
+    pub(crate) fn mls_groups(&self) -> &MlsGroupQueryService {
+        &self.mls_groups
     }
 
     pub(crate) fn mls_key_packages(&self) -> &MlsKeyPackageService {

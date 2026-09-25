@@ -191,11 +191,17 @@ async fn validate_accepted_group_state(
             ))
         })?;
     let epoch_row = state
-        .mls_commits()
-        .commit(&effective_scope, &coordinates.group_id)
+        .mls_groups()
+        .current(&effective_scope)
         .await
-        .map_err(|error| author_credential_invalid(format!("mls commit store: {error}")))?
-        .ok_or_else(|| author_credential_invalid("group has no accepted epoch row"))?;
+        .map_err(|error| author_credential_invalid(format!("mls group store: {error}")))?
+        .filter(|_| {
+            effective_scope
+                .canonical_mls_group_id()
+                .is_ok_and(|group_id| group_id.as_str() == coordinates.group_id)
+        })
+        .ok_or_else(|| author_credential_invalid("group has no accepted epoch row"))?
+        .value;
     if epoch_row.epoch < coordinates.epoch {
         return Err(author_credential_invalid(format!(
             "envelope epoch {} is ahead of the accepted frontier {}",
@@ -207,10 +213,9 @@ async fn validate_accepted_group_state(
 }
 
 /// The server's maximum-authority active-leaf view for the group: claimed
-/// KeyPackages (validated wire KeyPackages → leaf credential + signature key)
-/// minus actors targeted by a remove proposal initiated before the envelope
-/// epoch. Undecodable KeyPackages are skipped — a leaf the server cannot
-/// validate can never authenticate an author (fail closed).
+/// KeyPackages (validated wire KeyPackages → leaf credential + signature key).
+/// Undecodable KeyPackages are skipped — a leaf the server cannot validate can
+/// never authenticate an author (fail closed).
 async fn active_author_leaves(
     state: &AppState,
     coordinates: &MinimalMetadataAuthorCoordinates,
@@ -220,19 +225,8 @@ async fn active_author_leaves(
         .key_packages_claimed_by_group(&coordinates.group_id)
         .await
         .map_err(|error| author_credential_invalid(format!("keypackage store: {error}")))?;
-    let removed_actors: std::collections::BTreeSet<String> = state
-        .projections()
-        .snapshot()
-        .mls_remove_proposals
-        .values()
-        .filter(|proposal| {
-            proposal.group_id == coordinates.group_id && proposal.base_epoch < coordinates.epoch
-        })
-        .map(|proposal| proposal.target_actor_id.clone())
-        .collect();
     Ok(rows
         .iter()
-        .filter(|row| !removed_actors.contains(&row.actor_id))
         .enumerate()
         .filter_map(|(index, row)| {
             arkret_mls::author_leaf_from_key_package_bytes(&row.key_package_bytes, index as u32)
@@ -275,18 +269,22 @@ pub(in crate::routing::events::event_log) async fn validate_pairwise_session_hol
     let proof_public_key = arkret_canonical::decode_ed25519_multibase(fragment)
         .map_err(|error| format!("pairwise holder key decode failed: {error}"))?;
     let current = state
-        .mls_commits()
-        .commit(effective_scope, group_id)
+        .mls_groups()
+        .current(effective_scope)
         .await
         .map_err(|error| format!("pairwise holder MLS state lookup failed: {error}"))?
-        .ok_or_else(|| "pairwise holder MLS state is unavailable".to_owned())?;
+        .filter(|current| {
+            effective_scope
+                .canonical_mls_group_id()
+                .is_ok_and(|derived| derived.as_str() == group_id)
+        })
+        .ok_or_else(|| "pairwise holder MLS state is unavailable".to_owned())?
+        .value;
 
     let coordinates = MinimalMetadataAuthorCoordinates {
         group_id: group_id.to_owned(),
         epoch: current.epoch,
-        group_state_ref: current
-            .accepted_commit_ref
-            .unwrap_or(current.genesis_event_ref),
+        group_state_ref: current.current_mls_commit_event_ref.to_string(),
     };
     let view = AuthorGroupStateView {
         group_id: arkret_wire::MlsGroupId::new(group_id.to_owned())

@@ -41,6 +41,9 @@ pub(super) struct SelfEventUnitEffects {
     /// The report's embedded franking proof nonce; its `consumed_at` is set to
     /// the accepting Commit time inside the unit.
     pub(super) franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
+    /// The verified public MLS transition and Welcomes of an `ak.mls.genesis`
+    /// or `ak.mls.commit` (`authority_mls_unit`).
+    pub(super) mls: Option<super::authority_mls_unit::MlsUnitInstallation>,
 }
 
 /// Kinds whose authorization and domain pre-state are decided only at the
@@ -60,6 +63,8 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::CapabilityRelinquish
             | arkret_wire::EventKind::MessageRevise
             | arkret_wire::EventKind::MessageRedact
+            | arkret_wire::EventKind::MlsGenesis
+            | arkret_wire::EventKind::MlsCommit
     )
 }
 
@@ -165,16 +170,47 @@ pub(super) async fn commit_event_unit(
         ),
     )
     .map_err(|error| ServiceError::Internal(error.to_string()))?;
-    let transaction = state
-        .authority_commits()
-        .prepare_self_event_transaction(
-            event,
-            &state.service_core_id(),
-            method,
-            state.notary_signing_key().as_ref(),
-            committed_at,
-        )
-        .await?;
+    let SelfEventUnitEffects {
+        franking_replay_nonce,
+        mls,
+    } = effects;
+    let is_mls = matches!(
+        event.kind,
+        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+    );
+    let transaction = match mls {
+        Some(mls) if is_mls => {
+            state
+                .authority_commits()
+                .prepare_self_mls_transaction(
+                    event,
+                    mls.state,
+                    mls.welcomes,
+                    &state.service_core_id(),
+                    method,
+                    state.notary_signing_key().as_ref(),
+                    committed_at,
+                )
+                .await?
+        }
+        None if !is_mls => {
+            state
+                .authority_commits()
+                .prepare_self_event_transaction(
+                    event,
+                    &state.service_core_id(),
+                    method,
+                    state.notary_signing_key().as_ref(),
+                    committed_at,
+                )
+                .await?
+        }
+        _ => {
+            return Err(ServiceError::Internal(
+                "an MLS Event commits only through the MLS unit".to_owned(),
+            ));
+        }
+    };
     let canonical_bytes = arkret_canonical::canonical_json_bytes(
         &event
             .digest_payload()
@@ -226,7 +262,7 @@ pub(super) async fn commit_event_unit(
         deliveries: Vec::new(),
         realm_fanout_source: Some(submission.clone()),
     };
-    let committed = match effects.franking_replay_nonce {
+    let committed = match franking_replay_nonce {
         Some(mut nonce) => {
             nonce.consumed_at = committed_at;
             state
@@ -349,6 +385,7 @@ pub(crate) async fn submit_self_moderation_report(
         AdmittedProducer::Local(producer_guard),
         SelfEventUnitEffects {
             franking_replay_nonce,
+            mls: None,
         },
     )
     .await

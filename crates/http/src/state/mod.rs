@@ -12,6 +12,7 @@ mod authority_bootstrap_validation;
 mod authority_direct_conversation;
 mod authority_forward;
 mod authority_key_backup_pointer;
+mod authority_mls_unit;
 mod authority_port;
 mod authority_producer_validation;
 mod authority_self_event_unit;

@@ -234,6 +234,11 @@ pub enum ConflictCode {
     SnapshotCapacityExceeded,
     /// A plaintext application body targets a scope with accepted MLS genesis.
     MlsActivationRequired,
+    /// A second `ak.mls.genesis` targets a scope whose Genesis is accepted.
+    MlsActivationIrreversible,
+    /// An MLS transition's governance binding differs from the scope's
+    /// current group, its Event payload or its GroupContext extension.
+    GovernanceBindingMismatch,
     /// A `restricted` / `knock_restricted` join rule has no automatic gate in
     /// the Realm's join policy (`join-policy.md` §2).
     JoinRulePolicyMismatch,
@@ -322,7 +327,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 60] = [
+    pub const ALL: [Self; 62] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
@@ -344,6 +349,8 @@ impl ConflictCode {
         Self::GateCheckFailed,
         Self::SnapshotCapacityExceeded,
         Self::MlsActivationRequired,
+        Self::MlsActivationIrreversible,
+        Self::GovernanceBindingMismatch,
         Self::JoinRulePolicyMismatch,
         Self::MembershipCompensationConflict,
         Self::MimiRoomBindingMigrationProofInvalid,
@@ -411,6 +418,8 @@ impl ConflictCode {
             Self::GateCheckFailed => arkret_wire::ReasonCode::GATE_CHECK_FAILED,
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
+            Self::MlsActivationIrreversible => arkret_wire::ReasonCode::MLS_ACTIVATION_IRREVERSIBLE,
+            Self::GovernanceBindingMismatch => arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH,
             Self::JoinRulePolicyMismatch => arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH,
             Self::MembershipCompensationConflict => "membership_compensation_conflict",
             Self::MimiRoomBindingMigrationProofInvalid => {
@@ -596,7 +605,7 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
 pub trait MlsAgentStoreRegistry: Send + Sync {
     // G3.S1: MLS lifecycle stores.
     fn mls_key_packages(&self) -> &dyn MlsKeyPackageStore;
-    fn mls_commits(&self) -> &dyn MlsCommitStore;
+    fn mls_groups(&self) -> &dyn MlsGroupCurrentStore;
     // AKP-0010 — agent participation policy.
     fn agent_participation(&self) -> &dyn AgentParticipationStore;
     // AKP-0008 — Agent principals.

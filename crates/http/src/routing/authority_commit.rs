@@ -206,6 +206,8 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::DirectConversationSpaceForbidden
                 | soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired
+                | soland_storage::ConflictCode::MlsActivationIrreversible
+                | soland_storage::ConflictCode::GovernanceBindingMismatch
                 | soland_storage::ConflictCode::JoinRulePolicyMismatch
                 | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid
                 | soland_storage::ConflictCode::InviteDirectedInviteeMismatch
@@ -612,6 +614,18 @@ mod tests {
                 StatusCode::CONFLICT,
                 "failed_precondition",
                 Some("mls_activation_required"),
+            ),
+            (
+                ConflictCode::MlsActivationIrreversible,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("mls_activation_irreversible"),
+            ),
+            (
+                ConflictCode::GovernanceBindingMismatch,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("governance_binding_mismatch"),
             ),
             (
                 ConflictCode::TemporarilyUnavailable,

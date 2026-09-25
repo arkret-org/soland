@@ -143,9 +143,6 @@ pub struct ProjectionState {
     pub sidecar_create_refs: BTreeMap<String, String>,
     /// Current accepted join ref for each active Circle member.
     pub circle_member_join_refs: BTreeMap<(String, String), String>,
-    /// Every accepted MLS Commit ref, used to bind Welcome evidence to an
-    /// actually accepted epoch transition.
-    pub accepted_mls_commit_refs: BTreeSet<String>,
     /// Side-band membership boundaries for Circle history filtering. Keyed by
     /// `(circle_id, actor_id)` and retained across leave/ban transitions so
     /// read-side helpers can enforce invited/joined floors deterministically.
@@ -205,24 +202,6 @@ pub struct ProjectionState {
     /// row is per `(actor_id, device_id)`; the `claimed_by` / claim-window
     /// slots flip on a successful CAS claim.
     pub mls_key_packages: BTreeMap<String, MlsKeyPackageProjection>,
-    /// G3.S1 — Remove proposals keyed by their canonical `ak.mls.proposal`
-    /// event id. Commit validation uses this to ensure pending remove
-    /// obligations are consumed by an explicit MLS Remove proposal reference.
-    pub mls_remove_proposals: BTreeMap<String, MlsRemoveProposal>,
-    /// G3.S1 — per-scope MLS commit-epoch state. Keyed by tagged
-    /// effective scope plus `mls_group_id` per the genesis uniqueness
-    /// rule. The reducer keeps the monotonic epoch counter in lockstep
-    /// with `apply_commit_epoch` CAS rules: each accepted commit bumps
-    /// the value by exactly +1 from the previous epoch. The same row
-    /// accumulates the governance Seal frontier covered by accepted MLS
-    /// commits so E2EE message paths can gate plaintext fallback against
-    /// stale epochs.
-    pub mls_commit_epochs: BTreeMap<MlsCommitEpochKey, MlsCommitEpoch>,
-    /// Reducer-derived MLS remove obligations. A parent Realm
-    /// `ak.member.state -> leave/ban` removes the actor from every Circle in
-    /// that Realm. For MLS-backed Circle scopes, the same transition queues an
-    /// obligation for the MLS path to issue a remove proposal/commit.
-    pub pending_mls_removals: Vec<MlsRemoveObligation>,
 }
 
 impl ProjectionState {

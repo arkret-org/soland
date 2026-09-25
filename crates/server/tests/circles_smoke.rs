@@ -443,16 +443,6 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
             "parent Realm {target_membership} must remove Bob from Circle {circle_id}"
         );
     }
-    assert_eq!(
-        state.pending_mls_removals.len(),
-        1,
-        "only the MLS-backed Circle should queue an MLS remove obligation"
-    );
-    let obligation = &state.pending_mls_removals[0];
-    assert_eq!(obligation.realm_id, REALM_A);
-    assert_eq!(obligation.circle_id.as_deref(), Some(CIRCLE_A));
-    assert_eq!(obligation.actor_id, member_key(BOB));
-    assert_eq!(obligation.trigger_membership, target_membership);
 }
 
 #[test]

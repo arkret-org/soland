@@ -541,8 +541,8 @@ impl soland_storage::MlsAgentStoreRegistry for FaultInjectingStore {
     fn mls_key_packages(&self) -> &dyn soland_storage::MlsKeyPackageStore {
         self.inner.mls_key_packages()
     }
-    fn mls_commits(&self) -> &dyn soland_storage::MlsCommitStore {
-        self.inner.mls_commits()
+    fn mls_groups(&self) -> &dyn soland_storage::MlsGroupCurrentStore {
+        self.inner.mls_groups()
     }
     fn agent_participation(&self) -> &dyn soland_storage::AgentParticipationStore {
         self.inner.agent_participation()

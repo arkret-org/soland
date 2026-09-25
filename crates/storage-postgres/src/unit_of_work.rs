@@ -2347,6 +2347,15 @@ async fn commit_one_in_connection(
         )
         .await?;
         commit_parent_membership_current_results(conn, event, commit).await?;
+        crate::mls_group_current_results::advance_key_access_revision_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::mls_group_current_results::commit_mls_group_current_result_in_connection(
+            conn,
+            &request.authority_commit,
+        )
+        .await?;
         crate::strand_current_results::commit_strand_create_current_result_in_connection(
             conn, event, commit,
         )

@@ -32,6 +32,8 @@ enum SelfEventRoute {
     KeyBackupPointer,
     /// `ak.identity.accountability_grant`: the issuer-PCR accountability unit.
     AccountabilityGrant,
+    /// `ak.mls.genesis` and `ak.mls.commit`: the MLS public-transition unit.
+    Mls,
     /// Realm-scope kinds with a guarded current-result authority cut.
     GuardedUnit,
 }
@@ -48,6 +50,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
     match kind {
         EventKind::KeyBackupActiveSeries => Ok(SelfEventRoute::KeyBackupPointer),
         EventKind::IdentityAccountabilityGrant => Ok(SelfEventRoute::AccountabilityGrant),
+        EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::StrandCreate
         | EventKind::RealmSetDefaultStrand
         | EventKind::MessageCreate
@@ -303,9 +306,11 @@ impl AuthorityProtocolPort for AppState {
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.event;
         refuse_actor_private_event(&event.kind)?;
-        let producer_guard =
-            super::authority_producer_validation::verify_self_event_producer(self, session, event)
-                .await?;
+        let (producer_guard, producer_key) =
+            super::authority_producer_validation::verify_self_event_producer_key(
+                self, session, event,
+            )
+            .await?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
             return super::authority_forward::forward_self_event(self, &governance, request).await;
         }
@@ -313,6 +318,21 @@ impl AuthorityProtocolPort for AppState {
             return Ok(outcome);
         }
         match self_event_route(&event.kind)? {
+            SelfEventRoute::Mls => {
+                if request.approval_signatures.is_some() {
+                    return Err(ServiceError::SchemaViolation(
+                        "an MLS Event carries no approval signatures".to_owned(),
+                    ));
+                }
+                return super::authority_mls_unit::admit_mls_event(
+                    self,
+                    event,
+                    &[],
+                    super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
+                    &producer_key,
+                )
+                .await;
+            }
             SelfEventRoute::KeyBackupPointer => {
                 return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
                     self, &request,
@@ -346,14 +366,22 @@ impl AuthorityProtocolPort for AppState {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.commit_event;
-        super::authority_producer_validation::verify_self_event_producer(self, session, event)
+        let (producer_guard, producer_key) =
+            super::authority_producer_validation::verify_self_event_producer_key(
+                self, session, event,
+            )
             .await?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
             return super::authority_forward::forward_self_mls(self, &governance, request).await;
         }
-        Err(ServiceError::Internal(
-            "self MLS authority cut and atomic group installation are unavailable".to_owned(),
-        ))
+        super::authority_mls_unit::admit_mls_event(
+            self,
+            event,
+            &request.welcomes,
+            super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
+            &producer_key,
+        )
+        .await
     }
 
     async fn submit_peer_authority_forward_event(
@@ -463,6 +491,9 @@ mod tests {
             self_event_route(&EventKind::IdentityAccountabilityGrant).unwrap(),
             SelfEventRoute::AccountabilityGrant
         );
+        for kind in [EventKind::MlsGenesis, EventKind::MlsCommit] {
+            assert_eq!(self_event_route(&kind).unwrap(), SelfEventRoute::Mls);
+        }
         for kind in [
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
@@ -492,6 +523,8 @@ mod tests {
         let routed = [
             EventKind::KeyBackupActiveSeries,
             EventKind::IdentityAccountabilityGrant,
+            EventKind::MlsGenesis,
+            EventKind::MlsCommit,
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,

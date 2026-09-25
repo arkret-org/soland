@@ -167,20 +167,6 @@ fn decode_mimi_room_binding_current(
     })
 }
 
-#[derive(QueryableByName)]
-struct MimiMlsCurrentRow {
-    #[diesel(sql_type = Text)]
-    group_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-    #[diesel(sql_type = Jsonb)]
-    effective_scope: Value,
-    #[diesel(sql_type = Jsonb)]
-    commit_json: Value,
-    #[diesel(sql_type = Jsonb)]
-    envelope: Value,
-}
-
 fn invalid_mimi_migration() -> PersistenceError {
     PersistenceError::Conflict(
         soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid.to_string(),
@@ -304,41 +290,10 @@ async fn verify_mimi_migration_in_connection(
     if !mimi_migration_topology_matches(value, expected_topology) {
         return Err(invalid_mimi_migration());
     }
-    if let Some(group_id) = payload.mls_group_id.as_ref() {
-        let group_row = sql_query(
-            "SELECT s.group_id,s.realm_id,s.effective_scope,c.commit_json,e.envelope \
-             FROM mls_group_states s JOIN canonical_events e ON e.pk=s.commit_event_pk \
-             JOIN realm_commits c ON c.event_pk=e.pk WHERE s.group_id=$1 FOR UPDATE",
-        )
-        .bind::<Text, _>(group_id.as_str())
-        .get_result::<MimiMlsCurrentRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?
-        .ok_or_else(invalid_mimi_migration)?;
-        let scope: arkret_wire::ScopeRef = decode_json(
-            group_row.effective_scope,
-            "MIMI current MLS effective scope",
-        )?;
-        let group_commit: arkret_wire::RealmCommit =
-            decode_json(group_row.commit_json, "MIMI current MLS RealmCommit")?;
-        let group_event: arkret_wire::Event =
-            decode_json(group_row.envelope, "MIMI current MLS Event")?;
-        let derived = scope
-            .canonical_mls_group_id()
-            .map_err(|_| invalid_mimi_migration())?;
-        if group_row.group_id != group_id.as_str()
-            || group_row.realm_id != payload.binding_scope.realm_id.as_str()
-            || derived != *group_id
-            || group_commit.realm_id != payload.binding_scope.realm_id
-            || group_commit.event_ref != group_event.event_id
-            || group_event.realm_id != payload.binding_scope.realm_id
-        {
-            return Err(invalid_mimi_migration());
-        }
-        // The installed MLS state does not carry an authenticated MIMI
-        // GroupInfo. Until admission can pin that evidence to this transaction,
-        // an encrypted-room migration cannot be finalized.
+    if payload.mls_group_id.is_some() {
+        // The accepted `mls_group` current carries no authenticated MIMI
+        // GroupInfo. Until admission can pin that evidence to this
+        // transaction, an encrypted-room migration cannot be finalized.
         return Err(invalid_mimi_migration());
     }
     Ok(())
@@ -464,18 +419,6 @@ struct HandoffRow {
 struct CommitStreamRow {
     #[diesel(sql_type = Jsonb)]
     commit_json: Value,
-    #[diesel(sql_type = Jsonb)]
-    envelope: Value,
-}
-
-#[derive(QueryableByName)]
-struct PriorMlsStateRow {
-    #[diesel(sql_type = BigInt)]
-    epoch: i64,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-    #[diesel(sql_type = Jsonb)]
-    effective_scope: Value,
     #[diesel(sql_type = Jsonb)]
     envelope: Value,
 }
@@ -743,6 +686,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM message_revision_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'mls_group'::text AS selector_kind, value->'effective_scope' AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM mls_group_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'moderation_report'::text AS selector_kind, to_jsonb(report_event_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM moderation_report_current_results WHERE realm_id = $1 \
@@ -832,6 +779,13 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         })?,
                     }
                 }
+                ("mls_group", Some(scope_ref)) => arkret_wire::CurrentSelector::MlsGroup {
+                    scope_ref: serde_json::from_value(scope_ref).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored mls_group scope is invalid: {error}"
+                        ))
+                    })?,
+                },
                 ("moderation_report", Some(event_id)) => {
                     arkret_wire::CurrentSelector::ModerationReport {
                         event_id: serde_json::from_value(event_id).map_err(|error| {
@@ -1406,75 +1360,6 @@ async fn commit_transaction_in_connection_with_device_guard(
     .bind::<Timestamptz, _>(transaction.commit.committed_at)
     .execute(&mut *conn)
     .await?;
-    if let Some(mls_state) = &transaction.mls_state {
-        let payload: arkret_models_crypto::MlsCommitPayload = serde_json::from_value(
-            serde_json::to_value(&transaction.event.payload).map_err(PersistenceError::database)?,
-        )
-        .map_err(invalid)?;
-        let previous = sql_query(
-            "SELECT s.epoch,s.realm_id,s.effective_scope,e.envelope \
-             FROM mls_group_states s JOIN canonical_events e ON e.pk=s.commit_event_pk \
-             WHERE s.group_id=$1 FOR UPDATE OF s",
-        )
-        .bind::<Text, _>(&mls_state.group_id)
-        .get_result::<PriorMlsStateRow>(&mut *conn)
-        .await
-        .optional()?;
-        let epoch = to_i64(mls_state.epoch, "MLS epoch")?;
-        let valid_successor = previous.as_ref().map_or(mls_state.epoch == 1, |row| {
-            row.epoch.checked_add(1) == Some(epoch)
-        });
-        if !valid_successor {
-            return Err(PersistenceError::Conflict(
-                "MLS staged Commit does not advance the installed epoch exactly".into(),
-            )
-            .into());
-        }
-        if let Some(prior) = previous {
-            let prior_event: arkret_wire::Event =
-                decode_json(prior.envelope, "previous installed MLS Commit Event")?;
-            let prior_scope: arkret_wire::ScopeRef =
-                decode_json(prior.effective_scope, "previous installed MLS scope")?;
-            if prior.realm_id != transaction.event.realm_id.as_str()
-                || prior_scope != mls_state.effective_scope
-                || prior_event.event_id != *payload.base_group_state_ref()
-                || prior_event.kind != arkret_wire::EventKind::MlsCommit
-            {
-                return Err(PersistenceError::Conflict(
-                    "MLS Commit base does not match the installed authority state".into(),
-                )
-                .into());
-            }
-        }
-        sql_query(
-            "INSERT INTO mls_group_states \
-             (group_id, realm_id, effective_scope, epoch, state_bytes, commit_event_pk, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (group_id) DO UPDATE SET \
-               realm_id = EXCLUDED.realm_id, effective_scope = EXCLUDED.effective_scope, \
-               epoch = EXCLUDED.epoch, state_bytes = EXCLUDED.state_bytes, \
-               commit_event_pk = EXCLUDED.commit_event_pk, updated_at = EXCLUDED.updated_at",
-        )
-        .bind::<Text, _>(&mls_state.group_id)
-        .bind::<Text, _>(transaction.event.realm_id.as_str())
-        .bind::<Jsonb, _>(serde_json::to_value(&mls_state.effective_scope).map_err(PersistenceError::database)?)
-        .bind::<BigInt, _>(epoch)
-        .bind::<Binary, _>(&mls_state.state_bytes)
-        .bind::<BigInt, _>(event_row.event_pk)
-        .bind::<Timestamptz, _>(transaction.commit.committed_at)
-        .execute(&mut *conn)
-        .await?;
-    }
-    for welcome in &transaction.welcomes {
-        crate::devices::enqueue_mls_welcome_in_connection(
-            conn,
-            welcome,
-            event_row.event_pk,
-            transaction.commit.committed_at,
-            transaction.recipient_queue_capacity,
-        )
-        .await?;
-    }
     Ok(AuthorityCommitWriteOutcome::Committed)
 }
 

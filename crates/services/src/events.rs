@@ -926,91 +926,60 @@ impl EventQueryService {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct MlsCommitState {
-    pub group_id: String,
-    pub effective_scope: ScopeRef,
-    pub epoch: u64,
-    pub creator_device_id: String,
-    pub genesis_event_ref: String,
-    pub governance_binding: MlsGovernanceBindingPayload,
-    pub accepted_commit_ref: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct InitializeMlsGroupCommand {
-    pub effective_scope: ScopeRef,
-    pub group_id: String,
-    pub leader_actor_id: String,
-    pub creator_device_id: String,
-    pub genesis_event_ref: String,
-    pub governance_binding: MlsGovernanceBindingPayload,
-    pub committed_at: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct AdvanceMlsEpochCommand {
-    pub expected_previous_epoch: u64,
-    pub effective_scope: ScopeRef,
-    pub group_id: String,
-    pub leader_actor_id: String,
-    pub governance_binding: MlsGovernanceBindingPayload,
-    pub accepted_commit_ref: String,
-    pub committed_at: i64,
-}
-
+/// Read port of the `mls_group` typed current (encryption-and-audit.md
+/// §2.5). Only the accepting transactions of MLS Events and of membership
+/// changes write it.
 #[async_trait::async_trait]
-pub trait MlsCommitReadPort: Send + Sync {
-    async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>>;
-    async fn commit(
+pub trait MlsGroupReadPort: Send + Sync {
+    async fn current(
         &self,
         effective_scope: &ScopeRef,
-        group_id: &str,
-    ) -> ServiceResult<Option<MlsCommitState>>;
-    async fn initialize_group(
+    ) -> ServiceResult<Option<soland_storage::MlsGroupCurrentRecord>>;
+    async fn realm_currents(
         &self,
-        command: InitializeMlsGroupCommand,
-    ) -> ServiceResult<Option<MlsCommitState>>;
-    async fn advance_epoch(
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<Vec<soland_storage::MlsGroupCurrentRecord>>;
+    #[cfg(any(test, feature = "test-support"))]
+    async fn seed_test_current(
         &self,
-        command: AdvanceMlsEpochCommand,
-    ) -> ServiceResult<Option<MlsCommitState>>;
+        record: &soland_storage::MlsGroupCurrentRecord,
+    ) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct MlsCommitQueryService {
-    commits: Arc<dyn MlsCommitReadPort>,
+pub struct MlsGroupQueryService {
+    groups: Arc<dyn MlsGroupReadPort>,
 }
 
-impl MlsCommitQueryService {
-    pub fn new(commits: Arc<dyn MlsCommitReadPort>) -> Self {
-        Self { commits }
+impl MlsGroupQueryService {
+    pub fn new(groups: Arc<dyn MlsGroupReadPort>) -> Self {
+        Self { groups }
     }
 
-    pub async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>> {
-        self.commits.commits().await
-    }
-
-    pub async fn commit(
+    /// The accepted current group of `effective_scope`, if its Genesis is
+    /// accepted.
+    pub async fn current(
         &self,
         effective_scope: &ScopeRef,
-        group_id: &str,
-    ) -> ServiceResult<Option<MlsCommitState>> {
-        self.commits.commit(effective_scope, group_id).await
+    ) -> ServiceResult<Option<soland_storage::MlsGroupCurrentRecord>> {
+        self.groups.current(effective_scope).await
     }
 
-    pub async fn initialize_group(
+    /// Every accepted current group of one Realm, Realm scope first.
+    pub async fn realm_currents(
         &self,
-        command: InitializeMlsGroupCommand,
-    ) -> ServiceResult<Option<MlsCommitState>> {
-        self.commits.initialize_group(command).await
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<Vec<soland_storage::MlsGroupCurrentRecord>> {
+        self.groups.realm_currents(realm_id).await
     }
 
-    pub async fn advance_epoch(
+    /// Install one current group row for a reader fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn seed_test_current(
         &self,
-        command: AdvanceMlsEpochCommand,
-    ) -> ServiceResult<Option<MlsCommitState>> {
-        self.commits.advance_epoch(command).await
+        record: &soland_storage::MlsGroupCurrentRecord,
+    ) -> ServiceResult<()> {
+        self.groups.seed_test_current(record).await
     }
 }
 
@@ -1086,6 +1055,10 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         &self,
         source_id: &str,
         claim_request_id: &str,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn peer_claim_by_claim_id(
+        &self,
+        claim_id: &str,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn peer_claim_by_keypackage_id(
         &self,
@@ -1198,6 +1171,14 @@ impl MlsKeyPackageService {
         self.key_packages
             .peer_claim(source_id, claim_request_id)
             .await
+    }
+    /// The ledger row that issued the exact `KeypackageClaimId` a Welcome
+    /// names.
+    pub async fn peer_claim_by_claim_id(
+        &self,
+        claim_id: &str,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages.peer_claim_by_claim_id(claim_id).await
     }
     pub async fn peer_claim_by_keypackage_id(
         &self,

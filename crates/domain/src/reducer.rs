@@ -73,9 +73,8 @@ pub(crate) use projections::space_container_id_from_payload;
 pub use projections::{
     AppletProjection, CircleLifecycleState, CircleMembershipState, CircleProjection,
     DocumentVersionProjection, InviteProjection, KeyPackageLifetimeProjection, MessageState,
-    MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection, MlsRemoveObligation,
-    MlsRemoveProposal, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
-    PollState, ProjectedMessageView, ReactionState, RealmLinkState,
+    MlsKeyPackageProjection, MorphProjection, ObjectLifecycleState, PendingReplayEntry,
+    PinProjection, PollState, ProjectedMessageView, ReactionState, RealmLinkState,
     RealmOrganizationStatementState, RedactionCellValue, RelationCurrentResultProjection,
     RsvpProjection, SidecarContextProjection, SidecarProjection, SolandMembershipState,
     SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,

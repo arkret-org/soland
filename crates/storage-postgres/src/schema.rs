@@ -426,28 +426,17 @@ diesel::table! {
 }
 
 diesel::table! {
-    mls_group_states (group_id) {
-        group_id -> Text,
-        realm_id -> Text,
-        effective_scope -> Jsonb,
-        epoch -> Int8,
-        state_bytes -> Bytea,
-        commit_event_pk -> Int8,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     mls_welcome_deliveries (welcome_id) {
         welcome_id -> Text,
         realm_id -> Text,
         commit_event_pk -> Int8,
-        recipient_actor_id -> Text,
+        recipient -> Text,
         recipient_endpoint_kind -> Text,
         recipient_device_id -> Nullable<Text>,
         recipient_verification_method -> Nullable<Text>,
         recipient_authorization_event_ref -> Text,
         recipient_device_authorization -> Nullable<Jsonb>,
+        keypackage_claim_ref -> Text,
         position -> Int8,
         delivery_json -> Jsonb,
         state -> Text,
@@ -927,24 +916,6 @@ diesel::table! {
         content -> Jsonb,
         encrypted -> Bool,
         created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    mls_commits (id) {
-        id -> Uuid,
-        effective_scope_kind -> Text,
-        realm_id -> Text,
-        circle_id -> Nullable<Text>,
-        effective_scope -> Jsonb,
-        mls_group_id -> Text,
-        epoch -> Int8,
-        leader_actor_id -> Text,
-        creator_device_id -> Text,
-        genesis_event_ref -> Text,
-        governance_binding -> Jsonb,
-        accepted_commit_ref -> Nullable<Text>,
-        committed_at -> Int8,
     }
 }
 
@@ -1976,7 +1947,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     realm_commits,
     realm_authority_handoffs,
     realm_state_snapshots,
-    mls_group_states,
     mls_welcome_deliveries,
     consent_grants,
     mimi_consent_correlations,
@@ -2011,7 +1981,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     member_identity_events,
     member_identity_handle_claims,
     messages,
-    mls_commits,
     mls_key_packages,
     notifications,
     one_time_keys,

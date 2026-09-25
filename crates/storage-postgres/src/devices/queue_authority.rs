@@ -95,13 +95,18 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
     let (endpoint_kind, device_id, verification_method, authorization_event_ref, device_gate) =
         match &welcome.recipient_endpoint {
             MlsWelcomeRecipientEndpoint::Device { device_id } => {
+                let account = welcome.recipient_actor_id.as_account_id().ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "a device Welcome recipient is an Account actor".into(),
+                    )
+                })?;
                 let Some(binding) = crate::device_revocations::local_device_binding_in_transaction(
                     conn,
-                    &welcome.recipient_actor_id.to_string(),
+                    account.principal_id.as_str(),
                     device_id.as_str(),
                 )
                 .await?
-                else {
+                .filter(|binding| binding.station_id == account.station_id) else {
                     return Err(PersistenceError::Conflict(
                         "Welcome recipient device has no accepted authorization".into(),
                     )
@@ -129,7 +134,12 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
                        AND authorized_event_ref IS NOT NULL AND authorized_key_event IS NOT NULL \
                      FOR SHARE",
                 )
-                .bind::<Text, _>(welcome.recipient_actor_id.to_string())
+                .bind::<Text, _>(
+                    welcome
+                        .recipient_actor_id
+                        .signing_principal_id()
+                        .to_string(),
+                )
                 .bind::<Text, _>(verification_method.as_str())
                 .get_result::<AgentWelcomeAuthorizationRow>(&mut *conn)
                 .await
@@ -169,6 +179,23 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
         )
         .into());
     }
+    // encryption-and-audit.md §2.6: a claim serves exactly one accepted
+    // Commit; another Welcome naming it is a reuse, never a second delivery.
+    if sql_query(
+        "SELECT EXISTS(SELECT 1 FROM mls_welcome_deliveries WHERE keypackage_claim_ref=$1) \
+         AS present",
+    )
+    .bind::<Text, _>(welcome.keypackage_claim_ref.as_str())
+    .get_result::<crate::query_rows::ExistsRow>(&mut *conn)
+    .await?
+    .present
+    {
+        return Err(PersistenceError::Conflict(format!(
+            "{}: the KeyPackage claim already serves another accepted Welcome",
+            soland_storage::ConflictCode::DuplicateConflict
+        ))
+        .into());
+    }
     if recipient_queue_capacity == 0 {
         return Err(PersistenceError::SchemaViolation(
             "MLS Welcome transaction omitted recipient queue capacity".into(),
@@ -181,11 +208,16 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
                 "SELECT ((SELECT COUNT(*) FROM device_messages \
                WHERE recipient=$1 AND device_id=$2 AND recipient_device_authorization=$4) + \
                (SELECT COUNT(*) FROM mls_welcome_deliveries \
-               WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='device' \
+               WHERE recipient=$1 AND recipient_endpoint_kind='device' \
                  AND recipient_device_id=$2 AND recipient_authorization_event_ref=$3 \
                  AND recipient_device_authorization=$4 AND state='queued')) AS count",
             )
-            .bind::<Text, _>(welcome.recipient_actor_id.to_string())
+            .bind::<Text, _>(
+                welcome
+                    .recipient_actor_id
+                    .signing_principal_id()
+                    .to_string(),
+            )
             .bind::<Text, _>(device_id.as_deref().unwrap_or_default())
             .bind::<Text, _>(&authorization_event_ref)
             .bind::<Jsonb, _>(device_gate.as_ref().expect("device branch has gate"))
@@ -195,11 +227,16 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
         "agent_runtime" => {
             sql_query(
                 "SELECT COUNT(*) AS count FROM mls_welcome_deliveries \
-             WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='agent_runtime' \
+             WHERE recipient=$1 AND recipient_endpoint_kind='agent_runtime' \
                AND recipient_verification_method=$2 AND recipient_authorization_event_ref=$3 \
                AND state='queued'",
             )
-            .bind::<Text, _>(welcome.recipient_actor_id.to_string())
+            .bind::<Text, _>(
+                welcome
+                    .recipient_actor_id
+                    .signing_principal_id()
+                    .to_string(),
+            )
             .bind::<Text, _>(verification_method.as_deref().unwrap_or_default())
             .bind::<Text, _>(&authorization_event_ref)
             .get_result::<OutstandingCountRow>(&mut *conn)
@@ -216,20 +253,26 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
     }
     sql_query(
         "INSERT INTO mls_welcome_deliveries \
-         (welcome_id, realm_id, commit_event_pk, recipient_actor_id, recipient_endpoint_kind, \
+         (welcome_id, realm_id, commit_event_pk, recipient, recipient_endpoint_kind, \
           recipient_device_id, recipient_verification_method, recipient_authorization_event_ref, \
-          recipient_device_authorization, delivery_json, state, queued_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'queued',$11)",
+          recipient_device_authorization, keypackage_claim_ref, delivery_json, state, queued_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',$12)",
     )
     .bind::<Text, _>(welcome.welcome_id.as_str())
     .bind::<Text, _>(welcome.realm_id.as_str())
     .bind::<BigInt, _>(commit_event_pk)
-    .bind::<Text, _>(welcome.recipient_actor_id.to_string())
+    .bind::<Text, _>(
+        welcome
+            .recipient_actor_id
+            .signing_principal_id()
+            .to_string(),
+    )
     .bind::<Text, _>(endpoint_kind)
     .bind::<Nullable<Text>, _>(device_id)
     .bind::<Nullable<Text>, _>(verification_method)
     .bind::<Text, _>(authorization_event_ref)
     .bind::<Nullable<Jsonb>, _>(device_gate)
+    .bind::<Text, _>(welcome.keypackage_claim_ref.as_str())
     .bind::<Jsonb, _>(delivery_json)
     .bind::<Timestamptz, _>(queued_at)
     .execute(&mut *conn)
@@ -259,7 +302,7 @@ pub(super) async fn human_queue_has_capacity_in_transaction(
         "SELECT ((SELECT COUNT(*) FROM device_messages \
              WHERE recipient=$1 AND device_id=$2 AND recipient_device_authorization=$3) + \
              (SELECT COUNT(*) FROM mls_welcome_deliveries \
-             WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='device' \
+             WHERE recipient=$1 AND recipient_endpoint_kind='device' \
                AND recipient_device_id=$2 AND recipient_device_authorization=$3 \
                AND state='queued')) AS count",
     )
@@ -310,7 +353,7 @@ pub(super) async fn issue_ack_token(
         let exists = sql_query("SELECT EXISTS(\
             SELECT 1 FROM device_messages WHERE recipient=$1 AND device_id=$2 AND position=$3 AND recipient_device_authorization=$4 \
             UNION ALL \
-            SELECT 1 FROM mls_welcome_deliveries WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='device' \
+            SELECT 1 FROM mls_welcome_deliveries WHERE recipient=$1 AND recipient_endpoint_kind='device' \
               AND recipient_device_id=$2 AND position=$3 AND recipient_device_authorization=$4 AND state='queued'\
         ) AS present")
             .bind::<Text,_>(recipient).bind::<Text,_>(device_id).bind::<BigInt,_>(queue_position).bind::<Jsonb,_>(&binding)
@@ -341,7 +384,7 @@ pub(super) async fn ack_with_token(
         let count = sql_query("DELETE FROM device_messages WHERE recipient=$1 AND device_id=$2 AND position<=$3 AND recipient_device_authorization=$4")
             .bind::<Text,_>(recipient).bind::<Text,_>(device_id).bind::<BigInt,_>(token.queue_position).bind::<Jsonb,_>(&binding).execute(conn).await?;
         let welcome_count = sql_query("UPDATE mls_welcome_deliveries SET state='delivered', delivered_at=NOW() \
-            WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='device' AND recipient_device_id=$2 \
+            WHERE recipient=$1 AND recipient_endpoint_kind='device' AND recipient_device_id=$2 \
               AND position<=$3 AND recipient_device_authorization=$4 AND state='queued'")
             .bind::<Text,_>(recipient).bind::<Text,_>(device_id).bind::<BigInt,_>(token.queue_position)
             .bind::<Jsonb,_>(&binding)
@@ -432,7 +475,11 @@ fn decode_delivery(
                         device_id: welcome_device,
                     },
                 ) => {
-                    welcome.recipient_actor_id.to_string() == *recipient
+                    welcome
+                        .recipient_actor_id
+                        .signing_principal_id()
+                        .to_string()
+                        == *recipient
                         && welcome_device.as_str() == device_id
                 }
                 (
@@ -445,7 +492,11 @@ fn decode_delivery(
                         verification_method: welcome_method,
                     },
                 ) => {
-                    welcome.recipient_actor_id.to_string() == *agent_id
+                    welcome
+                        .recipient_actor_id
+                        .signing_principal_id()
+                        .to_string()
+                        == *agent_id
                         && welcome_method.as_str() == verification_method
                 }
                 _ => false,
@@ -490,7 +541,7 @@ pub(super) async fn list_recipient_deliveries(
                         AND recipient_device_authorization=$3 AND position>$4 \
                      UNION ALL \
                      SELECT position, 'mls_welcome'::text AS delivery_kind, delivery_json \
-                       FROM mls_welcome_deliveries WHERE recipient_actor_id=$1 \
+                       FROM mls_welcome_deliveries WHERE recipient=$1 \
                         AND recipient_endpoint_kind='device' AND recipient_device_id=$2 \
                         AND recipient_device_authorization=$3 AND state='queued' AND position>$4 \
                      ORDER BY position ASC LIMIT $5",
@@ -516,7 +567,7 @@ pub(super) async fn list_recipient_deliveries(
                 }
                 sql_query(
                     "SELECT position, 'mls_welcome'::text AS delivery_kind, delivery_json \
-                       FROM mls_welcome_deliveries WHERE recipient_actor_id=$1 \
+                       FROM mls_welcome_deliveries WHERE recipient=$1 \
                         AND recipient_endpoint_kind='agent_runtime' \
                         AND recipient_verification_method=$2 AND recipient_authorization_event_ref=$3 \
                         AND state='queued' AND position>$4 ORDER BY position ASC LIMIT $5",
@@ -566,7 +617,7 @@ pub(super) async fn issue_recipient_ack_token(
                 }
                 let exists = sql_query(
                     "SELECT EXISTS(SELECT 1 FROM mls_welcome_deliveries \
-                     WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='agent_runtime' \
+                     WHERE recipient=$1 AND recipient_endpoint_kind='agent_runtime' \
                        AND recipient_verification_method=$2 AND recipient_authorization_event_ref=$3 \
                        AND position=$4 AND state='queued') AS present",
                 )
@@ -649,7 +700,7 @@ pub(super) async fn ack_recipient_with_token(
                 }
                 let count = sql_query(
                     "UPDATE mls_welcome_deliveries SET state='delivered', delivered_at=NOW() \
-                     WHERE recipient_actor_id=$1 AND recipient_endpoint_kind='agent_runtime' \
+                     WHERE recipient=$1 AND recipient_endpoint_kind='agent_runtime' \
                        AND recipient_verification_method=$2 AND recipient_authorization_event_ref=$3 \
                        AND position<=$4 AND state='queued'",
                 )

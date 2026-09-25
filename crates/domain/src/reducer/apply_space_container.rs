@@ -666,7 +666,7 @@ impl ProjectionState {
                 }
             }
             arkret_models_collaboration::objects::space::ChildScopePolicy::RequireE2ee {} => {
-                if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
+                if self.child_scope_is_e2ee(child_scope_circle_id) {
                     Ok(())
                 } else {
                     Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
@@ -677,16 +677,16 @@ impl ProjectionState {
 
     /// Whether the child scope has been irreversibly activated by its own accepted
     /// `ak.mls.genesis`. An activated scope carries only RFC 9420 application ciphertext.
-    fn child_scope_is_e2ee(
-        &self,
-        child_scope_circle_id: Option<&str>,
-        child_realm_id: &str,
-    ) -> bool {
+    ///
+    /// A Realm scope's activation is its durable `mls_group` typed current,
+    /// which this in-process fold cannot read, so a Realm-scope child is never
+    /// proven E2EE here and `RequireE2ee` fails closed for it.
+    fn child_scope_is_e2ee(&self, child_scope_circle_id: Option<&str>) -> bool {
         match child_scope_circle_id {
             Some(circle_id) => self.circles.get(circle_id).is_some_and(|circle| {
                 circle.state == CircleLifecycleState::Active && circle.mls_group_ref.is_some()
             }),
-            None => self.realm_scope_is_mls_activated(child_realm_id),
+            None => false,
         }
     }
 }

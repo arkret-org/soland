@@ -284,7 +284,7 @@ fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value 
     })
 }
 
-fn project_mimi_sender_and_frontier(
+async fn project_mimi_sender_and_frontier(
     state: &AppState,
     realm_id: &str,
     group_id: &str,
@@ -292,42 +292,66 @@ fn project_mimi_sender_and_frontier(
     sender: &arkret_wire::ActorId,
 ) {
     let now = chrono::Utc::now();
-    let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
-    let scope_key = soland_domain::reducer::mls::effective_scope_key(&effective_scope).unwrap();
-    let mut projection = state.test_projections().test_state().lock();
-    projection.members.insert(
-        (realm_id.to_owned(), sender.to_string()),
-        soland_domain::reducer::SolandMembershipState {
-            member: sender.to_string(),
-            realm_id: realm_id.to_owned(),
-            state: "join".to_owned(),
-            role: "member".to_owned(),
-            membership_event_ref: Some(
+    let scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+    };
+    {
+        let mut projection = state.test_projections().test_state().lock();
+        projection.members.insert(
+            (realm_id.to_owned(), sender.to_string()),
+            soland_domain::reducer::SolandMembershipState {
+                member: sender.to_string(),
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                membership_event_ref: Some(
+                    "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
+                ),
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+    }
+    let current_event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::MlsCommit.as_str(),
+        scope.clone(),
+        sender.signing_principal_id().clone(),
+        soland_test_support::fixture_station_id(),
+        epoch,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
+        json!({ "governance_binding": mimi_governance_binding(realm_id, group_id, epoch) }),
+        now,
+    )
+    .unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &current_event,
+            Some(realm_id),
+            now,
+        ))
+        .await
+        .unwrap();
+    seed_mls_group_current(
+        state,
+        arkret_wire::MlsGroupCurrent {
+            effective_scope: scope,
+            genesis_event_ref: arkret_wire::EventId::new(
                 "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
-            ),
-            invited_at: None,
-            joined_at: now,
-            updated_at: now,
-            reason: None,
-        },
-    );
-    projection.mls_commit_epochs.insert(
-        soland_domain::reducer::MlsCommitEpochKey::new(scope_key, group_id),
-        soland_domain::reducer::MlsCommitEpoch {
-            group_id: group_id.to_owned(),
-            effective_scope,
+            )
+            .unwrap(),
+            current_mls_commit_event_ref: current_event.event_id.clone(),
             epoch,
-            leader_actor_id: sender.to_string(),
-            creator_device_id: MIMI_TEST_DEVICE_ID.to_owned(),
-            genesis_event_ref: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn".to_owned(),
-            committed_at: now.timestamp(),
-            governance_binding: mimi_governance_binding(realm_id, group_id, epoch),
-            accepted_commit_digest: Some(format!("sha256:{}", "3".repeat(64))),
-            accepted_commit_ref: Some(
-                "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD".to_owned(),
-            ),
+            current_key_access_revision: 0,
+            covered_key_access_revision: 0,
+            public_tree_ref: arkret_wire::BlobRef::new(format!("ak:blob:sha256:{}", "4".repeat(64)))
+                .unwrap(),
         },
-    );
+    )
+    .await;
 }
 
 fn text_mimi_message(message_id: &str, body: &str) -> Value {
@@ -1228,7 +1252,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     assert_eq!(identifier["has_more"], false);
 
     let sender = mimi_source_station_account("did:web:alice.example");
-    project_mimi_sender_and_frontier(&state, demo_realm_id(), group_id, 1, &sender);
+    project_mimi_sender_and_frontier(&state, demo_realm_id(), group_id, 1, &sender).await;
     let message_body = mimi_submit_body(
         demo_realm_id(),
         group_id,
@@ -1366,7 +1390,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     assert!(binding_event_id.starts_with("ak:event:"));
 
     let sender = mimi_source_station_account("did:web:remote.example");
-    project_mimi_sender_and_frontier(&state, demo_realm, group_id, 1, &sender);
+    project_mimi_sender_and_frontier(&state, demo_realm, group_id, 1, &sender).await;
     let msg_resp: Value = signed_mimi_post!(
         state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
@@ -1487,7 +1511,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     .unwrap();
     assert_eq!(rebound_resp["accepted"], true);
 
-    project_mimi_sender_and_frontier(&state, custom_realm, custom_group_id, 1, &sender);
+    project_mimi_sender_and_frontier(&state, custom_realm, custom_group_id, 1, &sender).await;
     let msg_resp_2: Value = signed_mimi_post!(
         state,
         format!("http://server/_arkret/open/mimi/strands/{room_id}/messages"),
@@ -1629,7 +1653,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     }
     assert_eq!(update_resp["accepted"], true, "room update: {update_resp}");
     let sender = mimi_source_station_account("did:web:mimi.example");
-    project_mimi_sender_and_frontier(&state, realm_id, group_id, 1, &sender);
+    project_mimi_sender_and_frontier(&state, realm_id, group_id, 1, &sender).await;
 
     let mut unmarked = signed_mimi_post!(
         state,

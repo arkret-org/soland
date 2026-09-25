@@ -869,10 +869,9 @@ pub async fn hydrate_projections_from_persistence(
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
         CircleLifecycleState, CircleMembershipState, CircleProjection,
-        KeyPackageLifetimeProjection, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection,
-        MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
-        SpaceContainerProjection, StrandProjection, StrandWatchProjection,
-        object_stage_from_wire_value,
+        KeyPackageLifetimeProjection, MlsKeyPackageProjection, MorphProjection,
+        ObjectLifecycleState, SpaceContainerLifecycleState, SpaceContainerProjection,
+        StrandProjection, StrandWatchProjection, object_stage_from_wire_value,
     };
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
@@ -1239,46 +1238,6 @@ pub async fn hydrate_projections_from_persistence(
         }
     }
 
-    // Restore the durable confirmed epoch and exact accepted Commit ref.
-    // The binding is the source of transition metadata. Missing optional
-    // in-memory Commit bytes/digest is not evidence of competing authority.
-    if let Ok(records) = persistence.mls_commits().snapshot_all().await {
-        for record in records {
-            let Ok(scope_key) =
-                soland_domain::reducer::mls::effective_scope_key(&record.effective_scope)
-            else {
-                tracing::warn!(
-                    group_id = %record.group_id,
-                    "skipping mls_commit row with invalid effective_scope during hydrate"
-                );
-                continue;
-            };
-            proj.mls_commit_epochs.insert(
-                MlsCommitEpochKey::new(scope_key, record.group_id.clone()),
-                MlsCommitEpoch {
-                    group_id: record.group_id,
-                    effective_scope: record.effective_scope,
-                    epoch: record.epoch,
-                    leader_actor_id: record.leader_actor_id,
-                    creator_device_id: record.creator_device_id,
-                    genesis_event_ref: record.genesis_event_ref,
-                    committed_at: record.committed_at,
-                    governance_binding: record.governance_binding,
-                    accepted_commit_digest: None,
-                    accepted_commit_ref: record.accepted_commit_ref.clone(),
-                },
-            );
-            if let Some(commit_ref) = record.accepted_commit_ref {
-                proj.accepted_mls_commit_refs.insert(commit_ref);
-            }
-        }
-    }
-    for event in events
-        .iter()
-        .filter(|event| event.kind == arkret_wire::EventKind::MlsCommit.as_str())
-    {
-        proj.accepted_mls_commit_refs.insert(event.event_id.clone());
-    }
     // The Strand mirror intentionally stores only common index fields. Replay
     // the accepted projection events after mirror hydration so Calendar
     // fields, schema activation, the schedule revision DAG, RSVP causal-register

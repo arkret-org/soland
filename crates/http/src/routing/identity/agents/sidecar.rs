@@ -18,7 +18,7 @@ use arkret_models_collaboration::sidecar_operations::{
     SidecarEnsurePreparedStatus, SidecarEnsureRequestBody,
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
-use arkret_wire::{MlsGroupId, NonEmptyString};
+use arkret_wire::NonEmptyString;
 use salvo::oapi::extract::QueryParam;
 use soland_services::identity::{
     AgentSidecarContextState as AgentSidecarContextRecord, AgentSidecarState as AgentSidecarRecord,
@@ -441,19 +441,20 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     {
         return Err("mls_sidecar_binding_mismatch");
     }
-    let expected_scope = json!({
-        "kind": "sidecar",
-        "realm_id": sidecar_projection.realm_id,
-        "sidecar_id": sidecar_projection.sidecar_id,
-    });
     let current_group = state
-        .projections()
-        .snapshot()
-        .mls_commit_epochs
-        .values()
-        .filter(|row| row.effective_scope == expected_scope)
-        .max_by_key(|row| row.epoch)
-        .map(|row| row.group_id.clone());
+        .mls_groups()
+        .current(binding.effective_scope())
+        .await
+        .map_err(|_| "mls_sidecar_binding_state_unavailable")?
+        .map(|current| {
+            current
+                .value
+                .effective_scope
+                .canonical_mls_group_id()
+                .map(|group_id| group_id.to_string())
+        })
+        .transpose()
+        .map_err(|_| "mls_sidecar_binding_invalid")?;
     match operation.event_kind.clone() {
         arkret_wire::EventKind::MlsGenesis => {
             if current_group.is_some()
@@ -504,17 +505,6 @@ fn controller_device_completed_group_join(
     false
 }
 
-fn epoch_matches_sidecar_binding(
-    row: &soland_domain::reducer::MlsCommitEpoch,
-    expected: &SidecarMlsBinding,
-) -> bool {
-    serde_json::from_value::<MlsGovernanceBindingPayload>(row.governance_binding.clone())
-        .ok()
-        .and_then(|binding| binding.sidecar_binding())
-        .as_ref()
-        == Some(expected)
-}
-
 async fn sidecar_view(
     state: &AppState,
     record: &AgentSidecarRecord,
@@ -532,39 +522,61 @@ async fn sidecar_view(
     let desired_typed = typed_agent_ids(&desired)?;
     let projection = state.projections().snapshot();
     let expected_binding = sidecar_mls_binding_for_desired(record, &desired_typed, &projection)?;
-    let expected_scope = json!({
-        "kind": "sidecar",
-        "realm_id": record.realm_id,
-        "sidecar_id": record.sidecar_id,
-    });
-    let epoch_row = projection
-        .mls_commit_epochs
-        .values()
-        .filter(|row| row.effective_scope == expected_scope)
-        .max_by_key(|row| row.epoch);
-    let epoch_binding_current =
-        epoch_row.is_some_and(|row| epoch_matches_sidecar_binding(row, &expected_binding));
-    let genesis_actor = if let Some(row) = epoch_row {
-        state
+    let sidecar_scope = arkret_wire::ScopeRef::Sidecar {
+        realm_id: arkret_wire::RealmId::new(record.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Sidecar Realm id: {error}")))?,
+        sidecar_id: arkret_wire::SidecarId::new(record.sidecar_id.clone())
+            .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
+    };
+    let epoch_row = state
+        .mls_groups()
+        .current(&sidecar_scope)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar MLS group lookup: {error}")))?
+        .map(|current| current.value);
+    let epoch_binding_current = match &epoch_row {
+        Some(row) => {
+            crate::routing::mls::current_mls_group_binding(state, row)
+                .await?
+                .sidecar_binding()
+                .as_ref()
+                == Some(&expected_binding)
+        }
+        None => false,
+    };
+    let genesis = match &epoch_row {
+        Some(row) => state
             .event_queries()
-            .canonical_event(&row.genesis_event_ref)
+            .canonical_event(row.genesis_event_ref.as_str())
             .await
             .map_err(|error| AppError::internal(format!("Sidecar genesis lookup: {error}")))?
-            .and_then(|event| serde_json::from_str::<arkret_wire::ActorId>(&event.actor_id).ok())
-    } else {
-        None
+            .and_then(|event| serde_json::from_value::<arkret_wire::Event>(event.envelope).ok()),
+        None => None,
     };
+    let genesis_producer = genesis
+        .as_ref()
+        .and_then(|event| event.human_device_producer().ok().flatten());
     let controller_device_ready = epoch_binding_current
         && !controller_device_id.is_empty()
-        && epoch_row.is_some_and(|row| {
-            (genesis_actor.as_ref() == Some(&controller_actor)
-                && device_coordinates_match(Some(&row.creator_device_id), controller_device_id))
-                || controller_device_completed_group_join(
-                    &projection,
-                    &controller_account,
+        && epoch_row.as_ref().is_some_and(|row| {
+            (genesis.as_ref().map(|event| &event.actor_id) == Some(&controller_actor)
+                && device_coordinates_match(
+                    genesis_producer
+                        .as_ref()
+                        .map(|producer| producer.device_id.as_str()),
                     controller_device_id,
-                    &row.group_id,
-                )
+                ))
+                || row
+                    .effective_scope
+                    .canonical_mls_group_id()
+                    .is_ok_and(|group_id| {
+                        controller_device_completed_group_join(
+                            &projection,
+                            &controller_account,
+                            controller_device_id,
+                            group_id.as_str(),
+                        )
+                    })
         });
     let effective = if epoch_binding_current {
         desired_typed.clone()
@@ -600,16 +612,15 @@ async fn sidecar_view(
         participant_authority_digest: expected_binding.participant_authority_digest.clone(),
         authority_stream_head: expected_binding.authority_stream_head.clone(),
         mls_group_id: epoch_row
-            .map(|row| MlsGroupId::new(row.group_id.clone()))
+            .as_ref()
+            .map(|row| row.effective_scope.canonical_mls_group_id())
             .transpose()
             .map_err(|error| AppError::internal(format!("stored MLS group id: {error}")))?
             .map(|id| id.to_string()),
-        epoch: epoch_row.map(|row| row.epoch),
+        epoch: epoch_row.as_ref().map(|row| row.epoch),
         genesis_event_ref: epoch_row
-            .map(|row| EventId::new(row.genesis_event_ref.clone()))
-            .transpose()
-            .map_err(|error| AppError::internal(format!("stored genesis Event ref: {error}")))?
-            .map(|id| id.to_string()),
+            .as_ref()
+            .map(|row| row.genesis_event_ref.to_string()),
         current_controller_device_ready: controller_device_ready,
     };
     let view = AgentSidecarView {

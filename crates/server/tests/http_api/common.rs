@@ -2642,8 +2642,6 @@ pub(crate) fn signal_mls_genesis(scope: &arkret_wire::ScopeRef) -> arkret_wire::
 
 pub(crate) async fn seed_signal_mls_basis(state: &AppState, scope: &arkret_wire::ScopeRef) {
     let event = signal_mls_genesis(scope);
-    let group_id = scope.canonical_mls_group_id().unwrap();
-    let scope_value = serde_json::to_value(scope).unwrap();
     state
         .test_persistence()
         .events()
@@ -2654,17 +2652,34 @@ pub(crate) async fn seed_signal_mls_basis(state: &AppState, scope: &arkret_wire:
         ))
         .await
         .unwrap();
+    seed_mls_group_current(
+        state,
+        arkret_wire::MlsGroupCurrent {
+            effective_scope: scope.clone(),
+            genesis_event_ref: event.event_id.clone(),
+            current_mls_commit_event_ref: event.event_id.clone(),
+            epoch: 0,
+            current_key_access_revision: 0,
+            covered_key_access_revision: 0,
+            public_tree_ref: serde_json::from_value(event.payload["ratchet_tree_ref"].clone())
+                .unwrap(),
+        },
+    )
+    .await;
+}
+
+/// Install one scope's `mls_group` current directly, for readers exercised
+/// without an accepted MLS Event.
+pub(crate) async fn seed_mls_group_current(state: &AppState, value: arkret_wire::MlsGroupCurrent) {
     state
         .test_persistence()
-        .mls_commits()
-        .initialize_genesis(soland_storage::MlsCommitGenesis {
-            effective_scope: &scope_value,
-            group_id: &group_id,
-            leader_actor_id: &event.actor_id.to_string(),
-            creator_device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            genesis_event_ref: event.event_id.as_str(),
-            governance_binding: &event.payload["governance_binding"],
-            committed_at: event.created_at.timestamp(),
+        .mls_groups()
+        .seed_test_current(&soland_storage::MlsGroupCurrentRecord {
+            realm_id: value.effective_scope.realm_id().clone(),
+            value,
+            current_commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+            current_stream_position: 7,
+            public_state: vec![1],
         })
         .await
         .unwrap();

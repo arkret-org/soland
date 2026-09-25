@@ -9,11 +9,11 @@
 //!   (atomically claim a published KeyPackage; second claim of the same id returns `409
 //!   cas_conflict`).
 //!
-//! MLS *commits* are no longer served by a dedicated REST surface — clients
-//! submit `ak.mls.commit` events via the normal `POST /_arkret/self/events`
-//! pipeline (`ak.self.events.command.submit.v1` of the registered durable `ak.mls.commit`
-//! kind). The reducer's epoch-bump path is unchanged; only the HTTP
-//! entrypoint moved.
+//! MLS *commits* have no dedicated REST surface: clients submit
+//! `ak.mls.genesis` and `ak.mls.commit` through `POST /_arkret/self/events`
+//! (`ak.self.events.command.submit.v1`), and the MLS authority unit
+//! (`state::authority_mls_unit`) installs the `mls_group` typed current with
+//! every Welcome at the covering RealmCommit.
 //!
 //! Each handler:
 //!   1. authenticates the caller via [`AuthArgs`] (bearer session);
@@ -23,10 +23,8 @@
 //! Deferred (mapped to TODO(G3.S1-followup) markers in `reducer/mls.rs`):
 //!   - decryption_pending   — deferred-decryption queue + retry.
 //!
-//! `ak.mls.commit` reducer validation requires the confirmed governance binding
-//! and its authenticated covered frontier. Recipient-private Welcome delivery
-//! is carried by the formal authority-commit transaction, never by a shared
-//! Realm Event.
+//! Recipient-private Welcome delivery is carried by the formal authority-commit
+//! transaction, never by a shared Realm Event.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -453,20 +451,6 @@ pub(crate) async fn load_mls_public_blob(
 }
 
 // ── publish ───────────────────────────────────────────────────────────
-
-pub(crate) fn enqueue_device_revoke_mls_removals(
-    state: &AppState,
-    actor_id: &str,
-    device_id: &str,
-    revoke_event_id: &str,
-) -> usize {
-    state.projections().enqueue_device_revoke_mls_removals(
-        actor_id,
-        device_id,
-        revoke_event_id,
-        now(),
-    )
-}
 
 #[salvo::oapi::endpoint(
     operation_id = "ak.self.keys.keypackages.upload.create",
@@ -3178,13 +3162,28 @@ async fn revoke_keypackages(
     json_ok(KeyPackagesRevokeOutcome { revoked, failures })
 }
 
-// ── commits ───────────────────────────────────────────────────────────
-//
-// Deleted as part of the spec-canonical refactor. MLS commits are now
-// submitted via the regular events pipeline as `ak.mls.commit` durable
-// events through `POST /_arkret/self/events` (op `ak.self.events.command.submit.v1`). The
-// reducer's epoch-bump path (`reducer::mls::apply_commit_epoch`) is
-// invoked from the events submission strand; no dedicated REST surface.
+/// The governance binding of the Event that made `current` the scope's
+/// current group: its accepted Genesis or winning Commit. It is read from the
+/// exact committed Event, never restated in the typed current.
+pub(crate) async fn current_mls_group_binding(
+    state: &AppState,
+    current: &arkret_wire::MlsGroupCurrent,
+) -> Result<arkret_models_crypto::MlsGovernanceBindingPayload, AppError> {
+    let event = state
+        .event_queries()
+        .canonical_event(current.current_mls_commit_event_ref.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("current MLS Event lookup: {error}")))?
+        .ok_or_else(|| AppError::internal("the current MLS group Event is unavailable"))?;
+    let binding = event
+        .envelope
+        .get("payload")
+        .and_then(payload_fields::governance_binding)
+        .cloned()
+        .ok_or_else(|| AppError::internal("the current MLS Event has no governance binding"))?;
+    serde_json::from_value(binding)
+        .map_err(|error| AppError::internal(format!("current MLS governance binding: {error}")))
+}
 
 // ── helpers ───────────────────────────────────────────────────────────
 

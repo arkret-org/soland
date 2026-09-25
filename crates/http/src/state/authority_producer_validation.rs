@@ -54,6 +54,22 @@ pub(crate) async fn verify_self_event_producer(
     session: &SessionIdentityState,
     event: &Event,
 ) -> ServiceResult<SelfProducerCommitGuard> {
+    verify_self_event_producer_key(state, session, event)
+        .await
+        .map(|(guard, _)| guard)
+}
+
+/// [`verify_self_event_producer`] that also returns the exact key the
+/// producer proof verified under, for objects the same producer seals
+/// alongside the Event (an MLS Commit's Welcome deliveries).
+pub(crate) async fn verify_self_event_producer_key(
+    state: &AppState,
+    session: &SessionIdentityState,
+    event: &Event,
+) -> ServiceResult<(
+    SelfProducerCommitGuard,
+    arkret_signatures::PublicKeyMaterial,
+)> {
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
     let actor = crate::routing::identity::session_actor::validated_session_actor(state, session)
@@ -166,7 +182,7 @@ pub(crate) async fn verify_self_event_producer(
         digest_suite,
     )
     .map_err(|error| rejected(format!("Event producer proof invalid: {error}")))?;
-    Ok(guard)
+    Ok((guard, key))
 }
 
 /// Resolve the human device that actually signed the Event.

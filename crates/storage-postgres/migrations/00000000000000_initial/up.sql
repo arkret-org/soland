@@ -1009,18 +1009,6 @@ CREATE INDEX realm_state_snapshot_window_reservations_expiry_idx
 CREATE INDEX realm_state_snapshot_window_reservations_account_stream_idx
     ON public.realm_state_snapshot_window_reservations (account_id, stream_key, expires_at_ms);
 
--- The staged OpenMLS successor is installed in the same transaction that
--- commits its producer Event and queues every recipient Welcome.
-CREATE TABLE public.mls_group_states (
-    group_id text PRIMARY KEY,
-    realm_id text NOT NULL,
-    effective_scope jsonb NOT NULL,
-    epoch bigint NOT NULL CHECK (epoch >= 0),
-    state_bytes bytea NOT NULL CHECK (octet_length(state_bytes) > 0),
-    commit_event_pk bigint NOT NULL UNIQUE REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    updated_at timestamptz NOT NULL
-);
-
 -- Both recipient-delivery families consume one durable ordering source.
 CREATE SEQUENCE public.recipient_delivery_position_seq AS bigint;
 
@@ -1031,12 +1019,17 @@ CREATE TABLE public.mls_welcome_deliveries (
     welcome_id text PRIMARY KEY,
     realm_id text NOT NULL,
     commit_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    recipient_actor_id text NOT NULL,
+    -- The recipient's queue owner: its signing principal, the same key
+    -- `device_messages.recipient` uses, so both branches share one queue.
+    recipient text NOT NULL,
     recipient_endpoint_kind text NOT NULL CHECK (recipient_endpoint_kind IN ('device', 'agent_runtime')),
     recipient_device_id text,
     recipient_verification_method text,
     recipient_authorization_event_ref text NOT NULL,
     recipient_device_authorization jsonb,
+    -- The exact KeyPackage claim the Welcome consumes; one claim serves one
+    -- accepted Commit only (encryption-and-audit.md §2.6).
+    keypackage_claim_ref text NOT NULL UNIQUE,
     position bigint NOT NULL DEFAULT nextval('public.recipient_delivery_position_seq'),
     delivery_json jsonb NOT NULL,
     state text DEFAULT 'queued' NOT NULL CHECK (state IN ('queued', 'delivered')),
@@ -1055,78 +1048,15 @@ CREATE TABLE public.mls_welcome_deliveries (
 );
 
 CREATE INDEX mls_welcome_deliveries_recipient_idx
-    ON public.mls_welcome_deliveries (recipient_actor_id, recipient_endpoint_kind, state, position);
+    ON public.mls_welcome_deliveries (recipient, recipient_endpoint_kind, state, position);
 
 CREATE UNIQUE INDEX mls_welcome_deliveries_device_position_idx
-    ON public.mls_welcome_deliveries (recipient_actor_id, recipient_device_id, position)
+    ON public.mls_welcome_deliveries (recipient, recipient_device_id, position)
     WHERE recipient_endpoint_kind = 'device';
 
 CREATE UNIQUE INDEX mls_welcome_deliveries_agent_position_idx
-    ON public.mls_welcome_deliveries (recipient_actor_id, recipient_verification_method, position)
+    ON public.mls_welcome_deliveries (recipient, recipient_verification_method, position)
     WHERE recipient_endpoint_kind = 'agent_runtime';
-
--- Exact public leaf intent atomically retained with MLS Event admission.
-CREATE TABLE public.mls_frontier_inputs (
-    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    canonical_bytes bytea NOT NULL
-);
-
--- Verified public epoch-zero candidate, not a current membership authority.
--- The source Event FK keeps its actor/proof and withdrawal state authoritative.
-CREATE TABLE public.mls_public_genesis_states (
-    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    source_canonical_bytes bytea NOT NULL,
-    source_available boolean NOT NULL,
-    input_bytes bytea NOT NULL,
-    public_state bytea NOT NULL,
-    producer_signing_key text NOT NULL,
-    producer_device_authorization jsonb,
-    leaf_authorizations jsonb
-);
-
--- Public candidates stay separate from the winning epoch and membership authority.
-CREATE TABLE public.mls_public_proposal_sources (
-    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    source_canonical_bytes bytea NOT NULL,
-    source_available boolean NOT NULL,
-    producer jsonb NOT NULL
-);
-CREATE TABLE public.mls_public_commit_states (
-    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    source_canonical_bytes bytea NOT NULL,
-    base_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    public_state bytea NOT NULL,
-    transition jsonb NOT NULL,
-    source_available boolean NOT NULL,
-    leaf_authorizations jsonb,
-    CHECK (event_pk <> base_event_pk)
-);
-CREATE TABLE public.mls_public_transition_dependencies (
-    transition_event_pk bigint NOT NULL REFERENCES public.mls_public_commit_states(event_pk) ON DELETE RESTRICT,
-    source_event_pk bigint NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
-    PRIMARY KEY (transition_event_pk, source_event_pk),
-    CHECK (transition_event_pk <> source_event_pk)
-);
-CREATE INDEX mls_public_transition_source_idx ON public.mls_public_transition_dependencies(source_event_pk);
-CREATE FUNCTION public.invalidate_mls_public_suffix() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF (OLD.state = 'committed' AND NEW.state <> 'committed') OR OLD.canonical_bytes IS DISTINCT FROM NEW.canonical_bytes THEN
-        UPDATE mls_public_genesis_states SET source_available=FALSE WHERE event_pk=NEW.pk;
-        UPDATE mls_public_proposal_sources SET source_available=FALSE WHERE event_pk=NEW.pk;
-        WITH RECURSIVE affected(event_pk) AS (
-            SELECT NEW.pk
-            UNION
-            SELECT d.transition_event_pk FROM mls_public_transition_dependencies d
-            JOIN affected a ON a.event_pk=d.source_event_pk
-        )
-        UPDATE mls_public_commit_states SET source_available=FALSE
-        WHERE event_pk IN (SELECT event_pk FROM affected);
-    END IF;
-    RETURN NEW;
-END
-$$;
-CREATE TRIGGER canonical_mls_public_source_withdrawal AFTER UPDATE OF state, canonical_bytes ON public.canonical_events
-FOR EACH ROW EXECUTE FUNCTION public.invalidate_mls_public_suffix();
 
 -- Transport-only membership compensation evidence accepted with one Event.
 -- The FK supplies Event identity without copying it into the evidence body;
@@ -2634,28 +2564,6 @@ CREATE TABLE public.key_backup_delete_challenges (
 
 CREATE INDEX key_backup_delete_challenges_expiry_idx
     ON public.key_backup_delete_challenges (expires_at);
-
-CREATE TABLE public.mls_commits (
-    id uuid PRIMARY KEY,
-    effective_scope_kind text NOT NULL,
-    realm_id text NOT NULL,
-    circle_id text,
-    effective_scope jsonb NOT NULL,
-    mls_group_id text NOT NULL,
-    epoch bigint NOT NULL,
-    leader_actor_id text NOT NULL,
-    creator_device_id text NOT NULL,
-    -- Exact accepted genesis Event identity from the verified operation context.
-    genesis_event_ref text NOT NULL,
-    governance_binding jsonb DEFAULT '{}'::jsonb NOT NULL,
-    accepted_commit_ref text,
-    committed_at bigint NOT NULL,
-    CONSTRAINT mls_commits_effective_scope_check CHECK ((((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL)) OR ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL))))
-);
-
-CREATE UNIQUE INDEX mls_commits_circle_scope_key ON public.mls_commits USING btree (realm_id, circle_id, mls_group_id) WHERE ((effective_scope_kind = 'circle'::text) AND (circle_id IS NOT NULL));
-
-CREATE UNIQUE INDEX mls_commits_realm_scope_key ON public.mls_commits USING btree (realm_id, mls_group_id) WHERE ((effective_scope_kind = 'realm'::text) AND (circle_id IS NULL));
 
 CREATE TABLE public.mls_key_packages (
     id text PRIMARY KEY,
@@ -4411,6 +4319,29 @@ CREATE TABLE message_revision_current_results (
         AND (NOT value ? 'track_name' OR value->>'track_name'='discussion')))
 );
 CREATE INDEX message_revision_current_results_realm ON message_revision_current_results(realm_id,message_id);
+
+-- `mls_group` typed current (encryption-and-audit.md §2.5): one row per MLS
+-- effective scope, keyed by the canonical JSON of that scope. The scope's
+-- accepted `ak.mls.genesis` creates it, each winning `ak.mls.commit` merges
+-- its epoch, current Commit ref and covered key-access revision, and every
+-- membership change of the scope advances its current key-access revision.
+-- `public_state` is the Station-private public RFC 9420 tracker the current
+-- transition was verified into; it holds no member secret and never leaves
+-- the Station.
+CREATE TABLE mls_group_current_results (
+ realm_id TEXT NOT NULL,
+ scope_key TEXT COLLATE "C" NOT NULL PRIMARY KEY,
+ mls_group_id TEXT NOT NULL UNIQUE,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ public_state BYTEA NOT NULL CHECK(octet_length(public_state) > 0),
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->'effective_scope'->>'realm_id'=realm_id),
+ CHECK((value->>'covered_key_access_revision')::numeric <= (value->>'current_key_access_revision')::numeric)
+);
+CREATE INDEX mls_group_current_results_realm ON mls_group_current_results(realm_id,scope_key);
 
 -- `object_redaction` typed current: the canonically sorted set of committed
 -- redaction assertions on one subject, keyed by the redaction target's typed-id

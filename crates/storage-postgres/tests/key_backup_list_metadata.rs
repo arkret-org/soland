@@ -11,7 +11,8 @@
 
 mod support;
 
-use std::{fs, sync::OnceLock};
+use std::fs;
+use std::sync::OnceLock;
 
 use arkret_models_crypto::{BackupActiveSeriesPointer, KeyBackupSummary, KeysBackupsList};
 use arkret_schema::ProtocolSchemaRegistry;

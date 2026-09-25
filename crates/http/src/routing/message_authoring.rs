@@ -142,12 +142,9 @@ pub(crate) async fn mls_send_gate(
     scope: &ScopeRef,
     envelopes: Option<&[&EncryptedEnvelope]>,
 ) -> Result<(), MlsSendGateError> {
-    let group = scope
-        .canonical_mls_group_id()
-        .map_err(|error| MlsSendGateError::Internal(error.to_string()))?;
     let current = state
-        .mls_commits()
-        .commit(scope, &group)
+        .mls_groups()
+        .current(scope)
         .await
         .map_err(|_| MlsSendGateError::CurrentUnavailable)?;
     let Some(envelopes) = envelopes else {
@@ -158,30 +155,19 @@ pub(crate) async fn mls_send_gate(
             None => Ok(()),
         };
     };
-    let current = current.ok_or(MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated))?;
-    if state
-        .projections()
-        .snapshot()
-        .pending_mls_removals
-        .iter()
-        .any(|removal| {
-            removal.realm_id == scope.realm_id().as_str()
-                && removal.circle_id.as_deref() == scope.circle_id().map(|id| id.as_str())
-        })
-    {
+    let current = current
+        .ok_or(MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated))?
+        .value;
+    if current.covered_key_access_revision < current.current_key_access_revision {
         return Err(MlsSendGateError::Refused(
             MlsSendGateRefusal::EpochUpdateRequired,
         ));
     }
-    let current_ref = current
-        .accepted_commit_ref
-        .as_deref()
-        .unwrap_or(&current.genesis_event_ref);
     if current.effective_scope != *scope
-        || current.governance_binding.effective_scope() != scope
         || envelopes.iter().any(|envelope| {
             envelope.encryption_context.epoch() != current.epoch
-                || envelope.encryption_context.group_state_ref().as_str() != current_ref
+                || envelope.encryption_context.group_state_ref()
+                    != &current.current_mls_commit_event_ref
         })
     {
         return Err(MlsSendGateError::Refused(MlsSendGateRefusal::EpochMismatch));
@@ -485,10 +471,8 @@ mod tests {
     use arkret_models_collaboration::message_authoring::MessageEncryptionContext;
     use arkret_models_crypto::{
         EncryptedEnvelope, EncryptedEnvelopeEncryptionContext, EncryptedEnvelopeRoutingContext,
-        MlsGovernanceBindingPayload,
     };
     use arkret_wire::{AccountId, DidCoreId, EventId, RealmId, StrandId};
-    use soland_services::events::{AdvanceMlsEpochCommand, InitializeMlsGroupCommand};
 
     use super::*;
 
@@ -711,59 +695,86 @@ mod tests {
         }
     }
 
-    /// Accept the scope's `ak.mls.genesis` through the durable MLS commit port.
-    async fn accept_genesis(state: &AppState, scope: &ScopeRef, genesis: &EventId) {
-        state
-            .mls_commits()
-            .initialize_group(InitializeMlsGroupCommand {
-                effective_scope: scope.clone(),
-                group_id: scope.canonical_mls_group_id().unwrap().to_string(),
-                leader_actor_id: LEADER.to_owned(),
-                creator_device_id: DEVICE.to_owned(),
-                genesis_event_ref: genesis.as_str().to_owned(),
-                governance_binding: MlsGovernanceBindingPayload::realm(
-                    scope.realm_id().clone(),
-                    None,
-                    0,
-                    0,
-                    0,
-                )
-                .unwrap(),
-                committed_at: 1_788_000_000,
-            })
-            .await
-            .unwrap()
-            .expect("the scope had no accepted MLS genesis");
+    fn blob(seed: u8) -> arkret_wire::BlobRef {
+        arkret_wire::BlobRef::new(format!("ak:blob:sha256:{}", hex::encode([seed; 32]))).unwrap()
     }
 
-    /// Accept the epoch 0 -> 1 Commit through the durable MLS commit port.
+    /// Install the scope's accepted `mls_group` current directly.
+    async fn seed_group(state: &AppState, scope: &ScopeRef, value: arkret_wire::MlsGroupCurrent) {
+        state
+            .mls_groups()
+            .seed_test_current(&soland_storage::MlsGroupCurrentRecord {
+                realm_id: scope.realm_id().clone(),
+                value,
+                current_commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+                current_stream_position: 7,
+                public_state: vec![1],
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn current_group(state: &AppState, scope: &ScopeRef) -> arkret_wire::MlsGroupCurrent {
+        state
+            .mls_groups()
+            .current(scope)
+            .await
+            .unwrap()
+            .expect("accepted MLS group")
+            .value
+    }
+
+    /// The scope's accepted `ak.mls.genesis`.
+    async fn accept_genesis(state: &AppState, scope: &ScopeRef, genesis: &EventId) {
+        seed_group(
+            state,
+            scope,
+            arkret_wire::MlsGroupCurrent {
+                effective_scope: scope.clone(),
+                genesis_event_ref: genesis.clone(),
+                current_mls_commit_event_ref: genesis.clone(),
+                epoch: 0,
+                current_key_access_revision: 0,
+                covered_key_access_revision: 0,
+                public_tree_ref: blob(0x33),
+            },
+        )
+        .await;
+    }
+
+    /// A winning epoch 0 -> 1 Commit that covers no newer key-access revision.
     async fn accept_commit(
         state: &AppState,
         scope: &ScopeRef,
         genesis: &EventId,
         commit: &EventId,
     ) {
-        state
-            .mls_commits()
-            .advance_epoch(AdvanceMlsEpochCommand {
-                expected_previous_epoch: 0,
-                effective_scope: scope.clone(),
-                group_id: scope.canonical_mls_group_id().unwrap().to_string(),
-                leader_actor_id: LEADER.to_owned(),
-                governance_binding: MlsGovernanceBindingPayload::realm(
-                    scope.realm_id().clone(),
-                    Some(genesis.clone()),
-                    0,
-                    1,
-                    0,
-                )
-                .unwrap(),
-                accepted_commit_ref: commit.as_str().to_owned(),
-                committed_at: 1_788_000_060,
-            })
-            .await
-            .unwrap()
-            .expect("the epoch 0 Commit wins its CAS");
+        let current = current_group(state, scope).await;
+        assert_eq!(&current.genesis_event_ref, genesis);
+        seed_group(
+            state,
+            scope,
+            arkret_wire::MlsGroupCurrent {
+                current_mls_commit_event_ref: commit.clone(),
+                epoch: current.epoch + 1,
+                ..current
+            },
+        )
+        .await;
+    }
+
+    /// A membership change the scope's winning Commit has not covered yet.
+    async fn advance_key_access(state: &AppState, scope: &ScopeRef) {
+        let current = current_group(state, scope).await;
+        seed_group(
+            state,
+            scope,
+            arkret_wire::MlsGroupCurrent {
+                current_key_access_revision: current.current_key_access_revision + 1,
+                ..current
+            },
+        )
+        .await;
     }
 
     async fn problem(error: AppError) -> (StatusCode, serde_json::Value) {
@@ -965,18 +976,7 @@ mod tests {
         let state = test_state();
         let scope = realm_scope(REALM);
         accept_genesis(&state, &scope, &event_ref(1)).await;
-        state.test_projection().lock().pending_mls_removals.push(
-            soland_domain::reducer::MlsRemoveObligation {
-                realm_id: REALM.to_owned(),
-                circle_id: None,
-                mls_group_ref: Some(scope.canonical_mls_group_id().unwrap().to_string()),
-                actor_id: LEADER.to_owned(),
-                device_id: Some(DEVICE.to_owned()),
-                membership_frontier: Vec::new(),
-                trigger_membership: "leave".to_owned(),
-                triggered_at: chrono::Utc::now(),
-            },
-        );
+        advance_key_access(&state, &scope).await;
         let content = mls_content(standard(0, event_ref(1)), None, scope.clone(), DEVICE);
         assert_problem(
             validate_encryption_context(&state, &content, &scope, DEVICE).await,
@@ -1088,15 +1088,9 @@ mod tests {
         message_create_event(scope, payload)
     }
 
-    async fn accepted_mls_head(state: &AppState, scope: &ScopeRef) -> (u64, Option<String>) {
-        let group = scope.canonical_mls_group_id().unwrap();
-        let current = state
-            .mls_commits()
-            .commit(scope, &group)
-            .await
-            .unwrap()
-            .expect("accepted MLS state");
-        (current.epoch, current.accepted_commit_ref)
+    async fn accepted_mls_head(state: &AppState, scope: &ScopeRef) -> (u64, EventId) {
+        let current = current_group(state, scope).await;
+        (current.epoch, current.current_mls_commit_event_ref)
     }
 
     fn submit_refusal(
@@ -1139,14 +1133,7 @@ mod tests {
                 soland_storage::ConflictCode::FailedPrecondition
             );
         }
-        assert!(
-            state
-                .mls_commits()
-                .commit(&scope, &scope.canonical_mls_group_id().unwrap())
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(state.mls_groups().current(&scope).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1175,18 +1162,7 @@ mod tests {
         let scope = realm_scope(REALM);
         let (genesis, commit) = (event_ref(1), event_ref(2));
         accept_genesis(&state, &scope, &genesis).await;
-        state.test_projection().lock().pending_mls_removals.push(
-            soland_domain::reducer::MlsRemoveObligation {
-                realm_id: REALM.to_owned(),
-                circle_id: None,
-                mls_group_ref: Some(scope.canonical_mls_group_id().unwrap().to_string()),
-                actor_id: LEADER.to_owned(),
-                device_id: Some(DEVICE.to_owned()),
-                membership_frontier: Vec::new(),
-                trigger_membership: "leave".to_owned(),
-                triggered_at: chrono::Utc::now(),
-            },
-        );
+        advance_key_access(&state, &scope).await;
         let current = encrypted_message(&scope, standard(0, genesis.clone()), None);
         assert_eq!(
             submit_refusal(message_create_send_gate(&state, &current).await),

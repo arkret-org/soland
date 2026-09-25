@@ -8,8 +8,8 @@ use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
-    FacetRef, MlsRemoveObligation, ProjectionEffect, ProjectionState, SolandMembershipState,
-    SolandRealmState, object_stage_wire_value,
+    FacetRef, ProjectionEffect, ProjectionState, SolandMembershipState, SolandRealmState,
+    object_stage_wire_value,
 };
 use soland_storage::{PersistenceResult, PersistenceStore};
 
@@ -100,19 +100,6 @@ pub enum MlsProjectionEffect {
         intended_realm_id: Option<String>,
         claimed_at: i64,
     },
-    RemoveProposalRecorded,
-    GroupGenesis {
-        group_id: String,
-        effective_scope: Value,
-        creator_actor_id: String,
-        creator_device_id: String,
-    },
-    CommitEpochAdvanced {
-        group_id: String,
-        effective_scope: Value,
-        previous_epoch: u64,
-        leader_actor_id: String,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -188,33 +175,6 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                     group_id,
                     intended_realm_id,
                     claimed_at,
-                },
-                soland_domain::reducer::MlsEffect::RemoveProposalRecorded { .. } => {
-                    MlsProjectionEffect::RemoveProposalRecorded
-                }
-                soland_domain::reducer::MlsEffect::GroupGenesis {
-                    group_id,
-                    effective_scope,
-                    creator_actor_id,
-                    creator_device_id,
-                    ..
-                } => MlsProjectionEffect::GroupGenesis {
-                    group_id,
-                    effective_scope,
-                    creator_actor_id,
-                    creator_device_id,
-                },
-                soland_domain::reducer::MlsEffect::CommitEpochAdvanced {
-                    group_id,
-                    effective_scope,
-                    previous_epoch,
-                    leader_actor_id,
-                    ..
-                } => MlsProjectionEffect::CommitEpochAdvanced {
-                    group_id,
-                    effective_scope,
-                    previous_epoch,
-                    leader_actor_id,
                 },
             }),
             ProjectionEffect::RealmOrganizationProjected {
@@ -952,24 +912,6 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_mls_rejection(&self, operation: &Operation) -> Option<String> {
-        let kind = soland_domain::kinds::canonical_kind_for_operation(operation)?;
-        let mut state = self.state.lock().clone();
-        let effect = match kind {
-            arkret_wire::EventKind::MlsGenesis => {
-                soland_domain::reducer::mls::apply_group_genesis(&mut state, operation)
-            }
-            arkret_wire::EventKind::MlsCommit => {
-                soland_domain::reducer::mls::apply_commit_epoch(&mut state, operation)
-            }
-            _ => ProjectionEffect::Ignored,
-        };
-        match effect {
-            ProjectionEffect::Rejected { reason } => Some(reason),
-            _ => None,
-        }
-    }
-
     /// Validate a plaintext Poll response against the current accepted Poll
     /// projection before the Event is made durable. The reducer remains the
     /// deterministic fold, but semantic rejection must not be deferred until
@@ -1008,109 +950,6 @@ impl ProjectionService {
             ProjectionEffect::Rejected { reason } => Some(reason),
             _ => None,
         }
-    }
-
-    pub fn bind_circle_mls_group(
-        &self,
-        group_id: &str,
-        effective_scope: &Value,
-        clear_pending_removals: bool,
-    ) -> Vec<MlsRemoveObligation> {
-        let Some((realm_id, circle_id)) = mls_scope_parts(effective_scope) else {
-            return Vec::new();
-        };
-        let mut state = self.state.lock();
-        if let Some(circle_id) = circle_id.as_deref() {
-            let Some(circle) = state.circles.get_mut(circle_id) else {
-                tracing::warn!(%realm_id, %circle_id, %group_id, "MLS circle scope has no Circle projection");
-                return Vec::new();
-            };
-            if circle.realm_id != realm_id {
-                tracing::warn!(%realm_id, %circle_id, circle_realm_id = %circle.realm_id, %group_id, "MLS circle scope realm mismatch");
-                return Vec::new();
-            }
-            match circle.mls_group_ref.as_deref() {
-                Some(existing) if existing != group_id => {
-                    tracing::warn!(%realm_id, %circle_id, %group_id, existing, "MLS group mismatch for Circle projection");
-                    return Vec::new();
-                }
-                Some(_) => {}
-                None => circle.mls_group_ref = Some(group_id.to_owned()),
-            }
-        }
-        if !clear_pending_removals {
-            return Vec::new();
-        }
-        let pending = std::mem::take(&mut state.pending_mls_removals);
-        let (cleared, retained): (Vec<_>, Vec<_>) = pending.into_iter().partition(|obligation| {
-            obligation.realm_id == realm_id
-                && obligation.circle_id == circle_id
-                && obligation
-                    .mls_group_ref
-                    .as_deref()
-                    .is_none_or(|expected| expected == group_id)
-        });
-        state.pending_mls_removals = retained;
-        if !cleared.is_empty() {
-            tracing::info!(%realm_id, ?circle_id, %group_id, cleared = cleared.len(), "cleared pending MLS remove obligations");
-        }
-        cleared
-    }
-
-    /// Rebuild process-local MLS removal obligations from one durable sealed
-    /// cleanup intent. Enqueueing here is idempotent but is not durable and
-    /// therefore must never acknowledge the intent's MLS completion step;
-    /// callers acknowledge only after a durable obligation or covering MLS
-    /// commit is observable.
-    pub fn enqueue_device_revoke_mls_removals(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        revoke_event_id: &str,
-        triggered_at: DateTime<Utc>,
-    ) -> usize {
-        let mut state = self.state.lock();
-        let mut queued = Vec::new();
-        for row in state.mls_commit_epochs.values() {
-            let Some((realm_id, circle_id)) = mls_scope_parts(&row.effective_scope) else {
-                continue;
-            };
-            if !actor_participates_in_mls_scope(&state, &realm_id, circle_id.as_deref(), actor_id) {
-                continue;
-            }
-            if pending_device_revoke_exists(
-                &state.pending_mls_removals,
-                &realm_id,
-                circle_id.as_deref(),
-                &row.group_id,
-                actor_id,
-                device_id,
-                revoke_event_id,
-            ) || pending_device_revoke_exists(
-                &queued,
-                &realm_id,
-                circle_id.as_deref(),
-                &row.group_id,
-                actor_id,
-                device_id,
-                revoke_event_id,
-            ) {
-                continue;
-            }
-            queued.push(MlsRemoveObligation {
-                realm_id,
-                circle_id,
-                mls_group_ref: Some(row.group_id.clone()),
-                actor_id: actor_id.to_owned(),
-                device_id: Some(device_id.to_owned()),
-                membership_frontier: vec![revoke_event_id.to_owned()],
-                trigger_membership: "device_revoke".to_owned(),
-                triggered_at,
-            });
-        }
-        let count = queued.len();
-        state.pending_mls_removals.extend(queued);
-        count
     }
 
     pub fn mark_key_packages_revoked(&self, keypackage_ids: &[String]) {
@@ -1239,44 +1078,6 @@ pub(crate) fn restore_invite_acceptance_membership(
     );
 }
 
-fn mls_scope_parts(effective_scope: &Value) -> Option<(String, Option<String>)> {
-    let object = effective_scope.as_object()?;
-    let realm_id = object.get("realm_id").and_then(Value::as_str)?.to_owned();
-    match object.get("kind").and_then(Value::as_str) {
-        Some("realm") => Some((realm_id, None)),
-        Some("circle") => Some((
-            realm_id,
-            Some(object.get("circle_id").and_then(Value::as_str)?.to_owned()),
-        )),
-        _ => None,
-    }
-}
-
-fn actor_participates_in_mls_scope(
-    state: &ProjectionState,
-    realm_id: &str,
-    circle_id: Option<&str>,
-    actor_id: &str,
-) -> bool {
-    match circle_id {
-        Some(circle_id) => state.circles.get(circle_id).is_some_and(|circle| {
-            circle.realm_id == realm_id
-                && circle.mls_group_ref.is_some()
-                && circle.members.contains(actor_id)
-        }),
-        None => {
-            state
-                .member(realm_id, actor_id)
-                .is_some_and(|member| member.state == "join")
-                || state
-                    .realm_states
-                    .get(realm_id)
-                    .and_then(|realm| realm.owner.as_deref())
-                    == Some(actor_id)
-        }
-    }
-}
-
 fn morph_write_through_record(
     row: &soland_domain::reducer::MorphProjection,
 ) -> ProjectionWriteThroughRecord {
@@ -1300,29 +1101,6 @@ fn morph_write_through_record(
         created_at: row.created_at,
         updated_by: row.updated_by.clone(),
         updated_at: row.updated_at,
-    })
-}
-
-fn pending_device_revoke_exists(
-    obligations: &[MlsRemoveObligation],
-    realm_id: &str,
-    circle_id: Option<&str>,
-    group_id: &str,
-    actor_id: &str,
-    device_id: &str,
-    revoke_event_id: &str,
-) -> bool {
-    obligations.iter().any(|obligation| {
-        obligation.realm_id == realm_id
-            && obligation.circle_id.as_deref() == circle_id
-            && obligation.mls_group_ref.as_deref() == Some(group_id)
-            && obligation.actor_id == actor_id
-            && obligation.device_id.as_deref() == Some(device_id)
-            && obligation.trigger_membership == "device_revoke"
-            && obligation
-                .membership_frontier
-                .iter()
-                .any(|event_id| event_id == revoke_event_id)
     })
 }
 

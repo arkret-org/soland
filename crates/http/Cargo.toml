@@ -86,6 +86,7 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+arkret-mls = { workspace = true, features = ["test-utils"] }
 arkret-schema-conformance = { workspace = true }
 arkret-test-kit = { workspace = true }
 arkret-event-draft = { workspace = true, features = ["test-support"] }

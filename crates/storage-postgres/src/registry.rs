@@ -78,7 +78,7 @@ pub struct PgPersistenceStore {
     one_time_keys: PgOneTimeKeyStore,
     member_identity: PgMemberIdentityStore,
     mls_key_packages: PgMlsKeyPackageStore,
-    mls_commits: PgMlsCommitStore,
+    mls_groups: crate::mls_group_current_results::PgMlsGroupCurrentStore,
     agent_participation: PgAgentParticipationStore,
     agents: PgAgentStore,
     sidecars: PgSidecarStore,
@@ -165,7 +165,9 @@ impl PgPersistenceStore {
             one_time_keys: PgOneTimeKeyStore { pool: pool.clone() },
             member_identity: PgMemberIdentityStore { pool: pool.clone() },
             mls_key_packages: PgMlsKeyPackageStore { pool: pool.clone() },
-            mls_commits: PgMlsCommitStore { pool: pool.clone() },
+            mls_groups: crate::mls_group_current_results::PgMlsGroupCurrentStore {
+                pool: pool.clone(),
+            },
             agent_participation: PgAgentParticipationStore { pool: pool.clone() },
             agents: PgAgentStore { pool: pool.clone() },
             sidecars: PgSidecarStore { pool: pool.clone() },
@@ -439,8 +441,8 @@ impl MlsAgentStoreRegistry for PgPersistenceStore {
         &self.mls_key_packages
     }
 
-    fn mls_commits(&self) -> &dyn MlsCommitStore {
-        &self.mls_commits
+    fn mls_groups(&self) -> &dyn soland_storage::MlsGroupCurrentStore {
+        &self.mls_groups
     }
 
     fn agent_participation(&self) -> &dyn AgentParticipationStore {

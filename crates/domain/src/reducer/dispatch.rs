@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use super::{
     CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect, ProjectionState,
-    RealmLinkState, SpaceContainerLifecycleTransition, mls,
+    RealmLinkState, SpaceContainerLifecycleTransition,
 };
 use crate::hlc::ServerHlc;
 
@@ -809,27 +809,6 @@ fn apply_moderation_decision_lift_dispatch(
     s.apply_moderation_decision_lift(op, op.created_at)
 }
 
-// ── MLS lifecycle dispatch adapters ───────────────────────────────────
-//
-// Each adapter forwards to the free function in `reducer::mls`. The registry carries the two
-// MLS Event kinds: `ak.mls.genesis` and `ak.mls.commit`.
-
-fn apply_mls_genesis_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    mls::apply_group_genesis(s, op)
-}
-
-fn apply_mls_commit_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    mls::apply_commit_epoch(s, op)
-}
-
 /// Build the canonical `event_kind → ApplyFn` registry consumed by
 /// [`super::ProjectionState::apply`]. Public so out-of-crate tests can assert
 /// exact coverage of the active reducer-input set.
@@ -1227,12 +1206,19 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::SelfModerationReport,
         apply_durable_fact_dispatch,
     );
-    // MLS lifecycle: group genesis and the monotonic commit-epoch bump.
+    // `ak.mls.genesis` and `ak.mls.commit` write the `mls_group` typed current
+    // result, with the public RFC 9420 state and every Welcome, inside the
+    // guarded authority unit of work at the covering RealmCommit. The shared
+    // product projection keeps no mirror of the group and only acknowledges
+    // the durable fact.
     m.insert(
         arkret_wire::EventKind::MlsGenesis,
-        apply_mls_genesis_dispatch,
+        apply_durable_fact_dispatch,
     );
-    m.insert(arkret_wire::EventKind::MlsCommit, apply_mls_commit_dispatch);
+    m.insert(
+        arkret_wire::EventKind::MlsCommit,
+        apply_durable_fact_dispatch,
+    );
     for kind in [
         EventKind::AppletBridgeError,
         EventKind::AppletManagedActorProvision,

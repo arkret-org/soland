@@ -886,30 +886,6 @@ impl ProjectionState {
         )
     }
 
-    /// The canonical MLS group id an accepted `ak.mls.genesis` installed for the Realm-default
-    /// scope, if that scope is activated.
-    ///
-    /// A scope is plaintext until its own `ak.mls.genesis` is accepted; that acceptance
-    /// irreversibly activates it as standard RFC 9420 (realm-and-space.md 2.3, circle.md 7).
-    /// Realm, Circle and Sidecar scopes activate independently and activation never propagates.
-    pub fn realm_scope_mls_group_id(&self, realm_id: &str) -> Option<&str> {
-        self.mls_commit_epochs
-            .values()
-            .find(|epoch| {
-                matches!(
-                    serde_json::from_value::<arkret_wire::ScopeRef>(epoch.effective_scope.clone()),
-                    Ok(arkret_wire::ScopeRef::Realm { realm_id: scope_realm_id })
-                        if scope_realm_id.as_str() == realm_id
-                )
-            })
-            .map(|epoch| epoch.group_id.as_str())
-    }
-
-    /// Whether the Realm-default scope has accepted its own `ak.mls.genesis`.
-    pub fn realm_scope_is_mls_activated(&self, realm_id: &str) -> bool {
-        self.realm_scope_mls_group_id(realm_id).is_some()
-    }
-
     /// The canonical MLS group id an accepted `ak.mls.genesis` installed for a Circle scope.
     pub fn circle_scope_mls_group_id(&self, circle_id: &str) -> Option<&str> {
         self.circles
@@ -920,27 +896,6 @@ impl ProjectionState {
     /// Whether the named Circle scope has accepted its own `ak.mls.genesis`.
     pub fn circle_scope_is_mls_activated(&self, circle_id: &str) -> bool {
         self.circle_scope_mls_group_id(circle_id).is_some()
-    }
-
-    /// Whether the scope a verified `scope_ref` / projected `effective_scope` names is activated.
-    pub fn scope_is_mls_activated(&self, effective_scope: &Value) -> bool {
-        match serde_json::from_value::<arkret_wire::ScopeRef>(effective_scope.clone()) {
-            Ok(arkret_wire::ScopeRef::Realm { realm_id }) => {
-                self.realm_scope_is_mls_activated(realm_id.as_str())
-            }
-            Ok(arkret_wire::ScopeRef::Circle { circle_id, .. }) => {
-                self.circle_scope_is_mls_activated(circle_id.as_str())
-            }
-            _ => false,
-        }
-    }
-
-    /// Whether the scope named by a Realm plus an optional Circle is activated.
-    pub fn scope_is_mls_activated_for(&self, realm_id: &str, circle_id: Option<&str>) -> bool {
-        match circle_id {
-            Some(circle_id) => self.circle_scope_is_mls_activated(circle_id),
-            None => self.realm_scope_is_mls_activated(realm_id),
-        }
     }
 
     /// Effective Realm `history_access` projected from its dedicated cell.

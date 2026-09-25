@@ -5,7 +5,6 @@
 
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_wire::{AppletId, DidCoreId, EventKind};
-use serde_json::Value;
 
 use super::{
     CircleLifecycleState, MessageState, ObjectLifecycleState, SolandRelationState,
@@ -336,32 +335,6 @@ pub enum MlsEffect {
         intended_realm_id: Option<String>,
         last_resort: bool,
         claimed_at: i64,
-    },
-    /// `apply_remove_proposal` — a `ak.mls.proposal{proposal_type="remove"}`
-    /// was recorded so a later commit can consume a pending remove obligation.
-    RemoveProposalRecorded {
-        proposal_ref: String,
-        group_id: String,
-        effective_scope: Value,
-        target_actor_id: String,
-        target_device_id: Option<String>,
-    },
-    /// `apply_group_genesis` — the group was initialized at epoch 0.
-    GroupGenesis {
-        group_id: String,
-        effective_scope: Value,
-        epoch: u64,
-        creator_actor_id: String,
-        creator_device_id: String,
-    },
-    /// `apply_commit_epoch` — the group's epoch was bumped from
-    /// `previous_epoch` to `new_epoch`.
-    CommitEpochAdvanced {
-        group_id: String,
-        effective_scope: Value,
-        previous_epoch: u64,
-        new_epoch: u64,
-        leader_actor_id: String,
     },
 }
 

@@ -176,34 +176,17 @@ pub(crate) async fn direct_group_state_for_realm(
     let realm_id = arkret_wire::RealmId::new(realm_id.to_owned()).map_err(|error| {
         AppError::internal(format!("direct conversation Realm id is invalid: {error}"))
     })?;
-    let mut matching = state
-        .mls_commits()
-        .commits()
+    let Some(current) = state
+        .mls_groups()
+        .current(&arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        })
         .await
         .map_err(|error| AppError::internal(format!("MLS group-state lookup failed: {error}")))?
-        .into_iter()
-        .filter(|commit| {
-            matches!(
-                &commit.effective_scope,
-                arkret_wire::ScopeRef::Realm { realm_id: commit_realm_id }
-                    if commit_realm_id == &realm_id
-            )
-        });
-    let Some(commit) = matching.next() else {
+    else {
         return Ok(None);
     };
-    if matching.next().is_some() {
-        return Ok(None);
-    }
-    let state_ref = commit
-        .accepted_commit_ref
-        .as_deref()
-        .unwrap_or(commit.genesis_event_ref.as_str());
-    let event_ref = arkret_wire::EventId::new(state_ref.to_owned()).map_err(|error| {
-        AppError::internal(format!(
-            "stored MLS group-state Event ref is invalid: {error}"
-        ))
-    })?;
+    let event_ref = current.value.current_mls_commit_event_ref;
     let record = state
         .event_queries()
         .canonical_event(event_ref.as_str())

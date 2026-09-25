@@ -227,7 +227,7 @@ pub struct AuthorityCommitTransaction {
     pub event: Event,
     pub commit: RealmCommit,
     pub mls_state: Option<MlsStateInstallation>,
-    pub welcomes: Vec<MlsWelcomeDelivery>,
+    pub welcomes: Vec<VerifiedMlsWelcome>,
     /// Service-configured maximum outstanding deliveries for each exact
     /// recipient endpoint. A transaction carrying Welcome must provide a
     /// positive bound; zero is permitted only when no Welcome is present.
@@ -653,12 +653,49 @@ impl OrdinaryRealmBootstrapCommitUnit {
     }
 }
 
+/// The public MLS transition an accepted `ak.mls.genesis` or `ak.mls.commit`
+/// installs (encryption-and-audit.md §2.2, §5.1).
+///
+/// The serving layer verified the RFC 9420 public transition from the exact
+/// Event bytes against `base`; the accepting transaction installs it only
+/// while `base` is still the scope's current group, so a concurrent winner
+/// turns this attempt into a zero-write refusal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsStateInstallation {
-    pub group_id: String,
     pub effective_scope: arkret_wire::ScopeRef,
+    /// `None` for Genesis; otherwise the exact current group the Commit was
+    /// verified against.
+    pub base: Option<MlsInstalledBase>,
+    /// The epoch the transition reaches.
     pub epoch: u64,
-    pub state_bytes: Vec<u8>,
+    /// Station-private public RFC 9420 tracker state at `epoch`. It holds no
+    /// member secret and is never a wire value.
+    pub public_state: Vec<u8>,
+}
+
+/// The current group coordinates a Commit transition was verified against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsInstalledBase {
+    pub current_mls_commit_event_ref: arkret_wire::EventId,
+    pub epoch: u64,
+}
+
+/// One producer-signed Welcome the serving layer verified against its exact
+/// KeyPackage claim ledger entry (device-lifecycle.md, claim ledger rules).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedMlsWelcome {
+    pub delivery: MlsWelcomeDelivery,
+    pub claim: MlsWelcomeClaimLedgerKey,
+}
+
+/// The durable claim ledger row `keypackage_claim_ref` resolved to, with the
+/// exact request digest the verification read; the accepting transaction
+/// requires the row to still hold that request and a live claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsWelcomeClaimLedgerKey {
+    pub source_id: String,
+    pub claim_request_id: String,
+    pub request_digest: String,
 }
 
 impl AuthorityCommitTransaction {
@@ -683,25 +720,17 @@ impl AuthorityCommitTransaction {
                 "authority commit transaction bindings disagree".to_owned(),
             ));
         }
-        match (&self.mls_state, &self.event.kind) {
-            (Some(state), &arkret_wire::EventKind::MlsCommit) => {
-                let payload_value = serde_json::to_value(&self.event.payload).map_err(|error| {
-                    arkret_wire::WireError::Protocol(format!(
-                        "MLS Commit Event payload cannot be encoded: {error}"
-                    ))
-                })?;
-                let payload: arkret_models_crypto::MlsCommitPayload =
-                    serde_json::from_value(payload_value).map_err(|error| {
-                        arkret_wire::WireError::Protocol(format!(
-                            "MLS Commit Event has no valid governance binding: {error}"
-                        ))
-                    })?;
-                validate_mls_installation(&payload, &self.event.scope_ref, state)?;
-            }
-            (None, kind) if *kind != arkret_wire::EventKind::MlsCommit => {}
+        let is_mls = matches!(
+            self.event.kind,
+            arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+        );
+        match &self.mls_state {
+            Some(state) if is_mls => validate_mls_installation(&self.event, state)?,
+            None if !is_mls => {}
             _ => {
                 return Err(arkret_wire::WireError::Protocol(
-                    "MLS Commit acceptance requires exactly one installed group state".to_owned(),
+                    "MLS Genesis or Commit acceptance requires exactly one installed group state"
+                        .to_owned(),
                 ));
             }
         }
@@ -711,10 +740,11 @@ impl AuthorityCommitTransaction {
             ));
         }
         for welcome in &self.welcomes {
-            welcome.validate_shape()?;
-            if welcome.realm_id != self.event.realm_id
-                || welcome.effective_scope != self.event.scope_ref
-                || welcome.commit_event_ref != self.event.event_id
+            let delivery = &welcome.delivery;
+            delivery.validate_shape()?;
+            if delivery.realm_id != self.event.realm_id
+                || delivery.effective_scope != self.event.scope_ref
+                || delivery.commit_event_ref != self.event.event_id
             {
                 return Err(arkret_wire::WireError::Protocol(
                     "MLS Welcome does not bind the committed Event and stream".to_owned(),
@@ -726,22 +756,56 @@ impl AuthorityCommitTransaction {
 }
 
 fn validate_mls_installation(
-    payload: &arkret_models_crypto::MlsCommitPayload,
-    event_scope: &arkret_wire::ScopeRef,
+    event: &Event,
     state: &MlsStateInstallation,
 ) -> arkret_wire::Result<()> {
-    let binding = payload.governance_binding();
-    let expected_group_id = binding.mls_group_id()?;
-    if binding.effective_scope() != event_scope
-        || state.effective_scope != *event_scope
-        || state.group_id != expected_group_id.as_str()
-        || state.epoch != payload.next_epoch()
-        || state.state_bytes.is_empty()
-        || payload.covers_key_access_revision() != binding.key_access_revision()
-    {
-        return Err(arkret_wire::WireError::Protocol(
-            "installed MLS state differs from the signed Commit governance binding".to_owned(),
-        ));
+    let payload = serde_json::to_value(&event.payload).map_err(|error| {
+        arkret_wire::WireError::Protocol(format!("MLS Event payload cannot be encoded: {error}"))
+    })?;
+    let mismatch = || {
+        arkret_wire::WireError::Protocol(
+            "installed MLS state differs from the signed governance binding".to_owned(),
+        )
+    };
+    if state.public_state.is_empty() || state.effective_scope != event.scope_ref {
+        return Err(mismatch());
+    }
+    match event.kind {
+        arkret_wire::EventKind::MlsGenesis => {
+            let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+                serde_json::from_value(payload).map_err(|error| {
+                    arkret_wire::WireError::Protocol(format!(
+                        "MLS Genesis Event has no valid payload: {error}"
+                    ))
+                })?;
+            payload.validate()?;
+            if payload.effective_scope() != &event.scope_ref
+                || state.base.is_some()
+                || state.epoch != 0
+            {
+                return Err(mismatch());
+            }
+        }
+        _ => {
+            let payload: arkret_models_crypto::MlsCommitPayload = serde_json::from_value(payload)
+                .map_err(|error| {
+                arkret_wire::WireError::Protocol(format!(
+                    "MLS Commit Event has no valid governance binding: {error}"
+                ))
+            })?;
+            let binding = payload.governance_binding();
+            let Some(base) = &state.base else {
+                return Err(mismatch());
+            };
+            if binding.effective_scope() != &event.scope_ref
+                || base.current_mls_commit_event_ref != *payload.base_group_state_ref()
+                || base.epoch != payload.base_epoch()
+                || state.epoch != payload.next_epoch()
+                || payload.covers_key_access_revision() != binding.key_access_revision()
+            {
+                return Err(mismatch());
+            }
+        }
     }
     Ok(())
 }
@@ -1182,7 +1246,21 @@ mod mls_installation_tests {
     use arkret_models_crypto::{MlsCommitEnvelope, MlsCommitPayload, MlsGovernanceBindingPayload};
     use arkret_wire::{EventId, Hash, RealmId, ScopeRef};
 
-    use super::{MlsStateInstallation, validate_mls_installation};
+    use super::{MlsInstalledBase, MlsStateInstallation, validate_mls_installation};
+
+    fn commit_event(scope: &ScopeRef, payload: &MlsCommitPayload) -> arkret_wire::Event {
+        arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.mls.commit",
+            scope.clone(),
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:mls-committer.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:mls-station.example").unwrap(),
+            )),
+            serde_json::to_value(payload).unwrap(),
+            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn installed_state_must_match_signed_mls_binding() {
@@ -1202,26 +1280,40 @@ mod mls_installation_tests {
             commit_digest: Hash::new(arkret_canonical::sha256_digest(commit_bytes)).unwrap(),
             ratchet_tree: None,
         };
-        let payload = MlsCommitPayload::new(base, 7, &envelope, binding).unwrap();
+        let payload = MlsCommitPayload::new(base.clone(), 7, &envelope, binding).unwrap();
         let scope = ScopeRef::Realm { realm_id };
+        let event = commit_event(&scope, &payload);
         let installed = MlsStateInstallation {
-            group_id: envelope.group_id.as_str().to_owned(),
             effective_scope: scope.clone(),
+            base: Some(MlsInstalledBase {
+                current_mls_commit_event_ref: base,
+                epoch: 0,
+            }),
             epoch: 1,
-            state_bytes: vec![1],
+            public_state: vec![1],
         };
-        assert!(validate_mls_installation(&payload, &scope, &installed).is_ok());
+        assert!(validate_mls_installation(&event, &installed).is_ok());
 
-        let mut wrong_group = installed.clone();
-        wrong_group.group_id = "other-group".to_owned();
-        assert!(validate_mls_installation(&payload, &scope, &wrong_group).is_err());
+        let mut wrong_base = installed.clone();
+        wrong_base
+            .base
+            .as_mut()
+            .unwrap()
+            .current_mls_commit_event_ref =
+            EventId::from_event_digest(&Hash::new(arkret_canonical::sha256_digest([2])).unwrap())
+                .unwrap();
+        assert!(validate_mls_installation(&event, &wrong_base).is_err());
 
         let mut wrong_epoch = installed.clone();
         wrong_epoch.epoch = 2;
-        assert!(validate_mls_installation(&payload, &scope, &wrong_epoch).is_err());
+        assert!(validate_mls_installation(&event, &wrong_epoch).is_err());
+
+        let mut genesis_shaped = installed.clone();
+        genesis_shaped.base = None;
+        assert!(validate_mls_installation(&event, &genesis_shaped).is_err());
 
         let mut missing_state = installed;
-        missing_state.state_bytes.clear();
-        assert!(validate_mls_installation(&payload, &scope, &missing_state).is_err());
+        missing_state.public_state.clear();
+        assert!(validate_mls_installation(&event, &missing_state).is_err());
     }
 }

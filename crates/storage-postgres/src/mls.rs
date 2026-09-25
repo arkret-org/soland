@@ -1,13 +1,12 @@
 use diesel_async::AsyncConnection;
 
 use super::{
-    BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis,
-    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    BigInt, Binary, Bool, Jsonb, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
     MlsKeyPackageStore, Nullable, OptionalExtension, PeerClaimTerminalTransition,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value, apply_key_package_claim,
-    async_trait, ids, json_string_array, mls_effective_scope_parts, pg_conn, sql_query, sql_types,
+    PgTransactionError, QueryableByName, RunQueryDsl, Text, Value, apply_key_package_claim,
+    async_trait, ids, json_string_array, pg_conn, sql_query,
 };
 
 /// Encode a key package's trust-binding Event reference for storage.
@@ -29,9 +28,6 @@ fn format_authorize_event_id(token: &[u8]) -> String {
     )
 }
 pub struct PgMlsKeyPackageStore {
-    pub pool: PgPool,
-}
-pub struct PgMlsCommitStore {
     pub pool: PgPool,
 }
 #[async_trait]
@@ -332,6 +328,32 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         load_peer_claim(&mut conn, source_id, claim_request_id).await
+    }
+
+    async fn get_peer_claim_by_claim_id(
+        &self,
+        claim_id: &str,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query(
+            "SELECT source_id, claim_request_id, request_digest, key_package_use, keypackage_id, outcome, terminal_receipt, consume_receipt, claim_expires_at_unix_ms, expires_at, state, updated_at \
+             FROM peer_keypackage_claims \
+             WHERE outcome->'claims' @> jsonb_build_array(jsonb_build_object('claim_id', $1::text)) \
+             LIMIT 2",
+        )
+        .bind::<Text, _>(claim_id)
+        .load::<PeerKeyPackageClaimPgRow>(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        match <[PeerKeyPackageClaimPgRow; 1]>::try_from(rows) {
+            Ok([row]) => Ok(Some(PeerKeyPackageClaimLedgerRecord::from(row))),
+            Err(rows) if rows.is_empty() => Ok(None),
+            Err(_) => Err(PersistenceError::Conflict(
+                "one KeypackageClaimId names more than one claim ledger row".to_owned(),
+            )),
+        }
     }
 
     async fn get_peer_claim_by_keypackage_id(
@@ -837,136 +859,6 @@ async fn load_peer_claim(
     .map(|row| row.map(PeerKeyPackageClaimLedgerRecord::from))
     .map_err(PersistenceError::database)
 }
-#[async_trait]
-impl MlsCommitStore for PgMlsCommitStore {
-    async fn get(
-        &self,
-        effective_scope: &Value,
-        group_id: &str,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let scope = mls_effective_scope_parts(effective_scope)?;
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, \
-             genesis_event_ref, governance_binding, accepted_commit_ref, committed_at \
-             FROM mls_commits \
-             WHERE effective_scope_kind = $1 \
-               AND realm_id = $2 \
-               AND circle_id IS NOT DISTINCT FROM $3 \
-               AND mls_group_id = $4",
-        )
-        .bind::<Text, _>(&scope.kind)
-        .bind::<Text, _>(&scope.realm_id)
-        .bind::<Nullable<Text>, _>(&scope.circle_id)
-        .bind::<Text, _>(group_id)
-        .get_result::<MlsCommitEpochRow>(&mut *conn)
-        .await
-        .optional()
-        .map(|row| row.map(MlsCommitEpochRecord::from))
-        .map_err(PersistenceError::database)
-    }
-
-    async fn initialize_genesis(
-        &self,
-        genesis: MlsCommitGenesis<'_>,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let MlsCommitGenesis {
-            effective_scope,
-            group_id,
-            leader_actor_id,
-            creator_device_id,
-            genesis_event_ref,
-            governance_binding,
-            committed_at,
-        } = genesis;
-        let scope = mls_effective_scope_parts(effective_scope)?;
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO mls_commits \
-             (id, effective_scope_kind, realm_id, circle_id, effective_scope, mls_group_id, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, NULL, $11) \
-             ON CONFLICT DO NOTHING \
-             RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at",
-        )
-        .bind::<sql_types::Uuid, _>(Uuid::now_v7())
-        .bind::<Text, _>(&scope.kind)
-        .bind::<Text, _>(&scope.realm_id)
-        .bind::<Nullable<Text>, _>(&scope.circle_id)
-        .bind::<Jsonb, _>(effective_scope)
-        .bind::<Text, _>(group_id)
-        .bind::<Text, _>(leader_actor_id)
-        .bind::<Text, _>(creator_device_id)
-        .bind::<Text, _>(genesis_event_ref)
-        .bind::<Jsonb, _>(governance_binding)
-        .bind::<BigInt, _>(committed_at)
-        .get_result::<MlsCommitEpochRow>(&mut *conn).await
-        .optional()
-        .map(|row| row.map(MlsCommitEpochRecord::from))
-        .map_err(PersistenceError::database)
-    }
-
-    async fn try_bump(
-        &self,
-        expected_prev_epoch: u64,
-        advance: MlsCommitEpochAdvance<'_>,
-    ) -> PersistenceResult<Option<MlsCommitEpochRecord>> {
-        let scope = mls_effective_scope_parts(advance.effective_scope)?;
-        let expected_epoch = i64::try_from(expected_prev_epoch)
-            .map_err(|_| PersistenceError::Internal("MLS epoch exceeds i64".to_owned()))?;
-        let next_epoch = expected_prev_epoch
-            .checked_add(1)
-            .and_then(|epoch| i64::try_from(epoch).ok())
-            .ok_or_else(|| PersistenceError::Internal("MLS epoch overflow".to_owned()))?;
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "UPDATE mls_commits SET \
-               epoch = $6, \
-               leader_actor_id = $7, \
-                governance_binding = $8, \
-                accepted_commit_ref = $9, \
-                committed_at = $10 \
-             WHERE effective_scope_kind = $1 \
-               AND realm_id = $2 \
-               AND circle_id IS NOT DISTINCT FROM $3 \
-               AND mls_group_id = $4 \
-               AND epoch = $5 \
-              RETURNING id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at",
-        )
-        .bind::<Text, _>(&scope.kind)
-        .bind::<Text, _>(&scope.realm_id)
-        .bind::<Nullable<Text>, _>(&scope.circle_id)
-        .bind::<Text, _>(advance.group_id)
-        .bind::<BigInt, _>(expected_epoch)
-        .bind::<BigInt, _>(next_epoch)
-        .bind::<Text, _>(advance.leader_actor_id)
-        .bind::<Jsonb, _>(advance.governance_binding)
-        .bind::<Text, _>(advance.accepted_commit_ref)
-        .bind::<BigInt, _>(advance.committed_at)
-        .get_result::<MlsCommitEpochRow>(&mut *conn).await
-        .optional()
-        .map(|row| row.map(MlsCommitEpochRecord::from))
-        .map_err(PersistenceError::database)
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsCommitEpochRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT id, mls_group_id, effective_scope, epoch, leader_actor_id, creator_device_id, genesis_event_ref, governance_binding, accepted_commit_ref, committed_at \
-             FROM mls_commits ORDER BY effective_scope_kind ASC, realm_id ASC, circle_id ASC, mls_group_id ASC",
-        )
-        .load::<MlsCommitEpochRow>(&mut *conn).await
-        .map(|rows| rows.into_iter().map(MlsCommitEpochRecord::from).collect())
-        .map_err(PersistenceError::database)
-    }
-}
 #[derive(QueryableByName)]
 struct MlsKeyPackagePgRow {
     #[diesel(sql_type = Text)]
@@ -1104,43 +996,4 @@ fn validated_keypackage_row(row: MlsKeyPackagePgRow) -> PersistenceResult<MlsKey
         ))
     })?;
     Ok(row)
-}
-#[derive(QueryableByName)]
-struct MlsCommitEpochRow {
-    #[diesel(sql_type = sql_types::Uuid)]
-    id: Uuid,
-    #[diesel(sql_type = Text)]
-    mls_group_id: String,
-    #[diesel(sql_type = Jsonb)]
-    effective_scope: Value,
-    #[diesel(sql_type = BigInt)]
-    epoch: i64,
-    #[diesel(sql_type = Text)]
-    leader_actor_id: String,
-    #[diesel(sql_type = Text)]
-    creator_device_id: String,
-    #[diesel(sql_type = Text)]
-    genesis_event_ref: String,
-    #[diesel(sql_type = Jsonb)]
-    governance_binding: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    accepted_commit_ref: Option<String>,
-    #[diesel(sql_type = BigInt)]
-    committed_at: i64,
-}
-impl From<MlsCommitEpochRow> for MlsCommitEpochRecord {
-    fn from(row: MlsCommitEpochRow) -> Self {
-        Self {
-            id: row.id,
-            group_id: row.mls_group_id,
-            effective_scope: row.effective_scope,
-            epoch: row.epoch.max(0) as u64,
-            leader_actor_id: row.leader_actor_id.to_string(),
-            creator_device_id: row.creator_device_id,
-            genesis_event_ref: row.genesis_event_ref,
-            governance_binding: row.governance_binding,
-            accepted_commit_ref: row.accepted_commit_ref,
-            committed_at: row.committed_at,
-        }
-    }
 }

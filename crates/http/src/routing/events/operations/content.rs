@@ -4,14 +4,11 @@ pub(crate) async fn scope_has_accepted_mls_genesis(
     state: &AppState,
     scope: &arkret_wire::ScopeRef,
 ) -> Result<bool, &'static str> {
-    let group_id = scope
-        .canonical_mls_group_id()
-        .map_err(|_| "mls_activation_state_unavailable")?;
     state
-        .mls_commits()
-        .commit(scope, group_id.as_str())
+        .mls_groups()
+        .current(scope)
         .await
-        .map(|commit| commit.is_some())
+        .map(|current| current.is_some())
         .map_err(|_| "mls_activation_state_unavailable")
 }
 

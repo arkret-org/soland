@@ -170,35 +170,26 @@ pub(super) async fn enforce_mimi_submit_binding(
         .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
     }
 
-    let effective_scope = serde_json::json!({
-        "kind": "realm",
-        "realm_id": room_binding.realm_id,
-    });
-    let projection = state.projections().snapshot();
-    let current = projection
-        .mls_commit_epochs
-        .values()
-        .find(|row| row.effective_scope == effective_scope);
-    let Some(current) = current else {
+    let Some(current) = state
+        .mls_groups()
+        .current(&expected_scope)
+        .await
+        .map_err(|error| AppError::internal(format!("current MLS group lookup: {error}")))?
+    else {
         return Err(AppError::param_invalid(
             "MIMI submit_message has no accepted MLS security frontier",
         )
         .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
-    let current_scope: arkret_wire::ScopeRef =
-        serde_json::from_value(current.effective_scope.clone()).map_err(|_| {
-            AppError::param_invalid("MIMI accepted MLS scope is invalid")
-                .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
-        })?;
-    if current_scope != expected_scope {
-        return Err(AppError::param_invalid(
-            "MIMI accepted MLS scope does not match the room binding",
-        )
-        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH));
-    }
-    validate_mimi_group_ids(&current_scope, binding_group_id, &current.group_id)?;
+    let current = current.value;
+    let current_binding = crate::routing::mls::current_mls_group_binding(state, &current).await?;
+    let current_group_id = expected_scope.canonical_mls_group_id().map_err(|_| {
+        AppError::param_invalid("MIMI MLS scope cannot derive a group id")
+            .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+    })?;
+    validate_mimi_group_ids(&expected_scope, binding_group_id, current_group_id.as_str())?;
     if current.epoch != epoch
-        || arkret_canonical::canonical_json_bytes(&current.governance_binding).map_err(|error| {
+        || arkret_canonical::canonical_json_bytes(&current_binding).map_err(|error| {
             AppError::internal(format!("MLS frontier canonicalization: {error}"))
         })? != arkret_canonical::canonical_json_bytes(governance_binding).map_err(|error| {
             AppError::internal(format!("MIMI governance binding canonicalization: {error}"))

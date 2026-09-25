@@ -757,48 +757,29 @@ async fn verify_signal_mls_basis(
         .canonical_mls_group_id()
         .map_err(|error| signal_invalid(format!("signal MLS scope: {error}")))?;
     let current = state
-        .mls_commits()
-        .commit(&envelope.scope_ref, &group_id)
+        .mls_groups()
+        .current(&envelope.scope_ref)
         .await
         .map_err(|_| signal_rail_unavailable("resolve the signal MLS basis"))?
-        .ok_or_else(|| signal_invalid("signal scope has no accepted MLS state"))?;
-    let current_ref = current
-        .accepted_commit_ref
-        .as_deref()
-        .unwrap_or(&current.genesis_event_ref);
-    let bound_group_id = current
-        .governance_binding
-        .mls_group_id()
-        .map_err(|error| signal_invalid(format!("signal MLS governance binding: {error}")))?;
+        .ok_or_else(|| signal_invalid("signal scope has no accepted MLS state"))?
+        .value;
     if current.effective_scope != envelope.scope_ref
         || current.epoch != envelope.encrypted_payload.epoch
-        || current_ref != envelope.encrypted_payload.key_ref.group_state_ref
-        || current.governance_binding.effective_scope() != &envelope.scope_ref
-        || bound_group_id != group_id
-        || current.governance_binding.next_epoch() != current.epoch
+        || current.current_mls_commit_event_ref.as_str()
+            != envelope.encrypted_payload.key_ref.group_state_ref
     {
         return Err(signal_invalid(
             "signal MLS basis is stale, mismatched, or contested",
         ));
     }
-    if state
-        .projections()
-        .snapshot()
-        .pending_mls_removals
-        .iter()
-        .any(|removal| {
-            removal.realm_id == envelope.realm_id.as_str()
-                && removal.circle_id.as_deref()
-                    == envelope.scope_ref.circle_id().map(|id| id.as_str())
-        })
-    {
+    if current.covered_key_access_revision < current.current_key_access_revision {
         return Err(signal_invalid(
-            "signal MLS basis has pending removal obligations",
+            "signal MLS basis has an uncovered key-access revision",
         ));
     }
     let genesis = state
         .event_queries()
-        .canonical_event(&current.genesis_event_ref)
+        .canonical_event(current.genesis_event_ref.as_str())
         .await
         .map_err(|_| signal_rail_unavailable("resolve the signal MLS genesis"))?
         .ok_or_else(|| signal_invalid("signal MLS genesis is unavailable"))?;

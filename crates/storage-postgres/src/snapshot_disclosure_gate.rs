@@ -27,13 +27,14 @@
 //!
 //! Per family, a joined member receives:
 //!
-//! - every Realm singleton, every `member_state` row, every Realm-scoped Strand, and every
+//! - every Realm singleton, every `member_state` row, every Realm-scoped Strand, every
 //!   `invite_lifecycle`, `invite_live_target`, `invite_directed_invitee` and `capability_grant`
-//!   row. These are Realm-stream state written by durable shared Events that federation fans out to
-//!   every joined member (`federation.md` §4.1.1); membership, not a grant, decides a member's
-//!   reads (`capabilities.md` §9) and a Realm promises no read isolation among its joined members
-//!   (`realm-and-space.md` §1). A row below the caller's floor is current state the signed Snapshot
-//!   commits to (`realm-state-snapshot-schema.md` §3);
+//!   row, and the Realm-scope `mls_group` row (the public MLS group every member's send gate reads,
+//!   encryption-and-audit.md §2.5.3). These are Realm-stream state written by durable shared Events
+//!   that federation fans out to every joined member (`federation.md` §4.1.1); membership, not a
+//!   grant, decides a member's reads (`capabilities.md` §9) and a Realm promises no read isolation
+//!   among its joined members (`realm-and-space.md` §1). A row below the caller's floor is current
+//!   state the signed Snapshot commits to (`realm-state-snapshot-schema.md` §3);
 //! - a `message_revision` row only when its covering Commit is within the caller's readable
 //!   interval. Its value is the accepted carrier Event's payload, i.e. history content, and a
 //!   Snapshot must satisfy the history policy (`history-visibility.md` §6). A row below the floor
@@ -75,6 +76,8 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::MessageCreate,
     EventKind::MessageRevise,
     EventKind::MessageRedact,
+    EventKind::MlsGenesis,
+    EventKind::MlsCommit,
 ];
 
 /// Every typed-current table this Station installs. A new family could be
@@ -91,6 +94,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "strand_current_results",
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
+    "mls_group_current_results",
     "object_redaction_current_results",
     "invite_lifecycle_current_results",
     "invite_live_target_current_results",
@@ -441,6 +445,15 @@ pub(crate) fn disclose_to_account(
             | CurrentSelector::InviteLiveTarget { .. }
             | CurrentSelector::InviteDirectedInvitee { .. }
             | CurrentSelector::CapabilityGrant { .. } => {}
+            CurrentSelector::MlsGroup { scope_ref } => {
+                if !matches!(scope_ref, arkret_wire::ScopeRef::Realm { realm_id }
+                    if realm_id == &material.realm_id)
+                {
+                    return Err(rejected(
+                        "a Circle or Sidecar MLS group's visibility is not proved",
+                    ));
+                }
+            }
             CurrentSelector::ObjectRedaction { target_ref } => {
                 let value = serde_json::from_value::<
                     arkret_models_collaboration::events_payloads::redaction::ObjectRedactionCurrentValue,

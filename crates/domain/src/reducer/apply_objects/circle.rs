@@ -242,36 +242,9 @@ impl ProjectionState {
         circle.state_changed_at = Some(now);
         circle.updated_by = Some(operation.context.sender.to_string());
         circle.updated_at = Some(now);
-        let tombstoned_mls_scope = if target == CircleLifecycleState::Tombstoned {
-            let members = if circle.mls_group_ref.is_some() {
-                circle.members.iter().cloned().collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+        if target == CircleLifecycleState::Tombstoned {
             // Membership is invalidated when the Circle is tombstoned.
             circle.members.clear();
-            Some((
-                circle.realm_id.clone(),
-                circle.mls_group_ref.clone(),
-                members,
-            ))
-        } else {
-            None
-        };
-        if let Some((realm_id, mls_group_ref, members)) = tombstoned_mls_scope {
-            let membership_frontier = vec![operation.operation_id.as_str().to_owned()];
-            for member in members {
-                self.pending_mls_removals.push(MlsRemoveObligation {
-                    realm_id: realm_id.clone(),
-                    circle_id: Some(circle_id.clone()),
-                    mls_group_ref: mls_group_ref.clone(),
-                    actor_id: member,
-                    device_id: None,
-                    membership_frontier: membership_frontier.clone(),
-                    trigger_membership: "tombstone".to_owned(),
-                    triggered_at: now,
-                });
-            }
         }
         ProjectionEffect::CircleLifecycle {
             circle_id,
@@ -385,7 +358,6 @@ impl ProjectionState {
                 reason: "circle_not_active".to_owned(),
             };
         }
-        let mut removed_mls_member = None;
         match target_state.as_str() {
             "join" => {
                 circle.members.insert(actor.clone());
@@ -396,10 +368,7 @@ impl ProjectionState {
             "leave" | "ban" => {
                 self.circle_member_join_refs
                     .remove(&(circle_id.clone(), actor.clone()));
-                if circle.members.remove(&actor) && circle.mls_group_ref.is_some() {
-                    removed_mls_member =
-                        Some((circle.realm_id.clone(), circle.mls_group_ref.clone()));
-                }
+                circle.members.remove(&actor);
             }
             "knock" => {
                 // Knock is a non-active membership proposal; no active-set
@@ -414,26 +383,6 @@ impl ProjectionState {
         circle.updated_by = Some(operation.context.sender.to_string());
         circle.updated_at = Some(now);
         self.update_circle_membership_projection(&circle_id, &actor, &target_state, now);
-        if let Some((realm_id, mls_group_ref)) = removed_mls_member {
-            let membership_frontier = vec![
-                payload
-                    .get("event_id")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| operation.operation_id.as_str())
-                    .to_owned(),
-            ];
-            self.pending_mls_removals.push(MlsRemoveObligation {
-                realm_id,
-                circle_id: Some(circle_id.clone()),
-                mls_group_ref,
-                actor_id: actor.clone(),
-                device_id: None,
-                membership_frontier,
-                trigger_membership: target_state.clone(),
-                triggered_at: now,
-            });
-        }
         ProjectionEffect::CircleMemberStateChanged {
             circle_id,
             member: actor,
@@ -467,18 +416,6 @@ impl ProjectionState {
         }
         if circle.realm_id != operation_realm_id {
             return Err("circle_realm_mismatch");
-        }
-        if self.pending_mls_removals.iter().any(|obligation| {
-            obligation.realm_id == operation_realm_id
-                && obligation.circle_id.as_deref() == Some(scope_circle_id)
-                && obligation.mls_group_ref.as_deref().is_none_or(|group_ref| {
-                    circle
-                        .mls_group_ref
-                        .as_deref()
-                        .is_none_or(|expected| expected == group_ref)
-                })
-        }) {
-            return Err("circle_not_active");
         }
         Ok(())
     }
