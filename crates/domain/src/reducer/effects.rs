@@ -65,11 +65,6 @@ pub enum ProjectionEffect {
         state: String,
         invitee_id: Option<String>,
     },
-    KeyBackupActiveSeriesProjected {
-        actor_id: String,
-        backup_kind: String,
-        active_series_id: String,
-    },
     RealmLifecycle {
         realm_id: String,
         action: String,

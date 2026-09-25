@@ -883,19 +883,16 @@ pub async fn hydrate_projections_from_persistence(
     hydrate_canonical_realm_memberships(persistence, proj, projection_adapter).await?;
     hydrate_sidecar_projections(persistence, proj, &hydration_hlc).await?;
 
-    // Agent key authorization is consulted by sidecar eligibility, while
-    // `ak.key_backup.active_series` is the canonical selector for every
-    // backup class. Neither projection has active mirror-table integration,
-    // so restore them from the durable event stream. Agent authorize/revoke
-    // transitions must retain confirmed command order; querying each
-    // kind independently would lose their relative ordering.
+    // Agent key authorization is consulted by sidecar eligibility and has no
+    // mirror-table integration, so restore it from the durable event stream.
+    // Agent authorize/revoke transitions must retain confirmed command order;
+    // querying each kind independently would lose their relative ordering.
     let events = hydration_replay_records(persistence).await?;
     for event in events.iter().cloned() {
         let projection_name = match arkret_wire::EventKind::from_wire(&event.kind) {
             arkret_wire::EventKind::AgentKeyAuthorize | arkret_wire::EventKind::AgentKeyRevoke => {
                 "agent-key"
             }
-            arkret_wire::EventKind::KeyBackupActiveSeries => "active-series",
             _ => continue,
         };
         replay_hydration_record(

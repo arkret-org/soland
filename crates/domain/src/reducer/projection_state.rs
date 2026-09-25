@@ -81,10 +81,6 @@ pub struct ProjectionState {
     /// `ak.invite.third_party` creates pending third-party invites and
     /// `ak.invite.claim` converts them into DID-targeted claimed invites.
     pub invites: BTreeMap<String, InviteProjection>,
-    /// Signed key-backup active-series records keyed by `(actor_id,
-    /// backup_kind)`. Recovery MUST use this pointer instead of inferring the
-    /// canonical series from list order or latest timestamp.
-    pub key_backup_active_series: BTreeMap<(String, String), SolandKeyBackupActiveSeries>,
     /// Realm lifecycle state keyed by realm_id.
     pub realm_states: BTreeMap<String, SolandRealmState>,
     /// Redacted event IDs (tombstones). This stays as a flat

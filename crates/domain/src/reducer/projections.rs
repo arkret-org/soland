@@ -65,22 +65,6 @@ pub struct InviteProjection {
     pub claim_nonces: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SolandKeyBackupActiveSeries {
-    pub actor_id: String,
-    pub backup_kind: String,
-    pub active_series_id: String,
-    pub series_pointer_version: u64,
-    pub previous_series_ids: Vec<String>,
-    pub record_digest: String,
-    pub source_commit_ref:
-        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesSourceCommitRef,
-    pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub auth_data: arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesAuthData,
-    pub extra: BTreeMap<String, Value>,
-    pub event_id: String,
-}
-
 /// R3.1 — structured cache row for a single directed Realm link.
 /// Mirrors the `ak.component.realm.link.v1` cell value plus envelope-
 /// derived timestamps so the query API can render `created_at` /

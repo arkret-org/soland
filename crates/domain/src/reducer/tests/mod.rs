@@ -7,7 +7,6 @@ mod circle_encryption;
 mod circle_history;
 mod container_realm_control;
 mod invite_claim;
-mod key_backup_active_series;
 mod moderation;
 mod pending_replay;
 mod pin_rsvp_encryption;

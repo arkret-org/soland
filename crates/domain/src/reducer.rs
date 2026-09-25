@@ -19,7 +19,6 @@ mod apply_capability;
 mod apply_history_access;
 mod apply_identity_resolution;
 mod apply_invites;
-mod apply_key_backup;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
@@ -80,9 +79,9 @@ pub use projections::{
     PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState,
     RealmLinkState, RealmOrganizationStatementState, RedactionCellValue,
     RelationCurrentResultProjection, RsvpProjection, SidecarContextProjection, SidecarProjection,
-    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
-    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
-    StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
+    SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
+    SpaceContainerProjection, StrandProjection, StrandWatchProjection,
+    object_stage_from_wire_value, object_stage_wire_value,
 };
 use serde_json::Value;
 

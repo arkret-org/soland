@@ -943,10 +943,7 @@ async fn try_advance_rotation_switch(
         })
         .await
     {
-        Ok(_) => {
-            crate::state::mirror_committed_key_backup_pointer(state, event);
-            Ok(())
-        }
+        Ok(_) => Ok(()),
         Err(error) => match permanent_worker_refusal(&error) {
             Some(reason_code) => {
                 tracing::warn!(%error, "rotation pointer switch refused; aborting the transaction");

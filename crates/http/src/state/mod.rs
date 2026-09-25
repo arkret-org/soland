@@ -26,7 +26,6 @@ pub use app_state::{
 };
 #[cfg(feature = "test-support")]
 pub(crate) use authority_forward::{admit_forwarded_event, fresh_producer_device_evidence};
-pub(crate) use authority_key_backup_pointer::mirror_committed_key_backup_pointer;
 pub(crate) use authority_producer_validation::verify_self_event_producer;
 pub(crate) use authority_self_event_unit::submit_self_moderation_report;
 pub(crate) use member_identity::{

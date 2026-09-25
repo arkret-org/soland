@@ -36,7 +36,6 @@ pub mod facet {
     pub const DEVICE_REANCHOR: &str = "device.reanchor";
     pub const IDENTITY_RESOLUTION: &str = "identity.resolution";
     pub const INVITE_LIVE_TARGET: &str = "invite.live_target";
-    pub const KEY_BACKUP_ACTIVE_SERIES: &str = "key_backup.active_series";
     pub const MEMBER_IDENTITY: &str = "member.identity";
     pub const MEMBER_STATE: &str = "member.state";
     pub const MLS_EPOCH: &str = "mls.epoch";

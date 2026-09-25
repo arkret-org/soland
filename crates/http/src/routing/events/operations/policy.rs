@@ -255,10 +255,6 @@ async fn validate_one_operation_policy(
         validate_principal_control_realm_binding(state, operation)?;
         message_rules::validate_agent_control_realm_binding(state, operation).await?;
         validate_accountability_profile_policy(state, operations, operation).await?;
-        crate::routing::identity::agent_pcr::validate_active_series_operation_authority(
-            state, operation,
-        )
-        .await?;
         // Verify the canonical device possession proof on every
         // ak.device.authorize at ingest.
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::DeviceAuthorize {

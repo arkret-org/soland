@@ -184,13 +184,6 @@ fn apply_invite_claim_dispatch(
 ) -> ProjectionEffect {
     s.apply_invite_claim(op, op.created_at)
 }
-fn apply_key_backup_active_series_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_key_backup_active_series(op)
-}
 fn apply_realm_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -909,10 +902,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::InviteClaim,
         apply_invite_claim_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::KeyBackupActiveSeries,
-        apply_key_backup_active_series_dispatch,
     );
     // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
     // `ak.member.identity.update`. Cell family
