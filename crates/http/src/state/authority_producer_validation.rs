@@ -169,6 +169,13 @@ pub(crate) async fn verify_self_event_producer(
     Ok(guard)
 }
 
+/// Resolve the human device that actually signed the Event.
+///
+/// Decision 0107: self submit requires only that the signer is a device of the
+/// authenticated principal, not the session's own device. The signing device
+/// is judged by the single §8.2.2 rule -- its local PCR
+/// `device_authorization`/`device_generation` status -- and a refusal carries
+/// the registered device code.
 async fn human_producer_key(
     state: &AppState,
     session: &SessionIdentityState,
@@ -178,24 +185,27 @@ async fn human_producer_key(
     arkret_signatures::PublicKeyMaterial,
     SelfProducerCommitGuard,
 )> {
-    let device_id = DeviceId::new(session.device_id.clone())
-        .map_err(|_| rejected("human session has no canonical device id"))?;
-    if method_device_id(&proof.verification_method, &account.principal_id)
-        != Some(device_id.clone())
-    {
-        return Err(rejected(
-            "Event proof DID controller or fragment differs from authenticated device",
-        ));
-    }
-    let expected = session
+    session
         .session_grant
         .as_ref()
         .and_then(|grant| grant.device_binding.as_ref())
         .ok_or_else(|| rejected("human grant has no accepted device binding"))?;
-    if expected.device_id != device_id {
-        return Err(rejected(
-            "human grant device differs from authenticated session",
-        ));
+    let device_id = method_device_id(&proof.verification_method, &account.principal_id)
+        .ok_or_else(|| {
+            ServiceError::protocol(
+                arkret_wire::ErrorCode::SignatureInvalid,
+                "Event proof method is not a device of the authenticated account",
+            )
+        })?;
+    let admission = state
+        .persistence()
+        .pcr_device_admission(account, &device_id, chrono::Utc::now())
+        .await?;
+    if let Some(refusal) = ServiceError::device_admission_refusal(
+        admission,
+        "Event producer device is not active at the PCR cut",
+    ) {
+        return Err(refusal);
     }
     let selector =
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
@@ -204,14 +214,6 @@ async fn human_producer_key(
             device_id.as_str(),
         )
         .await?;
-    if selector.authorization_ref.event_id != *expected.committed_authorization()
-        || selector.authorization_ref.event_id != expected.authorization_event_id
-        || expected.model_generation_ref == 0
-    {
-        return Err(rejected(
-            "human grant is stale against current device authorization",
-        ));
-    }
     let gate = state
         .persistence()
         .device_revocation_gate_status(&selector)
@@ -236,10 +238,15 @@ async fn human_producer_key(
         &facet,
     )
     .await?
-    .ok_or_else(|| rejected("Event producer device authorization is unavailable"))?;
-    if authorization.authorized_generation_ref != expected.model_generation_ref {
+    .ok_or_else(|| {
+        ServiceError::protocol(
+            arkret_wire::ErrorCode::DeviceUnauthorized,
+            "Event producer device authorization is unavailable",
+        )
+    })?;
+    if facet.device_authorize_event_id.as_ref() != Some(&selector.authorization_ref.event_id) {
         return Err(rejected(
-            "human grant generation differs from current device authorization",
+            "Event producer device authorization is not its current confirmed instance",
         ));
     }
     let multibase = authorization
