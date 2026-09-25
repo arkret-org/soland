@@ -640,6 +640,10 @@ async fn upload_keypackage(
                 continue;
             }
         };
+        if let Err(reason) = validate_keypackage_ciphersuite(&entry, &key_package_bytes) {
+            rejected.push(keypackage_failure(&entry, endpoint_device_id, reason));
+            continue;
+        }
         let keypackage_digest = arkret_canonical::sha256_digest(&key_package_bytes);
         let capabilities = match validate_capabilities(&entry.capabilities) {
             Ok(value) => value,
@@ -3216,6 +3220,30 @@ async fn keypackage_device_revocation_gate(
     Ok(Some(selector))
 }
 
+/// A published KeyPackage names exactly the active registry suite its bytes
+/// declare (encryption-and-audit §2.1). An unregistered or reserved suite, a
+/// second advertised suite, or an outer label that differs from the bytes is
+/// `unsupported_ciphersuite`; nothing is tried in turn or rewritten locally.
+fn validate_keypackage_ciphersuite(
+    entry: &KeyPackageUploadEntry,
+    key_package_bytes: &[u8],
+) -> Result<(), &'static str> {
+    if arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0).is_err() {
+        return Err("key_package_invalid");
+    }
+    let declared = arkret_mls::keypackage_ciphersuite_canonical_id(key_package_bytes)
+        .map_err(|_| arkret_wire::ReasonCode::UNSUPPORTED_CIPHERSUITE)?;
+    if entry.cipher_suites.len() != 1
+        || entry.cipher_suites[0] != declared
+        || !arkret_wire::MLS_CIPHERSUITES
+            .iter()
+            .any(|suite| suite.canonical_id == declared && suite.status == "active")
+    {
+        return Err(arkret_wire::ReasonCode::UNSUPPORTED_CIPHERSUITE);
+    }
+    Ok(())
+}
+
 fn validate_capabilities(capabilities: &[String]) -> Result<Vec<String>, String> {
     let capabilities_ref = capabilities.iter().map(String::as_str).collect::<Vec<_>>();
     arkret_models_crypto::validate_advertised_keypackage_capabilities(&capabilities_ref)
@@ -3358,7 +3386,11 @@ async fn validate_agent_keypackage_leaf(
     let public_key = URL_SAFE_NO_PAD
         .decode(binding.public_key.key.as_str())
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    validate_actor_keypackage_leaf(principal, &public_key, key_package_bytes)
+    let owner = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal.clone(),
+        state.service_core_id(),
+    ));
+    validate_actor_keypackage_leaf(&owner, &public_key, key_package_bytes)
 }
 
 fn pairwise_keypackage_public_key(
@@ -3413,19 +3445,26 @@ fn validate_pairwise_keypackage_leaf(
     key_package_bytes: &[u8],
 ) -> Result<(), String> {
     let public_key = pairwise_keypackage_public_key(principal, verification_method)?;
-    validate_actor_keypackage_leaf(principal, &public_key, key_package_bytes)
+    let owner = arkret_wire::ActorId::service(principal.clone());
+    validate_actor_keypackage_leaf(&owner, &public_key, key_package_bytes)
 }
 
+/// The KeyPackage LeafNode must carry the owner's exact v1 BasicCredential,
+/// `UTF8(RFC8785_JCS(actor_id))` of the complete ActorId (never a collapsed
+/// principal, DID or device id), and be signed by the owner's authorized key
+/// (encryption-and-audit §2.1).
 fn validate_actor_keypackage_leaf(
-    principal: &arkret_wire::DidCoreId,
+    owner: &arkret_wire::ActorId,
     public_key: &[u8],
     key_package_bytes: &[u8],
 ) -> Result<(), String> {
+    let expected_identity = arkret_models_crypto::mls_basic_credential_identity(owner)
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
     let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
         .map_err(|_| "key_package_invalid".to_owned())?;
     match leaf.credential {
         arkret_mls::AuthorLeafCredential::Basic { identity }
-            if identity.as_slice() == principal.as_str().as_bytes() => {}
+            if identity.as_slice() == expected_identity.as_slice() => {}
         _ => return Err("claim_generation_mismatch".to_owned()),
     }
     if leaf.signature_key.as_slice() != public_key {
@@ -3480,17 +3519,11 @@ async fn validate_device_keypackage_leaf(
         "multibase",
     )
     .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
-        .map_err(|_| "key_package_invalid".to_owned())?;
-    match leaf.credential {
-        arkret_mls::AuthorLeafCredential::Basic { identity }
-            if identity.as_slice() == device_id.as_bytes() => {}
-        _ => return Err("claim_generation_mismatch".to_owned()),
-    }
-    if leaf.signature_key.as_slice() != verifying_key.to_bytes() {
-        return Err("claim_generation_mismatch".to_owned());
-    }
-    Ok(())
+    let owner = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal.clone(),
+        state.service_core_id(),
+    ));
+    validate_actor_keypackage_leaf(&owner, &verifying_key.to_bytes(), key_package_bytes)
 }
 
 async fn verify_device_keypackage_signature(
@@ -4537,6 +4570,89 @@ mod trust_binding_tests {
         assert_eq!(
             device_failure.device_id.as_deref(),
             Some("ak:device:01964137-0000-7000-8000-000000000001")
+        );
+    }
+
+    fn device_keypackage(
+        owner: &arkret_wire::ActorId,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> (KeyPackageUploadEntry, Vec<u8>) {
+        let identity = arkret_mls::ArkretMlsIdentity::new_human_device(
+            owner.clone(),
+            arkret_wire::DeviceId::new("ak:device:01964137-0000-7000-8000-000000000011").unwrap(),
+            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(signing_key.clone()),
+        )
+        .unwrap();
+        let record = identity.key_package_record().unwrap();
+        let entry = identity.key_package_upload_entry(&record).unwrap();
+        let bytes = decode_key_package(entry.keypackage.as_str()).unwrap();
+        (entry, bytes)
+    }
+
+    /// A published LeafNode carries `UTF8(RFC8785_JCS(actor_id))` of the
+    /// complete owner ActorId and the owner's authorized key; a collapsed
+    /// principal, device id or another Station's AccountId is refused.
+    #[test]
+    fn keypackage_leaf_must_carry_the_complete_owner_actor() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x21; 32]);
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:kp-owner.example").unwrap();
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:kp-station.example").unwrap();
+        let owner =
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), station));
+        let (_, bytes) = device_keypackage(&owner, &key);
+        validate_actor_keypackage_leaf(&owner, &key.verifying_key().to_bytes(), &bytes).unwrap();
+
+        let other_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let collapsed = arkret_wire::ActorId::service(principal);
+        for wrong_owner in [other_station, collapsed] {
+            assert_eq!(
+                validate_actor_keypackage_leaf(
+                    &wrong_owner,
+                    &key.verifying_key().to_bytes(),
+                    &bytes
+                ),
+                Err("claim_generation_mismatch".to_owned())
+            );
+        }
+        let other_key = ed25519_dalek::SigningKey::from_bytes(&[0x22; 32]);
+        assert_eq!(
+            validate_actor_keypackage_leaf(&owner, &other_key.verifying_key().to_bytes(), &bytes),
+            Err("claim_generation_mismatch".to_owned())
+        );
+    }
+
+    /// Publication names exactly the active registry suite the bytes declare.
+    #[test]
+    fn keypackage_upload_names_only_the_declared_active_suite() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x23; 32]);
+        let owner = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:kp-suite.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:kp-station.example").unwrap(),
+        ));
+        let (entry, bytes) = device_keypackage(&owner, &key);
+        validate_keypackage_ciphersuite(&entry, &bytes).unwrap();
+        for cipher_suites in [
+            vec!["MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519".to_owned()],
+            vec!["0x7fff".to_owned()],
+            vec![
+                "MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519".to_owned(),
+                "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
+            ],
+            Vec::new(),
+        ] {
+            let mut presented = entry.clone();
+            presented.cipher_suites = cipher_suites;
+            assert_eq!(
+                validate_keypackage_ciphersuite(&presented, &bytes),
+                Err("unsupported_ciphersuite")
+            );
+        }
+        assert_eq!(
+            validate_keypackage_ciphersuite(&entry, b"not a keypackage"),
+            Err("key_package_invalid")
         );
     }
 
