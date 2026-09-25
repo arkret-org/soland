@@ -757,16 +757,19 @@ pub(super) async fn realm_state_snapshot_head(
                 .unwrap_or(soland_http::error::ErrorCode::Unauthenticated);
             soland_http::error::AppError::from_rejection(typed, message)
         })?;
-    if is_realm_deleted(state, &realm_id).await
-        || !realm_id_accessible(state, &realm_id, Some(&session)).await
-    {
-        return Err(soland_http::error::AppError::not_found("not found"));
-    }
     let actor =
         crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
     let account = actor
         .as_account_id()
         .ok_or_else(|| soland_http::error::AppError::not_found("not found"))?;
+    if is_realm_deleted(state, &realm_id).await
+        || !crate::routing::realm_state_snapshot::account_is_joined_member(
+            state, &realm_id, account,
+        )
+        .await?
+    {
+        return Err(soland_http::error::AppError::not_found("not found"));
+    }
     let manifest = realm_state_snapshot_manifest_for_realm(state, &realm_id, account)
         .await
         .map_err(|error| {
@@ -813,14 +816,17 @@ pub(super) async fn realm_state_snapshot_by_ref(
             "the Realm snapshot is not readable by this caller",
         )
     };
-    if is_realm_deleted(state, &realm_id).await
-        || !realm_id_accessible(state, &realm_id, Some(&session)).await
-    {
-        return Err(denied());
-    }
     let actor =
         crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
     let account = actor.as_account_id().ok_or_else(denied)?;
+    if is_realm_deleted(state, &realm_id).await
+        || !crate::routing::realm_state_snapshot::account_is_joined_member(
+            state, &realm_id, account,
+        )
+        .await?
+    {
+        return Err(denied());
+    }
     let snapshot = crate::routing::realm_state_snapshot::issued_realm_state_snapshot_for_account(
         state,
         &realm_id,

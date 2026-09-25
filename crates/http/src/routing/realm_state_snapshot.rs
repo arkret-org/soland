@@ -30,6 +30,29 @@ fn map_issue_error(
     }
 }
 
+/// Whether `account` is a currently joined member of the Realm on the
+/// governing Station's typed `member_state` current (the same membership the
+/// Snapshot gate, the stream scan and the stream list prove), so a non-member
+/// gets the non-enumerating refusal before any disclosure is attempted.
+pub(crate) async fn account_is_joined_member(
+    state: &AppState,
+    realm_id: &str,
+    account: &arkret_wire::AccountId,
+) -> Result<bool, soland_http::error::AppError> {
+    let Ok(realm_id) = arkret_wire::RealmId::new(realm_id.to_owned()) else {
+        return Ok(false);
+    };
+    match state
+        .authority_commits()
+        .list_realm_streams_for_account(&realm_id, account, &state.service_core_id())
+        .await
+    {
+        Ok(soland_storage::AccountRealmStreamList::NotVisible) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(error) => Err(soland_http::error::AppError::internal(error.to_string())),
+    }
+}
+
 /// Issue the one closed, inline v1 snapshot from a single durable cut that
 /// also proves this Station's current governing tenure and persists the exact
 /// signed object for later by-ref reads. No chunk, cursor, or partial

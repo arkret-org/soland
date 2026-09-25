@@ -256,9 +256,17 @@ pub(super) async fn frame(
             (RealmSelection::NotSelected, _) => continue,
             (RealmSelection::Unsupported, _) => Some(RealmDetailErrorCode::TemporarilyUnavailable),
             (RealmSelection::RealmStream, None) => Some(RealmDetailErrorCode::NotFound),
-            (RealmSelection::RealmStream, Some(_))
+            (RealmSelection::RealmStream, Some(account))
                 if is_realm_deleted(state, realm.as_str()).await
-                    || !realm_id_accessible(state, realm.as_str(), Some(session)).await =>
+                    || !matches!(
+                        crate::routing::realm_state_snapshot::account_is_joined_member(
+                            state,
+                            realm.as_str(),
+                            account,
+                        )
+                        .await,
+                        Ok(true)
+                    ) =>
             {
                 Some(RealmDetailErrorCode::NotFound)
             }
