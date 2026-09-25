@@ -163,8 +163,30 @@ pub struct DeviceRevocationCleanupIntent {
     pub mls_obligation_completed_at: Option<DateTime<Utc>>,
 }
 
+/// The PCR `device_generation` typed current (device-lifecycle.md §5.5.4)
+/// with its read-side status, both from one confirmed cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PcrDeviceGeneration {
+    pub current_device_generation_ref: u64,
+    /// A verified fork reanchoring the generation has been ingested.
+    pub conflicted: bool,
+}
+
 #[async_trait]
 pub trait DeviceRevocationStore: Send + Sync {
+    /// The accepted `device_generation` of the Account's PCR at one confirmed
+    /// cut whose projection matches its latest writer Commit and whose
+    /// conflict-index marker covers the head. `None` when this Station holds
+    /// no PCR for the Account.
+    async fn pcr_device_generation(
+        &self,
+        _account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<PcrDeviceGeneration>> {
+        Err(PersistenceError::SchemaViolation(
+            "PCR device generation provider is unavailable".to_owned(),
+        ))
+    }
+
     /// Authoritative PCR human-device admission at `now`, folded from one
     /// confirmed cut of the accepted `device_authorization`,
     /// `device_generation`, revoke proposals and conflict index. Missing or

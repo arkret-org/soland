@@ -2103,6 +2103,17 @@ async fn accepted_device_unit_admits_only_a_current_active_approver() {
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
         };
+    // The typed device_generation current is readable at the confirmed cut.
+    assert_eq!(
+        PgDeviceRevocationStore { pool: pool.clone() }
+            .pcr_device_generation(&account)
+            .await
+            .unwrap(),
+        Some(soland_storage::PcrDeviceGeneration {
+            current_device_generation_ref: 1,
+            conflicted: false,
+        })
+    );
     let before = accepted_device_footprint(&pool, &realm_id, &account).await;
     let refusal = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
         let error = store

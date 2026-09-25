@@ -383,6 +383,17 @@ impl PersistenceHandle {
             .await?)
     }
 
+    pub async fn pcr_device_generation(
+        &self,
+        account: &arkret_wire::AccountId,
+    ) -> crate::ServiceResult<Option<soland_storage::PcrDeviceGeneration>> {
+        Ok(self
+            .persistence
+            .device_revocations()
+            .pcr_device_generation(account)
+            .await?)
+    }
+
     pub async fn pcr_device_admission(
         &self,
         account: &arkret_wire::AccountId,
@@ -1123,6 +1134,15 @@ impl PersistenceHandle {
 
 #[async_trait::async_trait]
 impl soland_storage::DeviceRevocationStore for PersistenceHandle {
+    async fn pcr_device_generation(
+        &self,
+        account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<soland_storage::PcrDeviceGeneration>> {
+        self.persistence
+            .device_revocations()
+            .pcr_device_generation(account)
+            .await
+    }
     async fn pcr_device_admission(
         &self,
         account: &arkret_wire::AccountId,

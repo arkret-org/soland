@@ -243,3 +243,106 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
         generation_conflicted: row.generation_conflict_count > 0,
     }))
 }
+
+#[derive(QueryableByName)]
+struct GenerationCutRow {
+    #[diesel(sql_type = Text)]
+    head_commit_id: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    generation_commit_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+    generation_value: Option<Value>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    latest_generation_commit_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+    expected_generation_value: Option<Value>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    marker_head_commit_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<BigInt>)]
+    conflict_revision: Option<i64>,
+    #[diesel(sql_type = BigInt)]
+    conflict_record_count: i64,
+    #[diesel(sql_type = BigInt)]
+    generation_conflict_count: i64,
+}
+
+/// The PCR `device_generation` typed current and its read-side status from
+/// one REPEATABLE READ snapshot. The projection must equal what its latest
+/// accepted writer (the registration anchor or a reanchor) derives, and the
+/// conflict-index marker must cover the PCR head, or the read fails closed.
+pub(crate) async fn confirmed_pcr_generation(
+    pool: &PgPool,
+    account: &AccountId,
+) -> PersistenceResult<Option<soland_storage::PcrDeviceGeneration>> {
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let row = sql_query(
+            "SELECT h.commit_id AS head_commit_id, \
+               g.current_commit_id AS generation_commit_id, g.value AS generation_value, \
+               (SELECT c.commit_id FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+                WHERE c.realm_id=p.pcr_realm_id AND \
+                  (e.kind='ak.device.reanchor' OR \
+                   (e.kind='ak.device.authorize' AND \
+                    e.envelope->'payload'->>'authorization_binding_kind'='registration_anchor')) \
+                ORDER BY c.stream_position DESC LIMIT 1) AS latest_generation_commit_id, \
+               (SELECT jsonb_build_object('current_device_generation_ref', \
+                        CASE WHEN e.kind='ak.device.reanchor' \
+                          THEN e.envelope->'payload'->'new_device_generation' \
+                          ELSE e.envelope->'payload'->'authorized_generation_ref' END) \
+                FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+                WHERE c.realm_id=p.pcr_realm_id AND \
+                  (e.kind='ak.device.reanchor' OR \
+                   (e.kind='ak.device.authorize' AND \
+                    e.envelope->'payload'->>'authorization_binding_kind'='registration_anchor')) \
+                ORDER BY c.stream_position DESC LIMIT 1) AS expected_generation_value, \
+               m.pcr_head_commit_id AS marker_head_commit_id, m.conflict_revision, \
+               (SELECT count(*) FROM pcr_verified_fork_records f WHERE f.realm_id=p.pcr_realm_id) \
+                 AS conflict_record_count, \
+               (SELECT count(*) FROM pcr_verified_fork_records f \
+                 WHERE f.realm_id=p.pcr_realm_id AND f.affects_generation) AS generation_conflict_count \
+             FROM principal_resolutions p \
+             JOIN LATERAL (SELECT commit_id FROM realm_commits \
+                           WHERE realm_id=p.pcr_realm_id \
+                             AND stream_ref=jsonb_build_object('kind','realm','realm_id',p.pcr_realm_id) \
+                           ORDER BY stream_position DESC LIMIT 1) h ON TRUE \
+             LEFT JOIN pcr_device_generation_current_results g ON g.realm_id=p.pcr_realm_id \
+             LEFT JOIN pcr_device_conflict_index_cuts m ON m.realm_id=p.pcr_realm_id \
+             WHERE p.principal_id=$1 AND p.station_id=$2",
+        )
+        .bind::<Text, _>(account.principal_id.as_str())
+        .bind::<Text, _>(account.station_id.as_str())
+        .get_result::<GenerationCutRow>(&mut *conn)
+        .await
+        .optional()?;
+        let Some(row) = row else { return Ok(None) };
+        if row.generation_commit_id.is_none()
+            || row.generation_commit_id != row.latest_generation_commit_id
+            || row.generation_value != row.expected_generation_value
+        {
+            return Err(incomplete("PCR device generation projection is behind accepted Commit").into());
+        }
+        if row.marker_head_commit_id.as_deref() != Some(row.head_commit_id.as_str())
+            || row.conflict_revision != Some(row.conflict_record_count)
+        {
+            return Err(incomplete("PCR conflict index cut does not cover the head").into());
+        }
+        let value = row.generation_value.expect("checked above");
+        let object = value
+            .as_object()
+            .filter(|object| object.len() == 1)
+            .ok_or_else(|| incomplete("PCR generation value is not closed"))?;
+        let current = object["current_device_generation_ref"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| incomplete("PCR generation value is invalid"))?;
+        Ok(Some(soland_storage::PcrDeviceGeneration {
+            current_device_generation_ref: current,
+            conflicted: row.generation_conflict_count > 0,
+        }))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}

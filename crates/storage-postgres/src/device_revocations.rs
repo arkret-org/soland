@@ -71,6 +71,13 @@ fn target(row: TargetRow) -> PersistenceResult<DeviceRevocationTargetRecord> {
 
 #[async_trait]
 impl DeviceRevocationStore for PgDeviceRevocationStore {
+    async fn pcr_device_generation(
+        &self,
+        account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<soland_storage::PcrDeviceGeneration>> {
+        crate::pcr_device_status_reader::confirmed_pcr_generation(&self.pool, account).await
+    }
+
     async fn pcr_device_admission(
         &self,
         account: &arkret_wire::AccountId,
