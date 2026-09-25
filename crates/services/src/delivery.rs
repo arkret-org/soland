@@ -92,7 +92,6 @@ pub trait DeviceDeliveryPort: Send + Sync {
         push_key: Option<&str>,
         app_id: Option<&str>,
     ) -> ServiceResult<usize>;
-    async fn push_devices(&self) -> ServiceResult<Vec<Value>>;
 }
 
 /// One admitted `SignalEnvelope` held for its TTL (`sync/signal.md` §4).
@@ -349,10 +348,6 @@ impl DeliveryService {
             .unregister_push_device(actor_id, device_id, push_key, app_id)
             .await
     }
-    pub async fn push_devices(&self) -> ServiceResult<Vec<Value>> {
-        self.device_delivery.push_devices().await
-    }
-
     pub async fn append_device_message(
         &self,
         device_revocation_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
@@ -724,9 +719,6 @@ mod tests {
             _app_id: Option<&str>,
         ) -> ServiceResult<usize> {
             Ok(0)
-        }
-        async fn push_devices(&self) -> ServiceResult<Vec<Value>> {
-            Ok(Vec::new())
         }
     }
 

@@ -100,10 +100,6 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
             .unregister(actor_id, device_id, push_key, app_id)
             .await?)
     }
-
-    async fn push_devices(&self) -> crate::ServiceResult<Vec<Value>> {
-        Ok(self.0.push_devices().snapshot_all().await?)
-    }
 }
 
 #[async_trait::async_trait]

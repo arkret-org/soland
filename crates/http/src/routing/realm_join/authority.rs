@@ -6,7 +6,7 @@ use arkret_identity::{
     converge_verified_realm_authorities, verify_realm_authority_bundle,
 };
 use arkret_models_collaboration::governance::realm_join_intake::{
-    RealmJoinCandidate, RealmJoinTarget,
+    RealmJoinCandidate, RealmJoinTarget, validate_authority_locator_hints,
 };
 use arkret_signatures::PublicKeyMaterial;
 use arkret_wire::{
@@ -134,6 +134,10 @@ pub(in crate::routing) async fn resolve_verified_authority(
     hints: &[RealmJoinCandidate],
     nonce: &Base64UrlString,
 ) -> Result<LocatedRealmAuthority, AppError> {
+    // Every carrier validated its array on decode; the set is re-checked here
+    // because a locator is used only after the consumer itself proved the
+    // whole array is bounded, ordered and free of repeated service ids.
+    validate_authority_locator_hints(hints).map_err(invalid_request)?;
     let request = AuthorityBundleRequest {
         realm_id: realm_id.clone(),
         nonce: nonce.clone(),

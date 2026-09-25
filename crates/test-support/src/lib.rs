@@ -688,33 +688,3 @@ impl RuntimeHealthPort for MemoryRuntimeHealth {
         0
     }
 }
-
-/// Read the service-derived `push_target_id` for one registered device.
-///
-/// `push_register_device_outcome` returns the pseudonym to the registering
-/// client itself (`zh/discovery/push-notifications.md` §3.1: the registration
-/// response is the only contractual path that hands it out); this helper reads
-/// the stored registration instead, which is what a notify caller inside the
-/// service does. A test that reuses `registration_id` as a push target is
-/// asserting a conflation the two values never had.
-pub async fn registered_push_target_id(
-    state: &AppState,
-    principal_id: &str,
-    device_id: &str,
-) -> String {
-    state
-        .test_push_devices()
-        .await
-        .into_iter()
-        .find(|record| {
-            record.get("principal_id").and_then(|v| v.as_str()) == Some(principal_id)
-                && record.get("device_id").and_then(|v| v.as_str()) == Some(device_id)
-        })
-        .and_then(|record| {
-            record
-                .get("push_target_id")
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        })
-        .expect("registered push device carries a push_target_id")
-}

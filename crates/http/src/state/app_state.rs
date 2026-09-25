@@ -1981,22 +1981,6 @@ impl AppState {
         self.hlc()
     }
 
-    /// Stored push-device registrations, for tests that need the
-    /// service-derived `push_target_id` from the server's side.
-    ///
-    /// `push_register_device_outcome` returns the pseudonym to the registering
-    /// client (`zh/discovery/push-notifications.md` §3.1); a test that needs
-    /// the value as the notify path sees it reads the stored registration
-    /// here.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub async fn test_push_devices(&self) -> Vec<serde_json::Value> {
-        self.deliveries()
-            .push_devices()
-            .await
-            .expect("push device registrations are readable")
-    }
-
     /// One content-addressed object as this Station stored it.
     ///
     /// A snapshot manifest commits to its chunks only through their content

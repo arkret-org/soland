@@ -4,8 +4,8 @@ use arkret_models_collaboration::governance::membership_invite::{
     MembershipPayload, MembershipPayloadState,
 };
 use arkret_models_collaboration::governance::realm_join_intake::{
-    PeerRealmJoinBootstrapOutcome, PeerRealmJoinBootstrapRequestBody, RealmJoinIntent,
-    SelfRealmJoinPrepareOutcome, SelfRealmJoinPrepareRequestBody,
+    PeerRealmJoinBootstrapOutcome, PeerRealmJoinBootstrapRequestBody, SelfRealmJoinPrepareOutcome,
+    SelfRealmJoinPrepareRequestBody,
 };
 use arkret_wire::{ActorId, AuthorityBundleRequest, Base64UrlString, CommitStreamRef, EventKind};
 use salvo::prelude::*;
@@ -86,22 +86,8 @@ async fn prepare(depot: &mut Depot, req: &mut Request) -> JsonResult<SelfRealmJo
         .parse_json::<SelfRealmJoinPrepareRequestBody>()
         .await
         .map_err(invalid_request)?;
-    body.target.validate().map_err(invalid_request)?;
-    let target = &body.target;
-    match &body.intent {
-        RealmJoinIntent::InviteAccept {
-            invite_id,
-            invite_token,
-        } if target.invite_id.as_ref() == Some(invite_id)
-            && target.invite_token.as_ref() == Some(invite_token) => {}
-        RealmJoinIntent::InviteAccept { .. } => {
-            return Err(invalid_request(
-                "invite intent does not bind the target invite",
-            ));
-        }
-        RealmJoinIntent::MemberJoin | RealmJoinIntent::Knock => {}
-    }
-    let bundle = authority::resolve_authority_bundle(state, target, &body.request_id).await?;
+    body.validate().map_err(invalid_request)?;
+    let bundle = authority::resolve_authority_bundle(state, &body.target, &body.request_id).await?;
     let outcome = SelfRealmJoinPrepareOutcome {
         request_id: body.request_id,
         realm_stream_head: bundle.realm_stream_head.clone(),

@@ -20,7 +20,6 @@ use arkret_models_discovery::{
     AccountAuthority, AuthGrantExchange, AuthGrantExchangeKind, AuthMetadata, AuthMethod,
     AuthMethodKind, ServiceDescribe,
 };
-pub use arkret_models_discovery::{RealmJoinCandidate, RealmJoinCandidateServiceKind};
 pub use arkret_models_identity::admin_grant::SessionGrantAdminIntrospectionStatus;
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
 pub use arkret_models_integration::OkOutcome;
