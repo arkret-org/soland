@@ -1,54 +1,28 @@
+use arkret_models_collaboration::events_payloads::{PolicyActionStatePayload, PolicyActionSubject};
 use arkret_schema::{ApprovalRequirementEligibility, capability_action_descriptor};
-use arkret_wire::{CapabilityActionId, PolicyId};
-use serde::Deserialize;
+use arkret_wire::CapabilityActionId;
 
 use super::*;
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PolicyActionStatePayload {
-    #[serde(default)]
-    policy_id: Option<PolicyId>,
-    #[serde(default)]
-    action_id: Option<String>,
-    value: PolicyActionValue,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PolicyActionValue {
-    action: CapabilityActionId,
-    approval_required: bool,
-    approval_quorum: u64,
-    policy_scope: String,
-}
-
-impl PolicyActionValue {
-    fn validate(&self) -> Result<(), &'static str> {
-        if self.approval_quorum == 0 || !valid_policy_scope(&self.policy_scope) {
+/// Admission-time checks of a closed `ak.policy.action` payload beyond its
+/// SDK shape: the action is a registered capability action, and a required
+/// approval names an action with a registered approval evidence carrier.
+fn validate_policy_action(payload: &PolicyActionStatePayload) -> Result<(), &'static str> {
+    payload
+        .validate()
+        .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    let action = CapabilityActionId::from_wire(payload.value.action.as_str())
+        .ok_or(arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    if payload.value.approval_required {
+        let descriptor = capability_action_descriptor(action);
+        if descriptor.approval_evidence_carrier_id.is_none()
+            || descriptor.approval_requirement_eligibility
+                == ApprovalRequirementEligibility::IneligibleNoRegisteredCarrier
+        {
             return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
         }
-        if self.approval_required {
-            let descriptor = capability_action_descriptor(self.action);
-            if descriptor.approval_evidence_carrier_id.is_none()
-                || descriptor.approval_requirement_eligibility
-                    == ApprovalRequirementEligibility::IneligibleNoRegisteredCarrier
-            {
-                // The registry token `approval_carrier_unregistered` remains
-                // reserved, so production must not emit it yet. The accepted
-                // active failure shape for an unrepresentable configuration is
-                // the generic closed-contract rejection.
-                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-            }
-        }
-        Ok(())
     }
-}
-
-fn valid_policy_scope(scope: &str) -> bool {
-    !scope.is_empty()
-        && !scope.chars().any(char::is_whitespace)
-        && (scope.starts_with("ak:") || scope.starts_with("did:"))
+    Ok(())
 }
 
 impl ProjectionState {
@@ -83,24 +57,19 @@ impl ProjectionState {
     /// to exist in this exact Realm. The Realm-local branch binds its opaque
     /// name to `(action, policy_scope)` on first write and cannot later move it.
     pub(crate) fn apply_policy_action(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload =
-            match serde_json::from_value::<PolicyActionStatePayload>(operation.payload.clone()) {
-                Ok(payload) if payload.value.validate().is_ok() => payload,
-                Ok(payload) => {
-                    return ProjectionEffect::Rejected {
-                        reason: payload
-                            .value
-                            .validate()
-                            .expect_err("guard established invalid value")
-                            .to_owned(),
-                    };
-                }
-                Err(_) => {
-                    return ProjectionEffect::Rejected {
-                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                    };
-                }
+        let payload = match operation.typed_payload::<arkret_wire::event_spec::PolicyAction>() {
+            Ok(payload) => payload,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        if let Err(reason) = validate_policy_action(&payload) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
             };
+        }
         let realm_id = operation.realm_id.to_string();
         let Some(value) = operation.payload.get("value").cloned() else {
             return ProjectionEffect::Rejected {
@@ -108,8 +77,16 @@ impl ProjectionState {
             };
         };
 
-        let (selector_kind, selector, target) = match (&payload.policy_id, &payload.action_id) {
-            (Some(policy_id), None) => {
+        let subject = match payload.subject() {
+            Ok(subject) => subject,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        let (selector_kind, selector, target) = match subject {
+            PolicyActionSubject::Policy(policy_id) => {
                 let policy_id = policy_id.to_string();
                 if self
                     .facet_value(&realm_id, &FacetRef::new(facet::POLICY, &policy_id))
@@ -129,8 +106,8 @@ impl ProjectionState {
                     ),
                 )
             }
-            (None, Some(action_id)) if !action_id.is_empty() && !action_id.starts_with("ak:") => {
-                let target = FacetRef::new(facet::POLICY_ACTION_REALM_ACTION, action_id);
+            PolicyActionSubject::Action(action_id) => {
+                let target = FacetRef::new(facet::POLICY_ACTION_REALM_ACTION, action_id.as_str());
                 if let Some(current) = self.facet_value(&realm_id, &target)
                     && (current.get("action").and_then(Value::as_str)
                         != Some(payload.value.action.as_str())
@@ -141,12 +118,7 @@ impl ProjectionState {
                         reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
                     };
                 }
-                ("realm_action", action_id.clone(), target)
-            }
-            _ => {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
+                ("realm_action", action_id.as_str().to_owned(), target)
             }
         };
 
