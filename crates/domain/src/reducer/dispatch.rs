@@ -149,20 +149,6 @@ fn apply_relation_delete_dispatch(
 ) -> ProjectionEffect {
     s.apply_relation_delete(op)
 }
-fn apply_container_move_item_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_container_move_item(op)
-}
-fn apply_container_rebalance_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_container_rebalance(op)
-}
 fn apply_membership_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -718,17 +704,6 @@ fn apply_call_recording_start_dispatch(
     s.apply_call_recording_start(op)
 }
 
-/// Dispatch for `ak.call.summary`; cell family is
-/// `ak.component.call.summary.v1` (`cell_subject = payload.call_id`,
-/// causal_register, write-once).
-fn apply_call_summary_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_call_summary(op)
-}
-
 /// R3.1 — dispatch for `ak.realm.link`. Projects the typed link payload
 /// into the `ak.component.realm.link.v1` transition cell + structured
 /// `realm_links` / `realm_links_inbound` caches.
@@ -882,14 +857,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RelationTombstone,
         apply_relation_delete_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ContainerMoveItem,
-        apply_container_move_item_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ContainerRebalance,
-        apply_container_rebalance_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::MemberState,
@@ -1178,13 +1145,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::CallRecordingStart,
         apply_call_recording_start_dispatch,
     );
-    // `ak.call.summary` — durable terminal summary projection. Cell family
-    // `ak.component.call.summary.v1`, write-once causal_register (`call-state.md`
-    // §7).
-    m.insert(
-        arkret_wire::EventKind::CallSummary,
-        apply_call_summary_dispatch,
-    );
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
     // helpers for cell-family naming.
@@ -1263,7 +1223,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         EventKind::AppletBridgeError,
         EventKind::AppletManagedActorProvision,
         EventKind::AuditAccessed,
-        EventKind::DeviceListUpdate,
     ] {
         m.insert(kind, apply_durable_fact_dispatch);
     }
@@ -1349,7 +1308,6 @@ mod tests {
         assert!(actual.contains(&EventKind::AppletBridgeError));
         assert!(actual.contains(&EventKind::AppletManagedActorProvision));
         assert!(actual.contains(&EventKind::AuditAccessed));
-        assert!(actual.contains(&EventKind::DeviceListUpdate));
         assert!(actual.contains(&EventKind::RealmGovernanceStationChange));
     }
 
@@ -1361,7 +1319,6 @@ mod tests {
             EventKind::AppletBridgeError,
             EventKind::AppletManagedActorProvision,
             EventKind::AuditAccessed,
-            EventKind::DeviceListUpdate,
             EventKind::SelfModerationReport,
         ] {
             let effect = state.apply_projected(&operation(&kind), &hlc);

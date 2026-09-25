@@ -627,37 +627,6 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_wire::EventKind::ContainerMoveItem
-            | arkret_wire::EventKind::ContainerRebalance => {
-                let Some(container_space_id) = operation
-                    .payload
-                    .get("to_container_id")
-                    .or_else(|| operation.payload.get("container_id"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                else {
-                    return Ok(());
-                };
-                let Some(object_ref) = operation
-                    .payload
-                    .get("object_ref")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                else {
-                    return Ok(());
-                };
-                let (child_scope, child_realm_id) =
-                    match self.projected_object_scope_and_realm(object_ref) {
-                        Some(value) => value,
-                        None => return Ok(()),
-                    };
-                self.check_space_child_scope_policy(
-                    container_space_id,
-                    child_scope.as_deref(),
-                    &child_realm_id,
-                    false,
-                )
-            }
             _ => Ok(()),
         }
     }

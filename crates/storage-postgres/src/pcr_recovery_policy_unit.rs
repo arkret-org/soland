@@ -9,8 +9,9 @@
 //! version, every `device_quorum` member is an active device of the same cut,
 //! and both the policy signature and the Event producer proof verify against
 //! the signer's accepted device key. The Event, its Commit and the accepted
-//! policy row become visible together or not at all. An update authorized by
-//! the prior policy's device quorum has no registered carrier and is refused.
+//! policy row become visible together or not at all. There is no
+//! quorum-signed update: every publication, rotation and revocation is
+//! signed by one current-generation device.
 
 use arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind;
 use arkret_models_crypto::{

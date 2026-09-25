@@ -144,22 +144,6 @@ fn validate_typed_payload_shapes(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     match kind {
-        arkret_wire::EventKind::ContainerMoveItem => {
-            let payload = operation
-                .typed_payload::<arkret_wire::event_spec::ContainerMoveItem>()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
-            payload
-                .validate()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        }
-        arkret_wire::EventKind::ContainerRebalance => {
-            let payload = operation
-                .typed_payload::<arkret_wire::event_spec::ContainerRebalance>()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
-            payload
-                .validate()
-                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
-        }
         arkret_wire::EventKind::ConsentGrant => {
             operation
                 .typed_payload::<arkret_wire::event_spec::ConsentGrant>()

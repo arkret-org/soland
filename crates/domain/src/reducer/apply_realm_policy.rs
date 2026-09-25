@@ -1,6 +1,6 @@
 use arkret_models_collaboration::events_payloads::call::{
     CallCreatePayload, CallLifecycleState, CallModerationDelta, CallRecordingStartPayload,
-    CallRecordingState, CallRosterDelta, CallStatePayload, CallSummaryPayload, CallTranscriptState,
+    CallRecordingState, CallRosterDelta, CallStatePayload, CallTranscriptState,
     RecordingCaptureKind,
 };
 
@@ -536,49 +536,6 @@ impl ProjectionState {
         self.set_facet(&realm_id, capture, Value::String(opening.to_owned()));
         self.set_facet(&realm_id, result, outcome);
         ProjectionEffect::CallStateProjected { call_id }
-    }
-
-    /// Project `ak.call.summary` into the write-once call summary facet
-    /// (`call-state.md` §7):
-    ///
-    /// - `final_state` MUST be a terminal call state.
-    /// - the `call_id` MUST already have a terminal `ak.call.state` head.
-    /// - the facet is write-once: a divergent rewrite MUST `call_summary_invalid`; an identical
-    ///   replay is an idempotent no-op.
-    pub(crate) fn apply_call_summary(&mut self, operation: &Operation) -> ProjectionEffect {
-        let value = state_payload_value(&operation.payload).clone();
-        let Ok(summary) = serde_json::from_value::<CallSummaryPayload>(value.clone()) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
-            };
-        };
-        let realm_id = operation.realm_id.to_string();
-        let call_id = summary.call_id.to_string();
-
-        // §7 — the call MUST already have a terminal `ak.call.state` head.
-        // `final_state` is a closed terminal-only union in the SDK type, so the
-        // payload half of the rule is settled by deserialization.
-        let terminal = self
-            .facet_value(&realm_id, &FacetRef::new(facet::CALL_STATE, &call_id))
-            .and_then(Value::as_str)
-            .is_some_and(is_terminal_call_state);
-        if !terminal {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
-            };
-        }
-
-        let target = FacetRef::new(facet::CALL_SUMMARY, &call_id);
-        if let Some(existing) = self.facet_value(&realm_id, &target) {
-            if existing != &value {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
-                };
-            }
-            return ProjectionEffect::CallSummaryProjected { call_id };
-        }
-        self.set_facet(&realm_id, target, value);
-        ProjectionEffect::CallSummaryProjected { call_id }
     }
 
     /// `call-state.md` §4.2 — the legal-successor table plus the terminal

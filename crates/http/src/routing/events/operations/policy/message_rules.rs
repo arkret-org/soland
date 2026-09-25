@@ -241,7 +241,6 @@ pub(super) async fn validate_applet_registration_authz(
 /// Control-stream events derive their exact owning account from the verified envelope actor.
 pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
     arkret_wire::event_kind_str::DEVICE_AUTHORIZE,
-    arkret_wire::event_kind_str::DEVICE_LIST_UPDATE,
     arkret_wire::event_kind_str::DEVICE_REVOKE,
 ];
 

@@ -46,14 +46,6 @@ pub enum ProjectionEffect {
     RelationDeleted {
         relation_id: String,
     },
-    ContainerPositionProjected {
-        container_ref: String,
-        item_ref: String,
-    },
-    ContainerOrderProjected {
-        container_ref: String,
-        position_count: usize,
-    },
     MembershipChanged {
         realm_id: String,
         member: String,
@@ -182,11 +174,6 @@ pub enum ProjectionEffect {
     AuditReleaseProjected {
         session_id: String,
         release_id: String,
-    },
-    /// `call-state.md` §7 — `ak.call.summary` projected into the write-once
-    /// `ak.component.call.summary.v1` causal_register cell.
-    CallSummaryProjected {
-        call_id: String,
     },
     /// R3.1 — `ak.realm.link` event was projected into the
     /// `ak.component.realm.link.v1` transition cell + the `realm_links`
