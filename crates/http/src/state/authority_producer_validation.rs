@@ -289,6 +289,162 @@ mod tests {
         assert!(standard_grant_for_account(&session, &account).is_err());
     }
 
+    fn human_session(
+        account: &AccountId,
+        device_id: &DeviceId,
+        authorization_event_id: &arkret_wire::EventId,
+    ) -> SessionIdentityState {
+        let now = chrono::Utc::now();
+        SessionIdentityState {
+            token_hash: "human-session".to_owned(),
+            account_pk: None,
+            actor: account.principal_id.as_str().to_owned(),
+            device_id: device_id.as_str().to_owned(),
+            audience: account.station_id.as_str().to_owned(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: Some(SessionGrantAuthorizationState {
+                grant_id: arkret_identifiers::SessionGrantId::from_issuance_digest([0x42; 32]),
+                revocation_ref: "fixture".to_owned(),
+                account_id: account.clone(),
+                issuer_id: account.station_id.clone(),
+                scopes: Vec::new(),
+                credential_class: SessionGrantCredentialClass::Standard,
+                holder_binding: SessionGrantHolderBinding::HumanDevice {
+                    device_binding: "fixture".to_owned(),
+                },
+                device_binding: Some(
+                    arkret_models_identity::session_credential::SessionGrantDeviceBinding {
+                        device_id: device_id.clone(),
+                        authorization_event_id: authorization_event_id.clone(),
+                        model_generation_ref: 1,
+                    },
+                ),
+                cnf_jkt: "fixture".to_owned(),
+            }),
+            expires_at: now + chrono::Duration::hours(1),
+            created_at: now,
+            revoked_at: None,
+        }
+    }
+
+    fn signed_by(
+        account: &AccountId,
+        realm_id: &arkret_wire::RealmId,
+        method: &arkret_wire::DidUrl,
+        seed: [u8; 32],
+    ) -> Event {
+        soland_test_support::device_authorization_history::sign_event(
+            arkret_wire::test_support::raw_event(
+                arkret_wire::EventKind::MessageCreate.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                account.principal_id.clone(),
+                account.station_id.clone(),
+                serde_json::json!({}),
+            )
+            .unwrap(),
+            method.clone(),
+            seed,
+        )
+    }
+
+    /// Decision 0107: the session's device and the signing device need only
+    /// share the principal. The signer is resolved from the proof fragment and
+    /// judged by its own PCR status; an unknown device or another principal's
+    /// device is refused with a registered code, never a bare conflict.
+    #[tokio::test]
+    async fn another_active_device_of_the_session_principal_may_sign() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let persistence = state.test_persistence();
+        let mut fixture =
+            soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
+        let founding = fixture
+            .admit_founding_device(persistence.as_ref())
+            .await
+            .expect("accepted PCR genesis");
+        let second = fixture
+            .admit_accepted_device(persistence.as_ref(), [61; 32])
+            .await
+            .expect("second device accepted by the founding device");
+        let account = fixture.history.account.clone();
+        let realm_id = fixture.history.events[0].realm_id.clone();
+        let session = human_session(
+            &account,
+            &fixture.history.founding_device_id,
+            &founding.authorization_ref.event_id,
+        );
+
+        let event = signed_by(
+            &account,
+            &realm_id,
+            &second.verification_method,
+            second.signing_seed,
+        );
+        let (_, guard) = human_producer_key(
+            &state,
+            &session,
+            &account,
+            event.producer_proof.as_ref().unwrap(),
+        )
+        .await
+        .expect("a second active device of the same principal signs a self Event");
+        let SelfProducerCommitGuard::HumanDevice(selector) = guard else {
+            panic!("a human producer yields a device guard");
+        };
+        assert_eq!(selector.device_id, second.authorization.device_id);
+        assert_eq!(
+            selector.authorization_ref,
+            second.authorization.authorization_ref
+        );
+
+        let unknown = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+        let unknown_method =
+            arkret_wire::DidUrl::new(format!("{}#{unknown}", fixture.history.did)).unwrap();
+        let refused = human_producer_key(
+            &state,
+            &session,
+            &account,
+            signed_by(&account, &realm_id, &unknown_method, [62; 32])
+                .producer_proof
+                .as_ref()
+                .unwrap(),
+        )
+        .await
+        .expect_err("a device without accepted authorization cannot sign");
+        assert!(
+            !refused
+                .detail()
+                .contains("differs from authenticated device"),
+            "{refused:?}"
+        );
+
+        let foreign = arkret_wire::DidUrl::new(format!(
+            "did:webvh:z6Mkother:bob.example#{}",
+            second.authorization.device_id
+        ))
+        .unwrap();
+        let refused = human_producer_key(
+            &state,
+            &session,
+            &account,
+            signed_by(&account, &realm_id, &foreign, second.signing_seed)
+                .producer_proof
+                .as_ref()
+                .unwrap(),
+        )
+        .await
+        .expect_err("another principal's device cannot sign");
+        assert!(
+            refused.detail().starts_with("signature_invalid"),
+            "{refused:?}"
+        );
+    }
+
     #[test]
     fn human_method_must_name_the_exact_account_did_and_device_fragment() {
         let controller = Did::new("did:webvh:z6Mkfull:alice.example".to_owned()).unwrap();
