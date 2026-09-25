@@ -5231,7 +5231,8 @@ fn plain_revision(message_id: &arkret_wire::MessageId, body: &str) -> serde_json
 
 /// Real PostgreSQL: `ak.message.revise` is decided at the accepting cut. A
 /// joined member without an edit action, a stranger, and a member holding only
-/// `ak.message.revise.own` on another author's Message are `capability_denied`;
+/// `ak.message.revise.own` on another author's Message are `capability_denied`,
+/// and an author's own edit after its edit window closed is refused;
 /// a revise built on a stale stream head, a body outside the create content
 /// gate and a revise of a redacted Message are refused. Every refusal leaves
 /// zero writes. The author's revise, and a member's revise under a granted
@@ -5417,9 +5418,75 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
         )]
     );
 
+    // The author path: a member holding `ak.message.create` and
+    // `ak.message.revise.own` under a 15-minute edit window edits its own
+    // Message inside the window and is `failed_precondition` once it closed.
+    let author = invite_account(
+        "author.example",
+        &station.as_str()["ak:did_core:web:".len()..],
+    );
+    inject_joined_member(&pool, &unit, &author).await;
+    let mut windowed = invite_grant_request(
+        &moderated,
+        &unit,
+        &root_event_ref,
+        &author,
+        &["ak.message.create", "ak.message.revise.own"],
+    );
+    let mut payload = serde_json::to_value(&windowed.authority_commit.event.payload).unwrap();
+    payload["grant"]["constraints"] = serde_json::json!([{
+        "constraint_kind": "temporal",
+        "constraint_subkind": "edit_window",
+        "applies_to_actions": ["ak.message.revise.own"],
+        "effect": "allow",
+        "message_edit_window": "PT15M"
+    }]);
+    windowed = realm_event_request_as(
+        &moderated,
+        &creator,
+        arkret_wire::EventKind::CapabilityGrant,
+        payload,
+    );
+    uow.commit_event(windowed.clone()).await.unwrap();
+    let authored = realm_event_request_as(
+        &windowed,
+        &author,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({
+            "strand_id": strand_id,
+            "track_name": "discussion",
+            "content": {"kind": "ak.content.text", "body": "member draft", "format": "plain"}
+        }),
+    );
+    uow.commit_event(authored.clone()).await.unwrap();
+    let authored_id =
+        arkret_wire::MessageId::from_event_id(&authored.authority_commit.event.event_id);
+    let own_edit = realm_event_request_as(
+        &authored,
+        &author,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&authored_id, "member final"),
+    );
+    uow.commit_event(own_edit.clone()).await.unwrap();
+    let mut late_edit = realm_event_request_as(
+        &own_edit,
+        &author,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&authored_id, "member too late"),
+    );
+    late_edit.authority_commit.commit.committed_at += chrono::TimeDelta::minutes(16);
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &late_edit,
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+    )
+    .await;
+
     // A redacted Message is terminal for revise.
     let redaction = realm_event_request_as(
-        &moderated,
+        &own_edit,
         &creator,
         arkret_wire::EventKind::MessageRedact,
         serde_json::json!({ "message_id": message_id }),
