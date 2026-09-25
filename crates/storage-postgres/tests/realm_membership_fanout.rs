@@ -298,7 +298,9 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
     expected.sort_by_key(|(member, _)| member.to_string());
     assert_owed(&fanout_rows(&pool, &bob_join).await, &bob_join, &expected);
 
-    // After Alice leaves by her own Control Event, only Bob authorizes it.
+    // After Alice leaves by her own Control Event, Bob still authorizes it
+    // and the leave itself is owed to Alice's Station, frozen with the leave
+    // as her basis (`federation.md` section 4.1.1).
     let alice_leave =
         membership_request(&bob_join.authority_commit, alice.clone(), &alice, "leave");
     uow.commit_event(alice_leave.clone()).await.unwrap();
@@ -306,16 +308,24 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
         member_state(&pool, &realm_id, &alice).await.as_deref(),
         Some("leave")
     );
+    let alice_leave_ref = alice_leave.authority_commit.event.event_id.clone();
     assert_owed(
         &fanout_rows(&pool, &alice_leave).await,
         &alice_leave,
-        &[(&bob, &bob_ref)],
+        &[(&bob, &bob_ref), (&alice, &alice_leave_ref)],
     );
 
-    // Bob leaves: nobody on the member Station is joined, so nothing is owed.
+    // Bob leaves: nobody on the member Station stays joined, but Bob's own
+    // leave is still owed to it as the last Commit it holds for Bob.
     let bob_leave = membership_request(&alice_leave.authority_commit, bob.clone(), &bob, "leave");
     let outcome = uow.commit_event(bob_leave.clone()).await.unwrap();
-    assert_eq!(outcome.outbox_inserted, 0);
+    assert_eq!(outcome.outbox_inserted, 1);
+    let bob_leave_ref = bob_leave.authority_commit.event.event_id.clone();
+    assert_owed(
+        &fanout_rows(&pool, &bob_leave).await,
+        &bob_leave,
+        &[(&bob, &bob_leave_ref)],
+    );
 }
 
 fn assert_code(error: &soland_storage::PersistenceError, code: ConflictCode) {
@@ -1171,13 +1181,35 @@ async fn fanout_basis_revalidation_cancels_after_member_leave() {
     );
 
     let leave = membership_request(&join.authority_commit, alice.clone(), &alice, "leave");
-    uow.commit_event(leave).await.unwrap();
+    uow.commit_event(leave.clone()).await.unwrap();
     assert!(
         !store
             .realm_fanout_still_owed(event, &local, &member_station(), &basis, now)
             .await
             .unwrap(),
         "every frozen basis is gone once the member left"
+    );
+    // The leave itself stays owed to Alice's Station while it is her
+    // effective membership, and stops being owed once she joins again.
+    let leave_event = &leave.authority_commit.event;
+    let leave_basis = vec![RealmFanoutAuthorityWitness {
+        member_id: alice.clone(),
+        membership_event_ref: leave_event.event_id.to_string(),
+    }];
+    assert!(
+        store
+            .realm_fanout_still_owed(leave_event, &local, &member_station(), &leave_basis, now)
+            .await
+            .unwrap()
+    );
+    let rejoin = membership_request(&leave.authority_commit, alice.clone(), &alice, "join");
+    uow.commit_event(rejoin).await.unwrap();
+    assert!(
+        !store
+            .realm_fanout_still_owed(leave_event, &local, &member_station(), &leave_basis, now)
+            .await
+            .unwrap(),
+        "a later membership Event supersedes the departing basis"
     );
 }
 

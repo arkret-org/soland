@@ -17,6 +17,13 @@
 //! service for message content, and a moderation report, readable only by
 //! moderators, only to a Station hosting a member who holds a moderation
 //! capability at this cut.
+//!
+//! A `leave` or `ban` that ends a member's joined state removes that member
+//! from the accepted joined set, so the member's own Station would never
+//! learn it. Such an Event is additionally owed to the departing member's
+//! Station, frozen with the Event itself as the membership basis, and stays
+//! owed only while that Event is still the member's effective membership
+//! (`federation.md` §4.1.1).
 
 use std::collections::BTreeMap;
 
@@ -50,6 +57,20 @@ struct JoinedMemberRow {
 struct CurrentValueRow {
     #[diesel(sql_type = Jsonb)]
     value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct MembershipEventRow {
+    #[diesel(sql_type = Text)]
+    event_id: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct PriorMembershipRow {
+    #[diesel(sql_type = Text)]
+    kind: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    membership: Option<String>,
 }
 
 #[derive(diesel::QueryableByName)]
@@ -114,6 +135,93 @@ async fn plaintext_message_services(
         .filter_map(|service| service.get("service_id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect())
+}
+
+/// The departing member's Station owed a membership Event that ended the
+/// member's joined state, with the Event itself as the frozen basis. `None`
+/// when the Event is no such transition, the member is hosted here, the
+/// member was not joined before it, or the Event is no longer the member's
+/// effective membership.
+async fn departing_member_target(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    authority_station: &arkret_wire::DidCoreId,
+) -> PersistenceResult<Option<(arkret_wire::DidCoreId, RealmFanoutAuthorityWitness)>> {
+    if event.kind != arkret_wire::EventKind::MemberState {
+        return Ok(None);
+    }
+    let Ok(payload) = serde_json::to_value(&event.payload).and_then(
+        serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >,
+    ) else {
+        return Ok(None);
+    };
+    use arkret_models_collaboration::governance::membership_invite::MembershipPayloadState;
+    if !matches!(
+        payload.membership,
+        MembershipPayloadState::Leave | MembershipPayloadState::Ban
+    ) {
+        return Ok(None);
+    }
+    let member = payload.member_id;
+    let station = member.route_service_id().clone();
+    if &station == authority_station {
+        return Ok(None);
+    }
+    let member_key = member.to_string();
+    let current = sql_query(
+        "SELECT e.envelope->>'event_id' AS event_id \
+         FROM member_state_current_results m \
+         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
+         JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE m.realm_id=$1 AND m.member_id=$2 \
+           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
+           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&member_key)
+    .get_result::<MembershipEventRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if current.is_none_or(|row| row.event_id != event.event_id.as_str()) {
+        return Ok(None);
+    }
+    let event_token = ids::parse_event_id(event.event_id.as_str())
+        .ok_or_else(|| PersistenceError::SchemaViolation("Event id is not canonical".into()))?;
+    let prior = sql_query(
+        "SELECT pe.kind, pe.envelope->'payload'->>'membership' AS membership \
+         FROM canonical_events e \
+         JOIN realm_commits c ON c.event_pk=e.pk \
+         JOIN realm_commits pc ON pc.stream_key=c.stream_key \
+           AND pc.stream_position < c.stream_position \
+         JOIN canonical_events pe ON pe.pk=pc.event_pk \
+         WHERE e.id=$1 AND pe.state='committed' AND ( \
+           (pe.kind='ak.member.state' AND pe.envelope->'payload'->'member_id'=$2::jsonb) \
+           OR (pe.kind='ak.invite.accept' AND pe.envelope->'actor_id'=$2::jsonb)) \
+         ORDER BY pc.stream_position DESC LIMIT 1",
+    )
+    .bind::<Binary, _>(event_token.to_vec())
+    .bind::<Text, _>(&member_key)
+    .get_result::<PriorMembershipRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let joined_before = prior.is_some_and(|row| {
+        row.kind == arkret_wire::EventKind::InviteAccept.as_str()
+            || row.membership.as_deref() == Some("join")
+    });
+    if !joined_before {
+        return Ok(None);
+    }
+    Ok(Some((
+        station,
+        RealmFanoutAuthorityWitness {
+            member_id: member,
+            membership_event_ref: event.event_id.to_string(),
+        },
+    )))
 }
 
 /// Every remote Station owed this Event, with the bases that authorize it.
@@ -181,6 +289,11 @@ async fn remote_targets(
                 member_id: member,
                 membership_event_ref: row.membership_event_id,
             });
+    }
+    if let Some((station, witness)) =
+        departing_member_target(conn, event, authority_station).await?
+    {
+        targets.entry(station).or_default().push(witness);
     }
     Ok(targets)
 }
