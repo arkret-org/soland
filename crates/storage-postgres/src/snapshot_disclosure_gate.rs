@@ -12,6 +12,8 @@
 //!   one (moderator-only reports, grants, links, Agent and PCR state) hold no row of this Realm;
 //! - every accepted Event of the Realm is of a kind whose result writes land only in disclosed
 //!   families, so no admitted Event can have produced state this subset omits;
+//! - no Event of the Realm is retention-expired: a `message_revision` row would otherwise carry the
+//!   content that committed-event reads withhold, and no typed row states the expiry;
 //! - the Realm has only its Realm stream (Circle and Sidecar visibility is not proved here) and is
 //!   in its genesis tenure (a planned handoff import of current families is not proved here);
 //! - the Account is the Realm's founder and its only member, currently joined. The founding join is
@@ -124,7 +126,8 @@ pub(crate) struct DisclosureFacts {
     pub(crate) members: Vec<(ActorId, String)>,
     /// An accepted Event whose kind is outside [`DISCLOSED_EVENT_KINDS`].
     pub(crate) undisclosed_kind: Option<String>,
-    /// A family without a disclosure rule holds a row of this Realm.
+    /// A family without a disclosure rule holds a row of this Realm, or an
+    /// Event of this Realm is retention-expired.
     pub(crate) undisclosed_family_row: bool,
 }
 
@@ -150,6 +153,7 @@ pub async fn account_snapshot_material(
 /// Issue the complete signed Snapshot to `account` at one durable cut. The
 /// governing row is share-locked first, so no handoff can commit between the
 /// tenure check, the disclosure proof, the signature, and the issuance write.
+/// An unchanged cut returns the object already issued to the Account for it.
 pub async fn issue_account_snapshot(
     pool: &PgPool,
     realm_id: &RealmId,
@@ -162,6 +166,8 @@ pub async fn issue_account_snapshot(
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .execute(&mut *conn)
             .await?;
+        // Issuance and issued-snapshot GC exclude each other (0441).
+        crate::sync_cursor::retention::lock(conn, false).await?;
         let Some(tenure) = sql_query(
             "SELECT service_id, generation FROM realm_authorities \
              WHERE realm_id=$1 FOR SHARE",
@@ -192,8 +198,11 @@ pub async fn issue_account_snapshot(
             .into());
         }
         soland_storage::enforce_inline_realm_state_snapshot_capacity(&snapshot)?;
-        crate::issued_realm_snapshots::issue_in_connection(conn, account, &snapshot).await?;
-        Ok(Some(snapshot))
+        let issued = crate::issued_realm_snapshots::issue_head_in_connection(
+            conn, account, &material, snapshot,
+        )
+        .await?;
+        Ok(Some(issued))
     })
     .await
     .map_err(crate::issued_realm_snapshots::snapshot_transaction_error)
@@ -244,7 +253,8 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1)) AS present",
+            OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
     .get_result::<PresenceRow>(&mut *conn)

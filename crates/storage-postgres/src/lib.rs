@@ -37,6 +37,7 @@ mod audit;
 mod authority_commit;
 mod blobs;
 mod capability_grant_current_results;
+mod committed_disclosure;
 mod contacts;
 #[cfg(test)]
 #[path = "../../test-support/src/device_authorization_history.rs"]

@@ -2564,6 +2564,419 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
     assert_eq!(forged.committed_events[0].commit().stream_position, 12);
 }
 
+fn message_redact_request(
+    previous: &EventCommitRequest,
+    message_id: &arkret_wire::MessageId,
+) -> EventCommitRequest {
+    let mut request = previous.clone();
+    let previous_commit = &previous.authority_commit.commit;
+    let previous_event = &previous.authority_commit.event;
+    let realm_id = previous_event.realm_id.clone();
+    let actor = previous_event.actor_id.as_account_id().unwrap();
+    let event = event(
+        arkret_wire::EventKind::MessageRedact,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        &actor.principal_id,
+        &actor.station_id,
+        serde_json::json!({ "message_id": message_id }),
+        previous_commit.committed_at,
+    );
+    request.authority_commit.event = event.clone();
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("redact:{}", event.event_id).as_bytes()),
+    );
+    request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
+    request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
+    request.event.event_id = event.event_id.to_string();
+    request.event.kind = event.kind.as_str().to_owned();
+    request.event.envelope = serde_json::to_value(&event).unwrap();
+    request.event.canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+    request.projections[0].event_kind = event.kind.as_str().to_owned();
+    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request
+}
+
+async fn account_issuance_count(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> i64 {
+    issuance_count(pool, realm_id).await
+}
+
+/// Real PostgreSQL (0441): repeated `/head` reads and window freezes at one
+/// cut reuse the object already issued for it; issuances at distinct heads
+/// that no window reserves are trimmed to the per-Account cap, newest kept;
+/// and live reservations on one stream stop at their cap, after which a
+/// limited window is preview only instead of evicting a live guarantee. A
+/// retried freeze returns the same rows on the same basis, and another
+/// Account can never read a window basis through the creator's cursor.
+#[tokio::test]
+async fn issued_snapshots_and_window_reservations_stay_within_their_caps() {
+    use soland_storage::{AccountRealmWindowRequest, SyncCursorStore as _};
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let cursors = soland_storage_postgres::PgSyncCursorStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let stranger = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let stream_ref = arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let head = || {
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let (realm_id, creator, issuer) = (realm_id.clone(), creator.clone(), issuer.clone());
+        let sign = &sign;
+        async move {
+            store
+                .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, sign)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    };
+    let by_ref = |id: arkret_wire::RealmSnapshotId| {
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let (realm_id, creator, issuer) = (realm_id.clone(), creator.clone(), issuer.clone());
+        async move {
+            store
+                .issued_realm_state_snapshot(&realm_id, &creator, &id, &issuer)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Same cut: every `/head` and every whole-history freeze reuses one object.
+    let first = head().await;
+    for _ in 0..4 {
+        assert_eq!(head().await, first);
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let window_ttl = 300_000;
+    let request = |limit: u32, delivered_head: Option<arkret_wire::CommitStreamHead>| {
+        AccountRealmWindowRequest {
+            realm_id: realm_id.clone(),
+            account: creator.clone(),
+            issuer: issuer.clone(),
+            window_limit: limit,
+            window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+            expires_at_ms: now_ms + window_ttl,
+            now_ms,
+            byte_budget: 7 * 1024 * 1024,
+            delivered_head,
+        }
+    };
+    for _ in 0..4 {
+        let whole = store
+            .freeze_account_realm_window(&request(20, None), &sign)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!whole.window.limited);
+    }
+    assert_eq!(account_issuance_count(&pool, &realm_id).await, 1);
+    assert_eq!(reservation_count(&pool).await, 0);
+
+    // Twelve distinct heads, each read once through `/head`, keep only the
+    // newest eight unreserved issuances.
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let mut previous = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(previous.clone()).await.unwrap();
+    let mut issued = Vec::new();
+    for index in 0..12 {
+        let message = message_create_request(&previous, &strand_id, &format!("head {index}"));
+        uow.commit_event(message.clone()).await.unwrap();
+        previous = message;
+        issued.push(head().await);
+    }
+    let cap = soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM;
+    assert_eq!(account_issuance_count(&pool, &realm_id).await, cap);
+    assert_eq!(by_ref(first.snapshot_id.clone()).await, None);
+    for (index, snapshot) in issued.iter().enumerate() {
+        let expected = (index >= issued.len() - cap as usize).then(|| snapshot.clone());
+        assert_eq!(by_ref(snapshot.snapshot_id.clone()).await, expected);
+    }
+
+    // A live delta after the newest issued head: every retry of the same
+    // request freezes the same rows on the same basis until the live
+    // reservations reach their cap; then the window is preview only, and no
+    // retry issues another object.
+    let latest = issued.last().unwrap().clone();
+    let delivered = latest.visible_stream_heads[0].clone();
+    let message = message_create_request(&previous, &strand_id, "live");
+    uow.commit_event(message.clone()).await.unwrap();
+    let reservation_cap = soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM;
+    let mut reference = None;
+    let mut creator_cursor = None;
+    for _ in 0..reservation_cap {
+        let retry = request(20, Some(delivered.clone()));
+        let window = store
+            .freeze_account_realm_window(&retry, &sign)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(window.window.preview_only, None);
+        let basis = window.window.window_start_basis.clone().unwrap();
+        assert_eq!(basis.snapshot_ref, latest.snapshot_id);
+        let rows = serde_json::to_value(&window.committed_events).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(*reference.get_or_insert_with(|| rows.clone()), rows);
+        creator_cursor.get_or_insert(retry.window_cursor);
+    }
+    assert_eq!(reservation_count(&pool).await, reservation_cap);
+    let over = store
+        .freeze_account_realm_window(&request(20, Some(delivered.clone())), &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(over.window.preview_only, Some(true));
+    assert!(over.window.window_start_basis.is_none());
+    assert_eq!(
+        serde_json::to_value(&over.committed_events).unwrap(),
+        reference.unwrap()
+    );
+    assert_eq!(reservation_count(&pool).await, reservation_cap);
+    // The first freeze issued the new head once; the reserved anchor is
+    // outside the unreserved cap.
+    assert_eq!(account_issuance_count(&pool, &realm_id).await, cap + 1);
+
+    // The basis is bound to the Account that froze the window.
+    let creator_cursor = creator_cursor.unwrap();
+    for account in [&stranger, &creator] {
+        let basis = store
+            .account_window_basis(
+                &realm_id,
+                account,
+                &creator_cursor,
+                &stream_ref,
+                &issuer,
+                now_ms,
+            )
+            .await
+            .unwrap();
+        assert_eq!(basis.is_some(), account == &creator);
+    }
+
+    // Once the reservations lapse the cap frees, and the retained anchor
+    // backs a live delta again.
+    cursors.prune_expired(now_ms + window_ttl).await.unwrap();
+    assert_eq!(reservation_count(&pool).await, 0);
+    let renewed = store
+        .freeze_account_realm_window(
+            &AccountRealmWindowRequest {
+                expires_at_ms: now_ms + 2 * window_ttl,
+                now_ms: now_ms + window_ttl,
+                ..request(20, Some(delivered.clone()))
+            },
+            &sign,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        renewed.window.window_start_basis.unwrap().snapshot_ref,
+        latest.snapshot_id
+    );
+}
+
+/// Real PostgreSQL: the Account stream scan applies the committed-event
+/// disclosure decision. A retention-expired Message and a redacted Message
+/// keep their Commit slot as the withheld branch, so the page is still one
+/// contiguous verifiable chain, while the redaction itself is disclosed in
+/// full. A signed cut can no longer carry the expired content: `/head` and
+/// the window refuse the cut and the earlier issued object is withdrawn
+/// from by-ref reads.
+#[tokio::test]
+async fn account_scan_withholds_expired_and_redacted_messages_on_their_commits() {
+    use arkret_wire::StreamScanDirection::After;
+    use soland_storage::AccountRealmWindowRequest;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let expired = message_create_request(&default, &strand_id, "expired");
+    uow.commit_event(expired.clone()).await.unwrap();
+    let redacted = message_create_request(&expired, &strand_id, "redacted");
+    uow.commit_event(redacted.clone()).await.unwrap();
+    let kept = message_create_request(&redacted, &strand_id, "kept");
+    uow.commit_event(kept.clone()).await.unwrap();
+    let before = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let redacted_message =
+        arkret_wire::MessageId::new(redacted.authority_commit.event.event_id.as_str().replacen(
+            "ak:event:",
+            "ak:message:",
+            1,
+        ))
+        .unwrap();
+    let redaction = message_redact_request(&kept, &redacted_message);
+    uow.commit_event(redaction.clone()).await.unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO retention_tombstones \
+         (event_id, realm_id, reason, policy_ttl_seconds, expired_at, tombstoned_at) \
+         SELECT id, realm_id, 'retention_policy.ttl', 60, now(), now() \
+         FROM canonical_events WHERE envelope->>'event_id' = $1",
+    )
+    .bind::<Text, _>(expired.authority_commit.event.event_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    let page = scanned_page(
+        store
+            .scan_stream_for_account(
+                &scan_request(&realm_id, After(None), 100),
+                &creator,
+                &issuer,
+            )
+            .await
+            .unwrap(),
+    );
+    let last = redaction.authority_commit.commit.stream_position;
+    assert_eq!(positions(&page), (0..=last).collect::<Vec<_>>());
+    assert!(!page.truncated);
+    for (index, item) in page.committed_events.iter().enumerate() {
+        if index > 0 {
+            assert_eq!(
+                item.commit().previous_commit_ref.as_ref(),
+                Some(&page.committed_events[index - 1].commit().commit_id)
+            );
+        }
+        let withheld = [&expired, &redacted]
+            .iter()
+            .any(|request| request.authority_commit.commit.commit_id == item.commit().commit_id);
+        match item {
+            arkret_wire::CommittedEventView::Withheld(view) => {
+                assert!(
+                    withheld,
+                    "unexpected withheld row {}",
+                    view.commit.stream_position
+                );
+            }
+            arkret_wire::CommittedEventView::Full(view) => {
+                assert!(!withheld, "disclosed row {}", view.commit.stream_position);
+                assert_eq!(view.event.event_id, view.commit.event_ref);
+            }
+        }
+    }
+
+    // No signed cut may carry the expired content any more.
+    assert!(
+        store
+            .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+            .await
+            .is_err()
+    );
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    assert!(
+        store
+            .freeze_account_realm_window(
+                &AccountRealmWindowRequest {
+                    realm_id: realm_id.clone(),
+                    account: creator.clone(),
+                    issuer: issuer.clone(),
+                    window_limit: 2,
+                    window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                    expires_at_ms: now_ms + 300_000,
+                    now_ms,
+                    byte_budget: 7 * 1024 * 1024,
+                    delivered_head: None,
+                },
+                &sign,
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        store
+            .issued_realm_state_snapshot(&realm_id, &creator, &before.snapshot_id, &issuer)
+            .await,
+        Err(soland_storage::PersistenceError::SchemaViolation(_))
+    ));
+}
+
 #[tokio::test]
 async fn peer_stream_scan_refuses_non_hosting_peers_and_never_serves_an_unproved_interval() {
     use arkret_wire::StreamScanDirection::After;

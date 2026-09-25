@@ -1080,6 +1080,45 @@ async fn account_cursor_roundtrips_station_cas_replay_position() {
     assert_eq!(parsed.account_data_change_position, 41);
 }
 
+/// 0441: an Account stream cursor, and so every window position it
+/// carries, is bound to the Account and filter that minted it; neither
+/// another Account nor a changed filter can resume from it.
+#[tokio::test]
+async fn account_cursor_is_bound_to_its_account_and_filter() {
+    let state = test_state();
+    let alice = roster_session(&state, "ak:did_core:web:alice.example");
+    let bob = roster_session(&state, "ak:did_core:web:bob.example");
+    let filter_a = json!({"realm_ids": [ROSTER_REALM]});
+    let filter_b = json!({"realm_ids": [ROSTER_REALM], "window_limit": 5});
+    let token = sync_token_for_account_positions(
+        &state,
+        Some(&alice),
+        Some(&filter_a),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        0,
+        0,
+        0,
+        None,
+        BTreeMap::new(),
+        false,
+        None,
+    )
+    .await
+    .expect("account cursor mints");
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    parse_and_validate_sync_cursor(&token, &state, Some(&alice), Some(&filter_a), now_ms)
+        .await
+        .expect("the minting Account and filter resume");
+    for (session, filter) in [(&bob, &filter_a), (&alice, &filter_b)] {
+        let error =
+            parse_and_validate_sync_cursor(&token, &state, Some(session), Some(filter), now_ms)
+                .await
+                .expect_err("another Account or filter must not reuse the cursor");
+        assert!(matches!(error, SyncCursorError::Mismatch(_)), "{error:?}");
+    }
+}
+
 #[tokio::test]
 async fn presenting_a_newer_cursor_preserves_older_retry_authority() {
     let state = test_state();

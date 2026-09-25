@@ -176,6 +176,19 @@ pub const UNRESERVED_ISSUED_SNAPSHOT_RETENTION_MS: i64 = 3_660_000;
 /// stream cursor that carries the window never lives longer.
 pub const MAX_ACCOUNT_WINDOW_RESERVATION_MS: i64 = 3_600_000;
 
+/// Issued snapshots of one Account and Realm that no live window reservation
+/// names are kept to the newest this many (0441). Issuing a further one
+/// reclaims the oldest; a head whose issuance was reclaimed backs no later
+/// window basis, so that window is `preview_only`.
+pub const MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM: i64 = 8;
+
+/// Live window reservations one Account may hold on one stream (0441). At
+/// the cap a newly frozen limited window names no basis and is
+/// `preview_only`; a reservation is never evicted before its deadline.
+/// Together with the unreserved cap this bounds the signed objects kept for
+/// one Account and Realm to 40 within the reservation lifetime.
+pub const MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM: i64 = 32;
+
 /// Decision 0081 / 0068: the complete RFC 8785 canonical signed body is one
 /// inline object of at most 8 MiB. There is no page, chunk, or truncation.
 pub const MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;

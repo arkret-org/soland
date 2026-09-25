@@ -744,6 +744,17 @@ CREATE TABLE public.canonical_events (
 CREATE INDEX canonical_events_realm_state_idx
     ON public.canonical_events (realm_id, state, received_at);
 
+-- Committed-event disclosure: a redaction target is looked up per Realm
+-- without scanning the Realm's history. The expression must stay identical to
+-- the predicate in `committed_disclosure.rs`.
+CREATE INDEX canonical_events_redaction_target_idx
+    ON public.canonical_events (
+        realm_id,
+        (COALESCE(NULLIF(btrim(envelope->'payload'->>'message_id'), ''),
+                  NULLIF(btrim(envelope->'payload'->>'target_ref'), '')))
+    )
+    WHERE kind IN ('ak.message.redact', 'ak.redaction') AND state = 'committed';
+
 -- Event identity bytes never change, and a terminal admission result never
 -- returns to the queue or changes branch.  Domain moderation/delivery state
 -- belongs to its own durable carrier, not to a fourth canonical Event state.
@@ -877,6 +888,10 @@ CREATE TABLE public.realm_state_snapshot_issuances (
 
 CREATE INDEX realm_state_snapshot_issuances_age_idx
     ON public.realm_state_snapshot_issuances (issued_at);
+-- Per-Account issuance cap and same-cut reuse (0441) read one Account's
+-- issuances newest first without scanning every other Account's.
+CREATE INDEX realm_state_snapshot_issuances_account_idx
+    ON public.realm_state_snapshot_issuances (account_id, issued_at DESC);
 
 -- A non-preview Account window names one exact issued snapshot as a
 -- stream's window_start_basis. Until the frozen window's consumable deadline
@@ -898,6 +913,9 @@ CREATE INDEX realm_state_snapshot_window_reservations_issuance_idx
     ON public.realm_state_snapshot_window_reservations (snapshot_id, account_id);
 CREATE INDEX realm_state_snapshot_window_reservations_expiry_idx
     ON public.realm_state_snapshot_window_reservations (expires_at_ms);
+-- Live reservations per Account stream are capped (0441).
+CREATE INDEX realm_state_snapshot_window_reservations_account_stream_idx
+    ON public.realm_state_snapshot_window_reservations (account_id, stream_key, expires_at_ms);
 
 -- The staged OpenMLS successor is installed in the same transaction that
 -- commits its producer Event and queues every recipient Welcome.

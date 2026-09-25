@@ -6,9 +6,10 @@
 //! and per-Event disclosure all bound it. This Station proves exactly one
 //! interval shape today: the sole founding member of a Realm reading that
 //! Realm's stream. Its whole accepted chain was produced by the caller, so the
-//! interval starts at the genesis Commit (`stream_start`) and every row is
-//! disclosable in full. Any other shape fails closed as unproved rather than
-//! serving a physical page.
+//! interval starts at the genesis Commit (`stream_start`). Within it each row
+//! is served in full or, when the shared committed-event disclosure decision
+//! withholds its Event, as the withheld branch on the same Commit. Any other
+//! shape fails closed as unproved rather than serving a physical page.
 //!
 //! A peer Station's replication right on a stream derives from the currently
 //! joined members routed to it. That founding shape never has a remote member,
@@ -17,7 +18,7 @@
 
 use arkret_wire::{
     AccountId, ActorId, CommitStreamRef, CommittedEventView, DidCoreId, ReadableFloorReason,
-    StreamScanRequest,
+    StreamScanOutcome, StreamScanRequest,
 };
 use soland_storage::AccountStreamScan;
 
@@ -130,17 +131,29 @@ pub(crate) async fn scan_stream_for_account(
                 "the founding interval has no retained genesis floor",
             ));
         }
-        // Every disclosed row must be the caller's own Event; anything else
-        // means the sole-founder proof does not describe this stream.
-        if page.committed_events.iter().any(|item| match item {
-            CommittedEventView::Full(view) => view.event.actor_id.to_string() != caller,
-            _ => true,
-        }) {
-            return Ok(AccountStreamScan::Unproved(
-                "a stream row was produced outside the sole-founder interval",
-            ));
+        // Every row must be the caller's own Event; anything else means the
+        // sole-founder proof does not describe this stream.
+        let mut rows = Vec::with_capacity(page.committed_events.len());
+        for item in page.committed_events {
+            match item {
+                CommittedEventView::Full(view) if view.event.actor_id.to_string() == caller => {
+                    rows.push(view);
+                }
+                _ => {
+                    return Ok(AccountStreamScan::Unproved(
+                        "a stream row was produced outside the sole-founder interval",
+                    ));
+                }
+            }
         }
-        Ok(AccountStreamScan::Page(page))
+        // Per-Event disclosure applies on top of the interval: a withheld row
+        // keeps its Commit so the page stays one verifiable chain.
+        let committed_events =
+            crate::committed_disclosure::disclose_in_connection(conn, rows).await?;
+        Ok(AccountStreamScan::Page(StreamScanOutcome {
+            committed_events,
+            ..page
+        }))
     })
     .await
     .map_err(PgTransactionError::into_persistence)

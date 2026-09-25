@@ -172,6 +172,118 @@ pub(crate) async fn issue_in_connection(
     Ok(())
 }
 
+#[derive(QueryableByName)]
+struct IssuedCandidateRow {
+    #[diesel(sql_type = Jsonb)]
+    snapshot_json: Value,
+}
+
+/// Issue the signed object of one proved cut to `account`, bounded (0441).
+///
+/// An object already issued to the Account for exactly this cut (same
+/// generation, heads, rows and floors, signed with the same verification
+/// method) is reissued instead of archiving `signed`: retries and repeated
+/// freezes at one head add no object. The Account's unreserved issuances in
+/// this Realm are then trimmed to
+/// [`soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM`],
+/// never touching a reserved one or a never-issued handoff object. The
+/// caller holds the shared retention lock, so GC cannot interleave.
+pub(crate) async fn issue_head_in_connection(
+    conn: &mut AsyncPgConnection,
+    account: &arkret_wire::AccountId,
+    material: &soland_storage::RealmStateSnapshotMaterial,
+    signed: arkret_wire::RealmStateSnapshot,
+) -> PersistenceResult<arkret_wire::RealmStateSnapshot> {
+    let account_key = account_key(account)?;
+    let generation = i64::try_from(material.governance_generation).map_err(|_| {
+        PersistenceError::SchemaViolation("snapshot generation exceeds storage range".to_owned())
+    })?;
+    let heads =
+        serde_json::to_value(&material.visible_stream_heads).map_err(PersistenceError::database)?;
+    let candidates = sql_query(
+        "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
+         JOIN realm_state_snapshot_issuances issued ON issued.snapshot_id = snapshot.snapshot_id \
+         WHERE issued.account_id=$1 AND snapshot.realm_id=$2 \
+           AND snapshot.governance_generation=$3 \
+           AND snapshot.snapshot_json->'visible_stream_heads' = $4 \
+         ORDER BY issued.issued_at DESC, snapshot.snapshot_id \
+         LIMIT $5",
+    )
+    .bind::<Text, _>(&account_key)
+    .bind::<Text, _>(material.realm_id.as_str())
+    .bind::<super::BigInt, _>(generation)
+    .bind::<Jsonb, _>(&heads)
+    .bind::<super::BigInt, _>(soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM)
+    .load::<IssuedCandidateRow>(&mut *conn)
+    .await
+    .map_err(snapshot_cut_error)?;
+    let mut issued = None;
+    for candidate in candidates {
+        let existing: arkret_wire::RealmStateSnapshot =
+            serde_json::from_value(candidate.snapshot_json).map_err(PersistenceError::database)?;
+        if !soland_storage::signed_snapshot_matches_material(&existing, material)
+            || existing.signature.verification_method != signed.signature.verification_method
+            || derived_snapshot_id(&existing)? != existing.snapshot_id
+        {
+            continue;
+        }
+        let touched = sql_query(
+            "UPDATE realm_state_snapshot_issuances SET issued_at = now() \
+             WHERE snapshot_id=$1 AND account_id=$2",
+        )
+        .bind::<Text, _>(existing.snapshot_id.as_str())
+        .bind::<Text, _>(&account_key)
+        .execute(&mut *conn)
+        .await
+        .map_err(snapshot_cut_error)?;
+        if touched == 1 {
+            issued = Some(existing);
+            break;
+        }
+    }
+    let issued = match issued {
+        Some(existing) => existing,
+        None => {
+            issue_in_connection(conn, account, &signed).await?;
+            signed
+        }
+    };
+    sql_query(
+        "WITH doomed AS ( \
+           SELECT issued.snapshot_id, issued.account_id \
+           FROM realm_state_snapshot_issuances issued \
+           JOIN realm_state_snapshots snapshot ON snapshot.snapshot_id = issued.snapshot_id \
+           WHERE issued.account_id=$1 AND snapshot.realm_id=$2 AND issued.snapshot_id <> $3 \
+             AND NOT EXISTS (SELECT 1 FROM realm_state_snapshot_window_reservations reserved \
+                             WHERE reserved.snapshot_id = issued.snapshot_id \
+                               AND reserved.account_id = issued.account_id) \
+           ORDER BY issued.issued_at DESC, issued.snapshot_id DESC \
+           OFFSET $4 \
+         ), removed AS ( \
+           DELETE FROM realm_state_snapshot_issuances issued USING doomed \
+           WHERE issued.snapshot_id = doomed.snapshot_id \
+             AND issued.account_id = doomed.account_id \
+           RETURNING issued.snapshot_id, issued.account_id \
+         ) \
+         DELETE FROM realm_state_snapshots snapshot \
+         WHERE snapshot.snapshot_id IN (SELECT snapshot_id FROM removed) \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM realm_state_snapshot_issuances remaining \
+             WHERE remaining.snapshot_id = snapshot.snapshot_id \
+               AND NOT EXISTS (SELECT 1 FROM removed \
+                               WHERE removed.snapshot_id = remaining.snapshot_id \
+                                 AND removed.account_id = remaining.account_id))",
+    )
+    .bind::<Text, _>(&account_key)
+    .bind::<Text, _>(material.realm_id.as_str())
+    .bind::<Text, _>(issued.snapshot_id.as_str())
+    .bind::<super::BigInt, _>(soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM - 1)
+    .execute(&mut *conn)
+    .await
+    .map_err(snapshot_cut_error)?;
+    Ok(issued)
+}
+
 fn derived_snapshot_id(
     snapshot: &arkret_wire::RealmStateSnapshot,
 ) -> PersistenceResult<arkret_wire::RealmSnapshotId> {
@@ -204,6 +316,12 @@ struct MemberRevisionRow {
     current_commit_id: String,
     #[diesel(sql_type = super::BigInt)]
     current_stream_position: i64,
+}
+
+#[derive(QueryableByName)]
+struct PresenceRow {
+    #[diesel(sql_type = super::Bool)]
+    present: bool,
 }
 
 #[derive(QueryableByName)]
@@ -264,6 +382,7 @@ async fn recheck_disclosure_in_connection(
     }
     let actor = arkret_wire::ActorId::account(account.clone());
     let mut own_membership = None;
+    let mut message_targets = Vec::new();
     for row in &snapshot.current_state_entries {
         let TypedCurrentResult::Value {
             selector,
@@ -290,8 +409,12 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmAlias
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::Strand { .. }
-            | CurrentSelector::RealmSetDefaultStrand
-            | CurrentSelector::MessageRevision { .. } => {}
+            | CurrentSelector::RealmSetDefaultStrand => {}
+            CurrentSelector::MessageRevision { message_id } => {
+                let message_id = message_id.as_str().to_owned();
+                message_targets.push(message_id.replacen("ak:message:", "ak:event:", 1));
+                message_targets.push(message_id);
+            }
             CurrentSelector::MemberState { actor_id }
                 if actor_id == &actor
                     && own_membership.is_none()
@@ -326,6 +449,29 @@ async fn recheck_disclosure_in_connection(
     {
         return Err(undisclosable(
             "the Account membership changed after this object was issued",
+        ));
+    }
+    // A Message row carries its content, so it stops being disclosable once
+    // retention expires any Event of the Realm or a redaction targets it:
+    // the same decision that withholds its committed Event.
+    let withdrawn = sql_query(
+        "SELECT (EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM canonical_events redaction \
+                      WHERE redaction.realm_id=$1 \
+                        AND redaction.kind IN ('ak.message.redact', 'ak.redaction') \
+                        AND redaction.state='committed' \
+                        AND COALESCE(NULLIF(btrim(redaction.envelope->'payload'->>'message_id'), ''), \
+                                     NULLIF(btrim(redaction.envelope->'payload'->>'target_ref'), '')) \
+                            = ANY($2))) AS present",
+    )
+    .bind::<Text, _>(snapshot.realm_id.as_str())
+    .bind::<super::Array<Text>, _>(&message_targets)
+    .get_result::<PresenceRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if withdrawn.present {
+        return Err(undisclosable(
+            "retention or a redaction withdrew a disclosed row",
         ));
     }
     for head in &snapshot.visible_stream_heads {
@@ -444,7 +590,10 @@ async fn still_disclosable(
 /// within `window_limit`, otherwise the last `window_limit` Commits of the
 /// Realm stream; `limited` states whether readable history lies below them.
 /// The frozen head is issued to the Account in the same cut, so the next
-/// delta can name it as its exact basis.
+/// delta can name it as its exact basis. Rows are served through the shared
+/// committed-event disclosure decision. Issuance reuses the object already
+/// issued for an unchanged cut and keeps the Account's unreserved issuances
+/// capped; at the live-reservation cap a limited window is preview only.
 pub(crate) async fn freeze_account_realm_window(
     pool: &PgPool,
     request: &soland_storage::AccountRealmWindowRequest,
@@ -580,11 +729,11 @@ pub(crate) async fn freeze_account_realm_window(
         }
         let start_index =
             usize::try_from(start - lowest).map_err(|_| window_rejected("window start"))?;
-        let delivered = chain[start_index..]
-            .iter()
-            .cloned()
-            .map(arkret_wire::CommittedEventView::Full)
-            .collect::<Vec<_>>();
+        let delivered = crate::committed_disclosure::disclose_in_connection(
+            conn,
+            chain[start_index..].to_vec(),
+        )
+        .await?;
         let encoded = arkret_canonical::canonical_json_bytes(&delivered)
             .map_err(PersistenceError::database)?;
         if encoded.len() > request.byte_budget {
@@ -593,7 +742,21 @@ pub(crate) async fn freeze_account_realm_window(
         // The sole-founder cut proved a readable floor at genesis.
         let limited = start > 0;
         let mut basis = None;
-        if start > 0 {
+        let live_reservations = sql_query(
+            "SELECT count(*) AS present FROM realm_state_snapshot_window_reservations \
+             WHERE account_id=$1 AND stream_key=$2 AND expires_at_ms > $3",
+        )
+        .bind::<Text, _>(&account_key)
+        .bind::<Text, _>(&stream_key)
+        .bind::<super::BigInt, _>(request.now_ms)
+        .get_result::<CountRow>(&mut *conn)
+        .await?
+        .present;
+        // At the cap no further reservation is taken, so a limited window
+        // names no basis and is preview only (0441).
+        if start > 0
+            && live_reservations < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
+        {
             let anchor_view = &chain[0];
             let anchor = arkret_wire::CommitStreamHead {
                 stream_ref: stream_ref.clone(),
@@ -606,11 +769,20 @@ pub(crate) async fn freeze_account_realm_window(
                    ON issued.snapshot_id = snapshot.snapshot_id \
                  WHERE snapshot.realm_id=$1 AND snapshot.governance_generation=$2 \
                    AND issued.account_id=$3 \
-                 ORDER BY snapshot.created_at DESC, snapshot.snapshot_id FOR KEY SHARE OF issued",
+                   AND snapshot.snapshot_json->'visible_stream_heads' = $4 \
+                 ORDER BY issued.issued_at DESC, snapshot.snapshot_id \
+                 LIMIT $5 FOR KEY SHARE OF issued",
             )
             .bind::<Text, _>(request.realm_id.as_str())
             .bind::<super::BigInt, _>(tenure.generation)
             .bind::<Text, _>(&account_key)
+            .bind::<Jsonb, _>(
+                serde_json::to_value(std::slice::from_ref(&anchor))
+                    .map_err(PersistenceError::database)?,
+            )
+            .bind::<super::BigInt, _>(
+                soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM,
+            )
             .load::<SnapshotJsonRow>(&mut *conn)
             .await?;
             for candidate in candidates {
@@ -654,7 +826,7 @@ pub(crate) async fn freeze_account_realm_window(
             .into());
         }
         if soland_storage::enforce_inline_realm_state_snapshot_capacity(&head_snapshot).is_ok() {
-            issue_in_connection(conn, &request.account, &head_snapshot).await?;
+            issue_head_in_connection(conn, &request.account, &material, head_snapshot).await?;
         }
         let window = RealmStreamWindow {
             stream_ref: stream_ref.clone(),
@@ -742,20 +914,22 @@ pub(crate) async fn account_window_basis(
 /// [`soland_storage::UNRESERVED_ISSUED_SNAPSHOT_RETENTION_MS`]; the signed
 /// object goes with its last issuance. A snapshot that was never issued (a
 /// private handoff anchor) is never a candidate. Each class is bounded to
-/// 10000 rows per sweep.
+/// `batch` rows; the result says whether either class filled its batch.
 pub(crate) async fn prune_in_connection(
     conn: &mut AsyncPgConnection,
     now_ms: i64,
-) -> Result<(), PgTransactionError> {
-    sql_query(
+    batch: i64,
+) -> Result<bool, PgTransactionError> {
+    let reservations = sql_query(
         "DELETE FROM realm_state_snapshot_window_reservations WHERE ctid IN \
          (SELECT ctid FROM realm_state_snapshot_window_reservations \
-          WHERE expires_at_ms <= $1 ORDER BY expires_at_ms LIMIT 10000)",
+          WHERE expires_at_ms <= $1 ORDER BY expires_at_ms LIMIT $2)",
     )
     .bind::<super::BigInt, _>(now_ms)
+    .bind::<super::BigInt, _>(batch)
     .execute(&mut *conn)
     .await?;
-    sql_query(
+    let issuances = sql_query(
         "WITH doomed AS ( \
            SELECT issued.snapshot_id, issued.account_id \
            FROM realm_state_snapshot_issuances issued \
@@ -763,27 +937,32 @@ pub(crate) async fn prune_in_connection(
              AND NOT EXISTS (SELECT 1 FROM realm_state_snapshot_window_reservations reserved \
                              WHERE reserved.snapshot_id = issued.snapshot_id \
                                AND reserved.account_id = issued.account_id) \
-           ORDER BY issued.issued_at LIMIT 10000 \
+           ORDER BY issued.issued_at LIMIT $3 \
          ), removed AS ( \
            DELETE FROM realm_state_snapshot_issuances issued USING doomed \
            WHERE issued.snapshot_id = doomed.snapshot_id \
              AND issued.account_id = doomed.account_id \
            RETURNING issued.snapshot_id, issued.account_id \
+         ), orphaned AS ( \
+           DELETE FROM realm_state_snapshots snapshot \
+           WHERE snapshot.snapshot_id IN (SELECT snapshot_id FROM removed) \
+             AND NOT EXISTS ( \
+               SELECT 1 FROM realm_state_snapshot_issuances remaining \
+               WHERE remaining.snapshot_id = snapshot.snapshot_id \
+                 AND NOT EXISTS (SELECT 1 FROM removed \
+                                 WHERE removed.snapshot_id = remaining.snapshot_id \
+                                   AND removed.account_id = remaining.account_id)) \
+           RETURNING 1 \
          ) \
-         DELETE FROM realm_state_snapshots snapshot \
-         WHERE snapshot.snapshot_id IN (SELECT snapshot_id FROM removed) \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM realm_state_snapshot_issuances remaining \
-             WHERE remaining.snapshot_id = snapshot.snapshot_id \
-               AND NOT EXISTS (SELECT 1 FROM removed \
-                               WHERE removed.snapshot_id = remaining.snapshot_id \
-                                 AND removed.account_id = remaining.account_id))",
+         SELECT count(*) AS present FROM removed",
     )
     .bind::<super::BigInt, _>(now_ms)
     .bind::<super::BigInt, _>(soland_storage::UNRESERVED_ISSUED_SNAPSHOT_RETENTION_MS)
-    .execute(&mut *conn)
-    .await?;
-    Ok(())
+    .bind::<super::BigInt, _>(batch)
+    .get_result::<CountRow>(&mut *conn)
+    .await?
+    .present;
+    Ok(i64::try_from(reservations).is_ok_and(|rows| rows >= batch) || issuances >= batch)
 }
 
 #[cfg(test)]

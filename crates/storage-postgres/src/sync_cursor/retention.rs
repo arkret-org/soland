@@ -164,14 +164,46 @@ pub(super) async fn save_cursor(
     Ok(())
 }
 
+/// Rows each reclaimable class loses per batch; each batch is one short
+/// transaction on the exclusive retention lock.
+const PRUNE_BATCH_ROWS: usize = 10_000;
+
+/// Upper bound on batches per sweep, so one sweep never holds the retention
+/// lock indefinitely; any remainder is the next sweep's first batch.
+const MAX_PRUNE_BATCHES_PER_SWEEP: usize = 1_000;
+
+/// Drain every reclaimable class (0441): batches repeat while any class
+/// filled its batch, so the backlog after a sweep is empty rather than
+/// growing whenever expiries outpace one batch per sweep interval.
 pub(super) async fn prune(pool: &PgPool, now_ms: i64) -> PersistenceResult<usize> {
+    let mut pruned = 0;
+    for _ in 0..MAX_PRUNE_BATCHES_PER_SWEEP {
+        let (handles, saturated) = prune_batch(pool, now_ms).await?;
+        pruned += handles;
+        if !saturated {
+            return Ok(pruned);
+        }
+    }
+    tracing::warn!(
+        pruned,
+        "sync retention sweep stopped at its batch bound; the remainder waits for the next sweep"
+    );
+    Ok(pruned)
+}
+
+/// One bounded batch per class. Returns the expired handles removed and
+/// whether any class filled its batch.
+async fn prune_batch(pool: &PgPool, now_ms: i64) -> PersistenceResult<(usize, bool)> {
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_,PgTransactionError,_>(async |conn| {
         lock(conn,true).await?;
-        let pruned = sql_query("DELETE FROM sync_cursor_handles WHERE id IN (SELECT id FROM sync_cursor_handles WHERE expires_at_ms<=$1 ORDER BY expires_at_ms LIMIT 10000)")
-            .bind::<BigInt,_>(now_ms).execute(&mut *conn).await?;
-        sql_query("DELETE FROM account_sync_snapshot_reservations WHERE bucket IN (SELECT bucket FROM account_sync_snapshot_reservations WHERE expires_at_ms<=$1 ORDER BY bucket LIMIT 10000)")
-            .bind::<BigInt,_>(now_ms).execute(&mut *conn).await?;
+        let batch = PRUNE_BATCH_ROWS as i64;
+        let mut saturated = false;
+        let pruned = sql_query("DELETE FROM sync_cursor_handles WHERE id IN (SELECT id FROM sync_cursor_handles WHERE expires_at_ms<=$1 ORDER BY expires_at_ms LIMIT $2)")
+            .bind::<BigInt,_>(now_ms).bind::<BigInt,_>(batch).execute(&mut *conn).await?;
+        saturated |= pruned == PRUNE_BATCH_ROWS;
+        saturated |= sql_query("DELETE FROM account_sync_snapshot_reservations WHERE bucket IN (SELECT bucket FROM account_sync_snapshot_reservations WHERE expires_at_ms<=$1 ORDER BY bucket LIMIT $2)")
+            .bind::<BigInt,_>(now_ms).bind::<BigInt,_>(batch).execute(&mut *conn).await? == PRUNE_BATCH_ROWS;
         // Indexed minima avoid scanning every active handle. Expired handles
         // awaiting the next bounded deletion batch conservatively retain data.
         let floors = sql_query("SELECT LEAST(COALESCE((SELECT min(summary_floor) FROM account_sync_snapshot_reservations),s.revision),COALESCE((SELECT summary_floor FROM account_sync_cursor_retention ORDER BY summary_floor LIMIT 1),s.revision)) AS summary_floor,LEAST(COALESCE((SELECT min(global_floor) FROM account_sync_snapshot_reservations),g.revision),COALESCE((SELECT global_floor FROM account_sync_cursor_retention ORDER BY global_floor LIMIT 1),g.revision)) AS global_floor FROM account_summary_clock s CROSS JOIN account_global_clock g WHERE s.singleton AND g.singleton")
@@ -179,18 +211,18 @@ pub(super) async fn prune(pool: &PgPool, now_ms: i64) -> PersistenceResult<usize
         sql_query("UPDATE account_sync_retention SET summary_floor=GREATEST(summary_floor,$1),global_floor=GREATEST(global_floor,$2) WHERE singleton")
             .bind::<BigInt,_>(floors.summary_floor).bind::<BigInt,_>(floors.global_floor).execute(&mut *conn).await?;
         // Closed versions only. Current values and tombstones remain available
-        // to a fresh baseline. Work per sweep is bounded independently of history.
-        sql_query("DELETE FROM account_summary_versions WHERE ctid IN (SELECT ctid FROM account_summary_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT 10000)")
-            .bind::<BigInt,_>(floors.summary_floor).execute(&mut *conn).await?;
-        sql_query("DELETE FROM current_result_versions WHERE ctid IN (SELECT ctid FROM current_result_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT 10000)")
-            .bind::<BigInt,_>(floors.summary_floor).execute(&mut *conn).await?;
-        sql_query("DELETE FROM account_global_versions WHERE ctid IN (SELECT ctid FROM account_global_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT 10000)")
-            .bind::<BigInt,_>(floors.global_floor).execute(&mut *conn).await?;
+        // to a fresh baseline.
+        saturated |= sql_query("DELETE FROM account_summary_versions WHERE ctid IN (SELECT ctid FROM account_summary_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT $2)")
+            .bind::<BigInt,_>(floors.summary_floor).bind::<BigInt,_>(batch).execute(&mut *conn).await? == PRUNE_BATCH_ROWS;
+        saturated |= sql_query("DELETE FROM current_result_versions WHERE ctid IN (SELECT ctid FROM current_result_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT $2)")
+            .bind::<BigInt,_>(floors.summary_floor).bind::<BigInt,_>(batch).execute(&mut *conn).await? == PRUNE_BATCH_ROWS;
+        saturated |= sql_query("DELETE FROM account_global_versions WHERE ctid IN (SELECT ctid FROM account_global_versions WHERE valid_until<=$1 ORDER BY valid_until LIMIT $2)")
+            .bind::<BigInt,_>(floors.global_floor).bind::<BigInt,_>(batch).execute(&mut *conn).await? == PRUNE_BATCH_ROWS;
         // Issued Realm snapshots share this lock: a window reservation is
         // registered under the shared side, so a reserved basis is never
         // reclaimed while its window is consumable.
-        crate::issued_realm_snapshots::prune_in_connection(conn, now_ms).await?;
-        Ok(pruned)
+        saturated |= crate::issued_realm_snapshots::prune_in_connection(conn, now_ms, batch).await?;
+        Ok((pruned, saturated))
     }).await.map_err(PgTransactionError::into_persistence)
 }
 
@@ -376,6 +408,34 @@ mod tests {
         store.delete(&cursor.handle).await.unwrap();
         store.prune_expired(now).await.unwrap();
         assert_eq!(versions().await, 1);
+    }
+
+    /// One sweep drains a reclaimable backlog larger than a batch instead of
+    /// leaving the remainder for later sweep intervals (0441).
+    #[tokio::test]
+    async fn one_sweep_drains_a_backlog_larger_than_one_batch() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let store = PgSyncCursorStore { pool: pool.clone() };
+        let mut conn = pg_conn(&pool).await.unwrap();
+        let backlog = 2 * PRUNE_BATCH_ROWS + 1;
+        conn.batch_execute(&format!(
+            "UPDATE account_summary_clock SET revision=10; UPDATE account_global_clock SET revision=10;
+            INSERT INTO current_result_versions(realm_id,selector_key,revision,valid_until,target_kind,target_key,payload)
+              SELECT 'realm','selector-'||n,1,2,'realm','','{{}}' FROM generate_series(1,{backlog}) n;"
+        ))
+        .await
+        .unwrap();
+        store
+            .prune_expired(Utc::now().timestamp_millis())
+            .await
+            .unwrap();
+        let remaining =
+            sql_query("SELECT count(*)::bigint AS revision FROM current_result_versions")
+                .get_result::<SummaryWatermarkRow>(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(remaining.revision, 0);
     }
 
     #[tokio::test]
