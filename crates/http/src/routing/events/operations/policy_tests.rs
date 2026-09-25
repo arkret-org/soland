@@ -1688,7 +1688,7 @@ async fn admit_agent_action_approval(
 {
     state
         .authority_commits()
-        .admit_event(
+        .admit_event_for_test(
             event,
             &crate::test_event::station_id(),
             state.service_verification_method("notary-key").unwrap(),

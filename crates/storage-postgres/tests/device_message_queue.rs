@@ -505,6 +505,7 @@ const AGENT_RUNTIME_SEED: [u8; 32] = [91; 32];
 /// the queue's endpoint recheck reads exactly what a production commit wrote.
 struct CommittedAgent {
     authority: soland_services::authority_commit::AuthorityCommitApplication,
+    store: soland_storage_postgres::PgAuthorityCommitStore,
     controller: device_authorization_history::DeviceHistoryFixture,
     station: arkret_wire::DidCoreId,
     agent_account: arkret_wire::AccountId,
@@ -531,6 +532,7 @@ impl CommittedAgent {
             )),
             100,
         );
+        let store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
         let station: arkret_wire::DidCoreId = STATION.parse().unwrap();
         let agent_did = arkret_wire::Did::new(AGENT_DID).unwrap();
         let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
@@ -578,7 +580,7 @@ impl CommittedAgent {
             })
             .await
             .unwrap();
-        admit(&authority, &station, &genesis).await;
+        admit(&authority, &store, &station, &genesis).await;
 
         let runtime = ed25519_dalek::SigningKey::from_bytes(&AGENT_RUNTIME_SEED);
         let verification_method =
@@ -640,7 +642,7 @@ impl CommittedAgent {
             serde_json::to_value(&payload).unwrap(),
             at,
         );
-        let commit = admit(&authority, &station, &authorize).await;
+        let commit = admit(&authority, &store, &station, &authorize).await;
         let authorization_ref = arkret_wire::CommittedEventRef {
             event_id: authorize.event_id.clone(),
             commit_id: commit.commit_id,
@@ -649,6 +651,7 @@ impl CommittedAgent {
         };
         let agent = Self {
             authority,
+            store,
             controller,
             station,
             agent_account,
@@ -690,7 +693,7 @@ impl CommittedAgent {
             payload,
             at,
         );
-        admit(&self.authority, &self.station, &event).await;
+        admit(&self.authority, &self.store, &self.station, &event).await;
     }
 
     async fn revoke_key(&self) {
@@ -777,34 +780,43 @@ fn controller_signed(
     )
 }
 
-/// Admit `event` through the Station's atomic Event committer, which signs
-/// the covering `RealmCommit` with the Station authority key.
+/// Commit `event` at the stream head with a Station-signed `RealmCommit`.
+///
+/// Agent key and lifecycle Events have no production admission unit yet, so
+/// this fixture uses the kind-agnostic storage admission reserved for tests.
 async fn admit(
     authority: &soland_services::authority_commit::AuthorityCommitApplication,
+    store: &soland_storage_postgres::PgAuthorityCommitStore,
     station: &arkret_wire::DidCoreId,
     event: &arkret_wire::Event,
 ) -> arkret_wire::RealmCommit {
+    use soland_storage::AuthorityCommitStore as _;
+
     let method = arkret_wire::DidUrl::new(format!(
         "{}#authority",
         device_authorization_history::did_web_station(station)
     ))
     .unwrap();
-    let outcome = authority
-        .admit_event(
+    let committed_at = Utc::now();
+    let transaction = authority
+        .prepare_self_event_transaction(
             event,
             station,
             method,
             &ed25519_dalek::SigningKey::from_bytes(&STATION_AUTHORITY_SEED),
-            Utc::now(),
+            committed_at,
         )
         .await
         .unwrap();
-    let soland_services::authority_commit::AuthorityEventAdmissionOutcome::Committed(commit) =
-        outcome
-    else {
-        panic!("the governing Station commits the Agent Event");
-    };
-    commit
+    assert_eq!(
+        store
+            .admit_event_transaction(&transaction, committed_at)
+            .await
+            .unwrap(),
+        soland_storage::AuthorityCommitWriteOutcome::Committed,
+        "the governing Station commits the Agent Event"
+    );
+    transaction.commit
 }
 
 /// An Agent-sent envelope for `recipient` and its batch, keyed exactly like

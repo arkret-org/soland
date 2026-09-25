@@ -2354,6 +2354,13 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        if crate::account_summary::changes_account_summary_inputs(&event.kind) {
+            crate::account_summary::publish_realm_account_summary_in_connection(
+                conn,
+                &event.realm_id,
+            )
+            .await?;
+        }
         outcome.outbox_inserted += crate::realm_fanout::plan_realm_fanout_in_connection(
             conn,
             event,

@@ -3869,19 +3869,14 @@ CREATE TABLE public.member_identity_handle_claims (
 );
 
 -- Account summaries are accepted governance projections, never discovery rows.
+-- Their only writer derives them from typed current results inside the
+-- authority transaction that changed an input (account_summary.rs).
 -- A transactional counter gives committed cuts; a sequence would permit holes.
 CREATE TABLE account_summary_clock (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     revision BIGINT NOT NULL CHECK (revision BETWEEN 0 AND 9007199254740991)
 );
 INSERT INTO account_summary_clock (singleton, revision) VALUES (TRUE, 0);
-CREATE TABLE account_summary_members (
-    realm_id TEXT NOT NULL,
-    cell_id TEXT NOT NULL,
-    actor_key TEXT NOT NULL,
-    PRIMARY KEY (realm_id, cell_id),
-    UNIQUE (realm_id, actor_key)
-);
 CREATE TABLE account_summary_current (
     actor_key TEXT NOT NULL,
     realm_id TEXT NOT NULL,
@@ -4101,11 +4096,8 @@ CREATE FUNCTION account_device_interest_visible(recipient TEXT, owner TEXT) RETU
     SELECT recipient::jsonb->>'kind'='account' AND owner::jsonb->>'kind'='account'
     AND (recipient=owner OR EXISTS (
         SELECT 1 FROM account_summary_current a JOIN account_summary_current b USING(realm_id)
-        JOIN committed_events creation ON creation.realm_id=a.realm_id AND creation.kind='ak.realm.create'
         WHERE a.actor_key=recipient AND b.actor_key=owner
           AND a.membership='join' AND b.membership='join' AND a.available AND b.available
-          AND jsonb_typeof(creation.envelope->'payload'->'object'->'schema_refs')='array'
-          AND NOT (creation.envelope->'payload'->'object'->'schema_refs' ? 'ak.profile.mls.minimal_metadata_realm.v1')
     ))
 $$;
 CREATE FUNCTION refresh_account_device_interest(recipient TEXT, owner TEXT) RETURNS VOID LANGUAGE plpgsql AS $$
@@ -4126,18 +4118,37 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER account_global_devices AFTER INSERT OR UPDATE ON devices FOR EACH ROW EXECUTE FUNCTION project_account_global_devices();
+-- Membership moves only the visibility of an owner's device list, so it
+-- publishes a change or removal only when that visibility flips. A device
+-- change itself is published by refresh_account_device_interest.
+CREATE FUNCTION reconcile_account_device_interest(recipient TEXT, owner TEXT) RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE hidden BOOLEAN := NOT COALESCE(account_device_interest_visible(recipient,owner),FALSE);
+DECLARE published BOOLEAN;
+BEGIN
+    SELECT deleted INTO published FROM account_global_versions
+        WHERE actor_key=recipient AND channel='device_lists' AND item_key=owner AND valid_until IS NULL;
+    IF published IS NOT DISTINCT FROM hidden OR (published IS NULL AND hidden) THEN
+        RETURN;
+    END IF;
+    PERFORM project_account_global_value(recipient,'device_lists',owner,owner::jsonb,hidden);
+END;
+$$;
 CREATE FUNCTION project_account_global_membership() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE peer TEXT;
 BEGIN
-    PERFORM refresh_account_device_interest(NEW.actor_key,NEW.actor_key);
+    -- Title and default Strand changes do not move device interest.
+    IF TG_OP='UPDATE' AND OLD.membership IS NOT DISTINCT FROM NEW.membership
+        AND OLD.available=NEW.available THEN
+        RETURN NEW;
+    END IF;
     FOR peer IN SELECT actor_key FROM account_summary_current WHERE realm_id=NEW.realm_id AND actor_key<>NEW.actor_key LOOP
-        PERFORM refresh_account_device_interest(NEW.actor_key,peer);
-        PERFORM refresh_account_device_interest(peer,NEW.actor_key);
+        PERFORM reconcile_account_device_interest(NEW.actor_key,peer);
+        PERFORM reconcile_account_device_interest(peer,NEW.actor_key);
     END LOOP;
     RETURN NEW;
 END;
 $$;
-CREATE TRIGGER account_global_membership AFTER INSERT OR UPDATE ON account_summary_current FOR EACH ROW EXECUTE FUNCTION project_account_global_membership();
+CREATE TRIGGER account_global_membership AFTER INSERT OR UPDATE OF membership, available ON account_summary_current FOR EACH ROW EXECUTE FUNCTION project_account_global_membership();
 
 
 -- A withdrawn holder source is unavailable, not an invented tombstone/revision.
@@ -4155,28 +4166,6 @@ BEGIN
 END;
 $$;
 
--- Withdraw shared-device discovery in the very transaction that withdraws the
--- immutable create context; no later Seal or client request is needed.
-CREATE FUNCTION invalidate_account_device_create() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE interest RECORD;
-BEGIN
-    IF OLD.kind='ak.realm.create' AND OLD.state='committed' AND NEW.state<>'committed' THEN
-        PERFORM 1 FROM account_global_clock WHERE singleton FOR UPDATE;
-        FOR interest IN
-            SELECT v.actor_key,v.item_key FROM account_global_versions v
-            JOIN account_summary_current recipient ON recipient.actor_key=v.actor_key AND recipient.realm_id=OLD.realm_id
-            JOIN account_summary_current owner ON owner.actor_key=v.item_key AND owner.realm_id=OLD.realm_id
-            WHERE v.channel='device_lists' AND v.valid_until IS NULL AND NOT v.deleted
-              AND v.actor_key<>v.item_key
-              AND NOT COALESCE(account_device_interest_visible(v.actor_key,v.item_key),FALSE)
-        LOOP
-            PERFORM project_account_global_value(interest.actor_key,'device_lists',interest.item_key,interest.item_key::jsonb,TRUE);
-        END LOOP;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-CREATE TRIGGER account_global_realm_create_withdrawal AFTER UPDATE OF state ON canonical_events FOR EACH ROW EXECUTE FUNCTION invalidate_account_device_create();
 
 CREATE TABLE current_result_heads (
  realm_id TEXT NOT NULL, selector_key TEXT COLLATE "C" NOT NULL,

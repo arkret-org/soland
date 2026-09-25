@@ -1379,6 +1379,7 @@ async fn commit_transaction_in_connection_with_device_guard(
     Ok(AuthorityCommitWriteOutcome::Committed)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn require_atomic_admission_outcome(
     outcome: AuthorityCommitWriteOutcome,
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
@@ -1743,6 +1744,11 @@ impl PgAuthorityCommitStore {
                 project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
                     .await?;
             }
+            crate::account_summary::publish_realm_account_summary_in_connection(
+                conn,
+                &authority.realm_id,
+            )
+            .await?;
             sql_query(
                 "UPDATE ordinary_realm_bootstrap_units SET commits_json=$2 WHERE realm_id=$1",
             )
@@ -2218,6 +2224,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .transpose()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     async fn admit_event_transaction(
         &self,
         transaction: &AuthorityCommitTransaction,
@@ -2254,6 +2261,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     async fn admit_self_event_transaction(
         &self,
         transaction: &AuthorityCommitTransaction,

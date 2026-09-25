@@ -733,13 +733,15 @@ impl AuthorityCommitApplication {
         ])
     }
 
-    /// Admit one already-validated producer Event as this Realm's current
-    /// governance Station.
+    /// Test fixture: commit one producer Event at its stream head through the
+    /// kind-agnostic storage admission, with no domain admission unit. An
+    /// exact retry of a committed Event returns its stored Commit.
     ///
-    /// The storage call is deliberately a single queue+commit transaction.
-    /// A failed authority/head CAS therefore cannot leave a queued Event that
-    /// a later path might mistake for accepted state.
-    pub async fn admit_event(
+    /// Production never admits an Event this way; it exists so tests can
+    /// stand up committed state for kinds whose admission unit is not wired.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub async fn admit_event_for_test(
         &self,
         event: &Event,
         local_service_id: &DidCoreId,
@@ -747,35 +749,38 @@ impl AuthorityCommitApplication {
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
     ) -> ServiceResult<AuthorityEventAdmissionOutcome> {
-        self.admit_event_with_guard(
-            event,
-            local_service_id,
-            verification_method,
-            signing_key,
-            committed_at,
-            None,
-        )
-        .await
-    }
-
-    pub async fn admit_self_event(
-        &self,
-        event: &Event,
-        local_service_id: &DidCoreId,
-        verification_method: DidUrl,
-        signing_key: &SigningKey,
-        committed_at: DateTime<Utc>,
-        guard: &SelfProducerCommitGuard,
-    ) -> ServiceResult<AuthorityEventAdmissionOutcome> {
-        self.admit_event_with_guard(
-            event,
-            local_service_id,
-            verification_method,
-            signing_key,
-            committed_at,
-            Some(guard),
-        )
-        .await
+        if let Some(record) = self.store().committed_event(&event.event_id).await? {
+            if record.event != *event {
+                return Err(ServiceError::Conflict(
+                    "event_id is already committed with different canonical content".to_owned(),
+                ));
+            }
+            return Ok(AuthorityEventAdmissionOutcome::Duplicate(record.commit));
+        }
+        let transaction = self
+            .prepare_self_event_transaction(
+                event,
+                local_service_id,
+                verification_method,
+                signing_key,
+                committed_at,
+            )
+            .await?;
+        match self
+            .store()
+            .admit_event_transaction(&transaction, committed_at)
+            .await?
+        {
+            AuthorityCommitWriteOutcome::Committed => Ok(
+                AuthorityEventAdmissionOutcome::Committed(transaction.commit),
+            ),
+            AuthorityCommitWriteOutcome::Duplicate => Err(ServiceError::Conflict(
+                "a racing admission committed the same Event".to_owned(),
+            )),
+            AuthorityCommitWriteOutcome::StaleAuthority(_) => {
+                Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority)
+            }
+        }
     }
 
     /// Prepare a single Event/RealmCommit for a larger atomic result unit.
@@ -883,92 +888,6 @@ impl AuthorityCommitApplication {
                 }
             },
         )
-    }
-
-    async fn admit_event_with_guard(
-        &self,
-        event: &Event,
-        local_service_id: &DidCoreId,
-        verification_method: DidUrl,
-        signing_key: &SigningKey,
-        committed_at: DateTime<Utc>,
-        guard: Option<&SelfProducerCommitGuard>,
-    ) -> ServiceResult<AuthorityEventAdmissionOutcome> {
-        event.validate_for_submit_structural().map_err(|error| {
-            ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
-        })?;
-        if let Some(record) = self.store().committed_event(&event.event_id).await? {
-            if record.event != *event {
-                return Err(ServiceError::Conflict(
-                    "event_id is already committed with different canonical content".to_owned(),
-                ));
-            }
-            return Ok(AuthorityEventAdmissionOutcome::Duplicate(record.commit));
-        }
-        let Some(authority) = self.store().current_authority(&event.realm_id).await? else {
-            return Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority);
-        };
-        if &authority.service_id != local_service_id {
-            return Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority);
-        }
-        let stream_ref =
-            CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
-                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        let head = self.store().stream_head(&stream_ref).await?;
-        let commit = build_signed_event_commit(
-            event,
-            &authority,
-            head.as_ref(),
-            verification_method,
-            signing_key,
-            committed_at,
-        )?;
-        let transaction = AuthorityCommitTransaction {
-            expected_authority: authority,
-            event: event.clone(),
-            commit: commit.clone(),
-            mls_state: None,
-            welcomes: Vec::new(),
-            recipient_queue_capacity: self.recipient_queue_capacity,
-        };
-        transaction.validate().map_err(|error| {
-            ServiceError::SchemaViolation(format!("invalid authority transaction: {error}"))
-        })?;
-        let write = if let Some(guard) = guard {
-            self.store()
-                .admit_self_event_transaction(&transaction, guard, committed_at)
-                .await?
-        } else {
-            self.store()
-                .admit_event_transaction(&transaction, committed_at)
-                .await?
-        };
-        match write {
-            AuthorityCommitWriteOutcome::Committed => {
-                Ok(AuthorityEventAdmissionOutcome::Committed(commit))
-            }
-            AuthorityCommitWriteOutcome::Duplicate => {
-                let record = self
-                    .store()
-                    .committed_event(&event.event_id)
-                    .await?
-                    .ok_or_else(|| {
-                        ServiceError::Internal(
-                            "duplicate authority admission has no durable committed Event"
-                                .to_owned(),
-                        )
-                    })?;
-                if record.event != *event {
-                    return Err(ServiceError::Conflict(
-                        "event_id is already committed with different canonical content".to_owned(),
-                    ));
-                }
-                Ok(AuthorityEventAdmissionOutcome::Duplicate(record.commit))
-            }
-            AuthorityCommitWriteOutcome::StaleAuthority(_) => {
-                Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority)
-            }
-        }
     }
 
     pub async fn current_authority(

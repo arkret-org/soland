@@ -18,11 +18,6 @@ pub trait CursorStorePort: Send + Sync {
         key: &str,
         assembly: &RealmJoinDownload,
     ) -> ServiceResult<()>;
-    async fn account_summary_has_join(
-        &self,
-        actor_key: &str,
-        realm_id: &str,
-    ) -> ServiceResult<bool>;
     async fn account_sync_watermarks(&self) -> ServiceResult<(i64, i64)>;
     async fn account_global_watermark(&self) -> ServiceResult<i64>;
     async fn account_global_channel_position(
@@ -156,16 +151,6 @@ impl SyncService {
             )
             .await
     }
-    pub async fn account_summary_has_join(
-        &self,
-        actor_key: &str,
-        realm_id: &str,
-    ) -> ServiceResult<bool> {
-        self.cursors
-            .account_summary_has_join(actor_key, realm_id)
-            .await
-    }
-
     pub async fn account_summary_watermark(&self) -> ServiceResult<i64> {
         self.cursors.account_summary_watermark().await
     }
@@ -318,9 +303,6 @@ mod tests {
             _: &RealmJoinDownload,
         ) -> ServiceResult<()> {
             unreachable!("cursor-only fixture cannot store bootstrap downloads")
-        }
-        async fn account_summary_has_join(&self, _: &str, _: &str) -> ServiceResult<bool> {
-            Ok(false)
         }
         async fn account_sync_watermarks(&self) -> ServiceResult<(i64, i64)> {
             Ok((0, 0))

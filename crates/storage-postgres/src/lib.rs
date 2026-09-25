@@ -26,6 +26,7 @@ pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 mod account_device_signer_evidence;
 mod account_status;
 mod account_stream_scan;
+mod account_summary;
 mod accounts;
 mod agent_current_results;
 mod agent_draft_pending_intents;

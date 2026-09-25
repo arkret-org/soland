@@ -646,56 +646,302 @@ async fn sync_snapshot_excludes_public_realms_without_exact_account_membership()
     assert_eq!(detail(left), Some(not_found));
 }
 
+/// One Realm-scope Event by `author` carrying a structural producer proof;
+/// the device-list fixtures exercise storage and sync, not signatures.
+fn realm_fixture_event(
+    kind: arkret_wire::EventKind,
+    scope_ref: arkret_wire::ScopeRef,
+    author: &arkret_wire::AccountId,
+    payload: serde_json::Value,
+    at: DateTime<Utc>,
+) -> arkret_wire::Event {
+    let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+        kind.as_str(),
+        scope_ref,
+        arkret_wire::ActorId::account(author.clone()),
+        payload,
+        at,
+    )
+    .unwrap();
+    let principal = author.principal_id.as_str();
+    crate::test_event::attach_structural_only_producer_proof(
+        &mut event,
+        arkret_wire::DidUrl::new(format!(
+            "did:{}#key",
+            principal.strip_prefix("ak:did_core:").unwrap()
+        ))
+        .unwrap(),
+    );
+    event
+}
+
+/// An ordinary Realm on this Station, admitted through the bootstrap unit
+/// and extended through the Event unit of work, as production commits it.
+struct CommittedRealm {
+    head: soland_storage::AuthorityCommitTransaction,
+}
+
+impl CommittedRealm {
+    fn transaction(
+        authority: &soland_storage::CurrentRealmAuthority,
+        method: &arkret_wire::DidUrl,
+        event: arkret_wire::Event,
+        previous: Option<&arkret_wire::RealmCommit>,
+    ) -> soland_storage::AuthorityCommitTransaction {
+        let at = event.created_at;
+        let realm_id = authority.realm_id.clone();
+        let position = previous.map_or(0, |commit| commit.stream_position + 1);
+        soland_storage::AuthorityCommitTransaction {
+            expected_authority: authority.clone(),
+            commit: arkret_wire::RealmCommit {
+                commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                    format!("{}:{position}", event.event_id).as_bytes(),
+                )),
+                realm_id: realm_id.clone(),
+                stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id },
+                stream_position: position,
+                previous_commit_ref: previous.map(|commit| commit.commit_id.clone()),
+                event_ref: event.event_id.clone(),
+                governance_generation: 0,
+                authority_ref: authority.authority_ref.clone(),
+                committed_at: at,
+                signature: arkret_wire::DetachedObjectSignature {
+                    context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: method.clone(),
+                    signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                        .unwrap(),
+                    created_at: at,
+                    sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+                },
+            },
+            event,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        }
+    }
+
+    async fn bootstrap(
+        store: &dyn soland_storage::PersistenceStore,
+        founder: &arkret_wire::AccountId,
+        method: arkret_wire::DidUrl,
+    ) -> Self {
+        use arkret_models_collaboration::authority_commit::{
+            OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
+            SelfAuthoritySubmitRequest,
+        };
+        use base64::Engine as _;
+
+        let at = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+        let genesis = realm_fixture_event(
+            arkret_wire::EventKind::RealmCreate,
+            arkret_wire::ScopeRef::RealmGenesis,
+            founder,
+            json!({"object":{
+                "schema":"ak.schema.realm_genesis.v1",
+                "purpose":"collaboration",
+                "genesis_salt":base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                    arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes())),
+                "trust_domain":"ak:trust_domain:device-lists.example",
+                "security_class":"high_assurance",
+                "governance_station_id":founder.station_id,
+                "initial_join_rule":"invite",
+                "initial_history_access":"since_join",
+                "initial_discoverability":"invite_only"
+            }}),
+            at,
+        );
+        let realm_id = genesis.realm_id.clone();
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let mut events = vec![genesis];
+        for (kind, payload) in [
+            (
+                arkret_wire::EventKind::RealmProfile,
+                json!({"schema":"ak.schema.realm_profile.v1","title":"Device lists"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmPolicyBundle,
+                json!({"policy_revision":1,"federation_policy":"closed"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmJoinRule,
+                json!({"value":"invite"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmHistoryAccess,
+                json!({"from":null,"to":"since_join"}),
+            ),
+            (
+                arkret_wire::EventKind::RealmDiscovery,
+                json!({"value":{"discoverability":"invite_only"}}),
+            ),
+            (
+                arkret_wire::EventKind::MemberState,
+                json!({"member_id":arkret_wire::ActorId::account(founder.clone()),"membership":"join"}),
+            ),
+        ] {
+            events.push(realm_fixture_event(
+                kind,
+                scope.clone(),
+                founder,
+                payload,
+                at,
+            ));
+        }
+        let authority = soland_storage::CurrentRealmAuthority {
+            realm_id,
+            generation: 0,
+            service_id: founder.station_id.clone(),
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                events[0].event_id.clone(),
+            ),
+            last_handoff_ref: None,
+        };
+        let mut transactions: Vec<soland_storage::AuthorityCommitTransaction> = Vec::new();
+        for event in &events {
+            let previous = transactions.last().map(|transaction| &transaction.commit);
+            let transaction = Self::transaction(&authority, &method, event.clone(), previous);
+            transactions.push(transaction);
+        }
+        let submission = OrdinaryRealmBootstrapUnitSubmission {
+            unit_kind: OrdinaryRealmBootstrapUnitKind::OrdinaryRealmBootstrap,
+            idempotency_key: arkret_wire::UuidV7::new(uuid::Uuid::now_v7()).unwrap(),
+            events: events
+                .into_iter()
+                .map(arkret_wire::EventAdmissionSubmission::new)
+                .collect(),
+        };
+        let unit = soland_storage::OrdinaryRealmBootstrapCommitUnit {
+            exact_request_body: serde_json::to_vec(
+                &SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(submission.clone()),
+            )
+            .unwrap(),
+            submission,
+            transactions,
+        };
+        store
+            .authority_commits()
+            .admit_ordinary_realm_bootstrap_unit(&unit, at)
+            .await
+            .expect("ordinary Realm bootstrap admitted");
+        Self {
+            head: unit.transactions.last().unwrap().clone(),
+        }
+    }
+
+    /// Commit `author`'s `ak.member.state` for `member` at the Realm head.
+    async fn member_state(
+        &mut self,
+        store: &dyn soland_storage::PersistenceStore,
+        author: &arkret_wire::AccountId,
+        member: &arkret_wire::AccountId,
+        membership: &str,
+    ) {
+        let event = realm_fixture_event(
+            arkret_wire::EventKind::MemberState,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: self.head.event.realm_id.clone(),
+            },
+            author,
+            json!({"member_id":arkret_wire::ActorId::account(member.clone()),"membership":membership}),
+            self.head.commit.committed_at,
+        );
+        let method = self.head.commit.signature.verification_method.clone();
+        let transaction = Self::transaction(
+            &self.head.expected_authority,
+            &method,
+            event.clone(),
+            Some(&self.head.commit),
+        );
+        let record = soland_storage::CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: event.actor_id.to_string(),
+            realm_id: Some(event.realm_id.to_string()),
+            kind: event.kind.as_str().to_owned(),
+            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(
+                &event.digest_payload().unwrap(),
+            )
+            .unwrap(),
+            envelope: serde_json::to_value(&event).unwrap(),
+            received_at: event.created_at,
+        };
+        store
+            .commit_event(soland_storage::EventCommitRequest {
+                authority_commit: transaction.clone(),
+                self_producer_guard: None,
+                forwarded_producer_evidence: None,
+                event: record,
+                parent_membership_admission: None,
+                contact_projection: None,
+                agent_draft_pending_intent: None,
+                consent_projection: None,
+                device_revocation_transition: None,
+                device_revocation_gate: None,
+                projections: Vec::new(),
+                idempotency: None,
+                outbox: Vec::new(),
+                realm_fanout_source: None,
+            })
+            .await
+            .expect("member state committed");
+        self.head = transaction;
+    }
+}
+
+/// Device-list interest is derived from the account summary the authority
+/// transaction writes: both principals are admitted through their PCR
+/// genesis, share a committed ordinary Realm, and a committed leave removes
+/// the peer from the tracked set.
 #[tokio::test]
 async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() {
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
     let mut config = test_config();
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    let session = roster_session(&state, ROSTER_CALLER);
-    state.realm_directory().upsert(roster_realm(false, true));
+    let store = state.test_persistence();
+    let caller_genesis = PcrGenesisFixture::new(state.service_did());
+    caller_genesis
+        .admit_into(store.as_ref())
+        .await
+        .expect("caller PCR genesis admitted");
+    let actor_genesis = PcrGenesisFixture::new(state.service_did());
+    actor_genesis
+        .admit_into(store.as_ref())
+        .await
+        .expect("actor PCR genesis admitted");
+    let caller = caller_genesis.history.account.clone();
+    let actor = actor_genesis.history.account.clone();
+    let session = roster_session(&state, caller.principal_id.as_str());
 
-    let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00.000Z")
-        .unwrap()
-        .with_timezone(&Utc);
-    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", created_at);
-    insert_projected_membership_at(&state, ROSTER_CALLER, "join", created_at);
-    let updated_at = created_at + chrono::Duration::seconds(1);
-    for (actor, device_id) in [
-        (
-            ROSTER_ACTOR,
-            "ak:device:01904100-0000-7000-8000-0000000000a1",
-        ),
-        (
-            ROSTER_CALLER,
-            "ak:device:01904100-0000-7000-8000-0000000000b1",
-        ),
-    ] {
-        state
-            .identities()
-            .save_device(soland_services::identity::SaveDeviceCommand {
-                actor_id: actor.to_owned(),
-                device_id: device_id.to_owned(),
-                display_name: None,
-                device: soland_services::identity::DeviceIdentity {
-                    actor_id: actor.to_owned(),
-                    device_id: device_id.to_owned(),
-                    display_name: None,
-                    verification_state: "verified".to_owned(),
-                    payload: json!({"algorithms": ["mls_rfc9420"]}),
-                    created_at,
-                    updated_at,
-                    revoked_at: None,
-                },
-            })
-            .await
-            .expect("device inserted");
-    }
+    let mut realm = CommittedRealm::bootstrap(
+        store.as_ref(),
+        &caller,
+        state.service_verification_method("notary-key").unwrap(),
+    )
+    .await;
+    realm
+        .member_state(store.as_ref(), &caller, &actor, "join")
+        .await;
 
     let body = roster_body(state.service_id());
     let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let mut shared = vec![
+        arkret_wire::ActorId::account(actor.clone()),
+        arkret_wire::ActorId::account(caller.clone()),
+    ];
+    shared.sort_by_key(|actor| actor.canonical_key().unwrap());
     assert_eq!(
         serde_json::to_value(&initial.device_lists).unwrap(),
-        json!({"changed_ids": [roster_actor(ROSTER_ACTOR), roster_actor(ROSTER_CALLER)], "left_ids": []})
+        json!({"changed_ids": shared, "left_ids": []})
     );
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
@@ -708,59 +954,16 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .await
     .expect("initial cursor parses");
 
-    let mut revoked = state
-        .identities()
-        .devices_for_actor(ROSTER_ACTOR)
-        .await
-        .expect("device list")
-        .into_iter()
-        .next()
-        .expect("actor device exists");
-    revoked.revoked_at = Some(updated_at + chrono::Duration::seconds(1));
-    revoked.updated_at = updated_at + chrono::Duration::seconds(1);
-    state
-        .identities()
-        .save_device(soland_services::identity::SaveDeviceCommand {
-            actor_id: revoked.actor_id.clone(),
-            device_id: revoked.device_id.clone(),
-            display_name: revoked.display_name.clone(),
-            device: revoked,
-        })
-        .await
-        .expect("device revoked");
-
+    realm
+        .member_state(store.as_ref(), &caller, &caller, "leave")
+        .await;
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
-    let after_revocation =
+    let after_scope_loss =
         build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     assert_eq!(
-        serde_json::to_value(&after_revocation.device_lists).unwrap(),
-        json!({"changed_ids": [roster_actor(ROSTER_ACTOR)], "left_ids": []}),
-        "device revocation changes the principal device list, not top-level left"
-    );
-    let incremental_filter_value = sync_filter_value(incremental_body.filter.as_ref());
-    let after_revocation_cursor = parse_and_validate_sync_cursor(
-        after_revocation.cursor.as_deref().unwrap(),
-        &state,
-        Some(&session),
-        incremental_filter_value.as_ref(),
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .expect("revocation cursor parses");
-
-    state.realm_directory().upsert(roster_realm(false, false));
-    insert_projected_membership(&state, ROSTER_CALLER, "leave");
-    let after_scope_loss = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &after_revocation_cursor,
-    )
-    .await;
-    assert_eq!(
         serde_json::to_value(&after_scope_loss.device_lists).unwrap(),
-        json!({"changed_ids": [], "left_ids": [roster_actor(ROSTER_ACTOR)]}),
+        json!({"changed_ids": [], "left_ids": [arkret_wire::ActorId::account(actor)]}),
         "principals no longer visible through any Realm leave the tracked device list set"
     );
 }

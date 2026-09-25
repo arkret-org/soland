@@ -78,11 +78,6 @@ pub trait SyncCursorStore: Send + Sync {
         key: &str,
         assembly: &RealmJoinDownload,
     ) -> PersistenceResult<()>;
-    async fn account_summary_has_join(
-        &self,
-        actor_key: &str,
-        realm_id: &str,
-    ) -> PersistenceResult<bool>;
     async fn account_sync_watermarks(&self) -> PersistenceResult<(i64, i64)>;
     async fn account_global_watermark(&self) -> PersistenceResult<i64>;
     async fn account_global_channel_position(

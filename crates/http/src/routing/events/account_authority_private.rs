@@ -10,12 +10,14 @@ use soland_services::authority_commit::AuthorityEventAdmissionOutcome;
 
 use crate::state::AppState;
 
-/// Admit a single Event delivered by this deployment's Account Authority.
+/// Admit the `accepted_device` `ak.device.authorize` Event a device pairing
+/// finalize hands over from this deployment's Account Authority.
 ///
-/// The adapter delegates to the injected authority application, whose
-/// queue+commit persistence call is one transaction. It therefore returns an
-/// accepted result only after the exact `Event` and its signed `RealmCommit`
-/// are durably visible together.
+/// Device pairing is the only flow the Account Authority completes through
+/// this Station's authority log (device-lifecycle.md §5.4). Every other Event
+/// kind has its own registered admission unit with its own domain
+/// authorization, so this private edge refuses it before any storage access
+/// instead of committing it without that authorization.
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "soland.account_authority.events.admit"))]
 pub(super) async fn admit_event(
@@ -32,6 +34,12 @@ pub(super) async fn admit_event(
     submission
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if submission.event.kind != arkret_wire::EventKind::DeviceAuthorize {
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::UnsupportedEventKind,
+            "the Account Authority private admission accepts only ak.device.authorize",
+        ));
+    }
     let idempotency_key = req
         .headers()
         .get("idempotency-key")
@@ -46,80 +54,18 @@ pub(super) async fn admit_event(
     let verification_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
-    if submission.event.kind == arkret_wire::EventKind::DeviceAuthorize {
-        let outcome = accepted_device_outcome(
-            state
-                .authority_commits()
-                .admit_accepted_device_authorization(
-                    &submission.event,
-                    &state.service_core_id(),
-                    verification_method,
-                    state.notary_signing_key().as_ref(),
-                    chrono::Utc::now(),
-                )
-                .await,
-        );
-        outcome
-            .validate_for_request(&AuthoritySubmitRequest::Event(submission))
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        return json_ok(outcome);
-    }
-    let admission = state
-        .authority_commits()
-        .admit_event(
-            &submission.event,
-            &state.service_core_id(),
-            verification_method,
-            state.notary_signing_key().as_ref(),
-            chrono::Utc::now(),
-        )
-        .await;
-    let outcome = match admission {
-        Ok(AuthorityEventAdmissionOutcome::Committed(commit)) => AuthoritySubmitOutcome::Accepted {
-            status: AuthorityCommitStatus::Committed,
-            commit,
-        },
-        Ok(AuthorityEventAdmissionOutcome::Duplicate(commit)) => AuthoritySubmitOutcome::Accepted {
-            status: AuthorityCommitStatus::Duplicate,
-            commit,
-        },
-        Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority) => {
-            AuthoritySubmitOutcome::Rejected {
-                status: AuthorityRejectionStatus::Rejected,
-                reason_code: "authority_mismatch".to_owned(),
-            }
-        }
-        Err(error) => match error.kind() {
-            ServiceErrorKind::Conflict
-                if error.conflict_code()
-                    == Some(soland_storage::ConflictCode::FailedPrecondition) =>
-            {
-                return Err(AppError::new(
-                    arkret_wire::ErrorCode::FailedPrecondition,
-                    error.detail(),
-                ));
-            }
-            ServiceErrorKind::Conflict => return Err(AppError::conflict(error.detail())),
-            ServiceErrorKind::SchemaViolation => {
-                return Err(AppError::param_invalid(error.detail()));
-            }
-            ServiceErrorKind::UnsupportedEventKind => {
-                return Err(AppError::new(
-                    arkret_wire::ErrorCode::UnsupportedEventKind,
-                    error.detail(),
-                ));
-            }
-            ServiceErrorKind::NotFound
-            | ServiceErrorKind::Database
-            | ServiceErrorKind::Internal => {
-                tracing::warn!(error = %error, "atomic Account Authority Event admission unavailable");
-                AuthoritySubmitOutcome::Rejected {
-                    status: AuthorityRejectionStatus::RetryableUnavailable,
-                    reason_code: "authority_transaction_unavailable".to_owned(),
-                }
-            }
-        },
-    };
+    let outcome = accepted_device_outcome(
+        state
+            .authority_commits()
+            .admit_accepted_device_authorization(
+                &submission.event,
+                &state.service_core_id(),
+                verification_method,
+                state.notary_signing_key().as_ref(),
+                chrono::Utc::now(),
+            )
+            .await,
+    );
     outcome
         .validate_for_request(&AuthoritySubmitRequest::Event(submission))
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -244,8 +190,122 @@ mod tests {
             .expect("production section");
         assert!(!source.contains("oapi::endpoint"));
         assert!(!source.contains("Arkret-Operation"));
-        assert!(source.contains(".authority_commits()") && source.contains(".admit_event("));
         assert!(source.contains(".admit_accepted_device_authorization("));
         assert!(source.contains("authority_transaction_unavailable"));
+        assert!(!source.contains(".admit_event("));
+    }
+
+    const CREDENTIAL: &str = "shared-internal-channel-credential";
+
+    fn private_channel_state() -> AppState {
+        let values = std::collections::BTreeMap::from([
+            (
+                "SOLAND_TRUST_DOMAIN".to_owned(),
+                "ak:trust_domain:soland.example".to_owned(),
+            ),
+            ("SOLAND_DEVELOPMENT_MODE".to_owned(), "true".to_owned()),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_URL".to_owned(),
+                "https://auth.soland.example".to_owned(),
+            ),
+            (
+                "SOLAND_INTERNAL_AUTHORITY_SHARED_SECRET".to_owned(),
+                CREDENTIAL.to_owned(),
+            ),
+            (
+                "SOLAND_ACCOUNT_AUTHORITY_TRUST_DOMAIN".to_owned(),
+                "ak:trust_domain:auth.soland.example".to_owned(),
+            ),
+        ]);
+        let mut config = crate::config::AppConfig::from_values(
+            &values,
+            crate::config::StartupOverrides::default(),
+        )
+        .unwrap();
+        config.seed_demo_data = false;
+        AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    fn submission(
+        kind: arkret_wire::EventKind,
+        payload: serde_json::Value,
+    ) -> EventAdmissionSubmission {
+        let actor = crate::test_actor_id_str("did:web:private-admission.example");
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(b"private-admission-realm"),
+        ));
+        let mut event = crate::test_event::raw_event(
+            kind.as_str(),
+            arkret_wire::ScopeRef::Realm { realm_id },
+            actor,
+            0,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            payload,
+        )
+        .unwrap();
+        crate::test_event::attach_structural_only_producer_proof(
+            &mut event,
+            arkret_wire::DidUrl::new("did:web:private-admission.example#key").unwrap(),
+        );
+        EventAdmissionSubmission::new(event)
+    }
+
+    /// Only the `accepted_device` unit may be reached through the Account
+    /// Authority's private channel. Any other kind is refused with
+    /// `unsupported_event_kind` before storage, so nothing is queued or
+    /// committed and no current result is written.
+    #[tokio::test]
+    async fn private_admission_refuses_every_kind_but_device_authorize_with_zero_writes() {
+        use salvo::test::ResponseExt as _;
+
+        let state = private_channel_state();
+        let router = salvo::Router::new()
+            .hoop(salvo::affix_state::inject(state.clone()))
+            .push(crate::routing::events::account_authority_private_router());
+        let service = salvo::Service::new(router);
+        for (kind, payload) in [
+            (
+                arkret_wire::EventKind::MemberState,
+                serde_json::json!({"membership": "join"}),
+            ),
+            (
+                arkret_wire::EventKind::CapabilityGrant,
+                serde_json::json!({}),
+            ),
+            (
+                arkret_wire::EventKind::AgentKeyAuthorize,
+                serde_json::json!({}),
+            ),
+            (arkret_wire::EventKind::MessageCreate, serde_json::json!({})),
+        ] {
+            let submission = submission(kind.clone(), payload);
+            let event_id = submission.event.event_id.clone();
+            let mut response =
+                salvo::test::TestClient::post("http://server/account-authority/events/admit")
+                    .add_header("authorization", format!("Bearer {CREDENTIAL}"), true)
+                    .add_header("idempotency-key", event_id.as_str(), true)
+                    .json(&submission)
+                    .send(&service)
+                    .await;
+            assert_eq!(
+                response.status_code,
+                Some(salvo::http::StatusCode::NOT_IMPLEMENTED),
+                "{kind:?} must fail closed"
+            );
+            let body: serde_json::Value = response.take_json().await.unwrap();
+            assert_eq!(
+                body["type"], "https://arkret.org/problems/unsupported_event_kind",
+                "{kind:?}: {body}"
+            );
+            assert!(
+                state
+                    .authority_commits()
+                    .queued_event(&event_id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }

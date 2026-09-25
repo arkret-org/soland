@@ -568,17 +568,6 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
             .save_realm_join_download(key, assembly)
             .await?)
     }
-    async fn account_summary_has_join(
-        &self,
-        actor_key: &str,
-        realm_id: &str,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .sync_cursors()
-            .account_summary_has_join(actor_key, realm_id)
-            .await?)
-    }
     async fn account_sync_watermarks(&self) -> crate::ServiceResult<(i64, i64)> {
         Ok(self.0.sync_cursors().account_sync_watermarks().await?)
     }

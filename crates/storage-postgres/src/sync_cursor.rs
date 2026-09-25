@@ -167,20 +167,6 @@ impl SyncCursorStore for PgSyncCursorStore {
         }).await.map_err(crate::PgTransactionError::into_persistence)
     }
 
-    async fn account_summary_has_join(
-        &self,
-        actor_key: &str,
-        realm_id: &str,
-    ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query("SELECT revision FROM account_summary_current WHERE actor_key = $1 AND realm_id = $2 AND membership = 'join'")
-            .bind::<Text, _>(actor_key).bind::<Text, _>(realm_id)
-            .get_result::<SummaryWatermarkRow>(&mut *conn).await.optional()
-            .map(|row| row.is_some()).map_err(PersistenceError::database)
-    }
-
     async fn account_sync_watermarks(&self) -> PersistenceResult<(i64, i64)> {
         retention::freeze(&self.pool).await
     }

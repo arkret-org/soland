@@ -1,3 +1,6 @@
+#[path = "support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
 mod support;
 use deadpool::managed::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
@@ -214,38 +217,6 @@ async fn account_global_snapshot_is_frozen_and_changes_are_page_bounded() {
             .unwrap()
             .is_empty()
     );
-}
-
-/// One committed shared Event row, for Realm-membership fixtures.
-async fn insert_source(
-    pool: &PgPool,
-    actor: &str,
-    realm: Option<&str>,
-    kind: &str,
-    payload: serde_json::Value,
-) -> arkret_wire::EventId {
-    use diesel::sql_types::{Binary, Jsonb, Nullable, Text};
-    use diesel_async::RunQueryDsl;
-    let digest = arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes());
-    let mut token = [0u8; 33];
-    token[0] = 1;
-    token[1..].copy_from_slice(&digest);
-    let id = arkret_wire::EventId::new(soland_storage::ids::format_event_id(&token)).unwrap();
-    // Every Event declares its producer-signed security scope, and the column
-    // is NOT NULL, so the fixture carries the scope that matches the Realm it
-    // claims instead of leaving the scope unstated.
-    let scope_ref = match realm {
-        Some(realm_id) => serde_json::json!({"kind": "realm", "realm_id": realm_id}),
-        None => serde_json::json!({"kind": "realm_genesis"}),
-    };
-    let envelope = serde_json::json!({"event_id":id,"actor_id":serde_json::from_str::<serde_json::Value>(actor).unwrap(),"scope_ref":scope_ref,"payload":payload});
-    let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,committed_at) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,'committed',now())")
-        .bind::<Binary,_>(token.to_vec()).bind::<Binary,_>(digest.to_vec()).bind::<Text,_>(actor)
-        .bind::<Nullable<Text>,_>(realm).bind::<Jsonb,_>(scope_ref)
-        .bind::<Text,_>(kind).bind::<Binary,_>(b"fixture".to_vec())
-        .bind::<Jsonb,_>(envelope).execute(&mut *conn).await.unwrap();
-    id
 }
 
 /// The fixture principal-control Realm of `principal` at `station`.
@@ -496,73 +467,71 @@ async fn visible(pool: &PgPool, recipient: &str, owner: &str) -> bool {
         .unwrap()
         .visible
 }
+/// Device interest follows the account summary the authority transaction
+/// derives from typed member state: a real bootstrap, a real join Commit and
+/// a real leave Commit, never a hand-written summary row.
 #[tokio::test]
-async fn device_interest_requires_exact_actor_current_membership_and_nonminimal_create() {
-    use diesel_async::RunQueryDsl;
+async fn device_interest_requires_exact_actor_current_membership() {
+    use ordinary_realm::{founder, next_request, open_discussion, station};
+    use soland_storage::EventCommitUnitOfWork;
+
     let pool = pool().await;
-    let account = |principal: &str, station: &str| {
-        serde_json::json!({"kind":"account","account_id":{"principal_id":principal,"station_id":station}}).to_string()
+    let run = uuid::Uuid::now_v7();
+    let account = |principal: &arkret_wire::DidCoreId, station: &str| {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new(station).unwrap(),
+        ))
     };
-    let principal = format!("ak:did_core:web:{}.example", uuid::Uuid::now_v7());
-    let recipient = account(&principal, "ak:did_core:web:local.example");
-    let peer = account(
-        "ak:did_core:web:peer.example",
-        "ak:did_core:web:remote.example",
-    );
-    let same_principal_other_station = account(
-        "ak:did_core:web:peer.example",
-        "ak:did_core:web:other.example",
-    );
-    for minimal in [true, false] {
-        let realm = format!("ak:realm:test-{}", uuid::Uuid::now_v7());
-        let mut conn = pool.get().await.unwrap();
-        for actor in [&recipient, &peer] {
-            diesel::sql_query("INSERT INTO account_summary_current(actor_key,realm_id,revision,membership,available) VALUES($1,$2,1,'join',TRUE)")
-                .bind::<diesel::sql_types::Text,_>(actor).bind::<diesel::sql_types::Text,_>(&realm).execute(&mut *conn).await.unwrap();
-        }
-        assert!(
-            !visible(&pool, &recipient, &peer).await,
-            "missing accepted create must fail closed"
-        );
-        let schemas = if minimal {
-            serde_json::json!(["ak.profile.mls.minimal_metadata_realm.v1"])
-        } else {
-            serde_json::json!(["ak.schema.realm.v1"])
-        };
-        let create_id = insert_source(
-            &pool,
-            &recipient,
-            Some(&realm),
-            "ak.realm.create",
-            serde_json::json!({"object":{"schema_refs":schemas}}),
-        )
-        .await;
-        assert_eq!(visible(&pool, &recipient, &peer).await, !minimal);
-        if !minimal {
-            // Establish the authorized interest. A committed Create cannot be
-            // withdrawn by writing a local quarantine state.
-            diesel::sql_query("SELECT refresh_account_device_interest($1,$2)")
-                .bind::<diesel::sql_types::Text, _>(&recipient)
-                .bind::<diesel::sql_types::Text, _>(&peer)
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-            let quarantine =
-                diesel::sql_query("UPDATE canonical_events SET state='quarantined' WHERE id=$1")
-                    .bind::<diesel::sql_types::Binary, _>(create_id.token_bytes().to_vec())
-                    .execute(&mut *conn)
-                    .await;
-            assert!(quarantine.is_err());
-            assert!(visible(&pool, &recipient, &peer).await);
-        }
-        assert!(!visible(&pool, &recipient, &same_principal_other_station).await);
-        diesel::sql_query("UPDATE account_summary_current SET available=FALSE WHERE realm_id=$1")
-            .bind::<diesel::sql_types::Text, _>(&realm)
-            .execute(&mut *conn)
-            .await
+    let recipient =
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(founder(), station()))
+            .canonical_key()
             .unwrap();
-        assert!(!visible(&pool, &recipient, &peer).await);
-    }
+    let peer_principal =
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:peer-{run}.example")).unwrap();
+    let peer_actor = account(&peer_principal, "ak:did_core:web:remote.example");
+    let peer = peer_actor.canonical_key().unwrap();
+    let same_principal_other_station = account(&peer_principal, "ak:did_core:web:other.example")
+        .canonical_key()
+        .unwrap();
+
+    let discussion = open_discussion(&pool, &format!("device-interest-{run}")).await;
+    assert!(
+        !visible(&pool, &recipient, &peer).await,
+        "an actor with no member state shares no Realm"
+    );
+    let at = discussion.committed_at();
+    let uow = soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone());
+    // The peer is hosted by another Station, so each Commit plans its
+    // committed-replication fanout from the exact source submission.
+    let with_fanout_source = |mut request: soland_storage::EventCommitRequest| {
+        request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+            request.authority_commit.event.clone(),
+        ));
+        request
+    };
+    let join = with_fanout_source(next_request(
+        &discussion.head.authority_commit,
+        arkret_wire::EventKind::MemberState,
+        &founder(),
+        serde_json::json!({"member_id": peer_actor, "membership": "join"}),
+        at,
+    ));
+    uow.commit_event(join.clone()).await.unwrap();
+    assert!(visible(&pool, &recipient, &peer).await);
+    assert!(visible(&pool, &peer, &recipient).await);
+    assert!(!visible(&pool, &recipient, &same_principal_other_station).await);
+
+    let leave = with_fanout_source(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::MemberState,
+        &founder(),
+        serde_json::json!({"member_id": peer_actor, "membership": "leave"}),
+        at,
+    ));
+    uow.commit_event(leave).await.unwrap();
+    assert!(!visible(&pool, &recipient, &peer).await);
+    assert!(!visible(&pool, &peer, &recipient).await);
     assert!(visible(&pool, &recipient, &recipient).await);
 }
 

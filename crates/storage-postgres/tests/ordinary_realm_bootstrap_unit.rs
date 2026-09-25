@@ -1436,6 +1436,158 @@ async fn default_strand_writes_exact_current_at_commit_and_rejects_dangling_and_
     assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
 }
 
+#[derive(diesel::QueryableByName, Debug, PartialEq)]
+struct AccountSummaryCurrentRow {
+    #[diesel(sql_type = Text)]
+    actor_key: String,
+    #[diesel(sql_type = BigInt)]
+    revision: i64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    membership: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    title: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    default_strand_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    available: bool,
+}
+
+async fn account_summary_current(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> Vec<AccountSummaryCurrentRow> {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT actor_key,revision,membership,title,default_strand_id,available \
+         FROM account_summary_current WHERE realm_id=$1 ORDER BY actor_key",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<AccountSummaryCurrentRow>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+async fn account_summary_version_count(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM account_summary_versions WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
+/// The creator's account summary is derived from the typed current rows in
+/// the same transaction as the Commits that establish them: the bootstrap
+/// unit yields membership and title, `ak.realm.set_default_strand` a new
+/// revision with the default Strand, and a failed Commit leaves no summary.
+#[tokio::test]
+async fn account_summary_follows_bootstrap_and_default_strand_in_the_commit_transaction() {
+    use soland_storage::SyncCursorStore as _;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let cursors = soland_storage_postgres::PgSyncCursorStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0].event.actor_id.canonical_key().unwrap();
+    let at = unit.transactions[0].commit.committed_at;
+
+    let mut failing = unit.clone();
+    failing.transactions[1].commit.signature.verification_method =
+        arkret_wire::DidUrl::new("did:web:wrong-station.example#authority").unwrap();
+    assert!(
+        store
+            .admit_ordinary_realm_bootstrap_unit(&failing, at)
+            .await
+            .is_err()
+    );
+    assert!(account_summary_current(&pool, &realm_id).await.is_empty());
+    assert_eq!(account_summary_version_count(&pool, &realm_id).await, 0);
+
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let bootstrapped = account_summary_current(&pool, &realm_id).await;
+    assert_eq!(bootstrapped.len(), 1);
+    let founding_revision = bootstrapped[0].revision;
+    assert_eq!(
+        bootstrapped[0],
+        AccountSummaryCurrentRow {
+            actor_key: creator.clone(),
+            revision: founding_revision,
+            membership: Some("join".to_owned()),
+            title: Some("Test Realm".to_owned()),
+            default_strand_id: None,
+            available: true,
+        }
+    );
+    assert_eq!(account_summary_version_count(&pool, &realm_id).await, 1);
+    assert_eq!(
+        cursors.account_summary_watermark().await.unwrap(),
+        founding_revision
+    );
+
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    assert_eq!(
+        account_summary_current(&pool, &realm_id).await,
+        bootstrapped
+    );
+
+    let missing = arkret_wire::StrandId::from_event_id(&unit.transactions[0].event.event_id);
+    let dangling = set_default_strand_request(&strand, &missing, None);
+    assert!(uow.commit_event(dangling).await.is_err());
+    assert_eq!(
+        account_summary_current(&pool, &realm_id).await,
+        bootstrapped
+    );
+    assert_eq!(account_summary_version_count(&pool, &realm_id).await, 1);
+
+    uow.commit_event(set_default_strand_request(&strand, &strand_id, None))
+        .await
+        .unwrap();
+    let pointed = account_summary_current(&pool, &realm_id).await;
+    assert_eq!(pointed.len(), 1);
+    assert!(pointed[0].revision > founding_revision);
+    assert_eq!(pointed[0].title.as_deref(), Some("Test Realm"));
+    assert_eq!(
+        pointed[0].default_strand_id.as_deref(),
+        Some(strand_id.as_str())
+    );
+    assert_eq!(account_summary_version_count(&pool, &realm_id).await, 2);
+
+    let changes = cursors
+        .account_summary_changes(&creator, founding_revision, 10)
+        .await
+        .unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].key.realm_id, realm_id.as_str());
+    assert_eq!(changes[0].key.revision, pointed[0].revision);
+    assert_eq!(changes[0].membership.as_deref(), Some("join"));
+    assert_eq!(
+        changes[0].default_strand_id.as_deref(),
+        Some(strand_id.as_str())
+    );
+    assert_eq!(changes[0].current_membership.as_deref(), Some("join"));
+    assert!(changes[0].current_available);
+    assert!(!changes[0].invalidated);
+    let page = cursors
+        .account_summary_page(&creator, pointed[0].revision, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 2);
+    assert_eq!(page[0].key.revision, pointed[0].revision);
+    assert_eq!(page[1].valid_until, Some(pointed[0].revision));
+}
+
 #[tokio::test]
 async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_strand() {
     let database = TestDatabase::lease().await;
