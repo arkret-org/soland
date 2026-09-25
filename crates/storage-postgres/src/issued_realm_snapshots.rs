@@ -366,6 +366,12 @@ struct WindowCommitRow {
 }
 
 #[derive(QueryableByName)]
+struct CommitIdRow {
+    #[diesel(sql_type = Text)]
+    present: String,
+}
+
+#[derive(QueryableByName)]
 struct ReservedSnapshotRow {
     #[diesel(sql_type = Jsonb)]
     snapshot_json: Value,
@@ -505,15 +511,48 @@ pub(crate) async fn freeze_account_realm_window(
         let [head] = material.visible_stream_heads.as_slice() else {
             return Err(window_rejected("the proved cut is not one Realm stream").into());
         };
+        let tail_start = (head.stream_position + 1).saturating_sub(u64::from(request.window_limit));
+        let position = |value: u64| {
+            i64::try_from(value).map_err(|_| window_rejected("stream position exceeds storage"))
+        };
+        let delivered_is_ancestor = match &request.delivered_head {
+            Some(delivered)
+                if delivered.stream_ref == stream_ref
+                    && delivered.stream_position < head.stream_position
+                    && delivered.stream_position + 1 >= tail_start =>
+            {
+                sql_query(
+                    "SELECT commit_id AS present FROM realm_commits \
+                     WHERE realm_id=$1 AND stream_key=$2 AND stream_position=$3",
+                )
+                .bind::<Text, _>(request.realm_id.as_str())
+                .bind::<Text, _>(&stream_key)
+                .bind::<super::BigInt, _>(position(delivered.stream_position)?)
+                .get_result::<CommitIdRow>(&mut *conn)
+                .await
+                .optional()?
+                .is_some_and(|row| row.present == delivered.commit_id.as_str())
+            }
+            _ => false,
+        };
+        let start = match &request.delivered_head {
+            Some(delivered) if delivered_is_ancestor => delivered.stream_position + 1,
+            _ => tail_start,
+        };
+        // Load only the delivered rows and, for a start above genesis, the
+        // anchor Commit just below them: never the whole stream history.
+        let lowest = start.saturating_sub(1);
         let rows = sql_query(
             "SELECT commit_row.commit_json, event_row.envelope \
              FROM realm_commits commit_row \
              JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
              WHERE commit_row.realm_id=$1 AND commit_row.stream_key=$2 \
+               AND commit_row.stream_position >= $3 \
              ORDER BY commit_row.stream_position",
         )
         .bind::<Text, _>(request.realm_id.as_str())
         .bind::<Text, _>(&stream_key)
+        .bind::<super::BigInt, _>(position(lowest)?)
         .load::<WindowCommitRow>(&mut *conn)
         .await?;
         let mut chain = Vec::with_capacity(rows.len());
@@ -524,31 +563,23 @@ pub(crate) async fn freeze_account_realm_window(
                 serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
             chain.push(arkret_wire::CommittedEventFullView { commit, event });
         }
+        let contiguous = chain.iter().enumerate().all(|(offset, view)| {
+            view.commit.stream_position == lowest + offset as u64
+                && (offset == 0
+                    || view.commit.previous_commit_ref.as_ref()
+                        == Some(&chain[offset - 1].commit.commit_id))
+        });
         let tip = chain
             .last()
             .ok_or_else(|| window_rejected("the proved stream has no Commit"))?;
-        if tip.commit.stream_position != head.stream_position
+        if !contiguous
+            || tip.commit.stream_position != head.stream_position
             || tip.commit.commit_id != head.commit_id
-            || u64::try_from(chain.len()).ok() != Some(head.stream_position + 1)
         {
             return Err(window_rejected("the delivered chain differs from the proved head").into());
         }
-        let tail_start = (head.stream_position + 1).saturating_sub(u64::from(request.window_limit));
-        let start = match &request.delivered_head {
-            Some(delivered)
-                if delivered.stream_ref == stream_ref
-                    && delivered.stream_position < head.stream_position
-                    && delivered.stream_position + 1 >= tail_start
-                    && usize::try_from(delivered.stream_position)
-                        .ok()
-                        .and_then(|index| chain.get(index))
-                        .is_some_and(|view| view.commit.commit_id == delivered.commit_id) =>
-            {
-                delivered.stream_position + 1
-            }
-            _ => tail_start,
-        };
-        let start_index = usize::try_from(start).map_err(|_| window_rejected("window start"))?;
+        let start_index =
+            usize::try_from(start - lowest).map_err(|_| window_rejected("window start"))?;
         let delivered = chain[start_index..]
             .iter()
             .cloned()
@@ -563,7 +594,7 @@ pub(crate) async fn freeze_account_realm_window(
         let limited = start > 0;
         let mut basis = None;
         if start > 0 {
-            let anchor_view = &chain[start_index - 1];
+            let anchor_view = &chain[0];
             let anchor = arkret_wire::CommitStreamHead {
                 stream_ref: stream_ref.clone(),
                 stream_position: anchor_view.commit.stream_position,
