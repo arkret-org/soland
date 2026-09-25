@@ -19,12 +19,12 @@ pub(crate) async fn validate_member_state_policy_for_test(
 ) -> Result<(), &'static str> {
     governance::validate_member_state_policy(state, operation, false).await
 }
+#[cfg(test)]
+pub(crate) use message_rules::realm_ids_match;
 pub(crate) use message_rules::validate_content_encryption_floor;
 #[cfg(test)]
 pub(super) use message_rules::validate_principal_control_realm_binding;
 use message_rules::*;
-#[cfg(test)]
-pub(crate) use message_rules::{message_window_permits, realm_ids_match};
 use realm_circle::*;
 
 pub(crate) fn validate_trusted_sidecar_create_operation(
@@ -57,11 +57,7 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
         )
-    } else if message.starts_with("message_edit_window")
-        || message.starts_with("message_redact_window")
-        || message.starts_with("direct_conversation_")
-        || message == "reaction_outside_scope"
-    {
+    } else if message.starts_with("direct_conversation_") || message == "reaction_outside_scope" {
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message == "applet_registration_unauthorized" {
         // applet-integration.md §4 — surface the spec reason verbatim (matches
@@ -284,7 +280,6 @@ async fn validate_one_operation_policy(
         validate_realm_organization_policy(state, operation).await?;
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
         validate_audience_mention_operation_policy(state, operation).await?;
-        validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;
     }
     Ok(())

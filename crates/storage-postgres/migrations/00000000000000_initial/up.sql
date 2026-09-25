@@ -749,17 +749,6 @@ CREATE INDEX canonical_events_realm_state_idx
 CREATE INDEX canonical_events_realm_unsettled_idx
     ON public.canonical_events (realm_id) WHERE state <> 'committed';
 
--- Committed-event disclosure: a redaction target is looked up per Realm
--- without scanning the Realm's history. The expression must stay identical to
--- the predicate in `committed_disclosure.rs`.
-CREATE INDEX canonical_events_redaction_target_idx
-    ON public.canonical_events (
-        realm_id,
-        (COALESCE(NULLIF(btrim(envelope->'payload'->>'message_id'), ''),
-                  NULLIF(btrim(envelope->'payload'->>'target_ref'), '')))
-    )
-    WHERE kind IN ('ak.message.redact', 'ak.redaction') AND state = 'committed';
-
 -- Event identity bytes never change, and a terminal admission result never
 -- returns to the queue or changes branch.  Domain moderation/delivery state
 -- belongs to its own durable carrier, not to a fourth canonical Event state.
@@ -4331,8 +4320,11 @@ CREATE TABLE realm_set_default_strand_current_results (
  CHECK(jsonb_typeof(value->'default_strand_id')='string')
 );
 
--- Event-derived Message revision chain. The first accepted create stores the
--- exact registered payload at the creating Event's covering RealmCommit.
+-- Event-derived Message revision chain: the exact registered payload of the
+-- chain's current accepted carrier at its covering RealmCommit. The creating
+-- `ak.message.create` opens the row; every accepted `ak.message.revise` of the
+-- same MessageId replaces it whole, so the carrier is either the create payload
+-- (naming its Strand) or a revise payload (naming this Message).
 CREATE TABLE message_revision_current_results (
  realm_id TEXT NOT NULL,
  message_id TEXT NOT NULL PRIMARY KEY,
@@ -4341,10 +4333,31 @@ CREATE TABLE message_revision_current_results (
  value JSONB NOT NULL,
  updated_at TIMESTAMPTZ NOT NULL,
  CHECK(jsonb_typeof(value)='object'),
- CHECK(value ? 'strand_id'),
- CHECK(value->>'track_name'='discussion')
+ CHECK((value ? 'strand_id' AND value->>'track_name'='discussion' AND NOT value ? 'message_id')
+    OR (value->>'message_id'=message_id AND NOT value ? 'strand_id'
+        AND (NOT value ? 'track_name' OR value->>'track_name'='discussion')))
 );
 CREATE INDEX message_revision_current_results_realm ON message_revision_current_results(realm_id,message_id);
+
+-- `object_redaction` typed current: the canonically sorted set of committed
+-- redaction assertions on one subject, keyed by the redaction target's typed-id
+-- string taken verbatim (`ak.message.redact` `message_id`, `ak.redaction`
+-- `target_ref`). Each element is tagged by its accepting Event's `<event_id>:0`
+-- dot with the complete redact payload, and no element is ever removed. The
+-- redacted object's own state is never mirrored here.
+CREATE TABLE object_redaction_current_results (
+ realm_id TEXT NOT NULL,
+ target_ref TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,target_ref),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK((value - 'assertions')='{}'::jsonb),
+ CHECK(jsonb_typeof(value->'assertions')='array'),
+ CHECK(jsonb_array_length(value->'assertions')>0)
+);
 
 -- `moderation_report` typed current: the accepted `ak.self.moderation.report`
 -- Event itself, keyed by its own EventId and stored with the exact complete

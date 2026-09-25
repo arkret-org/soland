@@ -20,12 +20,21 @@
 //! lists; any other actor needs an active Capability Grant naming one of the
 //! authorizing actions on a selector covering the Realm, with an intact issuer
 //! chain. Membership is a required input, never an authorization source.
+//!
+//! An action whose registry row lists `required_evaluator_checks` is never
+//! sufficient on its own: only a kind-specific caller that discharges those
+//! checks may count it. The one such check decided here is
+//! `actor_eq_target_author` of the `.own` Message actions
+//! ([`RealmAuthorizationCut::require_authored_target_kind`]), together with the
+//! self-service windows of `authz/constraint-schema.md` §14.2 that their
+//! `required_constraints` name.
 
 use std::collections::BTreeMap;
 
 use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilityGrant, CapabilitySubject, GrantConstraintKind, IssuerAuthorityRef,
+    CapabilityGrant, CapabilitySubject, GrantConstraint, GrantConstraintEffect,
+    GrantConstraintKind, GrantConstraintSubkind, IssuerAuthorityRef,
 };
 use arkret_wire::{ActorId, CapabilityActionId, EventKind, GrantId, RealmId, WireResourceSelector};
 
@@ -163,11 +172,19 @@ impl RealmAuthorizationCut {
         actions: &[&str],
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        let Some(root) = self.root.as_ref() else {
-            return false;
-        };
+        self.covering_grants(actions, at).next().is_some()
+    }
+
+    /// Every grant that alone would satisfy [`Self::grants_cover_any`].
+    fn covering_grants<'a>(
+        &'a self,
+        actions: &'a [&'a str],
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> impl Iterator<Item = &'a CapabilityGrant> + 'a {
+        let root = self.root.as_ref();
         let realm = WireResourceSelector::realm(self.realm_id.clone());
-        self.grants.iter().any(|(grant_id, grant)| {
+        self.grants.iter().filter_map(move |(grant_id, grant)| {
+            let root = root?;
             let covers = matches!(&grant.subject, CapabilitySubject::Actor(subject) if subject == &self.actor)
                 && grant.realm_id.as_ref() == Some(&self.realm_id)
                 && grant_is_active_at(grant, at)
@@ -183,7 +200,7 @@ impl RealmAuthorizationCut {
                     .resources
                     .iter()
                     .any(|resource| selector_covers(resource, &realm));
-            covers
+            (covers
                 && !grant.issuer_authority_refs.is_empty()
                 && grant
                     .issuer_authority_refs
@@ -215,33 +232,33 @@ impl RealmAuthorizationCut {
                             )
                             .is_ok()
                         }
-                    })
+                    }))
+                .then_some(grant)
         })
     }
 
     /// Whether the actor holds one of the actions authorizing `kind`: the
     /// root controller through its effective `ak.realm.owner`, anyone else
     /// through an active covering grant.
+    ///
+    /// Actions with registered evaluator checks are left out: they authorize
+    /// only through the caller that discharges those checks.
     pub(crate) fn holds_event_kind(
         &self,
         kind: &EventKind,
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         let actions = arkret_schema::capability_actions_for_event_kind(kind.as_str())
+            .filter(|descriptor| descriptor.required_evaluator_checks.is_empty())
             .map(|descriptor| descriptor.action.as_str())
             .collect::<Vec<_>>();
         (self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER))
             || self.grants_cover_any(&actions, at)
     }
 
-    /// The complete capability-gated verdict for `kind`: the Realm has an
-    /// authority root and a policy bundle, the actor is a joined member, and
-    /// the actor holds an authorizing action.
-    pub(crate) fn require_event_kind(
-        &self,
-        kind: &EventKind,
-        at: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<()> {
+    /// The Realm has an authority root and a policy bundle at this cut and the
+    /// actor is a joined member of it.
+    pub(crate) fn require_governed_member(&self, kind: &EventKind) -> PersistenceResult<()> {
         if self.root.is_none() {
             return Err(PersistenceError::Conflict(
                 "failed_precondition: the Realm has no authority root at this cut".to_owned(),
@@ -258,6 +275,18 @@ impl RealmAuthorizationCut {
                 kind.as_str()
             )));
         }
+        Ok(())
+    }
+
+    /// The complete capability-gated verdict for `kind`: the Realm has an
+    /// authority root and a policy bundle, the actor is a joined member, and
+    /// the actor holds an authorizing action.
+    pub(crate) fn require_event_kind(
+        &self,
+        kind: &EventKind,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.require_governed_member(kind)?;
         if !self.holds_event_kind(kind, at) {
             return Err(capability_denied(format!(
                 "the actor holds no action authorizing {}",
@@ -265,6 +294,169 @@ impl RealmAuthorizationCut {
             )));
         }
         Ok(())
+    }
+
+    /// The capability-gated verdict for a `kind` that acts on one authored
+    /// object: an unconditional action as in [`Self::require_event_kind`], or,
+    /// when the actor authored `target`, an action whose only evaluator check is
+    /// `actor_eq_target_author` on a covering grant whose self-service window
+    /// (`authz/constraint-schema.md` §14.2) still contains `at`. A window that
+    /// elapsed is `failed_precondition`, never a capability grant.
+    pub(crate) fn require_authored_target_kind(
+        &self,
+        kind: &EventKind,
+        target: &AuthoredTarget<'_>,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.require_governed_member(kind)?;
+        if self.holds_event_kind(kind, at) {
+            return Ok(());
+        }
+        if target.author != &self.actor {
+            return Err(capability_denied(format!(
+                "the actor holds no action authorizing {} on another author's object",
+                kind.as_str()
+            )));
+        }
+        let own_actions = arkret_schema::capability_actions_for_event_kind(kind.as_str())
+            .filter(|descriptor| {
+                descriptor.required_evaluator_checks == [ACTOR_EQ_TARGET_AUTHOR].as_slice()
+            })
+            .map(|descriptor| descriptor.action.as_str())
+            .collect::<Vec<_>>();
+        let mut window_elapsed = false;
+        for action in &own_actions {
+            for grant in self.covering_grants(std::slice::from_ref(action), at) {
+                if self_service_window_permits(grant, action, target.created_at, at) {
+                    return Ok(());
+                }
+                window_elapsed = true;
+            }
+        }
+        if window_elapsed {
+            return Err(PersistenceError::Conflict(format!(
+                "failed_precondition: the self-service window of {} has elapsed",
+                kind.as_str()
+            )));
+        }
+        Err(capability_denied(format!(
+            "the actor holds no action authorizing {} on this target",
+            kind.as_str()
+        )))
+    }
+}
+
+const ACTOR_EQ_TARGET_AUTHOR: &str = "actor_eq_target_author";
+
+/// The author and creation time of the object a `.own` action targets.
+pub(crate) struct AuthoredTarget<'a> {
+    pub(crate) author: &'a ActorId,
+    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Seconds of one designator run such as `2W3D` or `1H30M`; each designator
+/// appears at most once and in the order of `units`.
+fn designator_seconds(part: &str, units: &[(char, i64)]) -> Option<i64> {
+    let mut total = 0_i64;
+    let mut digits = String::new();
+    let mut remaining = units;
+    for character in part.chars() {
+        if character.is_ascii_digit() {
+            digits.push(character);
+            continue;
+        }
+        let offset = remaining.iter().position(|(unit, _)| *unit == character)?;
+        let amount = digits.parse::<i64>().ok()?;
+        total = total.checked_add(amount.checked_mul(remaining[offset].1)?)?;
+        digits.clear();
+        remaining = &remaining[offset + 1..];
+    }
+    digits.is_empty().then_some(total)
+}
+
+/// A registered window `P[nW][nD][T[nH][nM][nS]]`. Year and month designators
+/// have no fixed length, so a window spelled with them contains no instant.
+fn window_duration(value: &str) -> Option<chrono::TimeDelta> {
+    let rest = value.strip_prefix('P').filter(|rest| !rest.is_empty())?;
+    let (date, time) = match rest.split_once('T') {
+        Some((_, "")) => return None,
+        Some((date, time)) => (date, time),
+        None => (rest, ""),
+    };
+    let seconds = designator_seconds(date, &[('W', 7 * 86_400), ('D', 86_400)])?.checked_add(
+        designator_seconds(time, &[('H', 3_600), ('M', 60), ('S', 1)])?,
+    )?;
+    chrono::TimeDelta::try_seconds(seconds)
+}
+
+fn within_window(
+    created_at: chrono::DateTime<chrono::Utc>,
+    window: &str,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    window_duration(window)
+        .and_then(|window| created_at.checked_add_signed(window))
+        .is_some_and(|closes| at >= created_at && at <= closes)
+}
+
+/// `authz/constraint-schema.md` §15 for one `.own` action on one grant: every
+/// temporal constraint that governs the action must permit it. A constraint
+/// that names other actions only is neutral; an edit or redact window without
+/// an action gate, or a governing constraint whose effect is not `allow`, fails
+/// closed.
+fn self_service_window_permits(
+    grant: &CapabilityGrant,
+    action: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    grant
+        .constraints
+        .iter()
+        .all(|constraint| constraint_permits_own_action(constraint, action, created_at, at))
+}
+
+fn constraint_permits_own_action(
+    constraint: &GrantConstraint,
+    action: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if constraint.constraint_kind != GrantConstraintKind::Temporal {
+        return false;
+    }
+    let window_subkind = matches!(
+        constraint.constraint_subkind,
+        Some(GrantConstraintSubkind::EditWindow | GrantConstraintSubkind::RedactWindow)
+    );
+    if constraint.applies_to_actions.is_empty() {
+        if window_subkind {
+            return false;
+        }
+    } else if !constraint
+        .applies_to_actions
+        .iter()
+        .any(|governed| governed == action)
+    {
+        return constraint.effect == GrantConstraintEffect::Allow;
+    }
+    if constraint.effect != GrantConstraintEffect::Allow {
+        return false;
+    }
+    let edit = constraint.message_edit_window.as_deref();
+    let redact = constraint.message_redact_window.as_deref();
+    match action {
+        CapabilityActionId::MESSAGE_REVISE_OWN => {
+            edit.is_none_or(|window| within_window(created_at, window, at))
+        }
+        CapabilityActionId::MESSAGE_REDACT_OWN => match (redact, edit) {
+            (Some(window), _) => within_window(created_at, window, at),
+            (None, Some(window)) if constraint.redact_after_window_allowed != Some(true) => {
+                within_window(created_at, window, at)
+            }
+            _ => true,
+        },
+        _ => false,
     }
 }
 
@@ -301,4 +493,123 @@ pub(crate) async fn authorize_capability_gated_event_in_connection(
     let cut = RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id).await?;
     cut.require_event_kind(&event.kind, at)?;
     Ok(cut)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(minutes: i64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap()
+            + chrono::TimeDelta::minutes(minutes)
+    }
+
+    fn window(subkind: GrantConstraintSubkind, actions: &[&str]) -> GrantConstraint {
+        let mut constraint =
+            GrantConstraint::new(GrantConstraintKind::Temporal, GrantConstraintEffect::Allow);
+        constraint.constraint_subkind = Some(subkind);
+        constraint.applies_to_actions = actions.iter().map(|action| (*action).to_owned()).collect();
+        constraint
+    }
+
+    #[test]
+    fn registered_windows_have_fixed_lengths_only() {
+        for (value, seconds) in [
+            ("PT15M", 900),
+            ("PT24H", 86_400),
+            ("P1W2DT3H4M5S", 9 * 86_400 + 3 * 3_600 + 4 * 60 + 5),
+            ("P0D", 0),
+        ] {
+            assert_eq!(
+                window_duration(value),
+                chrono::TimeDelta::try_seconds(seconds),
+                "{value}"
+            );
+        }
+        for value in [
+            "P", "PT", "P1Y", "P1M", "PT1H1H", "PT1M1H", "15M", "P1DT", "PT-1S",
+        ] {
+            assert_eq!(window_duration(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn own_actions_follow_their_own_window_and_ignore_the_other() {
+        let revise_own = CapabilityActionId::MESSAGE_REVISE_OWN;
+        let redact_own = CapabilityActionId::MESSAGE_REDACT_OWN;
+        let mut edit = window(GrantConstraintSubkind::EditWindow, &[revise_own]);
+        edit.message_edit_window = Some("PT15M".to_owned());
+        assert!(constraint_permits_own_action(
+            &edit,
+            revise_own,
+            at(0),
+            at(15)
+        ));
+        assert!(!constraint_permits_own_action(
+            &edit,
+            revise_own,
+            at(0),
+            at(16)
+        ));
+        // A window gated to another action is neutral.
+        assert!(constraint_permits_own_action(
+            &edit,
+            redact_own,
+            at(0),
+            at(600)
+        ));
+
+        // Redact shares the edit window it is gated by unless it opts out.
+        let mut shared = window(
+            GrantConstraintSubkind::EditWindow,
+            &[revise_own, redact_own],
+        );
+        shared.message_edit_window = Some("PT15M".to_owned());
+        assert!(!constraint_permits_own_action(
+            &shared,
+            redact_own,
+            at(0),
+            at(16)
+        ));
+        shared.redact_after_window_allowed = Some(true);
+        assert!(constraint_permits_own_action(
+            &shared,
+            redact_own,
+            at(0),
+            at(600)
+        ));
+        shared.message_redact_window = Some("PT1H".to_owned());
+        assert!(!constraint_permits_own_action(
+            &shared,
+            redact_own,
+            at(0),
+            at(61)
+        ));
+
+        // A window without its action gate, a non-allow governing effect and a
+        // non-temporal constraint fail closed.
+        let mut ungated = window(GrantConstraintSubkind::EditWindow, &[]);
+        ungated.message_edit_window = Some("PT15M".to_owned());
+        assert!(!constraint_permits_own_action(
+            &ungated,
+            revise_own,
+            at(0),
+            at(1)
+        ));
+        let mut denying = edit.clone();
+        denying.effect = GrantConstraintEffect::Deny;
+        assert!(!constraint_permits_own_action(
+            &denying,
+            revise_own,
+            at(0),
+            at(1)
+        ));
+        let quota = GrantConstraint::new(GrantConstraintKind::Quota, GrantConstraintEffect::Allow);
+        assert!(!constraint_permits_own_action(
+            &quota,
+            revise_own,
+            at(0),
+            at(1)
+        ));
+    }
 }

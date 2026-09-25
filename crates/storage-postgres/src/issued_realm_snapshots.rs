@@ -409,7 +409,8 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmAlias
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::Strand { .. }
-            | CurrentSelector::RealmSetDefaultStrand => {}
+            | CurrentSelector::RealmSetDefaultStrand
+            | CurrentSelector::ObjectRedaction { .. } => {}
             CurrentSelector::MessageRevision { message_id } => {
                 let message_id = message_id.as_str().to_owned();
                 message_targets.push(message_id.replacen("ak:message:", "ak:event:", 1));
@@ -452,17 +453,12 @@ async fn recheck_disclosure_in_connection(
         ));
     }
     // A Message row carries its content, so it stops being disclosable once
-    // retention expires any Event of the Realm or a redaction targets it:
-    // the same decision that withholds its committed Event.
+    // retention expires any Event of the Realm or an `object_redaction`
+    // assertion names it: the same decision that withholds its committed Event.
     let withdrawn = sql_query(
         "SELECT (EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM canonical_events redaction \
-                      WHERE redaction.realm_id=$1 \
-                        AND redaction.kind IN ('ak.message.redact', 'ak.redaction') \
-                        AND redaction.state='committed' \
-                        AND COALESCE(NULLIF(btrim(redaction.envelope->'payload'->>'message_id'), ''), \
-                                     NULLIF(btrim(redaction.envelope->'payload'->>'target_ref'), '')) \
-                            = ANY($2))) AS present",
+            OR EXISTS(SELECT 1 FROM object_redaction_current_results redaction \
+                      WHERE redaction.realm_id=$1 AND redaction.target_ref = ANY($2))) AS present",
     )
     .bind::<Text, _>(snapshot.realm_id.as_str())
     .bind::<super::Array<Text>, _>(&message_targets)

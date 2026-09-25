@@ -58,6 +58,8 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::CapabilityGrant
             | arkret_wire::EventKind::CapabilityRevoke
             | arkret_wire::EventKind::CapabilityRelinquish
+            | arkret_wire::EventKind::MessageRevise
+            | arkret_wire::EventKind::MessageRedact
     )
 }
 

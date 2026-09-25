@@ -68,10 +68,13 @@ pub(crate) fn fanout_idempotency_key(commit_id: &arkret_wire::RealmCommitId) -> 
     format!("realm-fanout:{commit_id}")
 }
 
-/// Whether the Event carries a plaintext Message body.
+/// Whether the Event carries a plaintext Message body: a create or a revise
+/// without an encrypted carrier.
 fn plaintext_message(event: &arkret_wire::Event) -> bool {
-    event.kind == arkret_wire::EventKind::MessageCreate
-        && !event.payload.contains_key("encrypted_content")
+    matches!(
+        event.kind,
+        arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
+    ) && !event.payload.contains_key("encrypted_content")
 }
 
 /// The Stations the Realm names as private plaintext services for message

@@ -751,6 +751,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM moderation_state_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'object_redaction'::text AS selector_kind, to_jsonb(target_ref) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM object_redaction_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'invite_lifecycle'::text AS selector_kind, to_jsonb(invite_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM invite_lifecycle_current_results WHERE realm_id = $1 \
@@ -838,6 +842,15 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         target_ref: serde_json::from_value(target_ref).map_err(|error| {
                             PersistenceError::Internal(format!(
                                 "stored moderation_state target is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
+                ("object_redaction", Some(target_ref)) => {
+                    arkret_wire::CurrentSelector::ObjectRedaction {
+                        target_ref: serde_json::from_value(target_ref).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored object_redaction target is invalid: {error}"
                             ))
                         })?,
                     }

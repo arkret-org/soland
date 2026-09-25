@@ -2723,46 +2723,6 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
     assert_eq!(forged.committed_events[0].commit().stream_position, 12);
 }
 
-fn message_redact_request(
-    previous: &EventCommitRequest,
-    message_id: &arkret_wire::MessageId,
-) -> EventCommitRequest {
-    let mut request = previous.clone();
-    let previous_commit = &previous.authority_commit.commit;
-    let previous_event = &previous.authority_commit.event;
-    let realm_id = previous_event.realm_id.clone();
-    let actor = previous_event.actor_id.as_account_id().unwrap();
-    let event = event(
-        arkret_wire::EventKind::MessageRedact,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        &actor.principal_id,
-        &actor.station_id,
-        serde_json::json!({ "message_id": message_id }),
-        previous_commit.committed_at,
-    );
-    request.authority_commit.event = event.clone();
-    request.authority_commit.commit.event_ref = event.event_id.clone();
-    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
-        arkret_canonical::sha256_bytes(format!("redact:{}", event.event_id).as_bytes()),
-    );
-    request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
-    request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
-    request.event.event_id = event.event_id.to_string();
-    request.event.kind = event.kind.as_str().to_owned();
-    request.event.envelope = serde_json::to_value(&event).unwrap();
-    request.event.canonical_bytes =
-        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
-    request.event.canonical_digest = event
-        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-        .unwrap();
-    request.projections[0].event_id = event.event_id.to_string();
-    request.projections[0].event_kind = event.kind.as_str().to_owned();
-    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
-    request
-}
-
 async fn account_issuance_count(
     pool: &soland_storage_postgres::PgPool,
     realm_id: &arkret_wire::RealmId,
@@ -3049,7 +3009,12 @@ async fn account_scan_withholds_expired_and_redacted_messages_on_their_commits()
             1,
         ))
         .unwrap();
-    let redaction = message_redact_request(&kept, &redacted_message);
+    let redaction = realm_event_request_as(
+        &kept,
+        &creator,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({ "message_id": redacted_message }),
+    );
     uow.commit_event(redaction.clone()).await.unwrap();
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
@@ -5172,4 +5137,512 @@ async fn invite_revoke_releases_live_target_and_stale_previous_state_fails() {
     assert_eq!(slot_value(&families).0, serde_json::Value::Null);
     assert_eq!(families.lifecycle.len(), 3);
     assert_eq!(families.directed.len(), 3);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct MessageFamilies {
+    events: i64,
+    revisions: Vec<(String, String, serde_json::Value)>,
+    redactions: Vec<(String, String, serde_json::Value)>,
+}
+
+async fn message_families(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> MessageFamilies {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        subject: String,
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let events =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM canonical_events WHERE realm_id=$1")
+            .bind::<Text, _>(realm_id.as_str())
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .unwrap()
+            .count;
+    let mut families = Vec::new();
+    for sql in [
+        "SELECT message_id AS subject, current_commit_id, value \
+         FROM message_revision_current_results WHERE realm_id=$1 ORDER BY message_id",
+        "SELECT target_ref AS subject, current_commit_id, value \
+         FROM object_redaction_current_results WHERE realm_id=$1 ORDER BY target_ref",
+    ] {
+        families.push(
+            diesel::sql_query(sql)
+                .bind::<Text, _>(realm_id.as_str())
+                .load::<Row>(&mut *conn)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| (row.subject, row.current_commit_id, row.value))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let redactions = families.pop().unwrap();
+    let revisions = families.pop().unwrap();
+    MessageFamilies {
+        events,
+        revisions,
+        redactions,
+    }
+}
+
+/// Assert `request` was refused and left zero writes: no Event row, no
+/// Commit and no `message_revision` or `object_redaction` change.
+async fn assert_message_write_refused(
+    uow: &PgEventCommitUnitOfWork,
+    store: &PgAuthorityCommitStore,
+    pool: &soland_storage_postgres::PgPool,
+    request: &EventCommitRequest,
+    code: Option<soland_storage::ConflictCode>,
+) -> soland_storage::PersistenceError {
+    let realm_id = &request.authority_commit.event.realm_id;
+    let before = message_families(pool, realm_id).await;
+    let error = uow.commit_event(request.clone()).await.unwrap_err();
+    assert_eq!(error.conflict_code(), code, "{error}");
+    assert!(
+        store
+            .committed_event(&request.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        event_row_count(pool, request.authority_commit.event.event_id.as_str()).await,
+        0
+    );
+    assert_eq!(message_families(pool, realm_id).await, before);
+    error
+}
+
+fn plain_revision(message_id: &arkret_wire::MessageId, body: &str) -> serde_json::Value {
+    serde_json::json!({
+        "message_id": message_id,
+        "content": {"kind": "ak.content.text", "body": body, "format": "plain"}
+    })
+}
+
+/// Real PostgreSQL: `ak.message.revise` is decided at the accepting cut. A
+/// joined member without an edit action, a stranger, and a member holding only
+/// `ak.message.revise.own` on another author's Message are `capability_denied`;
+/// a revise built on a stale stream head, a body outside the create content
+/// gate and a revise of a redacted Message are refused. Every refusal leaves
+/// zero writes. The author's revise, and a member's revise under a granted
+/// `ak.message.revise`, each replace the exact `message_revision` row with the
+/// revise carrier at their own covering Commit.
+#[tokio::test]
+async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = creator_account(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let created = message_create_request(&default, &strand_id, "hello");
+    uow.commit_event(created.clone()).await.unwrap();
+    let message_id =
+        arkret_wire::MessageId::from_event_id(&created.authority_commit.event.event_id);
+
+    // The author's revise replaces the create carrier at its own Commit.
+    let revised = realm_event_request_as(
+        &created,
+        &creator,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&message_id, "hello, edited"),
+    );
+    uow.commit_event(revised.clone()).await.unwrap();
+    let families = message_families(&pool, &realm_id).await;
+    assert_eq!(
+        families.revisions,
+        vec![(
+            message_id.to_string(),
+            revised.authority_commit.commit.commit_id.to_string(),
+            plain_revision(&message_id, "hello, edited"),
+        )]
+    );
+    let snapshot = store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
+        entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
+            revision,
+            value,
+            ..
+        } if found == &message_id
+            && revision.commit_id == revised.authority_commit.commit.commit_id
+            && value == &plain_revision(&message_id, "hello, edited")
+    )));
+
+    // A revise built on the create's head cannot commit on it once the
+    // author's revise took that position.
+    let stale = realm_event_request_as(
+        &created,
+        &creator,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&message_id, "stale edit"),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &stale,
+        Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+    )
+    .await;
+
+    // Only the create's plain body passes the shared content gate.
+    let mut mentioned = plain_revision(&message_id, "@bob");
+    mentioned["content"]["mentions"] =
+        serde_json::json!([{"target_id": "ak:did_core:web:bob.example"}]);
+    for payload in [
+        mentioned,
+        serde_json::json!({
+            "message_id": message_id,
+            "content": {"kind": "ak.content.text", "body": "md", "format": "markdown"}
+        }),
+        serde_json::json!({
+            "message_id": message_id,
+            "content": {"kind": "ak.content.text", "body": "meta", "format": "plain"},
+            "metadata": {"title": "x"}
+        }),
+    ] {
+        let refused = realm_event_request_as(
+            &revised,
+            &creator,
+            arkret_wire::EventKind::MessageRevise,
+            payload,
+        );
+        let before = message_families(&pool, &realm_id).await;
+        assert!(uow.commit_event(refused.clone()).await.is_err());
+        assert_eq!(message_families(&pool, &realm_id).await, before);
+    }
+
+    let station = unit.transactions[0].expected_authority.service_id.clone();
+    let member = invite_account(
+        "member.example",
+        &station.as_str()["ak:did_core:web:".len()..],
+    );
+    let stranger = invite_account(
+        "stranger.example",
+        &station.as_str()["ak:did_core:web:".len()..],
+    );
+    inject_joined_member(&pool, &unit, &member).await;
+    for actor in [&member, &stranger] {
+        let foreign = realm_event_request_as(
+            &revised,
+            actor,
+            arkret_wire::EventKind::MessageRevise,
+            plain_revision(&message_id, "not yours"),
+        );
+        assert_message_write_refused(
+            &uow,
+            &store,
+            &pool,
+            &foreign,
+            Some(soland_storage::ConflictCode::CapabilityDenied),
+        )
+        .await;
+    }
+
+    // `.own` authorizes only the author: the member's grant of it is no
+    // edit right over the creator's Message.
+    let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
+    let own = invite_grant_request(
+        &revised,
+        &unit,
+        &root_event_ref,
+        &member,
+        &["ak.message.revise.own"],
+    );
+    uow.commit_event(own.clone()).await.unwrap();
+    let foreign = realm_event_request_as(
+        &own,
+        &member,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&message_id, "own is not others"),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &foreign,
+        Some(soland_storage::ConflictCode::CapabilityDenied),
+    )
+    .await;
+
+    // The unqualified action is an edit right over any Message.
+    let broad = invite_grant_request(
+        &own,
+        &unit,
+        &root_event_ref,
+        &member,
+        &["ak.message.revise"],
+    );
+    uow.commit_event(broad.clone()).await.unwrap();
+    let moderated = realm_event_request_as(
+        &broad,
+        &member,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&message_id, "moderated"),
+    );
+    uow.commit_event(moderated.clone()).await.unwrap();
+    assert_eq!(
+        message_families(&pool, &realm_id).await.revisions,
+        vec![(
+            message_id.to_string(),
+            moderated.authority_commit.commit.commit_id.to_string(),
+            plain_revision(&message_id, "moderated"),
+        )]
+    );
+
+    // A redacted Message is terminal for revise.
+    let redaction = realm_event_request_as(
+        &moderated,
+        &creator,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({ "message_id": message_id }),
+    );
+    uow.commit_event(redaction.clone()).await.unwrap();
+    let after_redaction = realm_event_request_as(
+        &redaction,
+        &creator,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&message_id, "too late"),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &after_redaction,
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+    )
+    .await;
+}
+
+/// Real PostgreSQL: `ak.message.redact` is admitted through the same-cut
+/// evaluator and adds one `<event_id>:0` assertion to the Message's
+/// `object_redaction` row in its Commit's transaction. Every read path then
+/// derives the withheld Message from that row: the Account scan withholds the
+/// create and revise Events, a fresh snapshot discloses the redaction row but
+/// no longer the redacted content, and an object issued before the redaction
+/// is withdrawn. A second redact, an unknown Message and a member without a
+/// redact action are refused with zero writes.
+#[tokio::test]
+async fn message_redact_writes_object_redaction_and_withholds_on_scan() {
+    use arkret_wire::StreamScanDirection::After;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = creator_account(&unit);
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let retracted = message_create_request(&default, &strand_id, "retracted");
+    uow.commit_event(retracted.clone()).await.unwrap();
+    let retracted_id =
+        arkret_wire::MessageId::from_event_id(&retracted.authority_commit.event.event_id);
+    let kept = message_create_request(&retracted, &strand_id, "kept");
+    uow.commit_event(kept.clone()).await.unwrap();
+    let kept_id = arkret_wire::MessageId::from_event_id(&kept.authority_commit.event.event_id);
+    let revised = realm_event_request_as(
+        &kept,
+        &creator,
+        arkret_wire::EventKind::MessageRevise,
+        plain_revision(&retracted_id, "retracted, edited"),
+    );
+    uow.commit_event(revised.clone()).await.unwrap();
+    let before = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let unknown = arkret_wire::MessageId::from_event_id(&strand.authority_commit.event.event_id);
+    let missing = realm_event_request_as(
+        &revised,
+        &creator,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({ "message_id": unknown }),
+    );
+    let error = assert_message_write_refused(&uow, &store, &pool, &missing, None).await;
+    assert!(
+        matches!(error, soland_storage::PersistenceError::NotFound(_)),
+        "{error}"
+    );
+
+    let redaction = realm_event_request_as(
+        &revised,
+        &creator,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({ "message_id": retracted_id, "reason": "retracted by author" }),
+    );
+    uow.commit_event(redaction.clone()).await.unwrap();
+    let families = message_families(&pool, &realm_id).await;
+    assert_eq!(
+        families.redactions,
+        vec![(
+            retracted_id.to_string(),
+            redaction.authority_commit.commit.commit_id.to_string(),
+            serde_json::json!({"assertions": [{
+                "tag_id": format!("{}:0", redaction.authority_commit.event.event_id),
+                "value": {"message_id": retracted_id, "reason": "retracted by author"},
+            }]}),
+        )]
+    );
+    // Redaction never rewrites the revision carrier.
+    assert_eq!(families.revisions.len(), 2);
+
+    let page = scanned_page(
+        store
+            .scan_stream_for_account(
+                &scan_request(&realm_id, After(None), 100),
+                &creator,
+                &issuer,
+            )
+            .await
+            .unwrap(),
+    );
+    let last = redaction.authority_commit.commit.stream_position;
+    assert_eq!(positions(&page), (0..=last).collect::<Vec<_>>());
+    for item in &page.committed_events {
+        let withheld = [&retracted, &revised]
+            .iter()
+            .any(|request| request.authority_commit.commit.commit_id == item.commit().commit_id);
+        assert_eq!(
+            matches!(item, arkret_wire::CommittedEventView::Withheld(_)),
+            withheld,
+            "row {}",
+            item.commit().stream_position
+        );
+    }
+
+    // The fresh cut carries the redaction and the kept Message only.
+    let after = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    let messages = after
+        .current_state_entries
+        .iter()
+        .filter_map(|entry| match entry {
+            arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::MessageRevision { message_id },
+                ..
+            } => Some(message_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages, vec![kept_id.clone()]);
+    assert!(after.current_state_entries.iter().any(|entry| matches!(
+        entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::ObjectRedaction { target_ref },
+            revision,
+            ..
+        } if target_ref == retracted_id.as_str()
+            && revision.commit_id == redaction.authority_commit.commit.commit_id
+    )));
+    assert!(matches!(
+        store
+            .issued_realm_state_snapshot(&realm_id, &creator, &before.snapshot_id, &issuer)
+            .await,
+        Err(soland_storage::PersistenceError::SchemaViolation(_))
+    ));
+    assert_eq!(
+        store
+            .issued_realm_state_snapshot(&realm_id, &creator, &after.snapshot_id, &issuer)
+            .await
+            .unwrap(),
+        Some(after)
+    );
+
+    // A redacted Message is terminal for a second redact.
+    let again = realm_event_request_as(
+        &redaction,
+        &creator,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({ "message_id": retracted_id }),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &again,
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+    )
+    .await;
+
+    // A joined member holding no redact action cannot retract another
+    // author's Message.
+    let station = unit.transactions[0].expected_authority.service_id.clone();
+    let member = invite_account(
+        "member.example",
+        &station.as_str()["ak:did_core:web:".len()..],
+    );
+    inject_joined_member(&pool, &unit, &member).await;
+    let foreign = realm_event_request_as(
+        &redaction,
+        &member,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({ "message_id": kept_id }),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &foreign,
+        Some(soland_storage::ConflictCode::CapabilityDenied),
+    )
+    .await;
 }

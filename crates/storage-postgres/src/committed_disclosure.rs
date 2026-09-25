@@ -7,9 +7,10 @@
 //! surface applies the same decision, which on this Station withholds:
 //!
 //! - an Event that local retention expired (`retention_tombstones`);
-//! - a Message create or revise whose Message an accepted redaction in the same Realm targets,
-//!   because redacted content must not stay recoverable from another read path
-//!   (`strand-and-message.md` §9.2).
+//! - a Message create or revise whose Message has an `object_redaction` assertion, and an Event
+//!   that an `ak:event:` redaction subject names, because redacted content must not stay
+//!   recoverable from another read path (`strand-and-message.md` §9.2, `event-and-patch.md`
+//!   §4.2.4). The typed current is the only redaction input; no Event history is rescanned.
 //!
 //! A joined member reading the Realm stream additionally receives another
 //! actor's Event in full only when its kind is disclosed to every member
@@ -36,8 +37,7 @@ struct WithheldRow {
     commit_id: String,
 }
 
-/// The redaction target expression must stay identical to the one indexed
-/// by `canonical_events_redaction_target_idx`.
+/// Commits among `$1` whose Event this Station withholds.
 pub(crate) const WITHHELD_COMMITS_SQL: &str = "\
     SELECT commit_row.commit_id FROM realm_commits commit_row \
     JOIN canonical_events event_row ON event_row.pk = commit_row.event_pk \
@@ -45,19 +45,15 @@ pub(crate) const WITHHELD_COMMITS_SQL: &str = "\
         WHEN 'ak.message.create' \
           THEN 'ak:message:' || substr(event_row.envelope->>'event_id', 10) \
         WHEN 'ak.message.revise' \
-          THEN btrim(event_row.envelope->'payload'->>'message_id') \
+          THEN event_row.envelope->'payload'->>'message_id' \
       END AS message_id) target \
     WHERE commit_row.commit_id = ANY($1) \
       AND (EXISTS (SELECT 1 FROM retention_tombstones tombstone \
                    WHERE tombstone.event_id = event_row.id) \
-        OR (target.message_id IS NOT NULL AND EXISTS ( \
-              SELECT 1 FROM canonical_events redaction \
-              WHERE redaction.realm_id = event_row.realm_id \
-                AND redaction.kind IN ('ak.message.redact', 'ak.redaction') \
-                AND redaction.state = 'committed' \
-                AND COALESCE(NULLIF(btrim(redaction.envelope->'payload'->>'message_id'), ''), \
-                             NULLIF(btrim(redaction.envelope->'payload'->>'target_ref'), '')) \
-                    IN (target.message_id, 'ak:event:' || substr(target.message_id, 12)))))";
+        OR EXISTS (SELECT 1 FROM object_redaction_current_results redaction \
+                   WHERE redaction.realm_id = event_row.realm_id \
+                     AND redaction.target_ref IN (target.message_id, \
+                                                  event_row.envelope->>'event_id')))";
 
 /// Apply the committed-event disclosure decision to rows read at the caller's
 /// cut, preserving their order and every Commit.

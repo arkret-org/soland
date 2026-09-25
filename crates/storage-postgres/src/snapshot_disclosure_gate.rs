@@ -14,6 +14,9 @@
 //!   families, so no admitted Event can have produced state this subset omits;
 //! - no Event of the Realm is retention-expired: a `message_revision` row would otherwise carry the
 //!   content that committed-event reads withhold, and no typed row states the expiry;
+//! - a redacted Message is disclosed as its `object_redaction` row only: its `message_revision` row
+//!   carries the content every other read path withholds, so it is outside the caller's visible
+//!   range and not part of the disclosed cut (`strand-and-message.md` §9.2);
 //! - the Realm has only its Realm stream (Circle and Sidecar visibility is not proved here) and is
 //!   in its genesis tenure (a planned handoff import of current families is not proved here);
 //! - the Account is the Realm's founder and its only member, currently joined. The founding join is
@@ -48,6 +51,8 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::StrandCreate,
     EventKind::RealmSetDefaultStrand,
     EventKind::MessageCreate,
+    EventKind::MessageRevise,
+    EventKind::MessageRedact,
 ];
 
 /// Every typed-current table this Station installs. A new family could be
@@ -64,6 +69,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "strand_current_results",
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
+    "object_redaction_current_results",
     // Moderator-only (content-moderation.md §3.3): these refuse the cut below
     // while any row exists, never silently omitted from a signed cut.
     "moderation_report_current_results",
@@ -404,6 +410,7 @@ pub(crate) fn disclose_to_account(
     let mut root = false;
     let mut history_access = None;
     let mut own_join = false;
+    let mut redacted = std::collections::BTreeSet::new();
     for row in &material.current_state_entries {
         let TypedCurrentResult::Value {
             selector,
@@ -454,6 +461,21 @@ pub(crate) fn disclose_to_account(
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::RealmSetDefaultStrand
             | CurrentSelector::MessageRevision { .. } => {}
+            CurrentSelector::ObjectRedaction { target_ref } => {
+                let value = serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::redaction::ObjectRedactionCurrentValue,
+                >(value.clone())
+                .map_err(PersistenceError::database)?;
+                value
+                    .validate_for_subject(target_ref)
+                    .map_err(PersistenceError::database)?;
+                if arkret_wire::MessageId::new(target_ref.as_str()).is_err() {
+                    return Err(rejected(
+                        "a non-Message redaction subject has no disclosure rule",
+                    ));
+                }
+                redacted.insert(target_ref.clone());
+            }
             _ => {
                 return Err(rejected(
                     "a current row family has no disclosure rule for this Account",
@@ -469,6 +491,15 @@ pub(crate) fn disclose_to_account(
             "the cut omits the genesis, authority root, or the Account's join",
         ));
     }
+    material.current_state_entries.retain(|row| {
+        !matches!(
+            row,
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::MessageRevision { message_id },
+                ..
+            } if redacted.contains(message_id.as_str())
+        )
+    });
     material.retention_and_history_floor = arkret_wire::RetentionAndHistoryFloor {
         history_access,
         stream_floors: vec![StreamHistoryFloor {
@@ -623,6 +654,69 @@ mod tests {
                 }],
             }
         );
+    }
+
+    fn redaction_row(target: &str, redacted: &MessageId, position: u64) -> TypedCurrentResult {
+        row(
+            CurrentSelector::ObjectRedaction {
+                target_ref: target.to_owned(),
+            },
+            position,
+            json!({"assertions": [{
+                "tag_id": format!("{}:0", event_id(0x77)),
+                "value": {"message_id": redacted, "reason": "retracted"}
+            }]}),
+        )
+    }
+
+    #[test]
+    fn a_redacted_message_is_disclosed_as_its_redaction_only() {
+        let (founder, mut material, facts) = fixture();
+        let message = MessageId::from_event_id(&event_id(0x33));
+        material.current_state_entries[10] = row(
+            CurrentSelector::MessageRevision {
+                message_id: message.clone(),
+            },
+            8,
+            json!({"message_id": message, "content": {"kind": "ak.content.text", "body": "x", "format": "plain"}}),
+        );
+        let redaction = redaction_row(message.as_str(), &message, 9);
+        material.current_state_entries.push(redaction.clone());
+        let disclosed = disclose_to_account(material.clone(), &founder, &facts).unwrap();
+        assert!(
+            !disclosed.current_state_entries.iter().any(|entry| matches!(
+                entry,
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::MessageRevision { .. },
+                    ..
+                }
+            ))
+        );
+        assert_eq!(disclosed.current_state_entries.last(), Some(&redaction));
+        assert_eq!(
+            disclosed.current_state_entries.len(),
+            material.current_state_entries.len() - 1
+        );
+
+        let other = MessageId::from_event_id(&event_id(0x34));
+        let (founder, mut foreign, facts) = fixture();
+        foreign
+            .current_state_entries
+            .push(redaction_row(message.as_str(), &other, 9));
+        assert!(disclose_to_account(foreign, &founder, &facts).is_err());
+        let (founder, mut event_subject, facts) = fixture();
+        let event_target = event_id(0x33).to_string();
+        event_subject.current_state_entries.push(row(
+            CurrentSelector::ObjectRedaction {
+                target_ref: event_target.clone(),
+            },
+            9,
+            json!({"assertions": [{
+                "tag_id": format!("{}:0", event_id(0x77)),
+                "value": {"target_ref": event_target}
+            }]}),
+        ));
+        assert!(disclose_to_account(event_subject, &founder, &facts).is_err());
     }
 
     #[test]

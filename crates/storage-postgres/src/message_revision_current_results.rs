@@ -1,9 +1,14 @@
-//! A bounded Message create current writer at the accepting RealmCommit cut.
+//! The bounded `message_revision` writers at the accepting RealmCommit cut.
 //!
-//! The supported carrier is a Realm-scope plain text Message in an active
+//! The supported create carrier is a Realm-scope plain text Message in an active
 //! local discussion Strand, by a joined author the same-cut evaluator admits
 //! for `ak.message.create` (the Realm root controller included). Other Message forms
 //! require their own source-scope and effect admission and remain closed.
+//!
+//! `ak.message.revise` replaces the chain's current carrier with the same plain
+//! body gate; the target, its creation history and the edit authority are read
+//! under the Realm authority lock, and redaction lives in its own
+//! `object_redaction` family (`crate::object_redaction_current_results`).
 
 use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
@@ -45,23 +50,46 @@ fn conflict(detail: &'static str) -> PersistenceError {
     PersistenceError::Conflict(detail.to_owned())
 }
 
-fn supported_plain_text(payload: &Value) -> bool {
-    let Some(object) = payload.as_object() else {
-        return false;
-    };
-    if object.len() != 3
-        || !object.contains_key("strand_id")
-        || object.get("track_name") != Some(&Value::String("discussion".to_owned()))
-    {
-        return false;
-    }
-    let Some(content) = object.get("content").and_then(Value::as_object) else {
+/// The one Message body this Station admits: a plain `ak.content.text` block
+/// with no mention, part or extension member, so the create and revise
+/// carriers share one content and mention gate.
+fn plain_text_content(content: Option<&Value>) -> bool {
+    let Some(content) = content.and_then(Value::as_object) else {
         return false;
     };
     content.len() == 3
         && content.get("kind") == Some(&Value::String("ak.content.text".to_owned()))
         && content.get("format") == Some(&Value::String("plain".to_owned()))
         && content.get("body").is_some_and(Value::is_string)
+}
+
+fn supported_plain_text(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    object.len() == 3
+        && object.contains_key("strand_id")
+        && object.get("track_name") == Some(&Value::String("discussion".to_owned()))
+        && plain_text_content(object.get("content"))
+}
+
+/// A revise carrier of the same plain body: the target, the body, and
+/// optionally the discussion track and a reason. Metadata, encrypted and MIMI
+/// carriers need their own authority cut.
+fn supported_plain_text_revision(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    object.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "message_id" | "content" | "track_name" | "reason"
+        )
+    }) && object
+        .get("track_name")
+        .is_none_or(|track| track == &Value::String("discussion".to_owned()))
+        && object.get("reason").is_none_or(Value::is_string)
+        && plain_text_content(object.get("content"))
 }
 
 pub(crate) async fn commit_message_create_current_result_in_connection(
@@ -152,12 +180,51 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if !member.present {
         return Err(conflict("Message actor is not a confirmed Realm member"));
     }
+    require_open_realm(conn, &event.realm_id, commit).await?;
+    require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id).await?;
+    require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    let message_id = arkret_wire::MessageId::from_event_id(&event.event_id);
+    let inserted = diesel::sql_query(
+        "INSERT INTO message_revision_current_results \
+         (realm_id,message_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(message_id.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<BigInt, _>(
+        i64::try_from(commit.stream_position)
+            .map_err(|_| conflict("invalid Message stream position"))?,
+    )
+    .bind::<Jsonb, _>(&payload)
+    .bind::<Timestamptz, _>(commit.committed_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if inserted != 1 {
+        return Err(conflict("Message revision current result already exists"));
+    }
+    Ok(())
+}
+
+#[derive(diesel::QueryableByName)]
+struct ServiceIdRow {
+    #[diesel(sql_type = Text)]
+    value: String,
+}
+
+/// No archive, tombstone or destroy of the Realm precedes this Commit.
+async fn require_open_realm(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
     let realm_closed = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
          WHERE e.realm_id=$1 AND e.state='committed' AND c.stream_position<$2 \
            AND e.kind IN ('ak.realm.archive','ak.realm.tombstone','ak.realm.destroy')) AS present",
     )
-    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
     .bind::<BigInt, _>(
         i64::try_from(commit.stream_position)
             .map_err(|_| conflict("invalid Message stream position"))?,
@@ -168,6 +235,16 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if realm_closed.present {
         return Err(conflict("Message Realm has a closed lifecycle"));
     }
+    Ok(())
+}
+
+/// The Message's Strand is an active Realm-scope Strand of this Realm whose
+/// discussion track is enabled at this cut (`strand-and-message.md` §4).
+pub(crate) async fn require_active_discussion_strand(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    strand_id: &arkret_wire::StrandId,
+) -> PersistenceResult<()> {
     let strand = diesel::sql_query(
         "SELECT s.value,s.current_stream_position,e.envelope->>'event_id' AS created_event_id \
          FROM strand_current_results s \
@@ -179,8 +256,8 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
            AND e.kind='ak.strand.create' AND e.state='committed' \
          FOR SHARE OF s",
     )
-    .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<Text, _>(typed.strand_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(strand_id.as_str())
     .get_result::<StrandRow>(&mut *conn)
     .await
     .optional()
@@ -191,7 +268,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
             "stored Strand creating Event id is invalid: {error}"
         ))
     })?;
-    if arkret_wire::StrandId::from_event_id(&created_event_id) != typed.strand_id {
+    if &arkret_wire::StrandId::from_event_id(&created_event_id) != strand_id {
         return Err(conflict(
             "Message target Strand identity has no creating Event",
         ));
@@ -221,7 +298,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
          WHERE e.realm_id=$1 AND e.state='committed' AND c.stream_position>$2 \
            AND ((e.kind LIKE 'ak.strand.%' AND e.kind<>'ak.strand.create') OR e.kind='ak.redaction')) AS present",
     )
-    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
     .bind::<BigInt, _>(strand.current_stream_position)
     .get_result::<PresentRow>(&mut *conn)
     .await
@@ -229,6 +306,16 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if changed.present {
         return Err(conflict("Message Strand has an unprojected successor"));
     }
+    Ok(())
+}
+
+/// This Station is a private plaintext service for message content of the
+/// Realm at this cut, so it may hold and serve a plaintext Message body.
+async fn require_plaintext_message_service(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
     let plaintext = diesel::sql_query(
         "SELECT b.value FROM realm_bootstrap_current_results b \
          JOIN realm_commits c ON c.commit_id=b.current_commit_id \
@@ -236,7 +323,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
            AND c.realm_id=b.realm_id AND c.stream_position=b.current_stream_position \
            AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=b.realm_id",
     )
-    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
     .get_result::<CurrentValueRow>(&mut *conn)
     .await
     .optional()
@@ -245,7 +332,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     let service_id = diesel::sql_query(
         "SELECT service_id AS value FROM realm_authorities WHERE realm_id=$1 FOR SHARE",
     )
-    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(realm_id.as_str())
     .get_result::<ServiceIdRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
@@ -279,14 +366,202 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
             "Message plaintext service is not authorized at this cut",
         ));
     }
-    let message_id = arkret_wire::MessageId::from_event_id(&event.event_id);
-    let inserted = diesel::sql_query(
-        "INSERT INTO message_revision_current_results \
-         (realm_id,message_id,current_commit_id,current_stream_position,value,updated_at) \
-         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+    Ok(())
+}
+
+#[derive(diesel::QueryableByName)]
+struct CreationRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct RevisionRow {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+}
+
+/// What a revise or redact of one Message reads about its target at the
+/// accepting cut: the current carrier's covering Commit, locked for this
+/// transaction, and the creation history the Message id retypes to.
+pub(crate) struct MessageTarget {
+    pub(crate) message_id: arkret_wire::MessageId,
+    pub(crate) current_commit_id: String,
+    pub(crate) author: arkret_wire::ActorId,
+    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) strand_id: arkret_wire::StrandId,
+}
+
+/// Lock the Message's `message_revision` row and read its creating
+/// `ak.message.create`. A Message this Realm never accepted is `not_found`,
+/// the same answer for a foreign, unknown or never-created id.
+pub(crate) async fn locked_message_target(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    message_id: &arkret_wire::MessageId,
+) -> PersistenceResult<MessageTarget> {
+    let not_found = || PersistenceError::NotFound("message not found".to_owned());
+    let revision = diesel::sql_query(
+        "SELECT current_commit_id FROM message_revision_current_results \
+         WHERE realm_id=$1 AND message_id=$2 FOR UPDATE",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(message_id.as_str())
+    .get_result::<RevisionRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(not_found)?;
+    let create_event_id = message_id.event_id();
+    let token = crate::ids::parse_event_id(create_event_id.as_str()).ok_or_else(not_found)?;
+    let creation = diesel::sql_query(
+        "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.realm_id=$2 AND e.kind='ak.message.create' AND e.state='committed' \
+           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=e.realm_id",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<CreationRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        PersistenceError::Internal(
+            "a message_revision row has no committed creating Event".to_owned(),
+        )
+    })?;
+    let created: arkret_wire::Event =
+        serde_json::from_value(creation.envelope).map_err(|error| {
+            PersistenceError::Internal(format!("stored Message creating Event is invalid: {error}"))
+        })?;
+    let payload: arkret_models_collaboration::events_payloads::message::MessageCreatePayload =
+        serde_json::from_value(
+            serde_json::to_value(&created.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "stored Message creating payload is invalid: {error}"
+            ))
+        })?;
+    Ok(MessageTarget {
+        message_id: message_id.clone(),
+        current_commit_id: revision.current_commit_id,
+        author: created.actor_id,
+        created_at: created.created_at,
+        strand_id: payload.strand_id,
+    })
+}
+
+/// Whether an `object_redaction` assertion already stands on the Message.
+pub(crate) async fn message_is_redacted(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    message_id: &arkret_wire::MessageId,
+) -> PersistenceResult<bool> {
+    Ok(diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM object_redaction_current_results \
+         WHERE realm_id=$1 AND target_ref=$2) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(message_id.as_str())
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .present)
+}
+
+/// The shared carrier rules of a Message revise or redact: a directly
+/// authored Realm-scope Event on the Realm stream, outside the MIMI facade
+/// branch (whose `service_attested` admission has its own ingress).
+pub(crate) fn require_message_write_carrier(
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.event_ref != event.event_id
+    {
+        return Err(conflict(
+            "Message revise and redact require the Realm source stream",
+        ));
+    }
+    if event.payload.contains_key("mimi_provenance") {
+        return Err(conflict("Message carrier needs a dedicated authority cut"));
+    }
+    if event.executed_by.is_some() || event.applet_id.is_some() {
+        return Err(PersistenceError::Conflict(format!(
+            "{}: a Message revise or redact must be directly authored by its actor",
+            soland_storage::ConflictCode::CapabilityDenied
+        )));
+    }
+    Ok(())
+}
+
+/// `ak.message.revise` at the accepting RealmCommit cut
+/// (`strand-and-message.md` §9.5.1, registry `result_writes`).
+///
+/// Under the Realm authority lock the target's `message_revision` row is
+/// locked and its creation history read. The actor must be a joined member
+/// holding `ak.message.revise`, or the author holding `ak.message.revise.own`
+/// inside its edit window; the Message must not be redacted, its Strand must
+/// still be an active Realm-scope discussion Strand, and the revise body passes
+/// the same plain-text content gate as create. The accepted carrier then
+/// replaces the row it locked, so the canonical revision is always the one at
+/// the greatest stream position of the chain.
+pub(crate) async fn commit_message_revise_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::MessageRevise {
+        return Ok(());
+    }
+    require_message_write_carrier(event, commit)?;
+    let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    if !supported_plain_text_revision(&payload) {
+        return Err(conflict("Message carrier needs a dedicated authority cut"));
+    }
+    let typed: arkret_models_collaboration::events_payloads::message::MessageRevisePayload =
+        serde_json::from_value(payload.clone())
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    let cut = crate::realm_authorization_cut::RealmAuthorizationCut::read(
+        conn,
+        &event.realm_id,
+        &event.actor_id,
+    )
+    .await?;
+    cut.require_governed_member(&event.kind)?;
+    let target = locked_message_target(conn, &event.realm_id, &typed.message_id).await?;
+    cut.require_authored_target_kind(
+        &event.kind,
+        &crate::realm_authorization_cut::AuthoredTarget {
+            author: &target.author,
+            created_at: target.created_at,
+        },
+        commit.committed_at,
+    )?;
+    if message_is_redacted(conn, &event.realm_id, &target.message_id).await? {
+        return Err(PersistenceError::Conflict(format!(
+            "{}: a redacted Message cannot be revised",
+            soland_storage::ConflictCode::FailedPrecondition
+        )));
+    }
+    require_open_realm(conn, &event.realm_id, commit).await?;
+    require_active_discussion_strand(conn, &event.realm_id, &target.strand_id).await?;
+    require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    let replaced = diesel::sql_query(
+        "UPDATE message_revision_current_results SET current_commit_id=$3, \
+         current_stream_position=$4, value=$5, updated_at=$6 \
+         WHERE realm_id=$1 AND message_id=$2 AND current_commit_id=$7",
     )
     .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<Text, _>(message_id.as_str())
+    .bind::<Text, _>(target.message_id.as_str())
     .bind::<Text, _>(commit.commit_id.as_str())
     .bind::<BigInt, _>(
         i64::try_from(commit.stream_position)
@@ -294,17 +569,14 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     )
     .bind::<Jsonb, _>(&payload)
     .bind::<Timestamptz, _>(commit.committed_at)
+    .bind::<Text, _>(&target.current_commit_id)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
-    if inserted != 1 {
-        return Err(conflict("Message revision current result already exists"));
+    if replaced != 1 {
+        return Err(PersistenceError::Internal(
+            "message_revision row changed inside its lock".to_owned(),
+        ));
     }
     Ok(())
-}
-
-#[derive(diesel::QueryableByName)]
-struct ServiceIdRow {
-    #[diesel(sql_type = Text)]
-    value: String,
 }

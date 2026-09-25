@@ -276,89 +276,8 @@ mod reaction_and_window_policy_tests {
         assert!(!realm_ids_match("ak:realm:abc", "ak:realm:def"));
     }
 
-    fn dur(value: u64, unit: &str) -> arkret_policy::authz::ConstraintDuration {
-        arkret_policy::authz::ConstraintDuration {
-            value,
-            unit: unit.to_owned(),
-        }
-    }
-
-    #[test]
-    fn redact_window_authoritative_within_and_after() {
-        let edit = dur(15, "m");
-        let redact = dur(24, "h");
-        // Within the 24h redact window — permitted regardless of the edit window.
-        assert!(message_window_permits(
-            true,
-            chrono::Duration::hours(1),
-            Some(&edit),
-            Some(&redact),
-            true,
-        ));
-        // Past the 24h redact window — denied even with redact_after_window_allowed.
-        assert!(!message_window_permits(
-            true,
-            chrono::Duration::hours(25),
-            Some(&edit),
-            Some(&redact),
-            true,
-        ));
-    }
-
-    #[test]
-    fn redact_shares_edit_window_unless_opted_out() {
-        let edit = dur(15, "m");
-        // Coupled: past the edit window with no redact window and flag false → denied.
-        assert!(!message_window_permits(
-            true,
-            chrono::Duration::minutes(16),
-            Some(&edit),
-            None,
-            false,
-        ));
-        // Opted out: redact_after_window_allowed=true → unbounded recall.
-        assert!(message_window_permits(
-            true,
-            chrono::Duration::minutes(16),
-            Some(&edit),
-            None,
-            true,
-        ));
-    }
-
-    #[test]
-    fn revise_uses_edit_window_only() {
-        let edit = dur(15, "m");
-        assert!(message_window_permits(
-            false,
-            chrono::Duration::minutes(10),
-            Some(&edit),
-            None,
-            false
-        ));
-        assert!(!message_window_permits(
-            false,
-            chrono::Duration::minutes(16),
-            Some(&edit),
-            None,
-            false
-        ));
-        // No edit window declared → unbounded edits.
-        assert!(message_window_permits(
-            false,
-            chrono::Duration::days(365),
-            None,
-            None,
-            false
-        ));
-    }
-
     #[test]
     fn policy_reason_code_maps_precondition_vs_capability() {
-        assert_eq!(
-            operation_policy_reason_code("message_redact_window elapsed").1,
-            "failed_precondition"
-        );
         assert_eq!(
             operation_policy_reason_code("reaction_outside_scope").1,
             "failed_precondition"

@@ -2354,6 +2354,14 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::message_revision_current_results::commit_message_revise_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::object_redaction_current_results::commit_message_redact_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::moderation_report_current_results::commit_moderation_report_current_result_in_connection(
             conn, event, commit,
         )
