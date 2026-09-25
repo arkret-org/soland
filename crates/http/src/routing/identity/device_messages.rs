@@ -130,11 +130,6 @@ pub(crate) enum ActorPrivateDeviceUpdate {
         content: ActorPrivateAccountDataUpdate,
         created_at: chrono::DateTime<chrono::Utc>,
     },
-    Blocklist {
-        sender: DeviceMessageSender,
-        content: ActorPrivateAccountDataUpdate,
-        created_at: chrono::DateTime<chrono::Utc>,
-    },
     ReadCursor {
         sender: DeviceMessageSender,
         content: ActorPrivateReadCursorUpdate,
@@ -146,16 +141,15 @@ impl ActorPrivateDeviceUpdate {
     fn kind(&self) -> &'static str {
         match self {
             Self::AccountData { .. } => "ak.account_data.update",
-            Self::Blocklist { .. } => "ak.account.blocklist.update",
             Self::ReadCursor { .. } => "ak.read_cursor.update",
         }
     }
 
     fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
         match self {
-            Self::AccountData { created_at, .. }
-            | Self::Blocklist { created_at, .. }
-            | Self::ReadCursor { created_at, .. } => *created_at,
+            Self::AccountData { created_at, .. } | Self::ReadCursor { created_at, .. } => {
+                *created_at
+            }
         }
     }
 }
@@ -716,7 +710,6 @@ pub(crate) async fn fanout_actor_private_update(
     let created_at = arkret_canonical::normalize_timestamp_canonical(update.created_at());
     let sender = match &update {
         ActorPrivateDeviceUpdate::AccountData { sender, .. }
-        | ActorPrivateDeviceUpdate::Blocklist { sender, .. }
         | ActorPrivateDeviceUpdate::ReadCursor { sender, .. } => sender,
     };
     let (origin_device_id, sender_endpoint_id, sender_revocation_gate) = match sender {
@@ -784,8 +777,7 @@ pub(crate) async fn fanout_actor_private_update(
         }
     };
     let content = match &update {
-        ActorPrivateDeviceUpdate::AccountData { content, .. }
-        | ActorPrivateDeviceUpdate::Blocklist { content, .. } => serde_json::to_value(content),
+        ActorPrivateDeviceUpdate::AccountData { content, .. } => serde_json::to_value(content),
         ActorPrivateDeviceUpdate::ReadCursor { content, .. } => serde_json::to_value(content),
     };
     let Ok(Value::Object(content)) = content else {
@@ -1094,7 +1086,7 @@ fn device_message_envelope_from_record(
         if *sender_id != state.service_core_id()
             || !matches!(
                 envelope.kind.as_str(),
-                "ak.account_data.update" | "ak.account.blocklist.update" | "ak.read_cursor.update"
+                "ak.account_data.update" | "ak.read_cursor.update"
             )
         {
             return None;

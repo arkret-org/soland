@@ -760,7 +760,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
 }
 
 #[tokio::test]
-async fn account_blocklist_replays_exactly_and_cas_conflict_rolls_back_every_write() {
+async fn account_blocklist_value_replays_exactly_and_cas_conflict_rolls_back_every_write() {
     use diesel_async::RunQueryDsl;
     use soland_storage::ActorPrivateAccountDataOutcome::{Applied, Replayed};
 
@@ -775,17 +775,17 @@ async fn account_blocklist_replays_exactly_and_cas_conflict_rolls_back_every_wri
     let now = chrono::Utc::now();
     let key = arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST;
     seed_pcr(&pool, &principal, &station).await;
-    let blocklist = |version: u64, offset: i64| {
-        let payload = serde_json::json!({"version": version, "entries": []});
+    let blocklist = |expected: u64, offset: i64| {
+        let value = serde_json::json!({"entries": []});
         (
             private_event(
-                arkret_wire::EventKind::AccountBlocklist,
+                arkret_wire::EventKind::AccountDataSet,
                 &principal,
                 &station,
-                payload.clone(),
+                serde_json::json!({"key": key, "expected_server_revision": expected, "body": value}),
                 now + chrono::Duration::milliseconds(offset),
             ),
-            payload,
+            value,
         )
     };
     let changes = |actor: String| {
@@ -804,25 +804,25 @@ async fn account_blocklist_replays_exactly_and_cas_conflict_rolls_back_every_wri
         }
     };
 
-    let (first, first_payload) = blocklist(1, 1);
+    let (first, first_payload) = blocklist(0, 1);
     let actor = first.actor_id.to_string();
     assert_eq!(
-        admit(&store, &first, key, 0, first_payload.clone(), true)
+        admit(&store, &first, key, 0, first_payload.clone(), false)
             .await
             .unwrap(),
         Applied
     );
     let after_first = changes(actor.clone()).await;
     assert_eq!(
-        admit(&store, &first, key, 0, first_payload, true)
+        admit(&store, &first, key, 0, first_payload, false)
             .await
             .unwrap(),
         Replayed
     );
     assert_eq!(changes(actor.clone()).await, after_first);
 
-    let (conflict, conflict_payload) = blocklist(1, 2);
-    let error = admit(&store, &conflict, key, 0, conflict_payload, true)
+    let (conflict, conflict_payload) = blocklist(0, 2);
+    let error = admit(&store, &conflict, key, 0, conflict_payload, false)
         .await
         .unwrap_err();
     assert_eq!(
@@ -839,17 +839,14 @@ async fn account_blocklist_replays_exactly_and_cas_conflict_rolls_back_every_wri
     assert_eq!(rolled_back.count, 0);
     assert_eq!(store.get(&actor, key).await.unwrap().unwrap().revision, 1);
 
-    let (second, second_payload) = blocklist(2, 3);
+    let (second, second_payload) = blocklist(1, 3);
     assert_eq!(
-        admit(&store, &second, key, 1, second_payload, true)
+        admit(&store, &second, key, 1, second_payload, false)
             .await
             .unwrap(),
         Applied
     );
     let current = store.get(&actor, key).await.unwrap().unwrap();
     assert_eq!(current.revision, 2);
-    assert_eq!(
-        current.payload,
-        serde_json::json!({"version": 2, "entries": []})
-    );
+    assert_eq!(current.payload, serde_json::json!({"entries": []}));
 }

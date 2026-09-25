@@ -140,18 +140,10 @@ async fn fanout_account_data(
         sender_account_id: sender_account_id.clone(),
         sender_device_id,
     };
-    let update = if record.account_data_key == arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST {
-        ActorPrivateDeviceUpdate::Blocklist {
-            sender,
-            content,
-            created_at: record.updated_at,
-        }
-    } else {
-        ActorPrivateDeviceUpdate::AccountData {
-            sender,
-            content,
-            created_at: record.updated_at,
-        }
+    let update = ActorPrivateDeviceUpdate::AccountData {
+        sender,
+        content,
+        created_at: record.updated_at,
     };
     fanout_actor_private_update(state, sender_account_id.principal_id.as_str(), update).await;
 }

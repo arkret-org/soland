@@ -659,25 +659,6 @@ fn audit_erasure_receipt_is_retained_as_a_durable_fact_without_current_projectio
 }
 
 #[test]
-fn account_blocklist_cannot_enter_the_shared_reducer() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::AccountBlocklist,
-            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({}),
-        ),
-        &hlc,
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason }
-            if reason == "unregistered_private_event_effect"
-    ));
-}
-
-#[test]
 fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

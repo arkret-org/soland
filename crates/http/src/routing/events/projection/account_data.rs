@@ -115,97 +115,13 @@ pub(super) async fn project_account_data_set(
             content: (!tombstone).then_some(applied.payload.clone()),
             updated_at: applied.updated_at,
         };
-        let update = if account_data_key == arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST {
-            ActorPrivateDeviceUpdate::Blocklist {
-                sender,
-                content,
-                created_at: applied.updated_at,
-            }
-        } else {
-            ActorPrivateDeviceUpdate::AccountData {
-                sender,
-                content,
-                created_at: applied.updated_at,
-            }
+        let update = ActorPrivateDeviceUpdate::AccountData {
+            sender,
+            content,
+            created_at: applied.updated_at,
         };
         fanout_actor_private_update(state, account_id.principal_id.as_str(), update).await;
     }
-}
-
-/// Fan out an accepted typed blocklist only after its actor-private value and
-/// source Event have committed together. The whole payload is the current
-/// value; an empty `entries` array is its versioned tombstone/clear state.
-pub(super) async fn project_account_blocklist(
-    state: &AppState,
-    origin: &str,
-    source_device_id: &str,
-    operation: &Operation,
-) {
-    let Some(account_id) = operation.context.sender.as_account_id() else {
-        return;
-    };
-    if account_id.station_id != state.service_core_id() {
-        return;
-    }
-    let Some(revision) = operation.payload.get("version").and_then(Value::as_u64) else {
-        return;
-    };
-    let tombstone = operation
-        .payload
-        .get("entries")
-        .and_then(Value::as_array)
-        .is_some_and(Vec::is_empty);
-    let owner = operation.context.sender.to_string();
-    let key = arkret_wire::AccountDataKey::ACCOUNT_BLOCKLIST;
-    let applied = match state.account_data().entry(&owner, key).await {
-        Ok(Some(applied))
-            if applied.revision == revision
-                && applied.payload == operation.payload
-                && applied.tombstone == tombstone =>
-        {
-            applied
-        }
-        Ok(_) => return,
-        Err(error) => {
-            tracing::warn!(%error, "committed account blocklist unavailable for fanout");
-            return;
-        }
-    };
-    if source_device_id.is_empty() || origin != account_id.principal_id.as_str() {
-        return;
-    }
-    let Ok(sender_device_id) = arkret_identifiers::DeviceId::new(source_device_id.to_owned())
-    else {
-        tracing::warn!(
-            owner,
-            source_device_id,
-            "actor-private blocklist fanout source is not a DeviceId"
-        );
-        return;
-    };
-    fanout_actor_private_update(
-        state,
-        account_id.principal_id.as_str(),
-        ActorPrivateDeviceUpdate::Blocklist {
-            sender: DeviceMessageSender::Account {
-                sender_account_id: account_id.clone(),
-                sender_device_id,
-            },
-            content: ActorPrivateAccountDataUpdate {
-                operation: if tombstone {
-                    ActorPrivateAccountDataOperation::Delete
-                } else {
-                    ActorPrivateAccountDataOperation::Put
-                },
-                account_data_key: key.to_owned(),
-                revision: applied.revision,
-                content: (!tombstone).then_some(applied.payload.clone()),
-                updated_at: applied.updated_at,
-            },
-            created_at: applied.updated_at,
-        },
-    )
-    .await;
 }
 
 #[cfg(test)]

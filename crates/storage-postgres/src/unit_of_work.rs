@@ -1705,10 +1705,8 @@ pub(crate) async fn admit_actor_private_account_data_in_connection(
     admission: &soland_storage::ActorPrivateAccountDataAdmission,
 ) -> PersistenceResult<soland_storage::ActorPrivateAccountDataOutcome> {
     let event = &admission.event;
-    if !matches!(
-        event.kind,
-        arkret_wire::EventKind::AccountDataSet | arkret_wire::EventKind::AccountBlocklist
-    ) || admission.cas.record.actor != event.actor_id.to_string()
+    if event.kind != arkret_wire::EventKind::AccountDataSet
+        || admission.cas.record.actor != event.actor_id.to_string()
         || admission.canonical_event_digest.len() != 32
     {
         return Err(PersistenceError::SchemaViolation(
