@@ -212,6 +212,7 @@ fn forward(
     PeerAuthorityForwardEventRequest {
         branch: AuthorityForwardBranch::AuthorityForward,
         event_submission: EventAdmissionSubmission::new(event),
+        mls_genesis_material: None,
         producer_device_evidence: evidence,
     }
 }
@@ -634,6 +635,7 @@ fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verif
             &peer(&account.station_id),
             PeerAuthorityForwardEventRequest::new(
                 EventAdmissionSubmission::new(event.clone()),
+                None,
                 Some(second),
             )
             .unwrap(),

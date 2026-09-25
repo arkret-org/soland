@@ -271,7 +271,7 @@ pub(super) async fn forward_self_event(
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
     let request =
-        PeerAuthorityForwardEventRequest::new(submission, evidence).map_err(wire_refusal)?;
+        PeerAuthorityForwardEventRequest::new(submission, None, evidence).map_err(wire_refusal)?;
     send_forward(
         state,
         governance,

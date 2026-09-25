@@ -24,7 +24,8 @@ fn forwarded_request(seed: u8) -> PeerAuthoritySubmitRequest {
         arkret_wire::DidUrl::new("did:web:relay-producer.example#key-1").unwrap(),
     );
     PeerAuthoritySubmitRequest::AuthorityForwardEvent(
-        PeerAuthorityForwardEventRequest::new(EventAdmissionSubmission::new(event), None).unwrap(),
+        PeerAuthorityForwardEventRequest::new(EventAdmissionSubmission::new(event), None, None)
+            .unwrap(),
     )
 }
 

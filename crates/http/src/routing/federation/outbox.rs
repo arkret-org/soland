@@ -2337,6 +2337,7 @@ mod tests {
                 arkret_models_collaboration::authority_commit::PeerAuthorityForwardEventRequest::new(
                     arkret_wire::EventAdmissionSubmission::new(event),
                     None,
+                    None,
                 )
                 .unwrap(),
             ),

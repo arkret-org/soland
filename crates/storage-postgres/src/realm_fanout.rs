@@ -363,6 +363,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
             replications: vec![CommittedEventSubmission {
                 event_submission: source.clone(),
                 source_commit: commit.clone(),
+                welcomes: None,
             }],
         });
     request
