@@ -358,6 +358,7 @@ struct UnitShape {
     other: ActorId,
     salt: String,
     join_rule: &'static str,
+    discoverability: &'static str,
     authority_ref: arkret_wire::SemanticRef,
 }
 
@@ -368,6 +369,7 @@ impl UnitShape {
             other: pair.peer_actor(),
             salt: salt(),
             join_rule: "closed",
+            discoverability: "invite_only",
             authority_ref: arkret_wire::SemanticRef::new(
                 pair.contact_round_id.to_string(),
                 "direct_conversation_contact_round",
@@ -402,7 +404,7 @@ fn founding_unit(
             "governance_station_id":pair.station,
             "initial_join_rule":shape.join_rule,
             "initial_history_access":"since_join",
-            "initial_discoverability":"invite_only"
+            "initial_discoverability":shape.discoverability
         }}),
         vec![shape.authority_ref.clone()],
         at,
@@ -769,10 +771,18 @@ async fn founding_refusals_decide_authority_at_the_slot_cut_with_zero_writes() {
         .await,
         ConflictCode::FailedPrecondition
     );
-    // The fixed baseline is create-locked.
+    // The fixed baseline is create-locked: closed, invite_only, since_join.
     assert_eq!(
         refuse(UnitShape {
             join_rule: "invite",
+            ..UnitShape::exact(&pair)
+        })
+        .await,
+        ConflictCode::DirectConversationFoundingUnitInvalid
+    );
+    assert_eq!(
+        refuse(UnitShape {
+            discoverability: "unlisted",
             ..UnitShape::exact(&pair)
         })
         .await,
@@ -927,10 +937,12 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
         DirectConversationAdmissionCut::Refused(ConflictCode::DirectConversationBindingInvalid)
     );
 
-    // Once the membership projection no longer resolves the exact pair, a
-    // new write fails the exact-two gate before any later stage. The peer's
-    // row is moved directly because its own leave is itself refused by the
-    // participant evaluator until binding admission exists.
+    // A participant who left still counts for the exact-two gate
+    // (`contact-and-direct-conversation.md` §8.4): the pair-external invite
+    // keeps its third-party reason and the peer's own rejoin passes every
+    // profile stage, leaving it to the self-membership authority. The peer's row is moved directly
+    // because its own leave is itself refused by the participant evaluator until binding
+    // admission exists.
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "UPDATE member_state_current_results \
@@ -945,6 +957,32 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     drop(conn);
     assert_eq!(
         refused(EventKind::InviteCreate, &pair.founder, invite(&third)).await,
-        ConflictCode::DirectConversationMemberCountInvalid
+        ConflictCode::DirectConversationThirdPartyMemberForbidden
+    );
+    assert_eq!(
+        evaluate(
+            EventKind::MemberState,
+            &pair.peer,
+            serde_json::json!({"realm_id":realm_id,"member_id":pair.peer_actor(),"membership":"join"}),
+        )
+        .await,
+        DirectConversationAdmissionCut::Passed
+    );
+
+    // Once the membership projection no longer resolves the exact pair, a
+    // new write fails the exact-two gate before any later stage.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "DELETE FROM member_state_current_results WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(pair.peer_actor().to_string())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert_eq!(
+        evaluate(EventKind::InviteCreate, &pair.founder, invite(&third)).await,
+        DirectConversationAdmissionCut::Refused(ConflictCode::DirectConversationMemberCountInvalid)
     );
 }

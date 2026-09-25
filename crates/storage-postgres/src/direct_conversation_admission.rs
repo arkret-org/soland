@@ -206,13 +206,16 @@ fn root_reliant(event: &arkret_wire::Event) -> bool {
         .is_some()
 }
 
-async fn joined_members(
+/// The membership participant set of `exact_two_projection`: every member
+/// row of the Realm, joined or left, so a participant who left still counts
+/// and can rejoin (`contact-and-direct-conversation.md` §8.4).
+async fn participant_members(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
 ) -> PersistenceResult<Vec<ActorId>> {
     sql_query(
         "SELECT member_id FROM member_state_current_results \
-         WHERE realm_id=$1 AND membership='join' ORDER BY member_id FOR SHARE",
+         WHERE realm_id=$1 AND membership IN ('join','leave') ORDER BY member_id FOR SHARE",
     )
     .bind::<Text, _>(realm_id.as_str())
     .load::<MemberRow>(&mut *conn)
@@ -300,7 +303,7 @@ pub(crate) async fn admission_refusal_in_connection(
         return Ok(Some(ConflictCode::DirectConversationMemberCountInvalid));
     };
     let pair = founding.pair();
-    let members = joined_members(conn, &event.realm_id).await?;
+    let members = participant_members(conn, &event.realm_id).await?;
     let distinct = members.iter().collect::<BTreeSet<_>>();
     if pair.len() != 2 || distinct.len() != members.len() || distinct != pair {
         return Ok(Some(ConflictCode::DirectConversationMemberCountInvalid));

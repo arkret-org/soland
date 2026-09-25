@@ -387,13 +387,10 @@ impl DirectConversationFoundingCommitUnit {
             .object;
         if genesis.initial_join_rule != arkret_wire::JoinRule::Closed
             || genesis.initial_history_access != arkret_wire::HistoryAccess::SinceJoin
-            || matches!(
-                genesis.initial_discoverability,
-                arkret_wire::Discoverability::Public | arkret_wire::Discoverability::Listed
-            )
+            || genesis.initial_discoverability != arkret_wire::Discoverability::InviteOnly
         {
             return Err(founding_unit_invalid(
-                "the genesis must pin the closed, since_join, non-discoverable baseline",
+                "the genesis must pin the closed, invite_only, since_join baseline",
             ));
         }
         let membership = |event: &Event| {
