@@ -4,7 +4,6 @@
 //! and sibling `apply_*` modules keep resolving these by name.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_wire::ReadCursorScope;
 use serde_json::Value;
 
 /// The id of an object created by this Event, for the create kinds whose
@@ -137,16 +136,6 @@ pub(crate) fn message_content_from_payload(
 
 pub(crate) fn content_kind(content: &Value) -> Option<&str> {
     content.get("kind").and_then(Value::as_str)
-}
-
-pub(crate) fn read_scope_key(scope: &ReadCursorScope) -> String {
-    let track_selector = scope.track.as_deref().unwrap_or("");
-    format!(
-        "{}\u{1f}{}\u{1f}{}",
-        scope.kind.as_str(),
-        scope.container_ref.as_deref().unwrap_or(""),
-        track_selector
-    )
 }
 
 /// Extract the typed-id object reference from a `ak.redaction` event

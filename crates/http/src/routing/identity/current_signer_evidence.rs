@@ -330,6 +330,16 @@ pub(crate) async fn current_agent_producer_binding(
         .as_ref()
         .ok_or_else(|| "Agent Event has no producer proof".to_owned())?;
     let actor = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+    current_agent_endpoint_key(state, actor, &producer.verification_method).await
+}
+
+/// The Agent endpoint's current accepted signing key for exactly
+/// `verification_method`, with the committed authorization that installed it.
+pub(crate) async fn current_agent_endpoint_key(
+    state: &AppState,
+    actor: &arkret_wire::ActorId,
+    verification_method: &arkret_wire::DidUrl,
+) -> Result<([u8; 32], CommittedEventRef), String> {
     let agent_id = &actor
         .as_account_id()
         .ok_or_else(|| "Agent producer is not an account ActorId".to_owned())?
@@ -345,7 +355,7 @@ pub(crate) async fn current_agent_producer_binding(
     let selector = SignerKeyQuerySelector::CurrentAdmission {
         sender: CurrentSignerKeyQuerySender::Agent {
             actor: actor.clone(),
-            verification_method: producer.verification_method.clone(),
+            verification_method: verification_method.clone(),
         },
     };
     let Some(SignerKeyQueryResult::CurrentResolved { key, .. }) =

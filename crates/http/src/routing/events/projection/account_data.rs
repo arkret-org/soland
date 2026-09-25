@@ -1,107 +1,12 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use serde_json::Value;
 use soland_services::identity::AccountDataState;
-use soland_services::operation_semantics as kinds;
 
 use crate::routing::identity::device_messages::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
-    ActorPrivateReadCursorUpdate, DeviceMessageSender, fanout_actor_private_update,
+    DeviceMessageSender, fanout_actor_private_update,
 };
 use crate::state::AppState;
-
-pub(super) fn actor_private_read_cursor_matches_origin(
-    origin: &str,
-    source_device_id: &str,
-    operation: &Operation,
-) -> bool {
-    if kinds::canonical_kind(operation) != arkret_wire::EventKind::ReadCursorAdvance
-        || source_device_id.is_empty()
-    {
-        return true;
-    }
-    let actor_matches = operation
-        .payload
-        .get("actor_id")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
-        .is_some_and(|actor_id| {
-            actor_id == operation.context.sender
-                && actor_id.signing_principal_id().as_str() == origin
-        });
-    let device_matches = operation
-        .payload
-        .get("device_id")
-        .and_then(Value::as_str)
-        .is_none_or(|device_id| device_id == source_device_id);
-    if !actor_matches || !device_matches {
-        tracing::warn!(
-            origin,
-            source_device_id,
-            operation_id = %operation.operation_id,
-            "ak.read_cursor.advance actor/device does not match accepted event origin"
-        );
-        return false;
-    }
-    true
-}
-
-pub(super) async fn read_cursor_reducer_context_operation(
-    state: &AppState,
-    operation: &Operation,
-) -> Option<Operation> {
-    if kinds::canonical_kind(operation) != arkret_wire::EventKind::ReadCursorAdvance {
-        return None;
-    }
-    let actor_id =
-        serde_json::from_value::<arkret_wire::ActorId>(operation.payload.get("actor_id")?.clone())
-            .ok()?;
-    let read_scope: arkret_wire::ReadCursorScope =
-        serde_json::from_value(operation.payload.get("read_scope")?.clone()).ok()?;
-    let candidate_event_id = operation
-        .payload
-        .get("position")?
-        .get("event_id")?
-        .as_str()?;
-    let current_event_id = {
-        let projection = state.projections().snapshot();
-        projection
-            .read_cursors
-            .values()
-            .find(|marker| {
-                marker.actor_id == actor_id
-                    && marker.realm_id.as_str() == operation.realm_id.as_str()
-                    && marker.read_scope == read_scope
-            })
-            .map(|marker| marker.position.event_id.to_string())
-    }?;
-    let relation = match state.event_queries().canonical_events().await {
-        Ok(records) => soland_services::events::read_cursor_causal_relation(
-            &records,
-            &current_event_id,
-            candidate_event_id,
-        ),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                current_event_id,
-                candidate_event_id,
-                "read cursor causal closure lookup failed; preserving current projection"
-            );
-            ReadCursorCausalRelation::Undecidable
-        }
-    };
-    let relation = match relation {
-        ReadCursorCausalRelation::CandidateDominatesCurrent => "candidate_dominates_current",
-        ReadCursorCausalRelation::CurrentDominatesCandidate => "current_dominates_candidate",
-        ReadCursorCausalRelation::Concurrent => "concurrent",
-        ReadCursorCausalRelation::Undecidable => "undecidable",
-    };
-    let mut contextual = operation.clone();
-    contextual.payload[crate::routing::events::READ_CURSOR_CAUSAL_RELATION_CONTEXT] =
-        Value::String(relation.to_owned());
-    Some(contextual)
-}
 
 pub(super) async fn project_account_data_set(
     state: &AppState,
@@ -298,45 +203,6 @@ pub(super) async fn project_account_blocklist(
                 updated_at: applied.updated_at,
             },
             created_at: applied.updated_at,
-        },
-    )
-    .await;
-}
-
-pub(super) async fn fanout_projection_effect_private_update(
-    state: &AppState,
-    origin: &str,
-    source_device_id: &str,
-    effect: &soland_services::projection::ProjectionEffectView,
-) {
-    let soland_services::projection::ProjectionEffectView::ReadMarkerUpdated(marker) = effect
-    else {
-        return;
-    };
-    if source_device_id.is_empty() || marker.actor_id.signing_principal_id().as_str() != origin {
-        return;
-    }
-    fanout_actor_private_update(
-        state,
-        marker.actor_id.signing_principal_id().as_str(),
-        ActorPrivateDeviceUpdate::ReadCursor {
-            sender: DeviceMessageSender::Account {
-                sender_account_id: match marker.actor_id.as_account_id() {
-                    Some(account_id) => account_id.clone(),
-                    None => return,
-                },
-                sender_device_id: marker.device_id.clone(),
-            },
-            content: ActorPrivateReadCursorUpdate {
-                schema: arkret_wire::SchemaId::READ_CURSOR_UPDATE_V1.to_owned(),
-                actor_id: marker.actor_id.clone(),
-                device_id: marker.device_id.clone(),
-                realm_id: marker.realm_id.clone(),
-                read_scope: marker.read_scope.clone(),
-                position: marker.position.clone(),
-                updated_at: marker.updated_at,
-            },
-            created_at: marker.updated_at,
         },
     )
     .await;

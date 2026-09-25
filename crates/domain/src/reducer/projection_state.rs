@@ -40,9 +40,6 @@ pub struct ProjectionState {
     /// Saved items remain holder-private account-data and never enter this
     /// shared Realm cache.
     pub pins: BTreeMap<(String, String), PinProjection>,
-    /// Read markers keyed by (realm_id, actor, scope_id). Causal-first merge;
-    /// HLC/device ordering applies only to causally concurrent positions.
-    pub read_cursors: BTreeMap<(String, String, String), ReadMarkerOutcome>,
     /// Materialized Relation history keyed by event-derived relation_id.
     pub relations: BTreeMap<String, SolandRelationState>,
     /// Current Relation identity for each canonical
@@ -112,8 +109,8 @@ pub struct ProjectionState {
     /// instead of scanning the durable Event store.
     ///
     /// Event kinds that carry no facet -- `ak.message.*`, `ak.reaction.*`,
-    /// `ak.read_cursor.advance`, `ak.relation.*`, `ak.redaction` -- keep their
-    /// own structured fields above.
+    /// `ak.relation.*`, `ak.redaction` -- keep their own structured fields
+    /// above.
     pub facets: BTreeMap<(String, FacetRef), SettledFacet>,
     /// Effective `default_join_rule`, keyed by Realm. This mirrors the
     /// bootstrap/create value and later sealed join-rule facet so admission
@@ -675,9 +672,6 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         match kind {
-            arkret_wire::EventKind::ReadCursorAdvance => {
-                self.apply_read_cursor(operation, operation.created_at)
-            }
             arkret_wire::EventKind::DevicePushRoute => self.apply_device_push_route(operation),
             arkret_wire::EventKind::AgentActionRequest => {
                 self.apply_agent_action_request(operation)

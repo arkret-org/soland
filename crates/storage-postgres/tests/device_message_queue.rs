@@ -82,6 +82,7 @@ fn batch(namespace: &str, message: DeviceMessageRecord) -> DeviceMessageBatchRec
         per_device_queue_capacity: 100,
         target_snapshot_guard: None,
         device_revocation_gate: None,
+        sender_agent_guard: None,
         items: vec![DeviceMessageBatchItemRecord {
             message_key: format!("{namespace}:message"),
             intent_digest: format!("{namespace}:intent"),
@@ -295,5 +296,51 @@ async fn postgres_device_message_queue_fails_closed_on_target_shaped_row() {
             .await
             .unwrap_err(),
         PersistenceError::SchemaViolation(_)
+    ));
+}
+
+/// An Agent-sent batch rechecks the sending endpoint's committed key
+/// authorization in the queue transaction: an authorization that is not the
+/// Agent's committed, single active current key refuses the whole batch and
+/// writes neither ledger nor queue rows.
+#[tokio::test]
+async fn postgres_agent_sender_without_current_authorization_writes_nothing() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (device_a, device_b) = two_device_authorities(&pool).await;
+    let store = PgDeviceMessageStore { pool: pool.clone() };
+
+    let agent_id = arkret_wire::DidCoreId::new("ak:did_core:web:queue-agent.example").unwrap();
+    let verification_method =
+        arkret_wire::DidUrl::new("did:web:queue-agent.example#agent").unwrap();
+    let authorization_ref = device_a.authorization_ref.clone();
+    let mut envelope = test_device_message_envelope(&device_a, &device_b, Utc::now());
+    envelope.sender = arkret_models_collaboration::device_messages::DeviceMessageSender::Agent {
+        sender_agent_id: agent_id.clone(),
+        sender_agent_verification_method: verification_method.clone(),
+        sender_agent_key_authorize_event_id: authorization_ref.event_id.clone(),
+    };
+    let mut refused = batch("agent-sender", message(&device_a, &device_b, envelope));
+    refused.sender_agent_guard = Some(soland_storage::AgentEndpointGuard {
+        pcr_realm_id: authorization_ref.stream_ref.realm_id().clone(),
+        agent_id,
+        authorization_ref,
+        verification_method,
+    });
+    assert!(matches!(
+        store.commit_batch(refused.clone()).await.unwrap(),
+        DeviceMessageBatchCommitOutcome::SenderAgentUnauthorized
+    ));
+    assert_eq!(queue_row_count(&pool).await, 0);
+    assert!(matches!(
+        store
+            .inspect_batch(
+                &refused.request_key,
+                &refused.request_digest,
+                &intents(&refused)
+            )
+            .await
+            .unwrap(),
+        DeviceMessageBatchInspection::Fresh { .. }
     ));
 }

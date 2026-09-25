@@ -46,22 +46,13 @@ mod projections;
 // `use super::*;`.
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use apply_capability::derive_authority_audit;
+pub use apply_capability::{
+    derive_authority_audit, engine_grant_from_capability_facet, engine_grant_from_cell_body,
+};
 pub use apply_objects::DeferredParentMembershipAdmission;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_models_collaboration::objects::read_receipts::{
-    ReadCursorCausalRelation, ReadCursorPosition, ReadMarkerOutcome,
-};
-use arkret_wire::ReadCursorScope;
 pub(crate) use capability_helpers::*;
-use serde_json::Value;
-
-pub use crate::hlc::ServerHlc;
-
-pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
-
-pub use apply_capability::{engine_grant_from_capability_facet, engine_grant_from_cell_body};
 pub use commit_stream::{CommitStreamEffect, CommitStreamProjection};
 pub(crate) use dispatch::{APPLY_REGISTRY, upsert_realm_link};
 pub use dispatch::{ApplyFn, default_apply_registry};
@@ -93,6 +84,9 @@ pub use projections::{
     SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
+use serde_json::Value;
+
+pub use crate::hlc::ServerHlc;
 
 #[cfg(test)]
 mod tests;

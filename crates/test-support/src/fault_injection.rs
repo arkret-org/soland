@@ -140,6 +140,10 @@ impl PersistenceStore for FaultInjectingStore {
     ) -> &dyn soland_storage::AccountDeviceSignerEvidenceStore {
         self.inner.account_device_signer_evidence()
     }
+
+    fn read_cursors(&self) -> &dyn soland_storage::ReadCursorStore {
+        self.inner.read_cursors()
+    }
 }
 
 #[async_trait]

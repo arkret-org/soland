@@ -548,7 +548,22 @@ pub struct DeviceMessageBatchRecord {
     /// independently authenticated peer/internal fanout, whose sender device
     /// is not authoritative at this service.
     pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
+    /// The sending Agent endpoint's committed key authorization, rechecked as
+    /// the single active current key in the same transaction. Exactly one of
+    /// this and `device_revocation_gate` is present for a client send.
+    pub sender_agent_guard: Option<AgentEndpointGuard>,
     pub items: Vec<DeviceMessageBatchItemRecord>,
+}
+
+/// An Agent runtime endpoint bound by its grant triple: the Agent, its
+/// verification method and the accepted `ak.agent.key_authorize` that
+/// authorized it in the Agent's PCR Realm.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentEndpointGuard {
+    pub pcr_realm_id: arkret_wire::RealmId,
+    pub agent_id: arkret_wire::DidCoreId,
+    pub authorization_ref: arkret_wire::CommittedEventRef,
+    pub verification_method: arkret_wire::DidUrl,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -574,10 +589,14 @@ pub enum DeviceMessageBatchCommitOutcome {
     Stored(BTreeMap<String, bool>),
     Duplicate(BTreeMap<String, bool>),
     RequestConflict,
-    MessageConflict { message_key: String },
+    MessageConflict {
+        message_key: String,
+    },
     SnapshotConflict,
     DeviceRevocationPending,
     DeviceRevoked,
+    /// The sending Agent endpoint is no longer the Agent's active current key.
+    SenderAgentUnauthorized,
     QueueAtCapacity,
 }
 

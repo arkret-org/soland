@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::RealmId;
-use arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
@@ -137,7 +136,6 @@ pub enum ProjectionEffectView {
         reason: String,
     },
     Ignored,
-    ReadMarkerUpdated(ReadMarkerOutcome),
     Mls(MlsProjectionEffect),
     RealmOrganizationProjected {
         realm_id: String,
@@ -186,7 +184,6 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                 target_ref, reason, ..
             } => Self::PendingReplayQueued { target_ref, reason },
             ProjectionEffect::Ignored => Self::Ignored,
-            ProjectionEffect::ReadMarkerUpdated(marker) => Self::ReadMarkerUpdated(marker),
             ProjectionEffect::Mls(effect) => Self::Mls(match effect {
                 soland_domain::reducer::MlsEffect::KeyPackagePublished {
                     keypackage_id, ..
@@ -862,16 +859,6 @@ impl ProjectionService {
     pub fn apply_projected(&self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffectView {
         let _authority_guard = self.history_authority_view_cas_guard();
         self.state.lock().apply_projected(operation, hlc).into()
-    }
-
-    /// Apply actor-private read-cursor state outside the durable-event reducer
-    /// registry. The event-kind registry deliberately marks these events as
-    /// `reducer_input=false` because they do not advance the Realm frontier.
-    pub fn apply_read_cursor(&self, operation: &Operation) -> ProjectionEffectView {
-        self.state
-            .lock()
-            .apply_read_cursor(operation, operation.created_at)
-            .into()
     }
 
     /// All-or-nothing install of one Sidecar-ensure run.

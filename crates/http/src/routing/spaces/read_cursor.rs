@@ -1,8 +1,10 @@
 //! Read cursor (`ak.self.read_cursor.*`) handlers.
 //!
-//! Protocol writes use `ak.read_cursor.advance` actor-private events; the
-//! resulting account-private state is consumed through projection/account sync.
-//! Mounted on the protocol surface at `/_arkret/self/read-cursors*`.
+//! Protocol writes are caller-signed `ak.read_cursor.advance` actor-private
+//! Events. Their only durable effect is the account-private
+//! `ak.private.read_cursor.v1` winner (actor-private-effects.md §3.4); no
+//! RealmCommit, Realm reducer or shared history is involved. Mounted on the
+//! protocol surface at `/_arkret/self/read-cursors*`.
 
 use arkret_models_collaboration::objects::read_receipts::{
     ReadCursor, ReadCursorAdvanceRequestBody, ReadCursorList, ReadMarkerOutcome,
@@ -12,6 +14,7 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use soland_http::error::AppError;
+use soland_storage::{ReadCursorAdvanceOutcome, ReadCursorAdvanceRefusal};
 
 use super::AuthArgs;
 use crate::routing::identity::device_messages::{
@@ -35,73 +38,157 @@ pub(super) async fn set_read_cursor(
 ) -> JsonResult<ReadMarkerOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let sender_account_id =
-        crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
-            state, &session,
-        )
-        .await?;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let submission = body.into_inner().advance_event;
-    let cursor = validate_caller_signed_read_cursor(&actor, &session.device_id, &submission.event)?;
-    let realm_id = cursor.realm_id.clone();
-    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
+    submission.validate().map_err(|error| {
+        AppError::schema_violation(format!("invalid advance_event submission: {error}"))
+    })?;
+    let event = submission.event;
+    let cursor = validate_caller_signed_read_cursor(&actor, &session.device_id, &event)?;
+    let owner = actor
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| AppError::capability_denied("a read cursor is owned by an Account"))?;
+    // The owner is `payload.actor_id.account_id`, stored at that Account's own
+    // Station (actor-private-effects.md §1); a session of another Station's
+    // Account never reaches here.
+    if owner.station_id != state.service_core_id() {
+        return Err(AppError::capability_denied(
+            "a read cursor is stored only at its owner's Station",
+        ));
+    }
+    let producer_guard = crate::state::verify_self_event_producer(state, &session, &event)
         .await
-        .map_err(|error| {
-            crate::routing::events::event_log::submit_one_error_to_app_error(
-                "ak.read_cursor.advance submit failed",
-                error.status(),
-                error.code(),
-                &error.message(),
-            )
-        })?;
-    let marker = {
-        let projection = state.projections().snapshot();
-        projection
-            .read_cursors
-            .values()
-            .find(|marker| {
-                marker.actor_id == actor
-                    && marker.realm_id.as_str() == realm_id.as_str()
-                    && marker.read_scope == cursor.read_scope
-            })
-            .cloned()
-    }
-    .ok_or_else(|| AppError::internal("accepted read cursor was not projected"))?;
-    // The projected marker's `updated_at` is the winning advance's envelope
-    // `created_at` (read-receipts.md §6.1), not a payload field, so identity of
-    // "this submission won" is the (device, position) pair we just submitted.
-    let candidate_won =
-        marker.device_id.as_str() == session.device_id && marker.position == cursor.position;
-    if candidate_won {
-        fanout_actor_private_update(
-            state,
-            &session.actor,
-            ActorPrivateDeviceUpdate::ReadCursor {
-                sender: DeviceMessageSender::Account {
-                    sender_account_id,
-                    sender_device_id: arkret_identifiers::DeviceId::new(session.device_id.clone())
-                        .map_err(|error| {
-                            AppError::internal(format!(
-                                "authenticated device id is invalid: {error}"
-                            ))
-                        })?,
-                },
-                content: ActorPrivateReadCursorUpdate {
-                    schema: arkret_wire::SchemaId::READ_CURSOR_UPDATE_V1.to_owned(),
-                    actor_id: marker.actor_id.clone(),
-                    device_id: marker.device_id.clone(),
-                    realm_id: marker.realm_id.clone(),
-                    read_scope: marker.read_scope.clone(),
-                    position: marker.position.clone(),
-                    updated_at: marker.updated_at,
-                },
-                created_at: marker.updated_at,
-            },
-        )
-        .await;
-    }
+        .map_err(advance_service_error)?;
+    let canonical_event_digest = arkret_canonical::sha256_bytes(
+        &arkret_canonical::canonical_json_bytes(&event)
+            .map_err(|error| AppError::schema_violation(error.to_string()))?,
+    )
+    .to_vec();
+    let advance = soland_storage::ReadCursorAdvance {
+        event,
+        canonical_event_digest,
+        cursor,
+        owner,
+        producer_guard: Some(producer_guard),
+        station_id: state.service_core_id(),
+        accepted_at: chrono::Utc::now(),
+    };
+    let outcome = state
+        .persistence()
+        .advance_read_cursor(&advance)
+        .await
+        .map_err(|error| advance_service_error(error.into()))?;
+    let marker = match outcome {
+        ReadCursorAdvanceOutcome::Accepted {
+            marker,
+            candidate_won,
+        } => {
+            if candidate_won {
+                fanout_read_cursor_winner(state, &session, &marker).await?;
+            }
+            marker
+        }
+        // The first outcome, without another write or device fanout.
+        ReadCursorAdvanceOutcome::Replayed(marker) => marker,
+        ReadCursorAdvanceOutcome::Refused(refusal) => return Err(advance_refusal(refusal)),
+    };
     json_ok(marker)
+}
+
+/// Sibling devices observe a new winner as the `ak.read_cursor.update`
+/// device message, whose `updated_at` is the winning advance's envelope time.
+async fn fanout_read_cursor_winner(
+    state: &AppState,
+    session: &soland_services::identity::SessionIdentityState,
+    marker: &ReadMarkerOutcome,
+) -> Result<(), AppError> {
+    let sender_account_id =
+        crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(state, session)
+            .await?;
+    let sender_device_id =
+        arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(|error| {
+            AppError::internal(format!("authenticated device id is invalid: {error}"))
+        })?;
+    fanout_actor_private_update(
+        state,
+        &session.actor,
+        ActorPrivateDeviceUpdate::ReadCursor {
+            sender: DeviceMessageSender::Account {
+                sender_account_id,
+                sender_device_id,
+            },
+            content: ActorPrivateReadCursorUpdate {
+                schema: arkret_wire::SchemaId::READ_CURSOR_UPDATE_V1.to_owned(),
+                actor_id: marker.actor_id.clone(),
+                device_id: marker.device_id.clone(),
+                realm_id: marker.realm_id.clone(),
+                read_scope: marker.read_scope.clone(),
+                position: marker.position.clone(),
+                updated_at: marker.updated_at,
+            },
+            created_at: marker.updated_at,
+        },
+    )
+    .await;
+    Ok(())
+}
+
+/// Every refusal of the actor-private contract writes nothing. A position this
+/// Station cannot prove visible or causally ordered stays provisional and is
+/// retryable; the caller cannot tell a missing Event from an invisible one.
+fn advance_refusal(refusal: ReadCursorAdvanceRefusal) -> AppError {
+    match refusal {
+        ReadCursorAdvanceRefusal::DuplicateConflict => crate::app_error!(
+            DuplicateConflict,
+            "advance_event is already accepted with different canonical bytes"
+        ),
+        ReadCursorAdvanceRefusal::NotMember => {
+            AppError::capability_denied("the read cursor owner is not a joined Realm member")
+        }
+        ReadCursorAdvanceRefusal::PositionNotInRealm => {
+            AppError::param_invalid("position.event_id is not a committed Event of realm_id")
+        }
+        ReadCursorAdvanceRefusal::Unproved(detail) => {
+            crate::app_error!(
+                TemporarilyUnavailable,
+                "read cursor position unproved: {detail}"
+            )
+        }
+    }
+}
+
+/// Producer and storage refusals keep their registered device, signature and
+/// schema codes; any other producer binding refusal is `capability_denied`.
+fn advance_service_error(error: soland_services::ServiceError) -> AppError {
+    use soland_services::ServiceError;
+    use soland_storage::ConflictCode;
+    match &error {
+        ServiceError::SchemaViolation(detail) => AppError::schema_violation(detail.clone()),
+        ServiceError::Conflict(detail) => match error.conflict_code() {
+            Some(
+                code @ (ConflictCode::DeviceRevoked
+                | ConflictCode::DeviceRevocationPending
+                | ConflictCode::DeviceGenerationFenced
+                | ConflictCode::DeviceUnauthorized
+                | ConflictCode::SignatureInvalid
+                | ConflictCode::SchemaViolation
+                | ConflictCode::TemporarilyUnavailable),
+            ) => soland_http::error::ErrorCode::from_wire(code.as_str()).map_or_else(
+                || AppError::internal(format!("unregistered refusal code {code}")),
+                |wire| AppError::from_rejection(wire, detail.clone()),
+            ),
+            _ => AppError::capability_denied(detail.clone()),
+        },
+        ServiceError::NotFound(detail) => AppError::capability_denied(detail.clone()),
+        ServiceError::UnsupportedEventKind(detail) => {
+            crate::app_error!(UnsupportedEventKind, "{detail}")
+        }
+        ServiceError::Database(_) | ServiceError::Internal(_) => {
+            AppError::internal(error.to_string())
+        }
+    }
 }
 
 fn validate_caller_signed_read_cursor(
@@ -165,17 +252,24 @@ pub(super) async fn get_read_cursors(
     let session = aa.authenticated_session(state, req).await?;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
-    let realm_id = realm_id.into_inner().unwrap_or_default();
-    let markers = {
-        let proj = state.projections().snapshot();
-        proj.read_cursors
-            .values()
-            .filter(|m| {
-                m.actor_id == actor && (realm_id.is_empty() || m.realm_id.as_str() == realm_id)
-            })
-            .cloned()
-            .collect::<Vec<ReadMarkerOutcome>>()
+    let Some(owner) = actor.as_account_id() else {
+        return json_ok(ReadCursorList {
+            markers: Vec::new(),
+        });
     };
+    let realm_id = realm_id
+        .into_inner()
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            arkret_wire::RealmId::new(value)
+                .map_err(|error| AppError::param_invalid(format!("realm_id: {error}")))
+        })
+        .transpose()?;
+    let markers = state
+        .persistence()
+        .read_cursor_winners(owner, realm_id.as_ref())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(ReadCursorList { markers })
 }
 

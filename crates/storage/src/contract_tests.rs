@@ -156,6 +156,7 @@ pub async fn assert_device_message_snapshot_guard_contract(
             devices: snapshot,
         }),
         device_revocation_gate: Some(authorization_a.clone()),
+        sender_agent_guard: None,
         items: [&device_a, &device_b]
             .into_iter()
             .enumerate()

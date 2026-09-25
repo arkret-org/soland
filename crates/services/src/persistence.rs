@@ -54,6 +54,26 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Classify one producer-verified read cursor advance and store its
+    /// account-private winner (`ak.private.read_cursor.v1`).
+    pub async fn advance_read_cursor(
+        &self,
+        advance: &soland_storage::ReadCursorAdvance,
+    ) -> PersistenceResult<soland_storage::ReadCursorAdvanceOutcome> {
+        self.persistence.read_cursors().advance(advance).await
+    }
+
+    /// The owner's durable read cursor winners.
+    pub async fn read_cursor_winners(
+        &self,
+        owner: &arkret_wire::AccountId,
+        realm_id: Option<&RealmId>,
+    ) -> PersistenceResult<
+        Vec<arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome>,
+    > {
+        self.persistence.read_cursors().list(owner, realm_id).await
+    }
+
     pub(crate) fn authority_commit_store(&self) -> &dyn soland_storage::AuthorityCommitStore {
         self.persistence.authority_commits()
     }

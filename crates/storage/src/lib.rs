@@ -64,6 +64,7 @@ mod projection;
 mod publication_evidence;
 mod push;
 mod push_handoff;
+mod read_cursors;
 mod realm_invites;
 mod recovery;
 mod service_identity;
@@ -107,6 +108,7 @@ pub use projection::*;
 pub use publication_evidence::*;
 pub use push::*;
 pub use push_handoff::*;
+pub use read_cursors::*;
 pub use realm_invites::*;
 pub use recovery::*;
 pub use service_identity::*;
@@ -487,6 +489,8 @@ pub trait PersistenceStore:
 {
     fn authority_commits(&self) -> &dyn AuthorityCommitStore;
     fn account_device_signer_evidence(&self) -> &dyn AccountDeviceSignerEvidenceStore;
+    /// `ak.private.read_cursor.v1` account-private winners.
+    fn read_cursors(&self) -> &dyn ReadCursorStore;
 }
 
 #[cfg(test)]

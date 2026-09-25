@@ -61,6 +61,18 @@ fn agent_draft_pending_intent_is_a_separate_private_state_machine() {
 }
 
 #[test]
+fn read_cursor_winner_is_an_account_private_store_with_an_exact_retry_ledger() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.read_cursor_winners"));
+    assert!(INITIAL_UP.contains(
+        "CONSTRAINT read_cursor_winners_pk PRIMARY KEY (account_key, realm_id, read_scope_key)"
+    ));
+    assert!(INITIAL_UP.contains("CREATE TABLE public.read_cursor_advances"));
+    assert!(INITIAL_UP.contains("octet_length(canonical_event_digest) = 32"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS read_cursor_advances CASCADE"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS read_cursor_winners CASCADE"));
+}
+
+#[test]
 fn history_response_stream_tables_are_created_and_dropped_symmetrically() {
     for table in [
         "history_key_response_streams",

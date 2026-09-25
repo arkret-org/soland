@@ -106,6 +106,40 @@ CREATE TABLE public.agent_draft_pending_intents (
 CREATE INDEX agent_draft_pending_intents_controller_expiry_idx
     ON public.agent_draft_pending_intents (controller_account_key, expires_at);
 
+-- ak.private.read_cursor.v1: the deterministic causal-first winner per
+-- (AccountId, realm_id, canonical read_scope). Account-private state only; it
+-- is never a Realm current result and never uses a RealmCommit as its head.
+-- The winning position's Commit coordinate is kept to decide dominance.
+CREATE TABLE public.read_cursor_winners (
+    account_key text NOT NULL,
+    realm_id text NOT NULL,
+    read_scope_key text NOT NULL,
+    cursor jsonb NOT NULL,
+    winning_event_id text NOT NULL,
+    derived_updated_at timestamp with time zone NOT NULL,
+    position_stream_key text NOT NULL,
+    position_stream_position bigint NOT NULL,
+    CONSTRAINT read_cursor_winners_pk PRIMARY KEY (account_key, realm_id, read_scope_key),
+    CONSTRAINT read_cursor_winners_cursor_shape CHECK (
+        jsonb_typeof(cursor) = 'object'
+        AND cursor->>'schema' = 'ak.schema.read_cursor.v1'
+        AND cursor->>'realm_id' = realm_id
+    ),
+    CONSTRAINT read_cursor_winners_position_check CHECK (position_stream_position >= 0)
+);
+
+-- Exact-retry ledger of accepted ak.read_cursor.advance Events: the first
+-- saved outcome, returned for a byte-identical retry without another write.
+CREATE TABLE public.read_cursor_advances (
+    event_id text PRIMARY KEY,
+    canonical_event_digest bytea NOT NULL,
+    account_key text NOT NULL,
+    outcome jsonb NOT NULL,
+    candidate_won boolean NOT NULL,
+    accepted_at timestamp with time zone NOT NULL,
+    CONSTRAINT read_cursor_advances_digest_length CHECK (octet_length(canonical_event_digest) = 32)
+);
+
 CREATE TABLE public.account_data_changes (
     position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     actor_id text NOT NULL,

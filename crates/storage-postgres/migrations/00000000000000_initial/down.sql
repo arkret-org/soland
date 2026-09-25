@@ -74,6 +74,8 @@ DROP TABLE IF EXISTS server_settings CASCADE;
 DROP TABLE IF EXISTS event_notification_relay CASCADE;
 DROP TABLE IF EXISTS account_data_changes CASCADE;
 DROP TABLE IF EXISTS account_data_change_retention CASCADE;
+DROP TABLE IF EXISTS read_cursor_advances CASCADE;
+DROP TABLE IF EXISTS read_cursor_winners CASCADE;
 DROP TABLE IF EXISTS agent_draft_pending_intents CASCADE;
 DROP TABLE IF EXISTS account_datas CASCADE;
 DROP TABLE IF EXISTS account_authoring_continuity CASCADE;

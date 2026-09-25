@@ -286,6 +286,25 @@ impl DeviceMessageStore for PgDeviceMessageStore {
             }
             }
 
+            if let Some(guard) = batch.sender_agent_guard.as_ref() {
+                match crate::authority_commit::check_agent_endpoint_current_in_connection(
+                    conn,
+                    &guard.pcr_realm_id,
+                    &guard.agent_id,
+                    &guard.authorization_ref,
+                    &guard.verification_method,
+                    chrono::Utc::now(),
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(PersistenceError::Conflict(_)) => {
+                        return Ok(DeviceMessageBatchCommitOutcome::SenderAgentUnauthorized);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+
             if let Some(expected) = &batch.target_snapshot_guard {
                 // Device authorization mutations take ROW EXCLUSIVE on this
                 // table. SHARE holds them off until the request ledger and all

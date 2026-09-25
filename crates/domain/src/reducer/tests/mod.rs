@@ -13,7 +13,6 @@ mod pending_replay;
 mod pin_rsvp_encryption;
 mod pin_scope_safety;
 mod poll;
-mod read_cursor;
 mod realm_authority;
 mod redaction_message;
 mod space_container;

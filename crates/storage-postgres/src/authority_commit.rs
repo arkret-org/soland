@@ -1336,124 +1336,150 @@ pub(crate) async fn check_self_producer_guard_in_connection(
             authorization_ref,
             verification_method,
         } => {
-            if agent_id != &actor.principal_id
-                || verification_method != method
-                || authorization_ref.stream_ref.realm_id() != pcr_realm_id
-            {
+            if agent_id != &actor.principal_id || verification_method != method {
                 return Err(PersistenceError::Conflict(
                     "self Event Agent guard differs from producer".to_owned(),
                 ));
             }
-            let authorization = sql_query(
-                "SELECT e.envelope,c.commit_json FROM canonical_events e \
-                 JOIN realm_commits c ON c.event_pk=e.pk \
-                 WHERE e.id=$1 AND e.state='committed'",
+            check_agent_endpoint_current_in_connection(
+                conn,
+                pcr_realm_id,
+                agent_id,
+                authorization_ref,
+                verification_method,
+                committed_at,
             )
-            .bind::<Binary, _>(
-                ids::parse_event_id(authorization_ref.event_id.as_str())
-                    .ok_or_else(|| invalid("Agent authorization Event id is invalid"))?
-                    .to_vec(),
-            )
-            .get_result::<ProducerAuthorizationRow>(&mut *conn)
             .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .ok_or_else(|| {
-                PersistenceError::Conflict("Agent authorization Event is not committed".to_owned())
-            })?;
-            let source_event: arkret_wire::Event =
-                decode_json(authorization.envelope, "Agent authorization Event")?;
-            let source_commit: arkret_wire::RealmCommit =
-                decode_json(authorization.commit_json, "Agent authorization Commit")?;
-            if source_event.kind != arkret_wire::EventKind::AgentKeyAuthorize
-                || source_event.event_id != authorization_ref.event_id
-                || source_event.realm_id != *pcr_realm_id
-                || source_commit.event_ref != authorization_ref.event_id
-                || source_commit.commit_id != authorization_ref.commit_id
-                || source_commit.stream_ref != authorization_ref.stream_ref
-                || source_commit.stream_position != authorization_ref.stream_position
-            {
-                return Err(PersistenceError::Conflict(
-                    "Agent authorization Commit differs from guarded source".to_owned(),
-                ));
-            }
-            lock_agent_producer_current(conn, pcr_realm_id, agent_id).await?;
-            let status = sql_query("SELECT value FROM agent_status_current_results WHERE realm_id=$1 AND agent_id=$2 FOR SHARE")
-                .bind::<Text, _>(pcr_realm_id.as_str())
-                .bind::<Text, _>(agent_id.as_str())
-                .get_result::<ProducerCurrentValueRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(PersistenceError::database)?;
-            if status.as_ref().and_then(|row| row.value.as_str()) != Some("active") {
-                return Err(PersistenceError::Conflict(
-                    "Agent producer is no longer active".to_owned(),
-                ));
-            }
-            let rows = sql_query("SELECT value FROM agent_key_current_results WHERE realm_id=$1 AND agent_id=$2 FOR SHARE")
-                .bind::<Text, _>(pcr_realm_id.as_str())
-                .bind::<Text, _>(agent_id.as_str())
-                .load::<ProducerCurrentValueRow>(&mut *conn)
-                .await
-                .map_err(PersistenceError::database)?;
-            let mut active = Vec::new();
-            for row in rows {
-                let entries = row
-                    .value
-                    .get("authorizations")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| {
-                        PersistenceError::Internal(
-                            "stored Agent key current result has no authorizations".to_owned(),
-                        )
-                    })?;
-                for entry in entries {
-                    let Some(raw_method) = entry
-                        .pointer("/value/verification_method")
-                        .and_then(Value::as_str)
-                    else {
-                        continue;
-                    };
-                    let payload: arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload =
-                        serde_json::from_value(entry.get("value").cloned().unwrap_or(Value::Null))
-                        .map_err(|error| PersistenceError::Internal(format!("stored Agent key authorization invalid: {error}")))?;
-                    if payload
-                        .expires_at
-                        .is_some_and(|expiry| expiry <= committed_at)
-                    {
-                        continue;
-                    }
-                    if payload.agent_id != *agent_id
-                        || entry.get("value")
-                            != Some(
-                                &serde_json::to_value(&source_event.payload)
-                                    .map_err(PersistenceError::database)?,
-                            )
-                    {
-                        return Err(PersistenceError::Conflict(
-                            "Agent current authorization differs from its accepted Event"
-                                .to_owned(),
-                        ));
-                    }
-                    let tag = entry.get("tag_id").and_then(Value::as_str).ok_or_else(|| {
-                        PersistenceError::Internal(
-                            "stored Agent authorization has no tag id".to_owned(),
-                        )
-                    })?;
-                    active.push((tag.to_owned(), raw_method.to_owned()));
-                }
-            }
-            if active.len() != 1
-                || active[0].0 != format!("{}:1", authorization_ref.event_id)
-                || active[0].1 != method.as_str()
-            {
-                return Err(PersistenceError::Conflict(
-                    "Agent producer authorization changed before commit".to_owned(),
-                ));
-            }
-            Ok(())
         }
     }
+}
+
+/// Recheck, inside the caller's transaction, that `authorization_ref` is the
+/// Agent's committed `ak.agent.key_authorize` and still its single active
+/// current key for `verification_method` at `committed_at`, with the Agent
+/// active.
+/// Shared by Agent-produced Events and Agent-sent DeviceMessages.
+pub(crate) async fn check_agent_endpoint_current_in_connection(
+    conn: &mut AsyncPgConnection,
+    pcr_realm_id: &arkret_wire::RealmId,
+    agent_id: &arkret_wire::DidCoreId,
+    authorization_ref: &arkret_wire::CommittedEventRef,
+    verification_method: &arkret_wire::DidUrl,
+    committed_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let method = verification_method;
+    if authorization_ref.stream_ref.realm_id() != pcr_realm_id {
+        return Err(PersistenceError::Conflict(
+            "Agent guard authorization is outside its PCR Realm".to_owned(),
+        ));
+    }
+    let authorization = sql_query(
+        "SELECT e.envelope,c.commit_json FROM canonical_events e \
+         JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.state='committed'",
+    )
+    .bind::<Binary, _>(
+        ids::parse_event_id(authorization_ref.event_id.as_str())
+            .ok_or_else(|| invalid("Agent authorization Event id is invalid"))?
+            .to_vec(),
+    )
+    .get_result::<ProducerAuthorizationRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        PersistenceError::Conflict("Agent authorization Event is not committed".to_owned())
+    })?;
+    let source_event: arkret_wire::Event =
+        decode_json(authorization.envelope, "Agent authorization Event")?;
+    let source_commit: arkret_wire::RealmCommit =
+        decode_json(authorization.commit_json, "Agent authorization Commit")?;
+    if source_event.kind != arkret_wire::EventKind::AgentKeyAuthorize
+        || source_event.event_id != authorization_ref.event_id
+        || source_event.realm_id != *pcr_realm_id
+        || source_commit.event_ref != authorization_ref.event_id
+        || source_commit.commit_id != authorization_ref.commit_id
+        || source_commit.stream_ref != authorization_ref.stream_ref
+        || source_commit.stream_position != authorization_ref.stream_position
+    {
+        return Err(PersistenceError::Conflict(
+            "Agent authorization Commit differs from guarded source".to_owned(),
+        ));
+    }
+    lock_agent_producer_current(conn, pcr_realm_id, agent_id).await?;
+    let status = sql_query("SELECT value FROM agent_status_current_results WHERE realm_id=$1 AND agent_id=$2 FOR SHARE")
+        .bind::<Text, _>(pcr_realm_id.as_str())
+        .bind::<Text, _>(agent_id.as_str())
+        .get_result::<ProducerCurrentValueRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+    if status.as_ref().and_then(|row| row.value.as_str()) != Some("active") {
+        return Err(PersistenceError::Conflict(
+            "Agent producer is no longer active".to_owned(),
+        ));
+    }
+    let rows = sql_query(
+        "SELECT value FROM agent_key_current_results WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
+    )
+    .bind::<Text, _>(pcr_realm_id.as_str())
+    .bind::<Text, _>(agent_id.as_str())
+    .load::<ProducerCurrentValueRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut active = Vec::new();
+    for row in rows {
+        let entries = row
+            .value
+            .get("authorizations")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "stored Agent key current result has no authorizations".to_owned(),
+                )
+            })?;
+        for entry in entries {
+            let Some(raw_method) = entry
+                .pointer("/value/verification_method")
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let payload: arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload =
+                serde_json::from_value(entry.get("value").cloned().unwrap_or(Value::Null))
+                .map_err(|error| PersistenceError::Internal(format!("stored Agent key authorization invalid: {error}")))?;
+            if payload
+                .expires_at
+                .is_some_and(|expiry| expiry <= committed_at)
+            {
+                continue;
+            }
+            if payload.agent_id != *agent_id
+                || entry.get("value")
+                    != Some(
+                        &serde_json::to_value(&source_event.payload)
+                            .map_err(PersistenceError::database)?,
+                    )
+            {
+                return Err(PersistenceError::Conflict(
+                    "Agent current authorization differs from its accepted Event".to_owned(),
+                ));
+            }
+            let tag = entry.get("tag_id").and_then(Value::as_str).ok_or_else(|| {
+                PersistenceError::Internal("stored Agent authorization has no tag id".to_owned())
+            })?;
+            active.push((tag.to_owned(), raw_method.to_owned()));
+        }
+    }
+    if active.len() != 1
+        || active[0].0 != format!("{}:1", authorization_ref.event_id)
+        || active[0].1 != method.as_str()
+    {
+        return Err(PersistenceError::Conflict(
+            "Agent producer authorization changed before commit".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 impl PgAuthorityCommitStore {

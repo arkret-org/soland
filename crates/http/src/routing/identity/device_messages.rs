@@ -189,12 +189,143 @@ struct PreparedDeviceMessageTarget {
 struct DeviceMessageIntentPreimage<'a> {
     device_message_id: &'a arkret_wire::DeviceMessageId,
     kind: &'a arkret_wire::ProtocolKind,
-    sender_account_id: &'a arkret_wire::AccountId,
-    sender_device_id: &'a str,
+    #[serde(flatten)]
+    sender: &'a DeviceMessageSender,
     recipient_account_id: &'a arkret_wire::AccountId,
     recipient_device_id: &'a arkret_wire::DeviceId,
     expires_at: chrono::DateTime<chrono::Utc>,
     content: &'a BTreeMap<String, Value>,
+}
+
+/// The authenticated sending endpoint of `ak.self.device_messages.command.send.v1`
+/// (device-lifecycle §7): a human device with its revocation gate, or an Agent
+/// runtime endpoint with its current key authorization. The Station branch is
+/// never reachable from this client surface.
+struct SendingEndpoint {
+    sender: DeviceMessageSender,
+    device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
+    agent_guard: Option<soland_storage::AgentEndpointGuard>,
+}
+
+async fn sending_endpoint(
+    state: &AppState,
+    session: &SessionIdentityState,
+) -> Result<SendingEndpoint, AppError> {
+    if session.agent_session.is_some() {
+        crate::routing::events::require_agent_session_scope(
+            session,
+            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_SEND_V1,
+        )?;
+        let denied = |detail: &str| AppError::capability_denied(detail.to_owned());
+        let grant = session
+            .session_grant
+            .as_ref()
+            .ok_or_else(|| denied("Agent sender requires an authenticated Agent grant"))?;
+        let arkret_models_identity::session_credential::SessionGrantHolderBinding::AgentRuntime {
+            agent_id,
+            agent_key_authorization_ref,
+            verification_method,
+        } = &grant.holder_binding
+        else {
+            return Err(denied("Agent sender grant binding is invalid"));
+        };
+        if session.actor != agent_id.as_str() {
+            return Err(denied("Agent sender actor differs from the grant"));
+        }
+        let actor =
+            crate::routing::identity::session_actor::validated_session_actor(state, session)
+                .await
+                .map_err(|error| denied(&error.message))?;
+        let (_, current) = super::current_signer_evidence::current_agent_endpoint_key(
+            state,
+            &actor,
+            verification_method,
+        )
+        .await
+        .map_err(|error| denied(&error))?;
+        if current.event_id != *agent_key_authorization_ref {
+            return Err(denied(
+                "Agent sender grant authorization is no longer current",
+            ));
+        }
+        return Ok(SendingEndpoint {
+            sender: DeviceMessageSender::Agent {
+                sender_agent_id: agent_id.clone(),
+                sender_agent_verification_method: verification_method.clone(),
+                sender_agent_key_authorize_event_id: agent_key_authorization_ref.clone(),
+            },
+            device_revocation_gate: None,
+            agent_guard: Some(soland_storage::AgentEndpointGuard {
+                pcr_realm_id: current.stream_ref.realm_id().clone(),
+                agent_id: agent_id.clone(),
+                authorization_ref: current,
+                verification_method: verification_method.clone(),
+            }),
+        });
+    }
+    let sender_account_id =
+        super::auth_grant_dpop::authenticated_session_account_id(state, session).await?;
+    let device_unauthorized = |detail: &str| {
+        AppError::capability_denied(detail.to_owned()).with_wire_code("device_unauthorized")
+    };
+    let sender_device_id = arkret_wire::DeviceId::new(session.device_id.clone())
+        .map_err(|_| device_unauthorized("to-device send requires a typed sender device"))?;
+    let gate = match super::device_generation::active_device_revocation_gate_selector(
+        state,
+        &session.actor,
+        &session.device_id,
+    )
+    .await
+    {
+        Ok(selector) => selector,
+        Err(error) if error.is_not_found() => {
+            return Err(device_unauthorized("device authorization is not active"));
+        }
+        Err(error) => {
+            return Err(AppError::internal(format!(
+                "current device revocation selector unavailable: {error}"
+            )));
+        }
+    };
+    Ok(SendingEndpoint {
+        sender: DeviceMessageSender::Account {
+            sender_account_id,
+            sender_device_id,
+        },
+        device_revocation_gate: Some(gate),
+        agent_guard: None,
+    })
+}
+
+/// The closed-sender idempotency identity of one logical message
+/// (device-lifecycle §7): `(sender_account_id, sender_device_id,
+/// device_message_id)` for a human device, `(sender_agent_id,
+/// device_message_id)` for an Agent and `(sender_id, device_message_id)` for
+/// the Station materializer. An Agent key rotation keeps the same identity.
+fn sender_idempotency_identity(
+    sender: &DeviceMessageSender,
+    device_message_id: &arkret_wire::DeviceMessageId,
+) -> Value {
+    match sender {
+        DeviceMessageSender::Account {
+            sender_account_id,
+            sender_device_id,
+        } => json!({
+            "sender_account_id": sender_account_id,
+            "sender_device_id": sender_device_id,
+            "device_message_id": device_message_id,
+        }),
+        DeviceMessageSender::Agent {
+            sender_agent_id, ..
+        } => json!({
+            "sender_agent_id": sender_agent_id,
+            "device_message_id": device_message_id,
+        }),
+        DeviceMessageSender::Station { sender_id } => json!({
+            "sender_id": sender_id,
+            "device_message_id": device_message_id,
+        }),
+    }
 }
 
 pub(super) fn protocol_router() -> Router {
@@ -217,30 +348,12 @@ async fn send_device_messages(
 ) -> JsonResult<DeviceMessagesSendOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let sender_account_id =
-        super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
     let body = device_messages_send_request_body(body.into_inner())?;
-    let sender_revocation_gate =
-        match super::device_generation::active_device_revocation_gate_selector(
-            state,
-            &session.actor,
-            &session.device_id,
-        )
-        .await
-        {
-            Ok(selector) => Some(selector),
-            Err(error) if error.is_not_found() => {
-                return Err(
-                    AppError::capability_denied("device authorization is not active")
-                        .with_wire_code("device_unauthorized"),
-                );
-            }
-            Err(error) => {
-                return Err(AppError::internal(format!(
-                    "current device revocation selector unavailable: {error}"
-                )));
-            }
-        };
+    let SendingEndpoint {
+        sender,
+        device_revocation_gate: sender_revocation_gate,
+        agent_guard: sender_agent_guard,
+    } = sending_endpoint(state, &session).await?;
     let idempotency_key = req
         .headers()
         .get("Idempotency-Key")
@@ -268,19 +381,17 @@ async fn send_device_messages(
                     "ak.secret.request and ak.secret.send are not admitted in v1",
                 ));
             }
-            let message_key = arkret_canonical::canonical_sha256(&json!({
-                "sender_account_id": sender_account_id,
-                "sender_device_id": session.device_id,
-                "device_message_id": target.device_message_id,
-            }))
+            let message_key = arkret_canonical::canonical_sha256(&sender_idempotency_identity(
+                &sender,
+                &target.device_message_id,
+            ))
             .map_err(|error| AppError::internal(error.to_string()))?;
             let recipient_account_id =
                 arkret_wire::AccountId::new(recipient.clone(), state.service_core_id().clone());
             let intent_digest = arkret_canonical::canonical_sha256(&DeviceMessageIntentPreimage {
                 device_message_id: &target.device_message_id,
                 kind: &target.kind,
-                sender_account_id: &sender_account_id,
-                sender_device_id: &session.device_id,
+                sender: &sender,
                 recipient_account_id: &recipient_account_id,
                 recipient_device_id: &device_id,
                 expires_at: target.expires_at,
@@ -338,7 +449,9 @@ async fn send_device_messages(
     let has_fresh_targets = prepared_targets
         .iter()
         .any(|target| !existing_message_outcomes.contains_key(&target.message_key));
-    let sender_verified = if has_fresh_targets {
+    // An Agent endpoint is proved by its grant triple against the current
+    // accepted key authorization, rechecked in the queue transaction.
+    let sender_verified = if has_fresh_targets && sender_agent_guard.is_none() {
         let sender_device = state
             .identities()
             .find_device(soland_services::identity::FindDeviceQuery {
@@ -349,7 +462,7 @@ async fn send_device_messages(
             .map_err(|error| AppError::internal(error.to_string()))?;
         device_is_active_verified(sender_device.as_ref())
     } else {
-        false
+        sender_agent_guard.is_some()
     };
     if has_fresh_targets && !sender_verified {
         return Err(AppError::capability_denied(
@@ -386,18 +499,8 @@ async fn send_device_messages(
                 let envelope = DeviceMessageEnvelope {
                     device_message_id: prepared.target.device_message_id.clone(),
                     kind: prepared.target.kind.clone(),
-                    // The send surface is device-authenticated, so the queued
-                    // envelope records the human-device sender branch.
-                    sender: DeviceMessageSender::Account {
-                        sender_account_id: sender_account_id.clone(),
-                        sender_device_id: arkret_wire::DeviceId::new(session.device_id.clone())
-                            .map_err(|_| {
-                                AppError::capability_denied(
-                                    "to-device send requires a typed sender device",
-                                )
-                                .with_wire_code("device_unauthorized")
-                            })?,
-                    },
+                    // The closed sender branch of the authenticated endpoint.
+                    sender: sender.clone(),
                     recipient_account_id: arkret_wire::AccountId::new(
                         prepared.recipient_id.clone(),
                         state.service_core_id().clone(),
@@ -444,6 +547,7 @@ async fn send_device_messages(
             idempotency_expires_at,
             per_device_queue_capacity: state.config().to_device_queue_capacity,
             device_revocation_gate: sender_revocation_gate,
+            sender_agent_guard,
             target_snapshot_guard: None,
             items: batch_items,
         })
@@ -479,6 +583,11 @@ async fn send_device_messages(
             return Err(
                 AppError::conflict("device generation is revoked").with_wire_code("device_revoked")
             );
+        }
+        DeviceMessageBatchCommitOutcome::SenderAgentUnauthorized => {
+            return Err(AppError::capability_denied(
+                "the sending Agent endpoint is no longer its current accepted key",
+            ));
         }
         DeviceMessageBatchCommitOutcome::QueueAtCapacity => {
             return Err(
@@ -1007,15 +1116,19 @@ mod tests {
     /// persisted service identity. Persisting the identity is what binds the
     /// device inventory to the Station in a deployment, so every device row
     /// written below carries the Station it belongs to.
-    fn station(development_mode: bool) -> AppState {
-        let config = crate::config::AppConfig {
+    fn station_config(development_mode: bool) -> crate::config::AppConfig {
+        crate::config::AppConfig {
             object_storage: crate::config::ObjectStorageConfig::local(
                 std::env::temp_dir().join("soland-device-messages-test-blobs"),
             ),
             development_mode,
             seed_demo_data: false,
             ..crate::config::AppConfig::test_default()
-        };
+        }
+    }
+
+    fn station(development_mode: bool) -> AppState {
+        let config = station_config(development_mode);
         let service_did =
             AppState::new(config.clone(), soland_storage_postgres::Db { pool: None }).service_did();
         let persisted = soland_test_support::app_state_with_service_did(
@@ -1233,5 +1346,23 @@ mod tests {
         let content = serde_json::to_value(&envelope.content).unwrap();
         assert_eq!(content.get("revision"), Some(&json!(7)));
         assert_eq!(content.get("content"), Some(&cell));
+
+        // A restarted Station over the same database serves the identical
+        // unacknowledged envelope: the queue is durable, never process state.
+        let restarted = AppState::new_with_persistence(
+            station_config(false),
+            soland_storage_postgres::Db { pool: None },
+            state.test_persistence(),
+        );
+        let requeued = restarted
+            .deliveries()
+            .device_messages_after(&holder, &holder_device, 0, 101)
+            .await
+            .expect("restarted holder device queue");
+        let reread = device_message_envelopes_after(&restarted, &requeued);
+        assert_eq!(
+            serde_json::to_value(&reread).unwrap(),
+            serde_json::to_value(&envelopes).unwrap()
+        );
     }
 }

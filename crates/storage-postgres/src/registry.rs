@@ -14,6 +14,7 @@ use crate::*;
 pub struct PgPersistenceStore {
     authority_commits: PgAuthorityCommitStore,
     account_device_signer_evidence: PgAccountDeviceSignerEvidenceArchive,
+    read_cursors: PgReadCursorStore,
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,
     agent_draft_pending_intents: PgAgentDraftPendingIntentStore,
@@ -97,6 +98,7 @@ impl PgPersistenceStore {
         Self {
             authority_commits: PgAuthorityCommitStore { pool: pool.clone() },
             account_device_signer_evidence: PgAccountDeviceSignerEvidenceArchive::new(pool.clone()),
+            read_cursors: PgReadCursorStore::new(pool.clone()),
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
             agent_draft_pending_intents: PgAgentDraftPendingIntentStore { pool: pool.clone() },
@@ -499,5 +501,9 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn account_device_signer_evidence(&self) -> &dyn AccountDeviceSignerEvidenceStore {
         &self.account_device_signer_evidence
+    }
+
+    fn read_cursors(&self) -> &dyn ReadCursorStore {
+        &self.read_cursors
     }
 }

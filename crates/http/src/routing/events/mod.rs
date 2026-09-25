@@ -1,8 +1,6 @@
 use salvo::prelude::*;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
-pub(crate) const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
-
 mod account_authority_private;
 pub(crate) mod event_log;
 pub(crate) mod peer;
