@@ -25,8 +25,8 @@ struct PlanRow {
     plan: Value,
 }
 
-/// Rows produced by every scan node over the two history tables, and the
-/// execution time in milliseconds.
+/// Rows every scan node over the two history tables produced or discarded,
+/// and the execution time in milliseconds.
 struct Measured {
     history_rows: f64,
     execution_ms: f64,
@@ -40,15 +40,20 @@ fn walk(node: &Value, rows: &mut f64, label: &str) {
             node_type != "Seq Scan",
             "{label}: sequential scan of {relation}"
         );
-        let actual = node
-            .get("Actual Rows")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+        // Rows an index or filter visited and discarded are read too.
+        let visited = [
+            "Actual Rows",
+            "Rows Removed by Filter",
+            "Rows Removed by Index Recheck",
+        ]
+        .into_iter()
+        .filter_map(|field| node.get(field).and_then(Value::as_f64))
+        .sum::<f64>();
         let loops = node
             .get("Actual Loops")
             .and_then(Value::as_f64)
             .unwrap_or(1.0);
-        *rows += actual * loops;
+        *rows += visited * loops;
     }
     for child in node
         .get("Plans")
@@ -121,21 +126,29 @@ async fn per_stream_reads_stay_bounded_across_one_hundred_and_one_thousand_realm
         let explain = |sql: &str| format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}");
         let mut report = Vec::new();
 
-        let heads = measure(
-            sql_query(explain(crate::authority_commit::REALM_STREAM_HEADS_SQL))
-                .bind::<Text, _>(hot_realm)
-                .get_result::<PlanRow>(&mut *conn)
-                .await
-                .unwrap()
-                .plan,
-            "stream heads",
-        );
-        assert!(
-            heads.history_rows <= 8.0,
-            "stream heads read {}",
-            heads.history_rows
-        );
-        report.push(("stream heads", heads));
+        // The first and the last Realm in key order: neither may walk the
+        // hot history or the other Realms' streams.
+        let last_realm = format!("ak:realm:capacity-{realms}");
+        for (label, realm) in [
+            ("stream heads (hot Realm)", hot_realm),
+            ("stream heads (last Realm)", last_realm.as_str()),
+        ] {
+            let heads = measure(
+                sql_query(explain(crate::authority_commit::REALM_STREAM_HEADS_SQL))
+                    .bind::<Text, _>(realm)
+                    .get_result::<PlanRow>(&mut *conn)
+                    .await
+                    .unwrap()
+                    .plan,
+                label,
+            );
+            assert!(
+                heads.history_rows <= 8.0,
+                "{label} read {}",
+                heads.history_rows
+            );
+            report.push((label, heads));
+        }
 
         let floor = measure(
             sql_query(explain(crate::authority_commit::STREAM_FLOOR_SQL))

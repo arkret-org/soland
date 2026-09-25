@@ -425,15 +425,18 @@ async fn commit_mimi_room_binding_current_result_in_connection(
 
 /// The head of every commit stream of one Realm, as a loose index scan over
 /// `realm_commits_realm_stream_tail_idx`: one index probe per stream, never
-/// a walk over the Realm's history.
+/// a walk over the Realm's history or other Realms' streams. The row
+/// comparisons keep each probe on the Realm-prefixed index.
 pub(crate) const REALM_STREAM_HEADS_SQL: &str = "\
     WITH RECURSIVE stream_keys AS ( \
-      (SELECT stream_key FROM realm_commits WHERE realm_id = $1 \
-       ORDER BY stream_key LIMIT 1) \
+      (SELECT stream_key FROM realm_commits \
+       WHERE (realm_id, stream_key) >= ($1, '') AND realm_id = $1 \
+       ORDER BY realm_id, stream_key LIMIT 1) \
       UNION ALL \
       SELECT (SELECT next_row.stream_key FROM realm_commits next_row \
-              WHERE next_row.realm_id = $1 AND next_row.stream_key > stream_keys.stream_key \
-              ORDER BY next_row.stream_key LIMIT 1) \
+              WHERE (next_row.realm_id, next_row.stream_key) > ($1, stream_keys.stream_key) \
+                AND next_row.realm_id = $1 \
+              ORDER BY next_row.realm_id, next_row.stream_key LIMIT 1) \
       FROM stream_keys WHERE stream_keys.stream_key IS NOT NULL \
     ) \
     SELECT head.stream_ref, head.stream_position, head.commit_id \
