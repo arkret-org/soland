@@ -262,17 +262,23 @@ pub(super) async fn authorize_key_backup_delete(
         }
     };
 
-    let mut device_gates = Vec::new();
+    let mut quorum_devices = Vec::new();
     if let KeyBackupDeleteProof::DeviceQuorum { signatures, .. } = &body.proof {
-        for contribution in signatures {
-            device_gates.push(crate::routing::identity::device_generation::active_device_revocation_gate_selector(state,actor_id,contribution.device_id.as_str()).await.map_err(|e|AppError::capability_denied(e.to_string()))?);
-        }
+        quorum_devices.extend(
+            signatures
+                .iter()
+                .map(|contribution| contribution.device_id.clone()),
+        );
     }
-    device_gates.sort_unstable();
+    quorum_devices.sort_unstable();
+    quorum_devices.dedup();
     Ok(AuthorizedKeyBackupDelete {
         gate: soland_storage::KeyBackupDeleteGate {
-            active_basis: serde_json::json!({"realm_id":pointers.control_realm_id,"authority_commit_id":pointers.authority_commit_id}),
-            device_gates,
+            basis: soland_storage::KeyBackupPointerBasis {
+                account_id: pointers.account_id,
+                secret_storage: pointers.secret_storage,
+            },
+            quorum_devices,
             expected_policy,
         },
         challenge_id: challenge.challenge_id.as_str().to_owned(),

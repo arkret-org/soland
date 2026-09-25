@@ -145,8 +145,7 @@ impl crate::key_backup::PgKeyBackupStore {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn consume_unlock_entry(
         &self,
-        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
-        active_basis: Value,
+        basis: &soland_storage::KeyBackupUnlockBasis,
         id: &str,
         backup: Value,
         request_digest: &str,
@@ -164,19 +163,24 @@ impl crate::key_backup::PgKeyBackupStore {
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_,PgTransactionError,_>(async move |conn| {
-            validate_active_basis(conn,&active_basis).await?;
-            if let Some(selector)=device_gate { crate::ensure_gate_allowed_in_transaction(conn,selector).await?; }
+            let current_device = match basis {
+                soland_storage::KeyBackupUnlockBasis::CurrentDevice { basis, device_id } => {
+                    recheck_pointer_basis(conn, basis, std::slice::from_ref(device_id), Some(&backup)).await?;
+                    true
+                }
+                soland_storage::KeyBackupUnlockBasis::RecoverySession => false,
+            };
             // Shared lock order serializes account counters and each authority's byte budget.
             let account=arkret_canonical::canonical_json_string(&backup["actor_id"]["account_id"]).map_err(PersistenceError::database)?;
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("backup-unlock:{account}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;
             // Current-device authorities carry an explicit device gate. A recovery
             // authority must acquire the same policy lock as every policy publication.
-            if device_gate.is_none() { lock_recovery_policy_for_session(conn,&id,now).await?; }
+            if !current_device { lock_recovery_policy_for_session(conn,&id,now).await?; }
             let now=chrono::Utc::now();
             let authority=sql_query("SELECT account_id,kind,expires_at,remaining_bytes::text AS remaining,rate_per_minute FROM key_backup_unlock_authorities WHERE authority_id=$1 FOR UPDATE")
                 .bind::<Text,_>(&id).get_result::<AuthorityRow>(&mut *conn).await.map_err(PersistenceError::database)?;
             if authority.account_id!=account {return Err(rejected("unlock account mismatch").into());}
-            match (authority.kind.as_str(),device_gate.is_some()) {
+            match (authority.kind.as_str(),current_device) {
                 ("current_device",true)|("recovery_session",false)=>{},
                 _=>return Err(rejected("unlock authority and current gate mismatch").into()),
             }
@@ -428,6 +432,115 @@ pub(crate) async fn validate_active_basis(
     .present;
     if !present {
         return Err(rejected("backup authority commit is not current").into());
+    }
+    Ok(())
+}
+
+#[derive(QueryableByName)]
+struct GenerationRow {
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+/// Recheck, at this transaction's PCR cut, the confirmed pointer a request
+/// was authorized against (key-management.md §7.6): the `secret_storage`
+/// pointer must be unchanged, every named device must be active in the
+/// current generation at the same PCR head, and a released envelope must
+/// belong to the active series and, when it names a generation, to the
+/// current one. A later unrelated PCR Commit does not by itself stale it.
+pub(crate) async fn recheck_pointer_basis(
+    conn: &mut crate::AsyncPgConnection,
+    basis: &soland_storage::KeyBackupPointerBasis,
+    devices: &[arkret_wire::DeviceId],
+    released: Option<&Value>,
+) -> Result<(), PgTransactionError> {
+    use arkret_models_crypto::BackupActiveSeriesPointer;
+    use soland_storage::ConflictCode;
+
+    let refused = |code: ConflictCode, reason: &str| -> PgTransactionError {
+        PersistenceError::Conflict(format!("{code}: {reason}")).into()
+    };
+    let pointer = crate::key_backup_current_results::confirmed_key_backup_pointer_in_connection(
+        conn,
+        &basis.account_id,
+    )
+    .await?
+    .ok_or_else(|| {
+        refused(
+            ConflictCode::TemporarilyUnavailable,
+            "the confirmed KeyBackup pointer is absent",
+        )
+    })?;
+    if pointer.secret_storage != basis.secret_storage {
+        return Err(refused(
+            ConflictCode::BackupRevisionStale,
+            "the secret_storage pointer changed after authorization",
+        ));
+    }
+    let now = Utc::now();
+    for device in devices {
+        let cut = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+            conn,
+            &basis.account_id,
+            device,
+            now,
+        )
+        .await?
+        .ok_or_else(|| {
+            refused(
+                ConflictCode::DeviceUnauthorized,
+                "device has no confirmed PCR cut",
+            )
+        })?;
+        if cut.authority.authority_commit_id != pointer.authority_commit_id {
+            return Err(refused(
+                ConflictCode::TemporarilyUnavailable,
+                "device status and pointer were read at different PCR heads",
+            ));
+        }
+        if let Some(code) = cut.admission().error_code() {
+            return Err(refused(
+                ConflictCode::from_detail(code.as_str())
+                    .unwrap_or(ConflictCode::DeviceUnauthorized),
+                "device is not active in the current generation at the PCR cut",
+            ));
+        }
+    }
+    let Some(released) = released else {
+        return Ok(());
+    };
+    let BackupActiveSeriesPointer::Active {
+        active_series_id, ..
+    } = &pointer.secret_storage
+    else {
+        return Err(refused(
+            ConflictCode::BackupRevisionStale,
+            "no active series is selected",
+        ));
+    };
+    let envelope: arkret_models_crypto::KeyBackup = serde_json::from_value(released.clone())
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if &envelope.series_id != active_series_id {
+        return Err(refused(
+            ConflictCode::BackupRevisionStale,
+            "the envelope is outside the active series",
+        ));
+    }
+    if let Some(source) = &envelope.source_commit_ref {
+        let generation =
+            sql_query("SELECT value FROM pcr_device_generation_current_results WHERE realm_id=$1")
+                .bind::<Text, _>(pointer.control_realm_id.as_str())
+                .get_result::<GenerationRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?
+                .and_then(|row| row.value["current_device_generation_ref"].as_u64());
+        if generation != Some(source.device_generation_ref) {
+            return Err(refused(
+                ConflictCode::BackupRevisionStale,
+                "the envelope names a device generation that is not current",
+            ));
+        }
     }
     Ok(())
 }

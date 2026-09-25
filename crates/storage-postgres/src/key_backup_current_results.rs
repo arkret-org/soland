@@ -493,7 +493,7 @@ pub(crate) async fn confirmed_key_backup_pointer_for_active_device_in_connection
     Ok(Some(pointer))
 }
 
-async fn confirmed_key_backup_pointer_in_connection(
+pub(crate) async fn confirmed_key_backup_pointer_in_connection(
     conn: &mut AsyncPgConnection,
     account_id: &AccountId,
 ) -> PersistenceResult<Option<BackupActiveSeriesState>> {

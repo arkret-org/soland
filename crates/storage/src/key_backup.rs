@@ -73,11 +73,38 @@ pub struct KeyBackupDeleteChallengeRecord {
     pub consumed_at: Option<chrono::DateTime<Utc>>,
 }
 
+/// The confirmed `secret_storage` pointer a current-device unlock or a delete
+/// was authorized against (key-management.md §7.6). The consuming
+/// transaction rereads the pointer and every named device at its own PCR cut:
+/// a changed pointer or a device that is no longer active refuses, while a
+/// later unrelated PCR Commit does not by itself stale the request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyBackupPointerBasis {
+    pub account_id: arkret_wire::AccountId,
+    pub secret_storage: arkret_models_crypto::BackupActiveSeriesPointer,
+}
+
+/// The authority a backup unlock consumes, rechecked in the consuming
+/// transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeyBackupUnlockBasis {
+    /// An ordinary unlock by the requesting device: the pointer must be
+    /// unchanged, the device active, and the envelope in the active series
+    /// under the current generation.
+    CurrentDevice {
+        basis: KeyBackupPointerBasis,
+        device_id: arkret_wire::DeviceId,
+    },
+    /// A verified recovery session: the manifest frozen at verification is
+    /// the basis, and the session and its policy are rechecked.
+    RecoverySession,
+}
+
 /// Frozen authorization inputs rechecked inside the destructive transaction.
 #[derive(Clone, Debug)]
 pub struct KeyBackupDeleteGate {
-    pub active_basis: Value,
-    pub device_gates: Vec<crate::DeviceRevocationGateSelector>,
+    pub basis: KeyBackupPointerBasis,
+    pub quorum_devices: Vec<arkret_wire::DeviceId>,
     pub expected_policy: Option<Value>,
 }
 
@@ -139,8 +166,7 @@ pub trait KeyBackupStore: Send + Sync {
     async fn unlock_challenge(&self, authority_id: &str) -> PersistenceResult<Option<Value>>;
     async fn consume_unlock(
         &self,
-        device_gate: Option<&crate::DeviceRevocationGateSelector>,
-        active_basis: Value,
+        basis: &KeyBackupUnlockBasis,
         authority_id: &str,
         backup: Value,
         request_digest: &str,

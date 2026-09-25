@@ -1144,8 +1144,7 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
     }
     async fn consume_unlock(
         &self,
-        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
-        active_basis: Value,
+        basis: &soland_storage::KeyBackupUnlockBasis,
         authority_id: &str,
         backup: Value,
         request_digest: &str,
@@ -1158,8 +1157,7 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
             .0
             .key_backups()
             .consume_unlock(
-                device_gate,
-                active_basis,
+                basis,
                 authority_id,
                 backup,
                 request_digest,

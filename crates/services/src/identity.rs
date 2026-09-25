@@ -1873,7 +1873,9 @@ impl SecurityTransactionService {
         &self,
         write: RotationPointerSwitchWrite,
     ) -> ServiceResult<SecurityTransactionRecord> {
-        self.transactions.commit_rotation_pointer_switch(write).await
+        self.transactions
+            .commit_rotation_pointer_switch(write)
+            .await
     }
 
     pub async fn commit_rotation_local_commit(
@@ -2053,8 +2055,7 @@ pub trait KeyBackupPort: Send + Sync {
     async fn unlock_challenge(&self, authority_id: &str) -> ServiceResult<Option<Value>>;
     async fn consume_unlock(
         &self,
-        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
-        active_basis: Value,
+        basis: &soland_storage::KeyBackupUnlockBasis,
         authority_id: &str,
         backup: Value,
         request_digest: &str,
@@ -2312,8 +2313,7 @@ impl KeyBackupService {
     }
     pub async fn consume_unlock(
         &self,
-        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
-        active_basis: Value,
+        basis: &soland_storage::KeyBackupUnlockBasis,
         authority_id: &str,
         backup: Value,
         request_digest: &str,
@@ -2324,8 +2324,7 @@ impl KeyBackupService {
     ) -> ServiceResult<Value> {
         self.backups
             .consume_unlock(
-                device_gate,
-                active_basis,
+                basis,
                 authority_id,
                 backup,
                 request_digest,

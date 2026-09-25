@@ -454,22 +454,16 @@ pub(super) async fn unlock_key_backup(
     // signed by a revoked old device key; such envelopes MUST be rejected as
     // `untrusted_backup_signature` even when series chain / ciphertext_digest match.
     anchor_key_backup_auth_data_trust_root(state, &session.actor, &backup).await?;
-    let active_basis = unlock_active_basis(state, &body.proof.account_id, &backup).await?;
-    let device_gate = if matches!(
-        &body.proof.authority,
-        arkret_models_crypto::KeyBackupUnlockAuthority::CurrentDevice { .. }
-    ) {
-        Some(
-            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
-                state,
-                &session.actor,
-                &session.device_id,
-            )
-            .await
-            .map_err(|error| AppError::capability_denied(error.to_string()))?,
-        )
-    } else {
-        None
+    let basis = match &body.proof.authority {
+        arkret_models_crypto::KeyBackupUnlockAuthority::CurrentDevice { .. } => {
+            soland_storage::KeyBackupUnlockBasis::CurrentDevice {
+                basis: unlock_active_basis(state, &body.proof.account_id, &backup).await?,
+                device_id: body.proof.requesting_device_id.clone(),
+            }
+        }
+        arkret_models_crypto::KeyBackupUnlockAuthority::RecoverySession { .. } => {
+            soland_storage::KeyBackupUnlockBasis::RecoverySession
+        }
     };
     let authority_id = match &body.proof.authority {
         arkret_models_crypto::KeyBackupUnlockAuthority::CurrentDevice { challenge_id, .. } => {
@@ -482,8 +476,7 @@ pub(super) async fn unlock_key_backup(
     let backup = state
         .key_backups()
         .consume_unlock(
-            device_gate.as_ref(),
-            active_basis,
+            &basis,
             authority_id,
             backup,
             &request_digest,
@@ -497,13 +490,7 @@ pub(super) async fn unlock_key_backup(
                 .unwrap_or(64),
         )
         .await
-        .map_err(|error| {
-            if error.to_string().contains("rate_limited") {
-                crate::app_error!(RateLimited, "backup unlock rate limit")
-            } else {
-                AppError::conflict(error.to_string())
-            }
-        })?;
+        .map_err(unlock_consumption_error)?;
     let backup = serde_json::from_value(backup)
         .map_err(|error| AppError::internal(format!("stored key backup invalid: {error}")))?;
     json_ok(backup)
@@ -676,6 +663,36 @@ async fn record_delete_idempotency(
     };
     if let Err(error) = state.jobs().store_idempotency_record(record).await {
         tracing::warn!(%error, idempotency_key, "key backup delete idempotency persist failed");
+    }
+}
+
+/// Map a refusal of the consuming transaction onto the unlock operation's
+/// registered failures: a moved pointer, series or generation is
+/// `backup_revision_stale`, and a device that stopped being current keeps its
+/// device code.
+fn unlock_consumption_error(error: soland_services::ServiceError) -> AppError {
+    use soland_storage::ConflictCode;
+
+    match error.conflict_code() {
+        Some(ConflictCode::BackupRevisionStale) => {
+            super::unlock::backup_revision_stale(&error.to_string())
+        }
+        Some(
+            code @ (ConflictCode::DeviceRevoked
+            | ConflictCode::DeviceRevocationPending
+            | ConflictCode::DeviceGenerationFenced
+            | ConflictCode::DeviceUnauthorized),
+        ) => arkret_wire::ErrorCode::from_wire(code.as_str()).map_or_else(
+            || AppError::capability_denied(error.to_string()),
+            |registered| AppError::new(registered, error.to_string()),
+        ),
+        Some(ConflictCode::TemporarilyUnavailable) => {
+            crate::app_error!(TemporarilyUnavailable, error.to_string())
+        }
+        _ if error.to_string().contains("rate_limited") => {
+            crate::app_error!(RateLimited, "backup unlock rate limit")
+        }
+        _ => AppError::conflict(error.to_string()),
     }
 }
 

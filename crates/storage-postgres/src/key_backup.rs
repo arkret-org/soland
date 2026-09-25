@@ -298,8 +298,7 @@ impl KeyBackupStore for PgKeyBackupStore {
     }
     async fn consume_unlock(
         &self,
-        device_gate: Option<&soland_storage::DeviceRevocationGateSelector>,
-        active_basis: Value,
+        basis: &soland_storage::KeyBackupUnlockBasis,
         authority_id: &str,
         backup: Value,
         request_digest: &str,
@@ -309,8 +308,7 @@ impl KeyBackupStore for PgKeyBackupStore {
         daily_limit: u32,
     ) -> PersistenceResult<Value> {
         self.consume_unlock_entry(
-            device_gate,
-            active_basis,
+            basis,
             authority_id,
             backup,
             request_digest,
@@ -476,11 +474,10 @@ impl KeyBackupStore for PgKeyBackupStore {
             .map_err(PersistenceError::database)?;
         use diesel_async::AsyncConnection;
         conn.transaction::<_,super::PgTransactionError,_>(async move |conn| {
-            super::key_backup_unlock::validate_active_basis(conn,&gate.active_basis).await?;
-            for selector in &gate.device_gates { crate::ensure_gate_allowed_in_transaction(conn,selector).await?; }
+            super::key_backup_unlock::recheck_pointer_basis(conn,&gate.basis,&gate.quorum_devices,None).await?;
             if recovery_session_id.is_none() {
                 let expected=gate.expected_policy.as_ref().ok_or_else(||PersistenceError::Conflict("device quorum policy gate required".into()))?;
-                if gate.device_gates.is_empty() {return Err(PersistenceError::Conflict("device quorum current gates required".into()).into());}
+                if gate.quorum_devices.is_empty() {return Err(PersistenceError::Conflict("device quorum current gates required".into()).into());}
                 let account=&backup["actor_id"]["account_id"];
                 let canonical=arkret_canonical::canonical_json_string(account).map_err(PersistenceError::database)?;
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("recovery-policy:{canonical}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;

@@ -185,6 +185,9 @@ pub enum ConflictCode {
     ApprovalNonceReused,
     /// The applet was revoked between admission and commit.
     AppletRevoked,
+    /// A KeyBackup request's pointer, series or device generation is no
+    /// longer current (key-management.md §7.6).
+    BackupRevisionStale,
     /// `actor_seq` is older than the accepted actor frontier.
     CasConflict,
     /// An exact source needed for a current reducer result is unavailable.
@@ -270,6 +273,7 @@ impl ConflictCode {
     pub const ALL: [Self; 38] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
+        Self::BackupRevisionStale,
         Self::CasConflict,
         Self::DependencyMissing,
         Self::DevicePairingNotFound,
@@ -313,6 +317,7 @@ impl ConflictCode {
         match self {
             Self::ApprovalNonceReused => arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
             Self::AppletRevoked => "applet_revoked",
+            Self::BackupRevisionStale => arkret_wire::ReasonCode::BACKUP_REVISION_STALE,
             Self::CasConflict => "cas_conflict",
             Self::DependencyMissing => "dependency_missing",
             Self::DevicePairingNotFound => "device_pairing_not_found",
