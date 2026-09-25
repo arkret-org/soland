@@ -826,12 +826,33 @@ pub enum AcceptedDeviceAuthorizationOutcome {
     Duplicate(arkret_wire::RealmCommit),
 }
 
+/// How a member Station holds one verified committed replica on a Realm
+/// stream it does not govern (`federation.md` §4.1.1).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommittedReplicaRole {
+    /// A hosted member's own verified join (its `ak.member.state{join}` or
+    /// its directed `ak.invite.accept`) on a stream this Station does not hold
+    /// yet: it opens the held stream, which stays pending anchor until the
+    /// governing Station's bootstrap snapshot is installed.
+    OpeningJoin {
+        member_account_id: arkret_wire::AccountId,
+    },
+    /// A direct successor of the held head of an anchored stream. At or
+    /// below the installed bootstrap snapshot head it is held for continuity
+    /// and as canonical bytes only, its effect already being in the installed
+    /// typed current; after it, the hosted-member basis and the Event's
+    /// visibility are re-verified against local typed current, which the
+    /// Event then advances.
+    HeldStream,
+}
+
 /// One committed Event a non-governance member Station stores as an exact
 /// source replica (`federation.md` §3, §4.1.1).
 ///
 /// The serving layer has already verified the producer proof, the source
 /// RealmCommit under `authority` and the Event/Commit binding. The store
-/// re-proves continuity and the hosted-member basis under its own locks.
+/// re-proves continuity, the anchor state and, for a successor, the
+/// hosted-member basis and visibility under its own locks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommittedReplica {
     /// This Station's own service id; a replica never names it as governance.
@@ -840,10 +861,18 @@ pub struct CommittedReplica {
     pub authority: CurrentRealmAuthority,
     pub event: arkret_wire::Event,
     pub commit: arkret_wire::RealmCommit,
-    /// The item is a hosted member's own verified `join`, which may open this
-    /// Station's held Realm stream at its position (the bootstrap exception).
-    pub opens_stream: bool,
+    pub role: CommittedReplicaRole,
     pub received_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// One verified RealmCommit whose Event the peer scan withheld, kept by a
+/// member Station as a continuity-only chain node (`federation.md` §4.1.1).
+/// It never enters the canonical Event store, a reducer, dedupe or digest.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedChainNode {
+    pub local_service_id: arkret_wire::DidCoreId,
+    pub authority: CurrentRealmAuthority,
+    pub commit: arkret_wire::RealmCommit,
 }
 
 /// Result of storing one committed replica.
@@ -851,6 +880,28 @@ pub struct CommittedReplica {
 pub enum CommittedReplicaOutcome {
     Stored,
     Duplicate,
+}
+
+/// The Realm stream a member Station holds as a replica, opened by a hosted
+/// member's own join (`federation.md` §4.1.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplicaStreamAnchor {
+    pub realm_id: arkret_wire::RealmId,
+    pub join_commit: arkret_wire::RealmCommit,
+    pub member_account_id: arkret_wire::AccountId,
+    /// The installed bootstrap snapshot head; `None` while pending anchor.
+    pub anchored_head: Option<CommitStreamHead>,
+}
+
+/// A verified bootstrap snapshot a member Station installs as the typed
+/// current of its pending replica stream (`federation.md` §4.1.1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplicaAnchorInstall {
+    pub realm_id: arkret_wire::RealmId,
+    pub join_commit_id: arkret_wire::RealmCommitId,
+    /// The snapshot's head on the Realm stream, at or after the join.
+    pub snapshot_head: CommitStreamHead,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
 }
 
 #[async_trait]
@@ -884,11 +935,46 @@ pub trait AuthorityCommitStore: Send + Sync {
     ) -> PersistenceResult<bool>;
 
     /// Store one verified committed replica with its held-stream continuity,
-    /// hosted-member basis and derived membership in one transaction.
+    /// anchor state, hosted-member basis and projected typed current in one
+    /// transaction.
     async fn install_committed_replica(
         &self,
         replica: &CommittedReplica,
     ) -> PersistenceResult<CommittedReplicaOutcome>;
+
+    /// Store one verified withheld RealmCommit as a continuity-only chain node
+    /// that directly follows the anchored held head.
+    async fn install_committed_chain_node(
+        &self,
+        node: &CommittedChainNode,
+    ) -> PersistenceResult<CommittedReplicaOutcome>;
+
+    /// The replica anchor of `realm_id`'s Realm stream on this member Station.
+    async fn replica_stream_anchor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<ReplicaStreamAnchor>>;
+
+    /// Every Realm whose replica stream is still pending anchor.
+    async fn pending_replica_stream_anchors(&self) -> PersistenceResult<Vec<arkret_wire::RealmId>>;
+
+    /// Atomically install a verified bootstrap snapshot as the typed current
+    /// of a pending replica stream and mark it anchored at the snapshot head.
+    async fn install_replica_anchor(&self, install: &ReplicaAnchorInstall)
+    -> PersistenceResult<()>;
+
+    /// The Commit this Station holds at the head of `stream_ref`, whether a
+    /// full replica or a chain node.
+    async fn held_stream_head_commit(
+        &self,
+        stream_ref: &CommitStreamRef,
+    ) -> PersistenceResult<Option<arkret_wire::RealmCommit>>;
+
+    /// The withheld chain node this member Station holds for `event_id`.
+    async fn committed_chain_node(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<arkret_wire::RealmCommit>>;
 
     async fn current_authority(
         &self,
@@ -1082,6 +1168,17 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
         account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
+
+    /// The bootstrap snapshot material a member Station anchors on
+    /// (`federation.md` §4.1.1): `account`'s complete disclosure with the
+    /// Realm stream floor at its join `membership_commit_id`, or `None`
+    /// unless that Commit is still its current joined membership.
+    async fn member_station_bootstrap_material(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        membership_commit_id: &arkret_wire::RealmCommitId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
 
     /// Issue one complete signed Snapshot to `account` from a single durable

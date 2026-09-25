@@ -1067,6 +1067,60 @@ impl AuthorityCommitApplication {
         Ok(self.store().install_committed_replica(replica).await?)
     }
 
+    /// Store one verified withheld Commit as a continuity-only chain node.
+    pub async fn install_committed_chain_node(
+        &self,
+        node: &soland_storage::CommittedChainNode,
+    ) -> ServiceResult<soland_storage::CommittedReplicaOutcome> {
+        Ok(self.store().install_committed_chain_node(node).await?)
+    }
+
+    pub async fn replica_stream_anchor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<Option<soland_storage::ReplicaStreamAnchor>> {
+        Ok(self.store().replica_stream_anchor(realm_id).await?)
+    }
+
+    pub async fn pending_replica_stream_anchors(&self) -> ServiceResult<Vec<arkret_wire::RealmId>> {
+        Ok(self.store().pending_replica_stream_anchors().await?)
+    }
+
+    /// Install a verified bootstrap snapshot as a pending replica stream's
+    /// typed current (`federation.md` §4.1.1).
+    pub async fn install_replica_anchor(
+        &self,
+        install: &soland_storage::ReplicaAnchorInstall,
+    ) -> ServiceResult<()> {
+        Ok(self.store().install_replica_anchor(install).await?)
+    }
+
+    pub async fn held_stream_head_commit(
+        &self,
+        stream_ref: &CommitStreamRef,
+    ) -> ServiceResult<Option<arkret_wire::RealmCommit>> {
+        Ok(self.store().held_stream_head_commit(stream_ref).await?)
+    }
+
+    pub async fn committed_chain_node(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> ServiceResult<Option<arkret_wire::RealmCommit>> {
+        Ok(self.store().committed_chain_node(event_id).await?)
+    }
+
+    pub async fn member_station_bootstrap_material(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        membership_commit_id: &RealmCommitId,
+    ) -> ServiceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+        Ok(self
+            .store()
+            .member_station_bootstrap_material(realm_id, account, membership_commit_id)
+            .await?)
+    }
+
     pub async fn stream_head(
         &self,
         stream_ref: &CommitStreamRef,

@@ -435,6 +435,68 @@ pub(crate) async fn submit_authority_forward(
     Err(format!("authority_forward response lost: {last_error}"))
 }
 
+/// Send one signed synchronous peer request (a peer read such as
+/// `ak.peer.realm_join.read.bootstrap.v1` or `ak.peer.committed_event.read.scan.v1`)
+/// to `peer_id` and return its bounded answer. Nothing is queued or retried.
+pub(crate) async fn signed_peer_request(
+    state: &AppState,
+    peer_id: &str,
+    path: &str,
+    body: &[u8],
+    max_response_bytes: usize,
+) -> Result<PeerSubmitResponse, String> {
+    let peer_target = super::resolved_peer_target(state, peer_id, "station", false).await?;
+    let target = format!("{}{path}", peer_target.base_url);
+    let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        &target,
+        "peer read",
+        state.config().development_mode,
+        REQUEST_TIMEOUT,
+    )?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    insert_header_if_valid(
+        &mut headers,
+        "content-digest",
+        &content_digest_header_value(body),
+    );
+    insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
+    insert_header_if_valid(&mut headers, "destination-service-id", peer_id);
+    insert_header_if_valid(
+        &mut headers,
+        "source-trust-domain",
+        state.config().trust_domain.as_str(),
+    );
+    insert_header_if_valid(
+        &mut headers,
+        "destination-trust-domain",
+        &peer_target.trust_domain,
+    );
+    let headers = rfc9421_sign(state, headers, "POST", &target);
+    let mut response = client
+        .post(parsed_url)
+        .headers(headers)
+        .body(body.to_vec())
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if bytes.len() + chunk.len() > max_response_bytes {
+            return Err("peer answer exceeds the operation limit".to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(PeerSubmitResponse {
+        status,
+        body: bytes,
+    })
+}
+
 fn authority_from_target_url(target_url: &str) -> String {
     let Ok(url) = reqwest::Url::parse(target_url) else {
         return String::new();

@@ -4,14 +4,12 @@ use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use soland_storage::{PersistenceError, PersistenceResult};
 
-pub(crate) async fn commit_strand_create_current_result_in_connection(
-    conn: &mut AsyncPgConnection,
+/// The registered `strand` current value an accepted `ak.strand.create`
+/// derives: the authored initial object with its Event-derived id and the
+/// `active` state. Every Station that projects the Event derives it here.
+pub(crate) fn strand_create_current_value(
     event: &arkret_wire::Event,
-    commit: &arkret_wire::RealmCommit,
-) -> PersistenceResult<()> {
-    if event.kind != arkret_wire::EventKind::StrandCreate {
-        return Ok(());
-    }
+) -> PersistenceResult<(arkret_wire::StrandId, serde_json::Value)> {
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     let payload: arkret_models_collaboration::events_payloads::StrandCreatePayload =
@@ -50,6 +48,18 @@ pub(crate) async fn commit_strand_create_current_result_in_connection(
         serde_json::to_value(&strand_id).map_err(PersistenceError::database)?,
     );
     value_object.insert("state".to_owned(), serde_json::json!("active"));
+    Ok((strand_id, value))
+}
+
+pub(crate) async fn commit_strand_create_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::StrandCreate {
+        return Ok(());
+    }
+    let (strand_id, value) = strand_create_current_value(event)?;
     let stream_position = i64::try_from(commit.stream_position).map_err(|_| {
         PersistenceError::SchemaViolation("Strand stream position exceeds BIGINT".to_owned())
     })?;

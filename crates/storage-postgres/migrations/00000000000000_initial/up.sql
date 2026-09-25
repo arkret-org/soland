@@ -895,7 +895,11 @@ CREATE TABLE public.realm_authorities (
 
 -- One chain per serialized CommitStreamRef. Realm, Circle and Sidecar
 -- positions are intentionally incomparable: there is no global chain and no
--- global position.
+-- global position. A member Station keeps a Commit whose Event a hosted
+-- member may not hold in full as a continuity-only chain node: its `event_pk`
+-- is NULL, it advances the held head and anchors `previous_commit_ref`, and
+-- no canonical Event, reducer, dedupe or digest ever reads it
+-- (`federation.md` section 4.1.1, withheld chain nodes).
 CREATE TABLE public.realm_commits (
     commit_id text PRIMARY KEY,
     realm_id text NOT NULL,
@@ -903,7 +907,7 @@ CREATE TABLE public.realm_commits (
     stream_ref jsonb NOT NULL,
     stream_position bigint NOT NULL CHECK (stream_position >= 0),
     previous_commit_ref text,
-    event_pk bigint NOT NULL UNIQUE REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    event_pk bigint UNIQUE REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     governance_generation bigint NOT NULL CHECK (governance_generation >= 0),
     commit_json jsonb NOT NULL,
     committed_at timestamptz NOT NULL,
@@ -916,6 +920,8 @@ CREATE TABLE public.realm_commits (
 
 CREATE INDEX realm_commits_realm_stream_tail_idx
     ON public.realm_commits (realm_id, stream_key, stream_position DESC);
+CREATE INDEX realm_commits_chain_node_event_ref_idx
+    ON public.realm_commits ((commit_json->>'event_ref')) WHERE event_pk IS NULL;
 
 -- Every Event kind a Realm has committed, maintained with each RealmCommit.
 -- A signed cut audits these kinds instead of re-reading the Realm history.
@@ -940,6 +946,27 @@ $$;
 CREATE TRIGGER realm_commits_record_event_kind
 AFTER INSERT ON public.realm_commits
 FOR EACH ROW EXECUTE FUNCTION public.record_realm_commit_event_kind();
+
+-- The Realm stream a member Station holds as the replica of a Realm another
+-- Station governs (`federation.md` section 4.1.1, member Station bootstrap).
+-- A hosted member's own join opened it; until the governing Station's
+-- bootstrap snapshot is verified and its typed current installed, the
+-- stream is pending anchor (`anchor_commit_id` is NULL): local reads are
+-- temporarily unavailable and later replicas are `dependency_missing`.
+CREATE TABLE public.replica_stream_anchors (
+    stream_key text PRIMARY KEY,
+    realm_id text NOT NULL UNIQUE,
+    join_commit_id text NOT NULL UNIQUE REFERENCES public.realm_commits(commit_id),
+    member_account_id jsonb NOT NULL,
+    anchor_commit_id text,
+    anchor_stream_position bigint CHECK (anchor_stream_position >= 0),
+    anchored_at timestamptz,
+    CONSTRAINT replica_stream_anchors_anchor_shape CHECK (
+        (anchor_commit_id IS NULL AND anchor_stream_position IS NULL AND anchored_at IS NULL)
+        OR (anchor_commit_id IS NOT NULL AND anchor_stream_position IS NOT NULL
+            AND anchored_at IS NOT NULL)
+    )
+);
 
 -- Planned old/new double-signed handoffs only. Consecutive generations are a
 -- CHECK, so a gap cannot be introduced by an unplanned election.

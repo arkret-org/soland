@@ -275,6 +275,9 @@ async fn run() -> anyhow::Result<()> {
     // the `federation_outbox` table populated by
     // `routing::federation::broadcast_*_to_peers`.
     let _federation_dispatcher = soland_http::routing::federation::outbox::spawn(state.clone());
+    // Member Station replica anchors a restart or an unreachable governing
+    // Station left pending (`federation.md` section 4.1.1).
+    let _replica_anchor_sweeper = soland_http::state::spawn_pending_anchor_sweeper(state.clone());
     tracing::info!(
         worker = "federation_outbox",
         enabled = state.config().federation_outbound_enabled,

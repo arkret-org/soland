@@ -7,8 +7,12 @@
 //! from the authenticated source Station, and the Commit must directly follow
 //! the stream this Station holds. A human device of an Account this Station
 //! hosts is still verified against local PCR. The only way to open a held
-//! Realm stream is the verified `join` of a member this Station hosts.
-//! Nothing is admitted, re-signed or fanned out again.
+//! Realm stream is the verified join of a member this Station hosts, which
+//! leaves it pending anchor: this Station then anchors it on the governing
+//! Station's bootstrap snapshot, and fills any gap in front of a replica
+//! that arrived before its predecessors, through the peer reads
+//! ([`super::replica_anchor`]). Nothing is admitted, re-signed or fanned out
+//! again.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +27,9 @@ use arkret_wire::{CommitStreamRef, ErrorCode, RealmId};
 use soland_services::authority_commit::AuthenticatedPeerContext;
 use soland_services::committed_receipt::{CommitContinuity, verify_committed_event_receipt};
 use soland_services::{ServiceError, ServiceResult};
-use soland_storage::{CommittedReplica, CommittedReplicaOutcome, ConflictCode};
+use soland_storage::{
+    CommittedReplica, CommittedReplicaOutcome, CommittedReplicaRole, ConflictCode,
+};
 
 use super::AppState;
 use crate::routing::realm_join::LocatedRealmAuthority;
@@ -62,38 +68,47 @@ fn rejection_reason(error: ServiceError) -> ServiceResult<String> {
     }
 }
 
-/// Whether the item is the verified `join` of a member this Station hosts,
-/// the one Event that may open its held Realm stream: the member's own
-/// `ak.member.state{join}` or the directed invitee's `ak.invite.accept`, which
-/// is that invitee's join (`governance-objects.md` §5.3).
-fn hosted_member_join(state: &AppState, item: &CommittedEventSubmission) -> bool {
+/// The hosted member whose verified join the item is, the one Event that may
+/// open its held Realm stream: the member's own `ak.member.state{join}` or
+/// the directed invitee's `ak.invite.accept`, which is that invitee's join
+/// (`governance-objects.md` §5.3).
+fn hosted_member_join(
+    state: &AppState,
+    item: &CommittedEventSubmission,
+) -> Option<arkret_wire::AccountId> {
     let event = &item.event_submission.event;
     if item.source_commit.stream_ref
         != (CommitStreamRef::Realm {
             realm_id: event.realm_id.clone(),
         })
     {
-        return false;
+        return None;
     }
-    match event.kind {
+    let member = match event.kind {
         arkret_wire::EventKind::MemberState => {
-            let Ok(payload) = serde_json::to_value(&event.payload)
+            let payload = serde_json::to_value(&event.payload)
                 .and_then(serde_json::from_value::<MembershipPayload>)
-            else {
-                return false;
-            };
-            payload.membership == MembershipPayloadState::Join
-                && payload.member_id.route_service_id() == &state.service_core_id()
-                && payload
+                .ok()?;
+            if payload.membership != MembershipPayloadState::Join
+                || payload
                     .realm_id
                     .as_ref()
-                    .is_none_or(|realm_id| realm_id == &event.realm_id)
+                    .is_some_and(|realm_id| realm_id != &event.realm_id)
+            {
+                return None;
+            }
+            payload.member_id
         }
-        arkret_wire::EventKind::InviteAccept => {
-            matches!(event.actor_id, arkret_wire::ActorId::Account { .. })
-                && event.actor_id.route_service_id() == &state.service_core_id()
+        arkret_wire::EventKind::InviteAccept => event.actor_id.clone(),
+        _ => return None,
+    };
+    match member {
+        arkret_wire::ActorId::Account { account_id }
+            if account_id.station_id == state.service_core_id() =>
+        {
+            Some(account_id)
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -164,26 +179,23 @@ async fn replicate_one(
         .await
         .map_err(|error| temporarily_unavailable(format!("RealmCommit signing key: {error}")))?;
     }
-    let opens_stream = hosted_member_join(state, item);
-    let held = match state
+    let held = state
         .authority_commits()
-        .stream_head(&commit.stream_ref)
-        .await?
-    {
-        Some(head) => Some(
-            state
-                .authority_commits()
-                .committed_event_by_commit_id(&head.commit_id)
-                .await?
-                .ok_or_else(|| ServiceError::internal("held stream head has no Commit"))?
-                .commit,
+        .held_stream_head_commit(&commit.stream_ref)
+        .await?;
+    let (continuity, role) = match (&held, hosted_member_join(state, item)) {
+        (Some(head), _) => (
+            CommitContinuity::After(head),
+            CommittedReplicaRole::HeldStream,
         ),
-        None => None,
-    };
-    let continuity = match (&held, opens_stream) {
-        (Some(head), _) => CommitContinuity::After(head),
-        (None, true) => CommitContinuity::Standalone,
-        (None, false) => CommitContinuity::StreamStart,
+        (None, Some(member_account_id)) => (
+            CommitContinuity::Standalone,
+            CommittedReplicaRole::OpeningJoin { member_account_id },
+        ),
+        (None, None) => (
+            CommitContinuity::StreamStart,
+            CommittedReplicaRole::HeldStream,
+        ),
     };
     verify_committed_event_receipt(
         state.persistence(),
@@ -205,7 +217,7 @@ async fn replicate_one(
             authority: located.current_authority(),
             event: event.clone(),
             commit: commit.clone(),
-            opens_stream: opens_stream && held.is_none(),
+            role,
             received_at: crate::wire::now(),
         })
         .await
@@ -219,17 +231,35 @@ pub(super) async fn receive(
 ) -> ServiceResult<PeerCommittedReplicationOutcome> {
     let mut authorities = BTreeMap::new();
     let mut replication_outcomes = Vec::with_capacity(request.replications.len());
+    let mut converge = std::collections::BTreeSet::new();
     for item in &request.replications {
+        let realm_id = &item.event_submission.event.realm_id;
         let record = match replicate_one(state, peer, &mut authorities, item).await {
-            Ok(CommittedReplicaOutcome::Stored) => PeerCommittedReplicationOutcomeRecord::Stored {},
+            Ok(CommittedReplicaOutcome::Stored) => {
+                // A stored join that opened the stream leaves it pending
+                // anchor; anchoring it is this Station's next step.
+                if hosted_member_join(state, item).is_some() {
+                    converge.insert(realm_id.clone());
+                }
+                PeerCommittedReplicationOutcomeRecord::Stored {}
+            }
             Ok(CommittedReplicaOutcome::Duplicate) => {
                 PeerCommittedReplicationOutcomeRecord::Duplicate {}
             }
-            Err(error) => PeerCommittedReplicationOutcomeRecord::Rejected {
-                reason_code: rejection_reason(error)?,
-            },
+            Err(error) => {
+                let reason_code = rejection_reason(error)?;
+                // A pending anchor or a gap in front of the item: pull the
+                // missing prefix so the sender's retry can be stored.
+                if reason_code == ConflictCode::DependencyMissing.as_str() {
+                    converge.insert(realm_id.clone());
+                }
+                PeerCommittedReplicationOutcomeRecord::Rejected { reason_code }
+            }
         };
         replication_outcomes.push(record);
+    }
+    for realm_id in converge {
+        super::replica_anchor::spawn_converge(state, realm_id);
     }
     Ok(PeerCommittedReplicationOutcome {
         branch: CommittedReplicationBranch::CommittedReplication,

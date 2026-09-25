@@ -249,6 +249,72 @@ pub async fn issue_account_snapshot(
     .map_err(crate::issued_realm_snapshots::snapshot_transaction_error)
 }
 
+#[derive(QueryableByName)]
+struct JoinPositionRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    current_stream_position: i64,
+}
+
+/// Material for `ak.peer.realm_join.read.bootstrap.v1` (`federation.md`
+/// §4.1.1, member Station bootstrap): the member Account's complete
+/// disclosure at one cut, with the Realm stream floor at the member's own
+/// join Commit -- the prefix evidence the member Station anchors its held
+/// stream on. `None` unless `membership_commit_id` is still the member's
+/// current joined membership.
+pub async fn member_station_bootstrap_material(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &AccountId,
+    membership_commit_id: &arkret_wire::RealmCommitId,
+) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let Some(join) = sql_query(
+            "SELECT current_stream_position FROM member_state_current_results \
+             WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(ActorId::account(account.clone()).to_string())
+        .bind::<Text, _>(membership_commit_id.as_str())
+        .get_result::<JoinPositionRow>(&mut *conn)
+        .await
+        .optional()?
+        else {
+            return Ok(None);
+        };
+        let Some(mut material) =
+            account_snapshot_material_in_connection(conn, realm_id, account).await?
+        else {
+            return Ok(None);
+        };
+        let join_position = u64::try_from(join.current_stream_position).map_err(|_| {
+            PersistenceError::Internal("stored join position is negative".to_owned())
+        })?;
+        material.current_state_entries.retain(|row| {
+            !matches!(
+                row,
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::MessageRevision { .. },
+                    revision,
+                    ..
+                } if revision.stream_position < join_position
+            )
+        });
+        material.retention_and_history_floor.stream_floors = vec![StreamHistoryFloor {
+            stream_ref: CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            oldest_position: join_position,
+        }];
+        Ok(Some(material))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
 /// The Account's disclosed material on the caller's cut.
 pub(crate) async fn account_snapshot_material_in_connection(
     conn: &mut AsyncPgConnection,

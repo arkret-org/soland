@@ -19,9 +19,10 @@ use ordinary_realm::{
     next_request_for_actor,
 };
 use soland_storage::{
-    AuthorityCommitStore, AuthorityCommitTransaction, CommittedReplica, CommittedReplicaOutcome,
-    ConflictCode, CurrentRealmAuthority, EventCommitRequest, EventCommitUnitOfWork,
-    OrdinaryRealmBootstrapCommitUnit, RealmFanoutAuthorityWitness,
+    AuthorityCommitStore, AuthorityCommitTransaction, CommittedChainNode, CommittedReplica,
+    CommittedReplicaOutcome, CommittedReplicaRole, ConflictCode, CurrentRealmAuthority,
+    EventCommitRequest, EventCommitUnitOfWork, OrdinaryRealmBootstrapCommitUnit,
+    RealmFanoutAuthorityWitness, ReplicaAnchorInstall,
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
@@ -872,18 +873,75 @@ fn governance_authority(unit: &OrdinaryRealmBootstrapCommitUnit) -> CurrentRealm
     unit.transactions[0].expected_authority.clone()
 }
 
+/// A replica as the member Station receives it: `opens_stream` marks the
+/// hosted member's own join on a stream this Station does not hold yet.
 fn replica(
     unit: &OrdinaryRealmBootstrapCommitUnit,
     request: &EventCommitRequest,
     opens_stream: bool,
 ) -> CommittedReplica {
+    let event = &request.authority_commit.event;
+    let role = if opens_stream {
+        let member = match event.kind {
+            arkret_wire::EventKind::InviteAccept => event.actor_id.clone(),
+            _ => serde_json::from_value(event.payload["member_id"].clone()).unwrap(),
+        };
+        CommittedReplicaRole::OpeningJoin {
+            member_account_id: member.as_account_id().unwrap().clone(),
+        }
+    } else {
+        CommittedReplicaRole::HeldStream
+    };
     CommittedReplica {
         local_service_id: member_station(),
         authority: governance_authority(unit),
-        event: request.authority_commit.event.clone(),
+        event: event.clone(),
         commit: request.authority_commit.commit.clone(),
-        opens_stream,
+        role,
         received_at: request.authority_commit.commit.committed_at,
+    }
+}
+
+/// Anchor the member Station's pending stream at the join itself with the
+/// given typed current, as a verified bootstrap snapshot whose head is the
+/// join would.
+async fn anchor_at_join(
+    store: &PgAuthorityCommitStore,
+    join: &EventCommitRequest,
+    entries: Vec<arkret_wire::TypedCurrentResult>,
+) {
+    let commit = &join.authority_commit.commit;
+    store
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: commit.realm_id.clone(),
+            join_commit_id: commit.commit_id.clone(),
+            snapshot_head: arkret_wire::CommitStreamHead {
+                stream_ref: commit.stream_ref.clone(),
+                stream_position: commit.stream_position,
+                commit_id: commit.commit_id.clone(),
+            },
+            current_state_entries: entries,
+        })
+        .await
+        .unwrap();
+}
+
+/// The member-state row a bootstrap snapshot carries for `member`'s join.
+fn joined_row(
+    join: &EventCommitRequest,
+    member: &arkret_wire::ActorId,
+) -> arkret_wire::TypedCurrentResult {
+    let commit = &join.authority_commit.commit;
+    arkret_wire::TypedCurrentResult::Value {
+        selector: arkret_wire::CurrentSelector::MemberState {
+            actor_id: member.clone(),
+        },
+        source_stream_ref: commit.stream_ref.clone(),
+        revision: arkret_wire::CurrentRevision {
+            commit_id: commit.commit_id.clone(),
+            stream_position: commit.stream_position,
+        },
+        value: serde_json::json!({"membership":"join"}),
     }
 }
 
@@ -951,6 +1009,23 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         serde_json::json!({"name":"Replicated"}),
         last.commit.committed_at,
     ));
+    // The join left the stream pending its bootstrap anchor: nothing after it
+    // is stored until the snapshot is installed.
+    let pending = store
+        .replica_stream_anchor(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.join_commit, join.authority_commit.commit);
+    assert_eq!(pending.anchored_head, None);
+    assert_code(
+        &store
+            .install_committed_replica(&replica(&unit, &next, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    anchor_at_join(&store, &join, vec![joined_row(&join, &alice)]).await;
     // A different Commit at the held position is a fork, not a successor.
     let mut fork = next.clone();
     fork.authority_commit.commit.stream_position = join.authority_commit.commit.stream_position;
@@ -1070,6 +1145,7 @@ async fn committed_replication_opens_the_stream_with_a_hosted_invite_accept() {
         Some((Some("join".to_owned()), true))
     );
 
+    anchor_at_join(&store, &accept, vec![joined_row(&accept, &bob)]).await;
     let leave = membership_request(&accept.authority_commit, bob.clone(), &bob, "leave");
     assert_eq!(
         store
@@ -1248,6 +1324,7 @@ async fn committed_replication_rejects_broken_predecessor_and_no_local_member() 
         .install_committed_replica(&replica(&unit, &join, true))
         .await
         .unwrap();
+    anchor_at_join(&store, &join, vec![joined_row(&join, &alice)]).await;
     let next = profile(&join.authority_commit, "Next");
     let after = profile(&next.authority_commit, "After");
     assert_code(
@@ -2122,5 +2199,483 @@ async fn account_window_starts_joined_member_at_its_join_commit() {
     assert_eq!(
         at_head.retention_and_history_floor.stream_floors[0].oldest_position,
         join_position
+    );
+}
+
+fn local_member(label: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{label}.example")).unwrap(),
+        arkret_wire::DidCoreId::new(STATION).unwrap(),
+    ))
+}
+
+async fn peer_page(
+    store: &PgAuthorityCommitStore,
+    request: arkret_wire::StreamScanRequest,
+    peer: &arkret_wire::DidCoreId,
+) -> soland_storage::AccountStreamScan {
+    store
+        .scan_stream_for_peer(
+            &request,
+            peer,
+            &arkret_wire::DidCoreId::new(STATION).unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn summary_title(
+    pool: &PgPool,
+    realm_id: &arkret_wire::RealmId,
+    member: &arkret_wire::ActorId,
+) -> Option<String> {
+    #[derive(diesel::QueryableByName)]
+    struct TitleRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+        title: Option<String>,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT title FROM account_summary_current WHERE realm_id=$1 AND actor_key=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .load::<TitleRow>(&mut *conn)
+    .await
+    .unwrap()
+    .pop()
+    .and_then(|row| row.title)
+}
+
+/// A governing Station's peer scan serves a member Station its replication
+/// right: from its hosted member's join floor while that member is joined,
+/// and through the member's own leave once it left -- never past it -- with a
+/// restricted plaintext Message kept to its Commit (`federation.md` §4.1.1).
+#[tokio::test]
+async fn peer_scan_serves_joined_and_departed_member_intervals() {
+    use arkret_wire::StreamScanDirection::{After, Before};
+    use soland_storage::AccountStreamScan;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = admit(&pool, "peer-scan-intervals", "public").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let last = unit.transactions.last().unwrap();
+    let alice = remote_member("peer-scan-alice");
+    let carol = local_member("peer-scan-carol");
+    let elsewhere = arkret_wire::DidCoreId::new("ak:did_core:web:elsewhere.example").unwrap();
+    let at = last.commit.committed_at;
+
+    assert_eq!(
+        peer_page(
+            &store,
+            scan_request(&realm_id, After(None), 10),
+            &member_station()
+        )
+        .await,
+        AccountStreamScan::NotAuthorized
+    );
+    let join = membership_request(last, alice.clone(), &alice, "join");
+    uow.commit_event(join.clone()).await.unwrap();
+    let strand = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::StrandCreate,
+        &founder(),
+        serde_json::json!({"object": {
+            "schema":"ak.schema.strand.v1",
+            "realm_id":realm_id,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Peer scan discussion"},
+            "state":"active",
+            "created_by":founder_actor(),
+            "created_at":at,
+        }}),
+        at,
+    ));
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = sourced(next_request(
+        &strand.authority_commit,
+        arkret_wire::EventKind::RealmSetDefaultStrand,
+        &founder(),
+        serde_json::json!({
+            "realm_id": realm_id,
+            "strand_id": strand_id,
+            "expected_default_strand_id": null,
+        }),
+        at,
+    ));
+    uow.commit_event(default.clone()).await.unwrap();
+    let message = sourced(next_request(
+        &default.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        &founder(),
+        message_payload(&strand_id, "plaintext kept on the governing Station"),
+        at,
+    ));
+    uow.commit_event(message.clone()).await.unwrap();
+    let join_position = join.authority_commit.commit.stream_position;
+
+    // Under `since_join` the right starts at Alice's join; the restricted
+    // plaintext Message is served as its Commit alone.
+    let AccountStreamScan::Page(joined) = peer_page(
+        &store,
+        scan_request(&realm_id, After(None), 10),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("a hosting peer is served its interval");
+    };
+    let floor = joined.readable_floor.clone().unwrap();
+    assert_eq!(floor.oldest_position, join_position);
+    assert_eq!(
+        floor.floor_commit_id,
+        join.authority_commit.commit.commit_id
+    );
+    assert_eq!(
+        rows(&joined),
+        vec![
+            (join_position, true),
+            (join_position + 1, true),
+            (join_position + 2, true),
+            (join_position + 3, false),
+        ]
+    );
+    assert!(!joined.truncated);
+    assert_eq!(
+        peer_page(&store, scan_request(&realm_id, After(None), 10), &elsewhere).await,
+        AccountStreamScan::NotAuthorized
+    );
+
+    // Alice leaves; Carol, a member of this Station, joins after her. The
+    // member Station's right now ends at Alice's own leave.
+    let leave = membership_request(&message.authority_commit, alice.clone(), &alice, "leave");
+    uow.commit_event(leave.clone()).await.unwrap();
+    let carol_join = membership_request(&leave.authority_commit, carol.clone(), &carol, "join");
+    uow.commit_event(carol_join).await.unwrap();
+    let leave_position = leave.authority_commit.commit.stream_position;
+    let AccountStreamScan::Page(departed) = peer_page(
+        &store,
+        scan_request(&realm_id, After(Some(join_position + 2)), 10),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("a departed member's Station keeps its right through the leave");
+    };
+    assert_eq!(
+        rows(&departed),
+        vec![(join_position + 3, false), (leave_position, true)]
+    );
+    assert!(!departed.truncated);
+    let AccountStreamScan::Page(newest) = peer_page(
+        &store,
+        scan_request(&realm_id, Before(None), 2),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("a newest-first page stops at the leave");
+    };
+    assert_eq!(
+        rows(&newest),
+        vec![(leave_position, true), (join_position + 3, false)]
+    );
+    let AccountStreamScan::Page(after_leave) = peer_page(
+        &store,
+        scan_request(&realm_id, After(Some(leave_position)), 10),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("a page after the leave is empty, not refused");
+    };
+    assert!(after_leave.committed_events.is_empty());
+}
+
+/// A member Station's held stream: the hosted member's join opens it pending
+/// anchor; the governing Station's bootstrap material anchors it at the
+/// member's join floor and installs its typed current; the peer scan fills
+/// the prefix, keeping a restricted plaintext Message as a chain node; later
+/// replicas advance local current and are re-verified against it, and the
+/// member's own scan is served from its join (`federation.md` §4.1.1).
+#[tokio::test]
+async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes() {
+    use arkret_wire::StreamScanDirection::After;
+    use soland_storage::AccountStreamScan;
+
+    let governance_database = TestDatabase::lease().await;
+    let member_database = TestDatabase::lease().await;
+    let governance_pool = governance_database.pool();
+    let member_pool = member_database.pool();
+    let governance = PgAuthorityCommitStore {
+        pool: governance_pool.clone(),
+    };
+    let member = PgAuthorityCommitStore {
+        pool: member_pool.clone(),
+    };
+    let uow = PgEventCommitUnitOfWork::new(governance_pool.clone());
+    let unit = admit(&governance_pool, "member-anchor", "public").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let last = unit.transactions.last().unwrap();
+    let at = last.commit.committed_at;
+    let alice = remote_member("member-anchor-alice");
+    let bob = remote_member("member-anchor-bob");
+    let alice_account = alice.as_account_id().unwrap().clone();
+
+    let join = membership_request(last, alice.clone(), &alice, "join");
+    uow.commit_event(join.clone()).await.unwrap();
+    let strand = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::StrandCreate,
+        &founder(),
+        serde_json::json!({"object": {
+            "schema":"ak.schema.strand.v1",
+            "realm_id":realm_id,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Anchored discussion"},
+            "state":"active",
+            "created_by":founder_actor(),
+            "created_at":at,
+        }}),
+        at,
+    ));
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = sourced(next_request(
+        &strand.authority_commit,
+        arkret_wire::EventKind::RealmSetDefaultStrand,
+        &founder(),
+        serde_json::json!({
+            "realm_id": realm_id,
+            "strand_id": strand_id,
+            "expected_default_strand_id": null,
+        }),
+        at,
+    ));
+    uow.commit_event(default.clone()).await.unwrap();
+    let message = sourced(next_request(
+        &default.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        &founder(),
+        message_payload(&strand_id, "plaintext kept on the governing Station"),
+        at,
+    ));
+    uow.commit_event(message.clone()).await.unwrap();
+
+    // The join opens the held stream pending anchor.
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &join, true))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert_code(
+        &member
+            .install_committed_replica(&replica(&unit, &strand, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    let pending_scan = member
+        .scan_stream_for_account(
+            &scan_request(&realm_id, After(None), 10),
+            &alice_account,
+            &member_station(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(pending_scan, AccountStreamScan::Unproved(_)),
+        "{pending_scan:?}"
+    );
+    assert_eq!(summary_title(&member_pool, &realm_id, &alice).await, None);
+
+    // The bootstrap material floors the Realm stream at Alice's join, and
+    // only for her current joined membership.
+    assert!(
+        governance
+            .member_station_bootstrap_material(
+                &realm_id,
+                &alice_account,
+                &strand.authority_commit.commit.commit_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let material = governance
+        .member_station_bootstrap_material(
+            &realm_id,
+            &alice_account,
+            &join.authority_commit.commit.commit_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        material.retention_and_history_floor.stream_floors[0].oldest_position,
+        join.authority_commit.commit.stream_position
+    );
+    let head = material.visible_stream_heads[0].clone();
+    assert_eq!(head.commit_id, message.authority_commit.commit.commit_id);
+    member
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: realm_id.clone(),
+            join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            snapshot_head: head.clone(),
+            current_state_entries: material.current_state_entries.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        member
+            .replica_stream_anchor(&realm_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .anchored_head,
+        Some(head.clone())
+    );
+    assert_eq!(
+        summary_title(&member_pool, &realm_id, &alice)
+            .await
+            .as_deref(),
+        Some("Fixture Realm")
+    );
+
+    // A chain node cannot skip the held head; the peer scan fills the prefix.
+    let chain_node = |commit: &arkret_wire::RealmCommit| CommittedChainNode {
+        local_service_id: member_station(),
+        authority: governance_authority(&unit),
+        commit: commit.clone(),
+    };
+    assert_code(
+        &member
+            .install_committed_chain_node(&chain_node(&message.authority_commit.commit))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    let AccountStreamScan::Page(prefix) = peer_page(
+        &governance,
+        scan_request(
+            &realm_id,
+            After(Some(join.authority_commit.commit.stream_position)),
+            10,
+        ),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("the member Station is served its interval");
+    };
+    for item in &prefix.committed_events {
+        let outcome = match item {
+            arkret_wire::CommittedEventView::Full(view) => {
+                let request = [&strand, &default]
+                    .into_iter()
+                    .find(|request| request.authority_commit.commit == view.commit)
+                    .unwrap();
+                member
+                    .install_committed_replica(&replica(&unit, request, false))
+                    .await
+                    .unwrap()
+            }
+            arkret_wire::CommittedEventView::Withheld(view) => member
+                .install_committed_chain_node(&chain_node(&view.commit))
+                .await
+                .unwrap(),
+        };
+        assert_eq!(outcome, CommittedReplicaOutcome::Stored);
+    }
+    assert_eq!(
+        member
+            .install_committed_chain_node(&chain_node(&message.authority_commit.commit))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Duplicate
+    );
+    assert_eq!(
+        member
+            .committed_chain_node(&message.authority_commit.event.event_id)
+            .await
+            .unwrap(),
+        Some(message.authority_commit.commit.clone())
+    );
+    assert!(
+        member
+            .committed_event(&message.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Bob joins on the governing Station; his join replica advances the
+    // member Station's typed current.
+    let bob_join = membership_request(&message.authority_commit, bob.clone(), &bob, "join");
+    uow.commit_event(bob_join.clone()).await.unwrap();
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &bob_join, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert_eq!(
+        member_state(&member_pool, &realm_id, &bob).await.as_deref(),
+        Some("join")
+    );
+    // A plaintext Message of a Realm that lists no plaintext service here is
+    // refused by the recipient re-verification, although it is contiguous.
+    let forged = sourced(next_request(
+        &bob_join.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        &founder(),
+        message_payload(&strand_id, "never held by the member Station"),
+        at,
+    ));
+    uow.commit_event(forged.clone()).await.unwrap();
+    assert_code(
+        &member
+            .install_committed_replica(&replica(&unit, &forged, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::CapabilityDenied,
+    );
+
+    // Alice's own scan on the member Station starts at her join and serves
+    // the chain node as the withheld branch.
+    let AccountStreamScan::Page(own) = member
+        .scan_stream_for_account(
+            &scan_request(&realm_id, After(None), 10),
+            &alice_account,
+            &member_station(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("an anchored held stream serves its hosted member");
+    };
+    let join_position = join.authority_commit.commit.stream_position;
+    let floor = own.readable_floor.clone().unwrap();
+    assert_eq!(floor.oldest_position, join_position);
+    assert_eq!(
+        floor.floor_reason,
+        arkret_wire::ReadableFloorReason::MembershipJoin
+    );
+    assert_eq!(
+        rows(&own),
+        vec![
+            (join_position, true),
+            (join_position + 1, true),
+            (join_position + 2, true),
+            (join_position + 3, false),
+            (join_position + 4, true),
+        ]
     );
 }

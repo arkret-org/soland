@@ -27,13 +27,15 @@ async fn get_committed_event(
     let session = aa.authenticated_session(state, req).await?;
     let event_id = EventId::new(event_id.into_inner())
         .map_err(|_| AppError::not_found("committed event not found"))?;
-    let record = state
+    let Some(record) = state
         .event_queries()
         .canonical_event(event_id.as_str())
         .await
         .ok()
         .flatten()
-        .ok_or_else(|| AppError::not_found("committed event not found"))?;
+    else {
+        return withheld_chain_node(state, &session, &event_id).await;
+    };
     if !event_visible_to_session(state, &record, &session).await {
         return Err(AppError::not_found("committed event not found"));
     }
@@ -43,6 +45,7 @@ async fn get_committed_event(
         .await
         .map_err(|error| AppError::internal(format!("committed Event lookup failed: {error}")))?
         .ok_or_else(|| AppError::not_found("committed event not found"))?;
+    refuse_pending_replica(state, &committed.commit.realm_id).await?;
     let view = CommittedEventView::Full(CommittedEventFullView {
         commit: committed.commit,
         event: committed.event,
@@ -51,6 +54,54 @@ async fn get_committed_event(
         AppError::internal(format!("durable committed Event view is invalid: {error}"))
     })?;
     json_ok(view)
+}
+
+/// A member Station's held Realm stream that is still pending its bootstrap
+/// anchor serves no local read (`federation.md` §4.1.1).
+async fn refuse_pending_replica(state: &AppState, realm_id: &RealmId) -> Result<(), AppError> {
+    let anchor = state
+        .authority_commits()
+        .replica_stream_anchor(realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("replica anchor lookup failed: {error}")))?;
+    if anchor.is_some_and(|anchor| anchor.anchored_head.is_none()) {
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
+            "the held Realm stream is pending its bootstrap anchor",
+        ));
+    }
+    Ok(())
+}
+
+/// A withheld chain node a member Station holds is read only as the withheld
+/// branch, by a member the Station hosts in its Realm (`federation.md`
+/// §4.1.1).
+async fn withheld_chain_node(
+    state: &AppState,
+    session: &SessionRecord,
+    event_id: &EventId,
+) -> JsonResult<CommittedEventView> {
+    let commit = state
+        .authority_commits()
+        .committed_chain_node(event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("chain node lookup failed: {error}")))?
+        .ok_or_else(|| AppError::not_found("committed event not found"))?;
+    let caller =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+            .map_err(|_| AppError::not_found("committed event not found"))?;
+    if !crate::routing::realm_has_member(state, commit.realm_id.as_str(), &caller.to_string()).await
+    {
+        return Err(AppError::not_found("committed event not found"));
+    }
+    json_ok(CommittedEventView::Withheld(
+        arkret_wire::CommittedEventWithheldView {
+            commit,
+            event_disclosure: arkret_wire::EventDisclosure {
+                status: arkret_wire::EventDisclosureStatus::Withheld,
+            },
+        },
+    ))
 }
 
 #[handler]

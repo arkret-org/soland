@@ -20,6 +20,7 @@ mod preview;
 pub(in crate::routing) use authority::resolve_verified_authority;
 pub(crate) use authority::{
     LocatedRealmAuthority, insert_method_key, resolve_verified_authority_of_service,
+    verify_served_bundle,
 };
 
 pub(super) fn self_router() -> Router {
@@ -42,7 +43,9 @@ fn unavailable(error: impl std::fmt::Display) -> AppError {
     AppError::internal(format!("Realm authority evidence unavailable: {error}"))
 }
 
-fn nonce_for_request(request_id: &arkret_wire::RequestId) -> Result<Base64UrlString, AppError> {
+pub(crate) fn nonce_for_request(
+    request_id: &arkret_wire::RequestId,
+) -> Result<Base64UrlString, AppError> {
     Base64UrlString::new(request_id.as_str().trim_start_matches("ak:request:"))
         .map_err(invalid_request)
 }
@@ -167,21 +170,20 @@ async fn peer_bootstrap(
     let bundle =
         local_authority_bundle(state, &body.realm_id, &nonce_for_request(&body.request_id)?)
             .await?;
-    let mut material = state
+    // The member Station anchors its held stream on this snapshot: the
+    // member's complete disclosure with the Realm stream floor at its own
+    // join, which must still be its current membership (`federation.md`
+    // §4.1.1, member Station bootstrap).
+    let material = state
         .authority_commits()
-        .realm_state_snapshot_material(&body.realm_id)
+        .member_station_bootstrap_material(
+            &body.realm_id,
+            &body.member_account_id,
+            &body.membership_commit_id,
+        )
         .await
         .map_err(unavailable)?
         .ok_or_else(|| AppError::not_found("Realm join bootstrap not found"))?;
-    // A Realm membership Commit grants the Realm stream. Circle and Sidecar
-    // streams require separate scope-specific membership evidence.
-    material
-        .visible_stream_heads
-        .retain(|head| head.stream_ref == expected_stream);
-    material
-        .retention_and_history_floor
-        .stream_floors
-        .retain(|floor| floor.stream_ref == expected_stream);
     if material.visible_stream_heads.is_empty() {
         return Err(unavailable("Realm stream head is unavailable"));
     }

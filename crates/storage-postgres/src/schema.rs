@@ -370,7 +370,7 @@ diesel::table! {
         stream_ref -> Jsonb,
         stream_position -> Int8,
         previous_commit_ref -> Nullable<Text>,
-        event_pk -> Int8,
+        event_pk -> Nullable<Int8>,
         governance_generation -> Int8,
         commit_json -> Jsonb,
         committed_at -> Timestamptz,

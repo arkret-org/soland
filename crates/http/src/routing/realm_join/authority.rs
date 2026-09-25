@@ -196,6 +196,24 @@ async fn verify_candidate(
     }
 }
 
+/// Verify a bundle a peer Station served bound to `nonce`, end to end under
+/// keys resolved from the bundle's own DIDs.
+pub(crate) async fn verify_served_bundle(
+    state: &AppState,
+    bundle: RealmAuthorityBundle,
+    nonce: &Base64UrlString,
+) -> Result<LocatedRealmAuthority, AppError> {
+    let keys = verified_keys(state, &bundle).await?;
+    let freshness = RealmAuthorityFreshness::new(crate::wire::now(), nonce.clone());
+    let authority =
+        verify_realm_authority_bundle(&bundle, &freshness, &keys).map_err(unavailable)?;
+    Ok(LocatedRealmAuthority {
+        bundle,
+        authority,
+        keys,
+    })
+}
+
 /// Verify the Realm authority an authenticated peer Station serves: its
 /// verified route is the only locator, and the verified chain must name that
 /// Station as the current governance Station.

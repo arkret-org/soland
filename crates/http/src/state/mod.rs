@@ -20,6 +20,7 @@ mod authority_self_event_unit;
 mod committed_replication;
 mod member_identity;
 mod notification;
+mod replica_anchor;
 mod service_route_fetcher;
 
 #[doc(hidden)]
@@ -47,5 +48,6 @@ pub(crate) use member_identity::{
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
+pub use replica_anchor::spawn_pending_anchor_sweeper;
 pub(crate) use service_route_fetcher::VerifiedBindingRouteFetcher;
 pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};

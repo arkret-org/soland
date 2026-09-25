@@ -91,11 +91,31 @@ pub(crate) fn fanout_idempotency_key(commit_id: &arkret_wire::RealmCommitId) -> 
 
 /// Whether the Event carries a plaintext Message body: a create or a revise
 /// without an encrypted carrier.
-fn plaintext_message(event: &arkret_wire::Event) -> bool {
+pub(crate) fn plaintext_message(event: &arkret_wire::Event) -> bool {
     matches!(
         event.kind,
         arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
     ) && !event.payload.contains_key("encrypted_content")
+}
+
+/// The Stations a `realm_plaintext_visible_services` current value names as
+/// private plaintext services for message content.
+pub(crate) fn plaintext_message_service_ids(value: &Value) -> Vec<String> {
+    value
+        .get("services")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|service| {
+            service.get("visibility").and_then(Value::as_str) == Some("private_plaintext")
+                && service
+                    .get("data_classes")
+                    .and_then(Value::as_array)
+                    .is_some_and(|classes| classes.iter().any(|class| class == "message_content"))
+        })
+        .filter_map(|service| service.get("service_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// The Stations the Realm names as private plaintext services for message
@@ -119,22 +139,7 @@ async fn plaintext_message_services(
     else {
         return Ok(Vec::new());
     };
-    Ok(row
-        .value
-        .get("services")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|service| {
-            service.get("visibility").and_then(Value::as_str) == Some("private_plaintext")
-                && service
-                    .get("data_classes")
-                    .and_then(Value::as_array)
-                    .is_some_and(|classes| classes.iter().any(|class| class == "message_content"))
-        })
-        .filter_map(|service| service.get("service_id").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect())
+    Ok(plaintext_message_service_ids(&row.value))
 }
 
 /// The departing member's Station owed a membership Event that ended the

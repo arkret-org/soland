@@ -424,6 +424,14 @@ struct CommitStreamRow {
 }
 
 #[derive(QueryableByName)]
+struct StreamPageRow {
+    #[diesel(sql_type = Jsonb)]
+    commit_json: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    envelope: Option<Value>,
+}
+
+#[derive(QueryableByName)]
 struct PresenceRow {
     #[diesel(sql_type = Bool)]
     present: bool,
@@ -473,19 +481,20 @@ pub(crate) fn stream_key(stream_ref: &arkret_wire::CommitStreamRef) -> Persisten
 /// The oldest retained Commit of one stream.
 pub(crate) const STREAM_FLOOR_SQL: &str = "SELECT commit_json FROM realm_commits \
      WHERE stream_key = $1 ORDER BY stream_position ASC LIMIT 1";
-/// One keyset page toward newer Commits.
+/// One keyset page toward newer Commits. A member Station's chain node has
+/// no Event and is read as its Commit alone.
 pub(crate) const STREAM_PAGE_AFTER_SQL: &str = "SELECT c.commit_json, e.envelope \
-     FROM realm_commits c JOIN canonical_events e ON e.pk = c.event_pk \
+     FROM realm_commits c LEFT JOIN canonical_events e ON e.pk = c.event_pk \
      WHERE c.stream_key = $1 AND c.stream_position > $2 \
      ORDER BY c.stream_position ASC LIMIT $3";
 /// One keyset page toward older Commits.
 pub(crate) const STREAM_PAGE_BEFORE_SQL: &str = "SELECT c.commit_json, e.envelope \
-     FROM realm_commits c JOIN canonical_events e ON e.pk = c.event_pk \
+     FROM realm_commits c LEFT JOIN canonical_events e ON e.pk = c.event_pk \
      WHERE c.stream_key = $1 AND c.stream_position < $2 \
      ORDER BY c.stream_position DESC LIMIT $3";
 /// The newest page of one stream.
 pub(crate) const STREAM_PAGE_NEWEST_SQL: &str = "SELECT c.commit_json, e.envelope \
-     FROM realm_commits c JOIN canonical_events e ON e.pk = c.event_pk \
+     FROM realm_commits c LEFT JOIN canonical_events e ON e.pk = c.event_pk \
      WHERE c.stream_key = $1 ORDER BY c.stream_position DESC LIMIT $2";
 
 /// One physical keyset page of a single commit stream on the caller's
@@ -549,7 +558,7 @@ pub(crate) async fn stream_page_above_floor_in_connection(
                 .bind::<Text, _>(&key)
                 .bind::<BigInt, _>(after)
                 .bind::<BigInt, _>(limit)
-                .load::<CommitStreamRow>(&mut *conn)
+                .load::<StreamPageRow>(&mut *conn)
                 .await
         }
         arkret_wire::StreamScanDirection::Before(Some(before)) => {
@@ -558,14 +567,14 @@ pub(crate) async fn stream_page_above_floor_in_connection(
                 .bind::<Text, _>(&key)
                 .bind::<BigInt, _>(before)
                 .bind::<BigInt, _>(limit)
-                .load::<CommitStreamRow>(&mut *conn)
+                .load::<StreamPageRow>(&mut *conn)
                 .await
         }
         arkret_wire::StreamScanDirection::Before(None) => {
             sql_query(STREAM_PAGE_NEWEST_SQL)
                 .bind::<Text, _>(&key)
                 .bind::<BigInt, _>(limit)
-                .load::<CommitStreamRow>(&mut *conn)
+                .load::<StreamPageRow>(&mut *conn)
                 .await
         }
     }
@@ -573,12 +582,23 @@ pub(crate) async fn stream_page_above_floor_in_connection(
     let committed_events = rows
         .into_iter()
         .map(|row| {
-            Ok(arkret_wire::CommittedEventView::Full(
-                arkret_wire::CommittedEventFullView {
-                    commit: decode_json(row.commit_json, "RealmCommit")?,
-                    event: decode_json(row.envelope, "committed Event")?,
-                },
-            ))
+            let commit = decode_json(row.commit_json, "RealmCommit")?;
+            Ok(match row.envelope {
+                Some(envelope) => {
+                    arkret_wire::CommittedEventView::Full(arkret_wire::CommittedEventFullView {
+                        commit,
+                        event: decode_json(envelope, "committed Event")?,
+                    })
+                }
+                None => arkret_wire::CommittedEventView::Withheld(
+                    arkret_wire::CommittedEventWithheldView {
+                        commit,
+                        event_disclosure: arkret_wire::EventDisclosure {
+                            status: arkret_wire::EventDisclosureStatus::Withheld,
+                        },
+                    },
+                ),
+            })
         })
         .collect::<PersistenceResult<Vec<_>>>()?
         .into_iter()
@@ -2157,6 +2177,96 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn install_committed_chain_node(
+        &self,
+        node: &soland_storage::CommittedChainNode,
+    ) -> PersistenceResult<soland_storage::CommittedReplicaOutcome> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            replica::install_committed_chain_node_in_connection(conn, node).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn replica_stream_anchor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<soland_storage::ReplicaStreamAnchor>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        replica::replica_stream_anchor_in_connection(&mut conn, realm_id)
+            .await
+            .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn pending_replica_stream_anchors(&self) -> PersistenceResult<Vec<arkret_wire::RealmId>> {
+        #[derive(QueryableByName)]
+        struct RealmRow {
+            #[diesel(sql_type = Text)]
+            realm_id: String,
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id FROM replica_stream_anchors \
+             WHERE anchor_commit_id IS NULL ORDER BY realm_id",
+        )
+        .load::<RealmRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(|row| decode_text(row.realm_id, "pending replica Realm id"))
+        .collect()
+    }
+
+    async fn install_replica_anchor(
+        &self,
+        install: &soland_storage::ReplicaAnchorInstall,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            replica::install_replica_anchor_in_connection(conn, install).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn held_stream_head_commit(
+        &self,
+        stream_ref: &arkret_wire::CommitStreamRef,
+    ) -> PersistenceResult<Option<arkret_wire::RealmCommit>> {
+        let key = stream_key(stream_ref)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT commit_json FROM realm_commits \
+             WHERE stream_key = $1 ORDER BY stream_position DESC LIMIT 1",
+        )
+        .bind::<Text, _>(key)
+        .get_result::<CommitRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| decode_json(row.commit_json, "held stream head"))
+        .transpose()
+    }
+
+    async fn committed_chain_node(
+        &self,
+        event_id: &arkret_wire::EventId,
+    ) -> PersistenceResult<Option<arkret_wire::RealmCommit>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT commit_json FROM realm_commits \
+             WHERE event_pk IS NULL AND commit_json->>'event_ref' = $1",
+        )
+        .bind::<Text, _>(event_id.as_str())
+        .get_result::<CommitRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| decode_json(row.commit_json, "chain node Commit"))
+        .transpose()
+    }
+
     async fn current_authority(
         &self,
         realm_id: &arkret_wire::RealmId,
@@ -2554,6 +2664,21 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
         crate::snapshot_disclosure_gate::account_snapshot_material(&self.pool, realm_id, account)
             .await
+    }
+
+    async fn member_station_bootstrap_material(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        membership_commit_id: &arkret_wire::RealmCommitId,
+    ) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+        crate::snapshot_disclosure_gate::member_station_bootstrap_material(
+            &self.pool,
+            realm_id,
+            account,
+            membership_commit_id,
+        )
+        .await
     }
 
     async fn issue_realm_state_snapshot_for_account(

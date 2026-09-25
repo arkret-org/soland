@@ -37,6 +37,20 @@ fn schema_violation(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::SchemaViolation(detail.to_string())
 }
 
+/// The `object_redaction` value a first `ak.message.redact` of a Message
+/// establishes: its one assertion, tagged by the Event's `<event_id>:0` dot.
+pub(crate) fn message_redaction_current_value(
+    event: &arkret_wire::Event,
+    payload: MessageRedactPayload,
+) -> PersistenceResult<ObjectRedactionCurrentValue> {
+    Ok(ObjectRedactionCurrentValue {
+        assertions: vec![ObjectRedactionEntry {
+            tag_id: CanonicalEventDot::new(event.event_id.clone(), 0).map_err(schema_violation)?,
+            value: ObjectRedactionAssertionValue::Message(payload),
+        }],
+    })
+}
+
 /// Admit `ak.message.redact` and add its assertion to the Message's
 /// `object_redaction` set. Every other kind is left to its own writer.
 pub(crate) async fn commit_message_redact_current_result_in_connection(
@@ -73,12 +87,7 @@ pub(crate) async fn commit_message_redact_current_result_in_connection(
     // `strand-and-message.md` §4: a Message of a Strand whose discussion
     // track is not active is refused for redact as for create and revise.
     require_active_discussion_strand(conn, &event.realm_id, &target.strand_id).await?;
-    let value = ObjectRedactionCurrentValue {
-        assertions: vec![ObjectRedactionEntry {
-            tag_id: CanonicalEventDot::new(event.event_id.clone(), 0).map_err(schema_violation)?,
-            value: ObjectRedactionAssertionValue::Message(payload),
-        }],
-    };
+    let value = message_redaction_current_value(event, payload)?;
     value
         .validate_for_subject(target.message_id.as_str())
         .map_err(schema_violation)?;

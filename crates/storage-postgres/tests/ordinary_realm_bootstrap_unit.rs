@@ -3096,7 +3096,7 @@ async fn account_scan_withholds_expired_and_redacted_messages_on_their_commits()
 }
 
 #[tokio::test]
-async fn peer_stream_scan_refuses_non_hosting_peers_and_never_serves_an_unproved_interval() {
+async fn peer_stream_scan_refuses_non_hosting_peers_and_serves_a_hosting_peer_its_interval() {
     use arkret_wire::StreamScanDirection::After;
     use soland_storage::AccountStreamScan;
 
@@ -3145,8 +3145,9 @@ async fn peer_stream_scan_refuses_non_hosting_peers_and_never_serves_an_unproved
         AccountStreamScan::NotAuthorized
     );
 
-    // A peer hosting a joined member may hold a right, but its join floor,
-    // history access and disclosure are not proved: fail closed, no page.
+    // A peer hosting a joined member holds its replication right from that
+    // member's readable floor: a join inside the founding unit reads from
+    // the genesis Commit (`federation.md` section 4.1.1).
     let remote_member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new("ak:did_core:web:remote-member.example").unwrap(),
         remote.clone(),
@@ -3170,9 +3171,21 @@ async fn peer_stream_scan_refuses_non_hosting_peers_and_never_serves_an_unproved
         .unwrap();
         let decision = scan(scan_request(&realm_id, After(None), 3), remote.clone()).await;
         if membership == "join" {
+            let AccountStreamScan::Page(page) = decision else {
+                panic!("a hosting peer is served its interval: {decision:?}");
+            };
+            assert_eq!(
+                page.readable_floor
+                    .as_ref()
+                    .map(|floor| floor.oldest_position),
+                Some(0)
+            );
+            assert_eq!(page.committed_events.len(), 3);
+            assert!(page.truncated);
             assert!(
-                matches!(decision, AccountStreamScan::Unproved(_)),
-                "{decision:?}"
+                page.committed_events
+                    .iter()
+                    .all(|item| matches!(item, arkret_wire::CommittedEventView::Full(_)))
             );
         } else {
             // A knock is not a joined member and grants nothing.

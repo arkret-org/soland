@@ -100,6 +100,7 @@ mod realm_invites;
 mod recovery;
 mod registry;
 mod relation_current_results;
+mod replica_current;
 mod security_transactions;
 mod self_current_reads;
 mod service_identity;
