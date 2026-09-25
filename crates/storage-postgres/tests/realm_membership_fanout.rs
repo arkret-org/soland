@@ -1995,15 +1995,15 @@ async fn account_snapshot_serves_joined_member_floor() {
 
 /// Real PostgreSQL: a `since_join` member's window never starts below its
 /// join Commit and `limited` is read against that floor. A window over its
-/// whole readable interval starts exactly at the floor; the state before the
-/// floor Commit (`before_readable_floor`) was never issued to the member, so
-/// that window is preview only. A window above the floor names the
-/// `after_committed_prefix` basis of a snapshot already issued to the member
-/// at its anchor, whose floor is the scan floor.
+/// whole readable interval starts exactly at the floor, above genesis: no
+/// prefix state inside the member's readable range can back it, so the
+/// window is `preview_only` without a basis, which is the formal rule
+/// (`sync/client-sync.md` §5.2, decision 0113). A window above the floor
+/// names the committed prefix through its anchor, backed by a snapshot
+/// already issued to the member at that anchor, whose floor is the scan
+/// floor.
 #[tokio::test]
 async fn account_window_starts_joined_member_at_its_join_commit() {
-    use arkret_models_collaboration::sync_frames::account_sync::StreamWindowAnchorKind;
-
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
@@ -2081,10 +2081,6 @@ async fn account_window_starts_joined_member_at_its_join_commit() {
     assert!(backed.window.limited);
     assert_eq!(backed.window.preview_only, None);
     let basis = backed.window.window_start_basis.clone().unwrap();
-    assert_eq!(
-        basis.anchor_kind,
-        StreamWindowAnchorKind::AfterCommittedPrefix
-    );
     assert_eq!(basis.anchor_position, head_position);
     assert_eq!(
         basis.anchor_commit_ref,

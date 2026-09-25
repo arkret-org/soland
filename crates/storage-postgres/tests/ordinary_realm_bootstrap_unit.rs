@@ -1863,7 +1863,6 @@ async fn reservation_count(pool: &soland_storage_postgres::PgPool) -> i64 {
 /// the guarantee (disclosure or expiry) withdraws the basis.
 #[tokio::test]
 async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only() {
-    use arkret_models_collaboration::sync_frames::account_sync::StreamWindowAnchorKind;
     use soland_storage::{AccountRealmWindowRequest, SyncCursorStore as _};
 
     let database = TestDatabase::lease().await;
@@ -1989,10 +1988,6 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
     assert_eq!(backed.window.preview_only, None);
     assert_eq!(positions(&backed), vec![7, 8]);
     let basis = backed.window.window_start_basis.clone().unwrap();
-    assert_eq!(
-        basis.anchor_kind,
-        StreamWindowAnchorKind::AfterCommittedPrefix
-    );
     assert_eq!(basis.anchor_position, 6);
     assert_eq!(
         basis.anchor_commit_ref,

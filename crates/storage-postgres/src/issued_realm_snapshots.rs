@@ -565,9 +565,7 @@ fn basis_from_snapshot(
     anchor: &arkret_wire::CommitStreamHead,
     floor: u64,
 ) -> Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis> {
-    use arkret_models_collaboration::sync_frames::account_sync::{
-        StreamWindowAnchorKind, StreamWindowStartBasis,
-    };
+    use arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis;
     let exact_head = snapshot.visible_stream_heads.as_slice() == std::slice::from_ref(anchor);
     let exact_floor = snapshot
         .retention_and_history_floor
@@ -582,7 +580,6 @@ fn basis_from_snapshot(
         && floor <= anchor.stream_position
         && &anchor.stream_ref == stream_ref)
         .then(|| StreamWindowStartBasis {
-            anchor_kind: StreamWindowAnchorKind::AfterCommittedPrefix,
             anchor_position: anchor.stream_position,
             anchor_commit_ref: anchor.commit_id.clone(),
             snapshot_ref: snapshot.snapshot_id.clone(),
@@ -619,10 +616,11 @@ async fn still_disclosable(
 /// within `window_limit`, otherwise the last `window_limit` Commits of the
 /// Realm stream, never below the Account's readable floor; `limited` states
 /// whether readable history lies below them. A window above the floor names
-/// an `after_committed_prefix` basis from a snapshot already issued to the
-/// Account at its anchor. A window starting exactly at a floor above genesis
-/// would need the state before the floor Commit (`before_readable_floor`),
-/// which this Station never issued to the Account, so it is preview only.
+/// the committed prefix through its anchor, backed by a snapshot already
+/// issued to the Account at that anchor. A window starting exactly at a
+/// floor above genesis has no issuable prefix state inside the Account's
+/// readable range, so it is `preview_only` without a basis
+/// (`sync/client-sync.md` §5.2, decision 0113).
 /// The frozen head is issued to the Account in the same cut, so the next
 /// delta can name it as its exact basis. Rows are served through the shared
 /// committed-event disclosure decision. Issuance reuses the object already

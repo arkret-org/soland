@@ -532,8 +532,9 @@ async fn commit_invite_cancel(
 /// its own membership is `leave`. The Invite moves to `accepted` and releases
 /// its slot; the `leave -> join` member write follows in the same
 /// transaction. Authorization is the invitee's own signature over the exact
-/// target Invite, not a Realm grant: the invitee is not yet a member (see
-/// spec-open 1954 §3). A third-party Invite has no stored directed invitee
+/// target Invite, not a Realm grant: the invitee is not yet a member, and
+/// `ak.invite.accept` is `subject_only` (`authz/capabilities.md` §13,
+/// decision 0113). A third-party Invite has no stored directed invitee
 /// and its claim binding is not admitted here, so it fails closed.
 async fn commit_invite_accept(
     conn: &mut AsyncPgConnection,
