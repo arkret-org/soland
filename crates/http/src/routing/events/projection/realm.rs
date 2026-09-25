@@ -367,7 +367,8 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
     // MID-4 / MIU-SOL-3 (R3.2): optimistic-concurrency guard. When
     // `expected_state_digest` is present, it MUST equal the current
     // per-actor writer-observed effective-set digest
-    // (`member_identity_effective_set_digest`, which folds `segment`) BEFORE
+    // (`member_identity_effective_set_digest` over the exact signed payloads,
+    // `current-results.md` §2) BEFORE
     // this event lands. Admission refuses the mismatch with
     // `failed_precondition` + `reason_code=member_identity_state_mismatch`
     // (`preflight_member_identity_state_guard`), so reaching this branch means

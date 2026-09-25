@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 use arkret_models_identity::HandleClaimStatus;
-use arkret_models_identity::{EffectiveIdentityEntry, HandleClaim};
+use arkret_models_identity::HandleClaim;
 use serde_json::Value;
 pub use soland_storage::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
@@ -13,8 +13,8 @@ pub use soland_storage::{
 /// registry. Stores every accepted `ak.member.identity.update` event by
 /// `(realm_id, actor_id, segment)`, computes the current effective set
 /// per the SDK helper `effective_identity_events`, and materializes the
-/// `expected_state_digest` guard (`member_identity_effective_set_digest`,
-/// including `segment`). The reducer
+/// `expected_state_digest` guard (`member_identity_effective_set_digest`
+/// over the exact signed payloads, `current-results.md` §2). The reducer
 /// (`reducer::apply_member_identity_update`) consults the guard for the
 /// optimistic-concurrency check (`expected_state_digest`) and writes
 /// accepted events back. Demand sync currently emits only bounded membership
@@ -47,11 +47,12 @@ pub struct MemberIdentityRegistry {
     handle_claims_by_subject: BTreeMap<arkret_wire::DidCoreId, Vec<HandleClaimEvidenceRecord>>,
 }
 
-/// Effective entries used by the accepted-state optimistic concurrency guard.
+/// Effective updates used by the accepted-state optimistic concurrency guard:
+/// each unreplaced update's Event ID with its exact signed payload.
 /// Concurrent unreplaced identity events remain separate entries.
 #[derive(Clone, Debug, Default)]
 struct MemberIdentitySnapshot {
-    effective_entries: Vec<EffectiveIdentityEntry>,
+    effective: Vec<(arkret_identifiers::EventId, Value)>,
 }
 
 impl MemberIdentityRegistry {
@@ -125,14 +126,23 @@ impl MemberIdentityRegistry {
     /// effective-set digest for `(realm_id, actor_id)` across all stored
     /// segments. This is the value an incoming event's
     /// `expected_state_digest` MUST equal BEFORE it lands (optimistic
-    /// concurrency guard). Returns `None` if no events are stored.
+    /// concurrency guard). With no stored event the effective set is empty
+    /// and digests `[]`; `None` only reports a digest failure.
     ///
-    /// Uses the SDK `member_identity_effective_set_digest` formula
-    /// `sha256(JCS({realm_id, actor_id, segment, effective_events:
-    /// [{event_id, segment, payload_digest}]}))`, including `segment`.
+    /// Uses the SDK `member_identity_effective_set_digest` formula:
+    /// sha256 over RFC 8785 JCS of the exact signed payloads ordered by
+    /// `event_id` (`current-results.md` §2, decision 0115).
     pub fn current_state_digest_for_actor(&self, realm_id: &str, actor_id: &str) -> Option<String> {
-        let snapshot = self.snapshot_for_actor(realm_id, actor_id)?;
-        effective_set_digest(realm_id, actor_id, &snapshot.effective_entries)
+        let snapshot = self
+            .snapshot_for_actor(realm_id, actor_id)
+            .unwrap_or_default();
+        let effective: Vec<(&arkret_identifiers::EventId, &Value)> = snapshot
+            .effective
+            .iter()
+            .map(|(event_id, payload)| (event_id, payload))
+            .collect();
+        arkret_models_identity::member_identity::member_identity_effective_set_digest(&effective)
+            .ok()
     }
 
     /// Build a [`MemberIdentitySnapshot`] across all segments under
@@ -183,7 +193,7 @@ impl MemberIdentityRegistry {
                 .then_with(|| a.event_id.cmp(&b.event_id))
         });
 
-        let effective: Vec<(&MemberIdentityEventRecord, EffectiveIdentityEntry)> = effective
+        let effective = effective
             .iter()
             .filter_map(|record| {
                 let event_id = match arkret_identifiers::EventId::new(record.event_id.clone()) {
@@ -197,33 +207,18 @@ impl MemberIdentityRegistry {
                         return None;
                     }
                 };
-                let payload_digest =
-                    match arkret_identifiers::Hash::new(record.payload_digest.clone()) {
-                        Ok(payload_digest) => payload_digest,
-                        Err(error) => {
-                            tracing::warn!(
-                                event_id = %record.event_id,
-                                payload_digest = %record.payload_digest,
-                                %error,
-                                "skipping corrupt member-identity record with invalid payload digest"
-                            );
-                            return None;
-                        }
-                    };
-                Some((
-                    *record,
-                    EffectiveIdentityEntry {
-                    event_id,
-                    segment: arkret_models_identity::member_identity::MemberIdentitySegment::MemberIdentity,
-                    payload_digest,
-                },
-                ))
+                let Some(payload) = record.raw_event.get("payload") else {
+                    tracing::warn!(
+                        event_id = %record.event_id,
+                        "skipping corrupt member-identity record without its signed payload"
+                    );
+                    return None;
+                };
+                Some((event_id, payload.clone()))
             })
             .collect();
-        let effective_entries: Vec<EffectiveIdentityEntry> =
-            effective.iter().map(|(_, entry)| entry.clone()).collect();
 
-        Some(MemberIdentitySnapshot { effective_entries })
+        Some(MemberIdentitySnapshot { effective })
     }
 }
 
@@ -279,28 +274,6 @@ pub(crate) fn handle_claim_envelopes_in_identity_payload(identity_payload: &Valu
         out.extend(claims.iter());
     }
     out
-}
-
-/// MIU-SOL-3 (R3.2) — `expected_state_digest` writer-observed effective-set
-/// digest. SHA-256 over RFC 8785 JCS canonical JSON of
-/// `{realm_id, actor_id, segment, effective_events:[{event_id, segment,
-/// payload_digest}]}`. Byte-compatible with the SDK
-/// `member_identity_effective_set_digest` helper. v1 core declares a single
-/// `member_identity` segment.
-fn effective_set_digest(
-    realm_id: &str,
-    actor_id: &str,
-    entries: &[EffectiveIdentityEntry],
-) -> Option<String> {
-    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
-    let actor_id = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
-    arkret_models_identity::member_identity::member_identity_effective_set_digest(
-        &realm_id,
-        &actor_id,
-        arkret_models_identity::member_identity::MemberIdentitySegment::MemberIdentity,
-        entries,
-    )
-    .ok()
 }
 
 #[cfg(test)]
@@ -458,9 +431,9 @@ mod tests {
         let snapshot = registry
             .snapshot_for_actor(&subject.realm_id, &subject.actor_id)
             .expect("the valid record should still produce a snapshot");
-        assert_eq!(snapshot.effective_entries.len(), 1);
+        assert_eq!(snapshot.effective.len(), 1);
         assert_eq!(
-            snapshot.effective_entries[0].event_id.as_str(),
+            snapshot.effective[0].0.as_str(),
             "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"
         );
         assert!(

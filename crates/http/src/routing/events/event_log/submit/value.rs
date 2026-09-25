@@ -629,9 +629,14 @@ pub(super) fn preflight_member_identity_state_guard(
     };
     let current = state.member_identity_state_digest(realm_id, &actor_id.to_string());
     match current.as_deref() {
-        // No accepted identity event yet: the writer observed the empty set,
-        // which no digest can name, so the guard cannot be satisfied.
-        None => Ok(()),
+        // The effective set, empty or not, always has a digest
+        // (`current-results.md` §2); a failure to compute it is not a
+        // precondition the writer can satisfy, so it is retryable.
+        None => Err(SubmitOneError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "the member identity effective-set digest could not be computed",
+        )),
         Some(current) if current == expected => Ok(()),
         Some(current) => Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -737,6 +742,31 @@ mod member_identity_state_guard_tests {
             .expect("the seeded record has an effective-set digest");
         assert!(
             preflight_member_identity_state_guard(&state, &guard_operation(Some(&current))).is_ok()
+        );
+    }
+
+    #[test]
+    fn a_first_write_guards_the_empty_effective_set() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let empty = "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+        assert_eq!(
+            state
+                .member_identity_state_digest(GUARD_REALM, &guard_actor().to_string())
+                .as_deref(),
+            Some(empty)
+        );
+        assert!(preflight_member_identity_state_guard(&state, &guard_operation(Some(empty))).is_ok());
+        assert!(
+            preflight_member_identity_state_guard(
+                &state,
+                &guard_operation(Some(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                )),
+            )
+            .is_err()
         );
     }
 
