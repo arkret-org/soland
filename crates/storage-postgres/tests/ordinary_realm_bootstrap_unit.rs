@@ -2295,7 +2295,7 @@ async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
         scanned_page(scan(scan_request(&realm_id, Before(Some(2)), 5), creator.clone()).await);
     assert_eq!(positions(&oldest), [1, 0]);
     assert!(!oldest.truncated);
-    assert_eq!(oldest.readable_floor, Some(floor));
+    assert_eq!(oldest.readable_floor, Some(floor.clone()));
 
     // No readable interval: another Account, or a Realm not governed here.
     assert_eq!(
@@ -2307,8 +2307,8 @@ async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
         scan(scan_request(&unknown, After(None), 3), creator.clone()).await,
         AccountStreamScan::NotAuthorized
     );
-    // Authorized in principle, but not provable here: another issuer, a
-    // Circle stream, or a second membership row.
+    // Authorized in principle, but not provable here: another issuer or a
+    // Circle stream.
     let other_station =
         arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
     assert!(matches!(
@@ -2347,10 +2347,13 @@ async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
     .execute(&mut conn)
     .await
     .unwrap();
-    assert!(matches!(
-        scan(scan_request(&realm_id, After(None), 3), creator.clone()).await,
-        AccountStreamScan::Unproved(_)
-    ));
+    // Another membership row does not move the founder's genesis floor, and a
+    // knocking Account has no readable interval.
+    assert_eq!(
+        scanned_page(scan(scan_request(&realm_id, After(None), 3), creator.clone()).await)
+            .readable_floor,
+        Some(floor.clone())
+    );
     assert_eq!(
         scan(scan_request(&realm_id, After(None), 3), stranger.clone()).await,
         AccountStreamScan::NotAuthorized
@@ -4337,7 +4340,7 @@ async fn self_current_reads_answer_only_the_provable_cut() {
         );
     }
 
-    // A second joined member makes the founder's floor unprovable.
+    // A second joined member does not move the founder's genesis floor.
     let second_member = arkret_wire::ActorId::account(stranger.clone()).to_string();
     diesel::sql_query(
         "INSERT INTO member_state_current_results \
@@ -4350,13 +4353,20 @@ async fn self_current_reads_answer_only_the_provable_cut() {
     .execute(&mut conn)
     .await
     .unwrap();
-    assert!(matches!(
-        store
-            .list_realm_streams_for_account(&realm_id, &creator, &station)
-            .await
-            .unwrap(),
-        AccountRealmStreamList::Unproved(_)
-    ));
+    let AccountRealmStreamList::Listed(streams) = store
+        .list_realm_streams_for_account(&realm_id, &creator, &station)
+        .await
+        .unwrap()
+    else {
+        panic!("the founder's stream list stays proved");
+    };
+    assert_eq!(
+        streams[0]
+            .readable_floor
+            .as_ref()
+            .map(|floor| (floor.oldest_position, floor.floor_reason)),
+        Some((0, arkret_wire::ReadableFloorReason::StreamStart))
+    );
 }
 
 fn realm_event_request_as(

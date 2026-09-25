@@ -269,6 +269,33 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
     .execute(&mut *conn)
     .await
     .unwrap();
+    // The same-cut evaluator also reads the Realm policy bundle and the
+    // actor's membership; the controller is a joined member.
+    diesel::sql_query(
+        "INSERT INTO realm_policy_bundle_current_results \
+         (realm_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,0,$3,$4)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(root_commit_id.as_str())
+    .bind::<Jsonb, _>(serde_json::json!({"policy_revision":1,"federation_policy":"closed"}))
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,'join',$3,0,$4,$5)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(actor.to_string())
+    .bind::<Text, _>(root_commit_id.as_str())
+    .bind::<Jsonb, _>(serde_json::json!({"membership":"join"}))
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
     drop(conn);
     let create = producer_event(
         arkret_wire::EventKind::CapabilityGrant,

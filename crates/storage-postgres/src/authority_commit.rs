@@ -554,7 +554,6 @@ pub(crate) async fn stream_page_in_connection(
 ) -> PersistenceResult<arkret_wire::StreamScanOutcome> {
     request.validate().map_err(invalid)?;
     let key = stream_key(&request.stream_ref)?;
-    let limit = i64::from(request.limit) + 1;
     let floor = sql_query(STREAM_FLOOR_SQL)
         .bind::<Text, _>(&key)
         .get_result::<CommitRow>(&mut *conn)
@@ -575,12 +574,34 @@ pub(crate) async fn stream_page_in_connection(
             })
         })
         .transpose()?;
+    stream_page_above_floor_in_connection(conn, request, readable_floor).await
+}
+
+/// One keyset page of a single commit stream bounded below by `floor`: no
+/// Commit under `floor.oldest_position` is returned, and a page that stops
+/// at the floor is not reported as truncated (`service-http-binding.md`
+/// §3.1). The floor itself is the caller's decision; `None` means the stream
+/// has no Commit yet.
+pub(crate) async fn stream_page_above_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    request: &arkret_wire::StreamScanRequest,
+    readable_floor: Option<arkret_wire::ReadableFloor>,
+) -> PersistenceResult<arkret_wire::StreamScanOutcome> {
+    request.validate().map_err(invalid)?;
+    let key = stream_key(&request.stream_ref)?;
+    let limit = i64::from(request.limit) + 1;
+    let lowest = readable_floor
+        .as_ref()
+        .map(|floor| to_i64(floor.oldest_position, "readable floor"))
+        .transpose()?
+        .unwrap_or(0);
     let rows = match request.direction {
         arkret_wire::StreamScanDirection::After(after) => {
             let after = after
                 .map(|position| to_i64(position, "stream cursor"))
                 .transpose()?
-                .unwrap_or(-1);
+                .unwrap_or(-1)
+                .max(lowest - 1);
             sql_query(STREAM_PAGE_AFTER_SQL)
                 .bind::<Text, _>(&key)
                 .bind::<BigInt, _>(after)
@@ -606,10 +627,8 @@ pub(crate) async fn stream_page_in_connection(
         }
     }
     .map_err(PersistenceError::database)?;
-    let truncated = rows.len() > usize::from(request.limit);
     let committed_events = rows
         .into_iter()
-        .take(usize::from(request.limit))
         .map(|row| {
             Ok(arkret_wire::CommittedEventView::Full(
                 arkret_wire::CommittedEventFullView {
@@ -618,7 +637,22 @@ pub(crate) async fn stream_page_in_connection(
                 },
             ))
         })
-        .collect::<PersistenceResult<Vec<_>>>()?;
+        .collect::<PersistenceResult<Vec<_>>>()?
+        .into_iter()
+        .filter(|item| {
+            readable_floor
+                .as_ref()
+                .is_none_or(|floor| item.commit().stream_position >= floor.oldest_position)
+        })
+        .collect::<Vec<_>>();
+    // Rows are ordered away from the cursor, so dropping those under the
+    // floor keeps the page contiguous; one row beyond `limit` inside the
+    // interval is what makes the page truncated.
+    let truncated = committed_events.len() > usize::from(request.limit);
+    let committed_events = committed_events
+        .into_iter()
+        .take(usize::from(request.limit))
+        .collect();
     let outcome = arkret_wire::StreamScanOutcome {
         committed_events,
         readable_floor,

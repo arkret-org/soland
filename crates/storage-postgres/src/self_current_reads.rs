@@ -25,8 +25,8 @@ use arkret_models_collaboration::strand_watch_operations::{
     StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody,
 };
 use arkret_wire::{
-    AccountId, ActorId, CommitStreamHead, CommitStreamRef, CommittedEventView, CurrentRevision,
-    DidCoreId, ReadableFloorReason, RealmId, RealmStreamRow, ScopeRef, StreamScanRequest,
+    AccountId, ActorId, CommitStreamHead, CommitStreamRef, CurrentRevision, DidCoreId, RealmId,
+    RealmStreamRow, ScopeRef,
 };
 use diesel_async::AsyncPgConnection;
 use soland_storage::{AccountRealmStreamList, MediaServiceAnchorRead, SelfExactCurrentRead};
@@ -82,8 +82,6 @@ enum MemberCut {
     ForeignTenure,
     Member {
         generation: u64,
-        /// Currently joined members, including the caller.
-        joined_members: usize,
         /// Head of the Realm stream; `None` before the genesis Commit.
         realm_head: Option<CommitStreamHead>,
         /// Whether any Circle or Sidecar stream has an established chain.
@@ -173,48 +171,9 @@ async fn member_cut(
     .present;
     Ok(MemberCut::Member {
         generation: to_u64(tenure.generation, "governance generation")?,
-        joined_members: members.len(),
         realm_head,
         scoped_streams,
     })
-}
-
-/// The caller's readable floor on the Realm stream, when provable: the sole
-/// joined member who founded the Realm reads it from the genesis Commit.
-async fn founder_realm_floor(
-    conn: &mut AsyncPgConnection,
-    realm_id: &RealmId,
-    caller: &ActorId,
-    joined_members: usize,
-) -> Result<Option<arkret_wire::ReadableFloor>, PgTransactionError> {
-    if joined_members != 1 {
-        return Ok(None);
-    }
-    let genesis = crate::authority_commit::stream_page_in_connection(
-        conn,
-        &StreamScanRequest {
-            realm_id: realm_id.clone(),
-            stream_ref: CommitStreamRef::Realm {
-                realm_id: realm_id.clone(),
-            },
-            direction: arkret_wire::StreamScanDirection::After(None),
-            limit: 1,
-        },
-    )
-    .await?;
-    let founded_by_caller = match <[_]>::first(&genesis.committed_events) {
-        Some(CommittedEventView::Full(view)) => {
-            view.commit.stream_position == 0
-                && view.event.kind == arkret_wire::EventKind::RealmCreate
-                && &view.event.actor_id == caller
-        }
-        _ => false,
-    };
-    Ok(genesis.readable_floor.filter(|floor| {
-        founded_by_caller
-            && floor.oldest_position == 0
-            && floor.floor_reason == ReadableFloorReason::StreamStart
-    }))
 }
 
 pub(crate) async fn list_realm_streams_for_account(
@@ -227,21 +186,20 @@ pub(crate) async fn list_realm_streams_for_account(
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         begin_read_cut(conn).await?;
-        let (joined_members, realm_head, scoped_streams) =
-            match member_cut(conn, realm_id, &caller, issuer).await? {
-                MemberCut::NotVisible => return Ok(AccountRealmStreamList::NotVisible),
-                MemberCut::ForeignTenure => {
-                    return Ok(AccountRealmStreamList::Unproved(
-                        "this Station does not hold the Realm's governing tenure",
-                    ));
-                }
-                MemberCut::Member {
-                    joined_members,
-                    realm_head,
-                    scoped_streams,
-                    ..
-                } => (joined_members, realm_head, scoped_streams),
-            };
+        let (realm_head, scoped_streams) = match member_cut(conn, realm_id, &caller, issuer).await?
+        {
+            MemberCut::NotVisible => return Ok(AccountRealmStreamList::NotVisible),
+            MemberCut::ForeignTenure => {
+                return Ok(AccountRealmStreamList::Unproved(
+                    "this Station does not hold the Realm's governing tenure",
+                ));
+            }
+            MemberCut::Member {
+                realm_head,
+                scoped_streams,
+                ..
+            } => (realm_head, scoped_streams),
+        };
         if scoped_streams {
             return Ok(AccountRealmStreamList::Unproved(
                 "Circle and Sidecar stream visibility is not proved at this cut",
@@ -250,7 +208,9 @@ pub(crate) async fn list_realm_streams_for_account(
         let Some(head) = realm_head else {
             return Ok(AccountRealmStreamList::Listed(Vec::new()));
         };
-        let Some(floor) = founder_realm_floor(conn, realm_id, &caller, joined_members).await?
+        let Some(floor) =
+            crate::account_stream_scan::caller_realm_floor_in_connection(conn, realm_id, &caller)
+                .await?
         else {
             return Ok(AccountRealmStreamList::Unproved(
                 "a per-member join or history floor is not proved at this cut",

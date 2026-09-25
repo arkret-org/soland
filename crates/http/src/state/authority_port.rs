@@ -53,7 +53,10 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::ModerationDecisionLift
         | EventKind::InviteCreate
         | EventKind::InviteRevoke
-        | EventKind::InviteCancel => Ok(SelfEventRoute::GuardedUnit),
+        | EventKind::InviteCancel
+        | EventKind::InviteAccept
+        | EventKind::CapabilityRevoke
+        | EventKind::CapabilityRelinquish => Ok(SelfEventRoute::GuardedUnit),
         EventKind::Unknown(raw) => Err(ServiceError::SchemaViolation(format!(
             "self Event kind {raw} is not registered"
         ))),
@@ -404,6 +407,9 @@ mod tests {
             EventKind::InviteCreate,
             EventKind::InviteRevoke,
             EventKind::InviteCancel,
+            EventKind::InviteAccept,
+            EventKind::CapabilityRevoke,
+            EventKind::CapabilityRelinquish,
         ] {
             assert_eq!(
                 self_event_route(&kind).unwrap(),
@@ -426,6 +432,9 @@ mod tests {
             EventKind::InviteCreate,
             EventKind::InviteRevoke,
             EventKind::InviteCancel,
+            EventKind::InviteAccept,
+            EventKind::CapabilityRevoke,
+            EventKind::CapabilityRelinquish,
         ];
         let mut refused = 0;
         for kind in EventKind::ALL.iter().filter(|kind| !routed.contains(kind)) {

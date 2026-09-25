@@ -1,14 +1,22 @@
-//! Same-cut admission of one ordinary `ak.member.state` transition.
+//! Same-cut admission of the Realm membership FSM.
 //!
-//! The Realm membership FSM (`common-fields.md` §4.5, `realm-and-space.md`
-//! §2.7) is decided here, inside the Event's RealmCommit transaction, against
-//! the locked durable member row, the Realm's typed join rule and join policy
-//! and the writer's capability at the accepting cut. The in-memory projection
-//! only pre-checks; nothing it holds is authority.
+//! Two registered Event kinds move a Realm `member_state` outside the
+//! bootstrap unit: an ordinary `ak.member.state` transition and the
+//! `leave -> join` edge an exact `ak.invite.accept` drives
+//! (`common-fields.md` §4.5, `realm-and-space.md` §2.7,
+//! `governance-objects.md` §5.3). An ordinary transition is decided here,
+//! inside the Event's RealmCommit transaction and before any of its writes, against the locked
+//! durable member row, the Realm's typed join rule and join policy and the
+//! writer's authorization from the same-cut evaluator in
+//! [`crate::realm_authorization_cut`]. The in-process reducer projection is
+//! never an input.
 //!
-//! Supported writers are the target ActorId itself and a writer holding
-//! `ak.realm.admin` at the same cut (the Realm root controller holds every
-//! action). Invite acceptance, the Agent controller carve-out, Circle and
+//! Supported `ak.member.state` writers are the target ActorId itself and a
+//! joined member holding an action that authorizes the kind at the same cut
+//! (the Realm root controller through its effective `ak.realm.owner`).
+//! Invite acceptance is decided with its Invite lifecycle by
+//! [`crate::invite_current_results`], which reuses this module's member row
+//! lock and Realm role check. The Agent controller carve-out, Circle and
 //! Strand scoped membership, Direct Conversation profiles and join policies
 //! whose proof gates need a same-cut re-evaluation stay closed.
 
@@ -20,6 +28,8 @@ use diesel::{OptionalExtension as _, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 use soland_storage::{ConflictCode, PersistenceError, PersistenceResult};
+
+use crate::realm_authorization_cut::{RealmAuthorizationCut, lock_realm_authorization_cut};
 
 #[derive(diesel::QueryableByName)]
 struct PresentRow {
@@ -87,6 +97,102 @@ fn edge_writer(from: &str, to: &str) -> Option<EdgeWriter> {
         ("ban", "leave") => Some(EdgeWriter::Admin),
         _ => None,
     }
+}
+
+/// Realm membership moves only on the Realm stream, by an Event its actor
+/// authored directly.
+fn require_realm_stream_carrier(
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+    {
+        return Err(unsupported(
+            "Realm membership is admitted only on the Realm stream",
+        ));
+    }
+    if event.executed_by.is_some() || event.applet_id.is_some() {
+        return Err(unsupported(
+            "delegated or Applet-authored membership has no same-cut admission",
+        ));
+    }
+    Ok(())
+}
+
+/// Only an ordinary collaboration Realm has the membership admission here;
+/// other Realm roles are governed by their own profile, and an Agent enters
+/// only through its controller binding.
+pub(crate) async fn require_ordinary_member(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    member: &arkret_wire::ActorId,
+) -> PersistenceResult<()> {
+    let ordinary = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
+           AND e.state='committed' AND e.envelope->'payload'->'object'->>'purpose'='collaboration') AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if !ordinary.present {
+        return Err(unsupported(
+            "membership of this Realm role is governed by its own profile",
+        ));
+    }
+    if let Some(account) = member.as_account_id() {
+        let agent = sql_query(
+            "SELECT EXISTS (SELECT 1 FROM agent_status_current_results WHERE agent_id=$1) AS present",
+        )
+        .bind::<Text, _>(account.principal_id.as_str())
+        .get_result::<PresentRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if agent.present {
+            return Err(unsupported(
+                "Agent membership needs its controller binding admission",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Lock the member row the current writer uses and read its membership at
+/// this cut. An absent row is the FSM's initial `leave`.
+pub(crate) async fn locked_membership(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    member: &arkret_wire::ActorId,
+) -> PersistenceResult<String> {
+    let member_key = member.to_string();
+    crate::unit_of_work::advisory_lock(
+        conn,
+        format!(
+            "parent-membership:member:{}:{member_key}",
+            realm_id.as_str()
+        ),
+    )
+    .await?;
+    Ok(sql_query(
+        "SELECT m.membership FROM member_state_current_results m \
+         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
+         WHERE m.realm_id=$1 AND m.member_id=$2 \
+           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
+           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id \
+         FOR UPDATE OF m",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(&member_key)
+    .get_result::<MembershipRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map_or_else(|| "leave".to_owned(), |row| row.membership))
 }
 
 async fn realm_current_value(
@@ -173,49 +279,12 @@ async fn check_self_entry(
     Ok(())
 }
 
-async fn holds_realm_admin(
-    conn: &mut AsyncPgConnection,
-    event: &arkret_wire::Event,
-    commit: &arkret_wire::RealmCommit,
-) -> PersistenceResult<bool> {
-    crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
-        conn,
-        &event.realm_id,
-        &event.actor_id,
-        &[arkret_wire::CapabilityActionId::REALM_ADMIN],
-        commit.committed_at,
-    )
-    .await
-}
-
-/// Decide one `ak.member.state` Event at its accepting cut.
-///
-/// Runs before any write of the Event's transaction, after the co-governed
-/// `parent_membership` cut (if any) was locked, and takes the member row lock
-/// the current writer uses.
-pub(crate) async fn admit_member_state_in_connection(
+/// Decide one ordinary `ak.member.state` Event at its accepting cut.
+async fn admit_member_state(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<()> {
-    if event.kind != arkret_wire::EventKind::MemberState {
-        return Ok(());
-    }
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-        || commit.stream_ref
-            != (arkret_wire::CommitStreamRef::Realm {
-                realm_id: event.realm_id.clone(),
-            })
-    {
-        return Err(unsupported(
-            "Realm membership is admitted only on the Realm stream",
-        ));
-    }
-    if event.executed_by.is_some() || event.applet_id.is_some() {
-        return Err(unsupported(
-            "delegated or Applet-authored membership has no same-cut admission",
-        ));
-    }
     let payload: MembershipPayload = serde_json::from_value(
         serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
     )
@@ -238,59 +307,8 @@ pub(crate) async fn admit_member_state_in_connection(
             "scoped, invited, Agent-bound or cascade membership has its own admission",
         ));
     }
-    let ordinary = sql_query(
-        "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
-         WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
-           AND e.state='committed' AND e.envelope->'payload'->'object'->>'purpose'='collaboration') AS present",
-    )
-    .bind::<Text, _>(event.realm_id.as_str())
-    .get_result::<PresentRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if !ordinary.present {
-        return Err(unsupported(
-            "membership of this Realm role is governed by its own profile",
-        ));
-    }
-    if let Some(account) = payload.member_id.as_account_id() {
-        let agent = sql_query(
-            "SELECT EXISTS (SELECT 1 FROM agent_status_current_results WHERE agent_id=$1) AS present",
-        )
-        .bind::<Text, _>(account.principal_id.as_str())
-        .get_result::<PresentRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        if agent.present {
-            return Err(unsupported(
-                "Agent membership needs its controller binding admission",
-            ));
-        }
-    }
-
-    let member_key = payload.member_id.to_string();
-    crate::unit_of_work::advisory_lock(
-        conn,
-        format!(
-            "parent-membership:member:{}:{member_key}",
-            event.realm_id.as_str()
-        ),
-    )
-    .await?;
-    let from = sql_query(
-        "SELECT m.membership FROM member_state_current_results m \
-         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
-         WHERE m.realm_id=$1 AND m.member_id=$2 \
-           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id \
-         FOR UPDATE OF m",
-    )
-    .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<Text, _>(&member_key)
-    .get_result::<MembershipRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .map_or_else(|| "leave".to_owned(), |row| row.membership);
+    require_ordinary_member(conn, &event.realm_id, &payload.member_id).await?;
+    let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;
     let to = state_name(payload.membership);
     let writer = edge_writer(&from, to)
         .ok_or_else(|| failed_precondition("membership transition is not a listed edge"))?;
@@ -304,25 +322,32 @@ pub(crate) async fn admit_member_state_in_connection(
             }
             check_self_entry(conn, &event.realm_id, to, !payload.gate_proofs.is_empty()).await
         }
-        EdgeWriter::SelfOrAdmin => {
-            if self_authored || holds_realm_admin(conn, event, commit).await? {
-                Ok(())
-            } else {
-                Err(capability_denied(
-                    "the writer holds no same-cut Realm administration capability",
-                ))
-            }
-        }
-        EdgeWriter::Admin => {
-            if holds_realm_admin(conn, event, commit).await? {
-                Ok(())
-            } else {
-                Err(capability_denied(
-                    "the writer holds no same-cut Realm administration capability",
-                ))
-            }
+        EdgeWriter::SelfOrAdmin if self_authored => Ok(()),
+        EdgeWriter::SelfOrAdmin | EdgeWriter::Admin => {
+            RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id)
+                .await?
+                .require_event_kind(&event.kind, commit.committed_at)
         }
     }
+}
+
+/// Decide one ordinary `ak.member.state` transition at its accepting cut.
+///
+/// Runs before any write of the Event's transaction, after the co-governed
+/// `parent_membership` cut (if any) was locked. It takes the Realm authority
+/// lock first and then the member row lock the current writer uses, so the
+/// verdict and the member write are one cut.
+pub(crate) async fn admit_member_state_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::MemberState {
+        return Ok(());
+    }
+    require_realm_stream_carrier(event, commit)?;
+    lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    admit_member_state(conn, event, commit).await
 }
 
 #[cfg(test)]

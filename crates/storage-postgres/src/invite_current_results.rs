@@ -11,17 +11,20 @@
 //!   directed-invite slot of that account in the Realm, whose value is the occupying create Event
 //!   id or null.
 //!
-//! `ak.invite.create` opens all three, `ak.invite.cancel` and every terminal
-//! `ak.invite.revoke` move the register by exact `previous_state` CAS and
-//! release the slot. Every refusal leaves zero writes because the caller rolls
-//! the whole transaction back. Authorization is decided by the same-cut
+//! `ak.invite.create` opens all three, `ak.invite.cancel`, every terminal
+//! `ak.invite.revoke` and `ak.invite.accept` move the register by exact
+//! `previous_state` CAS and release the slot. Acceptance also decides the
+//! accepting actor's `leave -> join` edge, whose `member_state` row the
+//! membership writer installs in the same transaction. Every refusal leaves zero writes because the
+//! caller rolls the whole transaction back. Authorization is decided by the same-cut
 //! evaluator in [`crate::realm_authorization_cut`]; the in-process reducer
 //! projection and the retired `realm_invites` mirror are never read.
 
 use arkret_models_collaboration::governance::membership_invite::{
-    InviteCancelPayload, InviteCancelTargetState, InviteCreatePayload, InviteDirectedInviteeValue,
-    InviteLiveTargetOccupant, InviteLiveTargetValue, InvitePreviousState, InviteRevokePayload,
-    InviteRevokePreviousState, InviteRevokeTargetState, validate_invite_create_wire_keys,
+    InviteAcceptPayload, InviteCancelPayload, InviteCancelTargetState, InviteCreatePayload,
+    InviteDirectedInviteeValue, InviteLiveTargetOccupant, InviteLiveTargetValue,
+    InvitePreviousState, InviteRevokePayload, InviteRevokePreviousState, InviteRevokeTargetState,
+    validate_invite_create_wire_keys,
 };
 use arkret_wire::{AccountId, ActorId, EventKind, InviteId, InviteState};
 use diesel::OptionalExtension as _;
@@ -524,6 +527,76 @@ async fn commit_invite_cancel(
     .await
 }
 
+/// `ak.invite.accept` (`models/governance-objects.md` §5.3): only the exact
+/// directed invitee accepts, out of the declared live state, and only while
+/// its own membership is `leave`. The Invite moves to `accepted` and releases
+/// its slot; the `leave -> join` member write follows in the same
+/// transaction. Authorization is the invitee's own signature over the exact
+/// target Invite, not a Realm grant: the invitee is not yet a member (see
+/// spec-open 1954 §3). A third-party Invite has no stored directed invitee
+/// and its claim binding is not admitted here, so it fails closed.
+async fn commit_invite_accept(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let payload: InviteAcceptPayload = typed_payload(event)?;
+    payload.validate().map_err(schema_violation)?;
+    lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    let realm_id = event.realm_id.as_str();
+    let stored = locked_lifecycle(conn, realm_id, &payload.invite_id)
+        .await?
+        .ok_or_else(|| PersistenceError::NotFound("invite not found".to_owned()))?;
+    // `stored_field_matches_payload`, unconditional for accept: both absent,
+    // or both present and byte-equal.
+    let stored_invitee = directed_invitee(conn, realm_id, &payload.invite_id).await?;
+    if stored_invitee != payload.invitee_account_id {
+        return Err(coded(
+            ConflictCode::InviteDirectedInviteeMismatch,
+            "invitee_account_id does not match the stored directed invitee",
+        ));
+    }
+    let Some(invitee) = stored_invitee else {
+        return Err(coded(
+            ConflictCode::UnsupportedFeature,
+            "a third-party Invite is accepted only through its claim binding",
+        ));
+    };
+    if event.actor_id.as_account_id() != Some(&invitee) {
+        return Err(coded(
+            ConflictCode::FailedPrecondition,
+            "only the directed invitee may accept the Invite",
+        ));
+    }
+    require_transition_from(
+        stored,
+        match payload.previous_state {
+            InvitePreviousState::Pending => InviteState::Pending,
+            InvitePreviousState::Claimed => InviteState::Claimed,
+        },
+    )?;
+    crate::member_state_admission::require_ordinary_member(conn, &event.realm_id, &event.actor_id)
+        .await?;
+    if crate::member_state_admission::locked_membership(conn, &event.realm_id, &event.actor_id)
+        .await?
+        != "leave"
+    {
+        return Err(coded(
+            ConflictCode::FailedPrecondition,
+            "invite acceptance moves membership only out of leave",
+        ));
+    }
+    set_lifecycle(
+        conn,
+        realm_id,
+        &payload.invite_id,
+        InviteState::Accepted,
+        commit,
+    )
+    .await?;
+    release_live_target(conn, realm_id, &payload.invite_id, &invitee, commit).await
+}
+
 /// Admit and write the registered Invite typed current results of `event`.
 /// Every other kind is left to its own writer.
 pub(crate) async fn commit_invite_current_results_in_connection(
@@ -533,7 +606,10 @@ pub(crate) async fn commit_invite_current_results_in_connection(
 ) -> PersistenceResult<()> {
     if !matches!(
         event.kind,
-        EventKind::InviteCreate | EventKind::InviteRevoke | EventKind::InviteCancel
+        EventKind::InviteCreate
+            | EventKind::InviteRevoke
+            | EventKind::InviteCancel
+            | EventKind::InviteAccept
     ) {
         return Ok(());
     }
@@ -542,6 +618,7 @@ pub(crate) async fn commit_invite_current_results_in_connection(
         EventKind::InviteCreate => commit_invite_create(conn, event, commit).await,
         EventKind::InviteRevoke => commit_invite_revoke(conn, event, commit).await,
         EventKind::InviteCancel => commit_invite_cancel(conn, event, commit).await,
+        EventKind::InviteAccept => commit_invite_accept(conn, event, commit).await,
         _ => Ok(()),
     }
 }

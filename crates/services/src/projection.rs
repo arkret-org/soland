@@ -1253,27 +1253,10 @@ impl ProjectionService {
             }
         }
     }
-
-    pub fn project_invite_acceptance(
-        &self,
-        realm_id: &str,
-        member: &str,
-        invite_created_at: DateTime<Utc>,
-        operation: &Operation,
-    ) {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        restore_invite_acceptance_membership(
-            &mut self.state.lock(),
-            realm_id,
-            member,
-            invite_created_at,
-            operation,
-        );
-    }
 }
 
-/// Materialize the membership cascade of an already accepted invite. Shared
-/// by live projection and canonical restart hydration.
+/// Materialize the membership cascade of an already accepted invite. Used
+/// by canonical restart hydration.
 pub(crate) fn restore_invite_acceptance_membership(
     state: &mut ProjectionState,
     realm_id: &str,

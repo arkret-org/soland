@@ -35,7 +35,7 @@ use super::{
 
 /// Event kinds whose admission writes only disclosed current families. Any
 /// other accepted kind refuses the cut rather than risk an omitted result.
-const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
+pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmCreate,
     EventKind::RealmProfile,
     EventKind::RealmPolicyBundle,

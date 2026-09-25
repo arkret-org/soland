@@ -347,10 +347,13 @@ async fn assert_refused(
     );
 }
 
-/// Only the listed FSM edges by their listed writers are admitted, and every
-/// refusal writes nothing.
+/// Real PostgreSQL: only the listed FSM edges by their listed writers are
+/// admitted -- self entry under an open join rule, self leave, and a kick or
+/// ban by a joined member the same-cut evaluator admits for `ak.member.state`
+/// (the root controller, or a holder of an active `ak.realm.admin` grant) --
+/// and every refusal writes nothing.
 #[tokio::test]
-async fn membership_transitions_need_their_listed_writer_and_entry_rule() {
+async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
@@ -435,6 +438,355 @@ async fn membership_transitions_need_their_listed_writer_and_entry_rule() {
         ConflictCode::FailedPrecondition,
     )
     .await;
+
+    // A grant of `ak.realm.admin` from the root lets Alice remove Carol; once
+    // the root revokes it, the same Alice is refused at the next cut.
+    let carol = remote_member("fsm-carol");
+    let carol_join = membership_request(&ban.authority_commit, carol.clone(), &carol, "join");
+    uow.commit_event(carol_join.clone()).await.unwrap();
+    let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
+    let admin_grant = grant_request(
+        &carol_join.authority_commit,
+        &alice,
+        &["ak.realm.admin"],
+        &root_event_ref,
+    );
+    uow.commit_event(admin_grant.clone()).await.unwrap();
+    let kick = membership_request(
+        &admin_grant.authority_commit,
+        alice.clone(),
+        &carol,
+        "leave",
+    );
+    uow.commit_event(kick.clone()).await.unwrap();
+    assert_eq!(
+        member_state(&pool, &realm_id, &carol).await.as_deref(),
+        Some("leave")
+    );
+    let revoke = sourced(next_request_for_actor(
+        &kick.authority_commit,
+        arkret_wire::EventKind::CapabilityRevoke,
+        founder_actor(),
+        serde_json::json!({
+            "grant_id": arkret_wire::GrantId::from_event_id(
+                &admin_grant.authority_commit.event.event_id
+            ),
+            "expected_revision": {
+                "commit_id": admin_grant.authority_commit.commit.commit_id,
+                "stream_position": admin_grant.authority_commit.commit.stream_position,
+            },
+        }),
+        kick.authority_commit.commit.committed_at,
+    ));
+    uow.commit_event(revoke.clone()).await.unwrap();
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&revoke.authority_commit, alice.clone(), &carol, "ban"),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    // Alice leaves by her own Event, and a member who left holds no
+    // administration even with the Realm's grants restored.
+    let alice_leave = membership_request(&revoke.authority_commit, alice.clone(), &alice, "leave");
+    uow.commit_event(alice_leave.clone()).await.unwrap();
+    assert_eq!(
+        member_state(&pool, &realm_id, &alice).await.as_deref(),
+        Some("leave")
+    );
+    // A distinct grant body: the first grant's exact Event is already committed.
+    let regrant = grant_request(
+        &alice_leave.authority_commit,
+        &alice,
+        &["ak.realm.admin", "ak.message.create"],
+        &root_event_ref,
+    );
+    uow.commit_event(regrant.clone()).await.unwrap();
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&regrant.authority_commit, alice.clone(), &carol, "ban"),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+}
+
+async fn realm_root_event_ref(pool: &PgPool, realm_id: &arkret_wire::RealmId) -> String {
+    #[derive(diesel::QueryableByName)]
+    struct RootRow {
+        #[diesel(sql_type = Text)]
+        authority_event_ref: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT authority_event_ref FROM realm_authority_root_current_results WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<RootRow>(&mut *conn)
+    .await
+    .unwrap()
+    .authority_event_ref
+}
+
+/// The root controller's grant of `actions` over the whole Realm to
+/// `subject`, sequenced after `previous`.
+fn grant_request(
+    previous: &AuthorityCommitTransaction,
+    subject: &arkret_wire::ActorId,
+    actions: &[&str],
+    root_event_ref: &str,
+) -> EventCommitRequest {
+    let realm_id = previous.event.realm_id.clone();
+    let at = previous.commit.committed_at;
+    sourced(next_request_for_actor(
+        previous,
+        arkret_wire::EventKind::CapabilityGrant,
+        founder_actor(),
+        serde_json::json!({
+            "grant": {
+                "schema": "ak.schema.capability.v1",
+                "realm_id": realm_id,
+                "issuer_id": founder_actor(),
+                "subject": subject,
+                "actions": actions,
+                "resources": [{"kind": "realm", "realm_id": realm_id}],
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": realm_id,
+                    "authority_event_ref": root_event_ref,
+                    "authority_generation": 0
+                }],
+                "issued_at": arkret_canonical::format_timestamp_canonical(at),
+            }
+        }),
+        at,
+    ))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AcceptState {
+    events: i64,
+    lifecycle: Vec<(String, serde_json::Value, String)>,
+    live_target: Vec<(String, serde_json::Value, String)>,
+    members: Vec<(String, serde_json::Value, String)>,
+}
+
+/// Every row an `ak.invite.accept` may write, with its covering Commit.
+async fn accept_state(pool: &PgPool, realm_id: &arkret_wire::RealmId) -> AcceptState {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        subject: String,
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let events =
+        diesel::sql_query("SELECT count(*) AS count FROM canonical_events WHERE realm_id=$1")
+            .bind::<Text, _>(realm_id.as_str())
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .unwrap()
+            .count;
+    let mut families = Vec::new();
+    for sql in [
+        "SELECT invite_id AS subject, value, current_commit_id \
+         FROM invite_lifecycle_current_results WHERE realm_id=$1 ORDER BY invite_id",
+        "SELECT invitee_account_id AS subject, value, current_commit_id \
+         FROM invite_live_target_current_results WHERE realm_id=$1 ORDER BY invitee_account_id",
+        "SELECT member_id AS subject, value, current_commit_id \
+         FROM member_state_current_results WHERE realm_id=$1 ORDER BY member_id",
+    ] {
+        families.push(
+            diesel::sql_query(sql)
+                .bind::<Text, _>(realm_id.as_str())
+                .load::<Row>(&mut *conn)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| (row.subject, row.value, row.current_commit_id))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let members = families.pop().unwrap();
+    let live_target = families.pop().unwrap();
+    let lifecycle = families.pop().unwrap();
+    AcceptState {
+        events,
+        lifecycle,
+        live_target,
+        members,
+    }
+}
+
+fn invite_create_request(
+    previous: &AuthorityCommitTransaction,
+    invitee: &arkret_wire::AccountId,
+) -> EventCommitRequest {
+    let at = previous.commit.committed_at;
+    sourced(next_request_for_actor(
+        previous,
+        arkret_wire::EventKind::InviteCreate,
+        founder_actor(),
+        serde_json::json!({
+            "invitee_account_id": invitee,
+            "introduction_evidence_digest": format!("sha256:{}", "a".repeat(64)),
+            "expires_at": arkret_canonical::format_timestamp_canonical(
+                at + chrono::TimeDelta::days(7)
+            ),
+        }),
+        at,
+    ))
+}
+
+/// An `ak.invite.accept` by `actor` of the Invite `create` opened, created
+/// `offset_ms` after the head it extends so that retries are distinct Events.
+fn accept_request(
+    previous: &AuthorityCommitTransaction,
+    actor: &arkret_wire::ActorId,
+    create: &EventCommitRequest,
+    previous_state: &str,
+    invitee: Option<&arkret_wire::AccountId>,
+    offset_ms: i64,
+) -> EventCommitRequest {
+    let mut payload = serde_json::json!({
+        "invite_id": arkret_wire::InviteId::from_event_id(&create.authority_commit.event.event_id),
+        "previous_state": previous_state,
+    });
+    if let Some(invitee) = invitee {
+        payload["invitee_account_id"] = serde_json::to_value(invitee).unwrap();
+    }
+    sourced(next_request_for_actor(
+        previous,
+        arkret_wire::EventKind::InviteAccept,
+        actor.clone(),
+        payload,
+        previous.commit.committed_at + chrono::TimeDelta::milliseconds(offset_ms),
+    ))
+}
+
+async fn assert_accept_refused(
+    pool: &PgPool,
+    uow: &PgEventCommitUnitOfWork,
+    request: EventCommitRequest,
+    code: ConflictCode,
+) {
+    let realm_id = request.authority_commit.event.realm_id.clone();
+    let before = accept_state(pool, &realm_id).await;
+    assert_refused(pool, uow, request, code).await;
+    assert_eq!(accept_state(pool, &realm_id).await, before);
+}
+
+/// Real PostgreSQL: the directed invitee's `ak.invite.accept` moves the Invite
+/// `pending -> accepted`, releases its live-target slot and moves its own
+/// member row `leave -> join`, all on the accepting Commit. Another actor, a
+/// payload invitee other than the stored one, a stale `previous_state` and a
+/// second accept of the terminal Invite are refused with zero writes; after
+/// leaving, the same account joins again through a fresh Invite.
+#[tokio::test]
+async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = admit(&pool, "accept-invite", "invite").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let bob = remote_member("accept-bob");
+    let bob_account = bob.as_account_id().unwrap().clone();
+    let carol = remote_member("accept-carol");
+    let carol_account = carol.as_account_id().unwrap().clone();
+
+    let create = invite_create_request(unit.transactions.last().unwrap(), &bob_account);
+    uow.commit_event(create.clone()).await.unwrap();
+    let head = &create.authority_commit;
+    for (request, code) in [
+        // Only the invitee accepts, even with the invitee's exact payload.
+        (
+            accept_request(head, &carol, &create, "pending", Some(&bob_account), 1),
+            ConflictCode::FailedPrecondition,
+        ),
+        // The payload invitee must match the stored one in both directions.
+        (
+            accept_request(head, &carol, &create, "pending", Some(&carol_account), 2),
+            ConflictCode::InviteDirectedInviteeMismatch,
+        ),
+        (
+            accept_request(head, &bob, &create, "pending", None, 3),
+            ConflictCode::InviteDirectedInviteeMismatch,
+        ),
+        // The declared pre-state is compared with the frozen register.
+        (
+            accept_request(head, &bob, &create, "claimed", Some(&bob_account), 4),
+            ConflictCode::FailedPrecondition,
+        ),
+    ] {
+        assert_accept_refused(&pool, &uow, request, code).await;
+    }
+    assert_eq!(member_state(&pool, &realm_id, &bob).await, None);
+
+    let accept = accept_request(head, &bob, &create, "pending", Some(&bob_account), 5);
+    uow.commit_event(accept.clone()).await.unwrap();
+    let accept_commit = accept.authority_commit.commit.commit_id.to_string();
+    let invite_id = arkret_wire::InviteId::from_event_id(&create.authority_commit.event.event_id);
+    let state = accept_state(&pool, &realm_id).await;
+    assert_eq!(
+        state.lifecycle,
+        vec![(
+            invite_id.to_string(),
+            serde_json::json!("accepted"),
+            accept_commit.clone()
+        )]
+    );
+    assert_eq!(
+        state.live_target,
+        vec![(
+            String::from_utf8(arkret_canonical::canonical_json_bytes(&bob_account).unwrap())
+                .unwrap(),
+            serde_json::Value::Null,
+            accept_commit.clone()
+        )]
+    );
+    assert!(state.members.contains(&(
+        bob.to_string(),
+        serde_json::json!({"membership": "join"}),
+        accept_commit.clone()
+    )));
+
+    // `accepted` is terminal: a second accept is refused before any write.
+    assert_accept_refused(
+        &pool,
+        &uow,
+        accept_request(
+            &accept.authority_commit,
+            &bob,
+            &create,
+            "pending",
+            Some(&bob_account),
+            6,
+        ),
+        ConflictCode::InviteAlreadyTerminal,
+    )
+    .await;
+
+    // After leaving, Bob returns only through a fresh Invite.
+    let leave = membership_request(&accept.authority_commit, bob.clone(), &bob, "leave");
+    uow.commit_event(leave.clone()).await.unwrap();
+    let reinvite = invite_create_request(&leave.authority_commit, &bob_account);
+    uow.commit_event(reinvite.clone()).await.unwrap();
+    let rejoin = accept_request(
+        &reinvite.authority_commit,
+        &bob,
+        &reinvite,
+        "pending",
+        Some(&bob_account),
+        7,
+    );
+    uow.commit_event(rejoin.clone()).await.unwrap();
+    assert_eq!(
+        member_state(&pool, &realm_id, &bob).await.as_deref(),
+        Some("join")
+    );
 }
 
 /// An Event owed to a remote Station cannot commit without the exact source
@@ -797,5 +1149,255 @@ async fn committed_replication_rejects_broken_predecessor_and_no_local_member() 
             .await
             .unwrap_err(),
         ConflictCode::CapabilityDenied,
+    );
+}
+
+fn scan_request(
+    realm_id: &arkret_wire::RealmId,
+    direction: arkret_wire::StreamScanDirection,
+    limit: u16,
+) -> arkret_wire::StreamScanRequest {
+    arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction,
+        limit,
+    }
+}
+
+async fn scanned(
+    store: &PgAuthorityCommitStore,
+    request: arkret_wire::StreamScanRequest,
+    account: &arkret_wire::ActorId,
+) -> soland_storage::AccountStreamScan {
+    store
+        .scan_stream_for_account(
+            &request,
+            account.as_account_id().unwrap(),
+            &arkret_wire::DidCoreId::new(STATION).unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+fn page(scan: soland_storage::AccountStreamScan) -> arkret_wire::StreamScanOutcome {
+    match scan {
+        soland_storage::AccountStreamScan::Page(page) => page,
+        other => panic!("expected a proved page, got {other:?}"),
+    }
+}
+
+/// Each row's position and whether its Event is disclosed in full.
+fn rows(page: &arkret_wire::StreamScanOutcome) -> Vec<(u64, bool)> {
+    page.committed_events
+        .iter()
+        .map(|item| {
+            (
+                item.commit().stream_position,
+                matches!(item, arkret_wire::CommittedEventView::Full(_)),
+            )
+        })
+        .collect()
+}
+
+/// Real PostgreSQL: under `since_join` a second member's readable interval
+/// starts at its own join Commit (`membership_join`, decision 0108 §1045),
+/// with the founder still reading from genesis (`stream_start`); pages stop
+/// at the floor without truncation, other members' Events of kinds not
+/// disclosed to every member are withheld on their Commit, the stream list
+/// names the same floor, a member who left reads nothing and a rejoin moves
+/// the floor to the new join.
+#[tokio::test]
+async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
+    use arkret_wire::StreamScanDirection::{After, Before};
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = admit(&pool, "scan-joined-member", "public").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let last = unit.transactions.last().unwrap();
+    let at = last.commit.committed_at;
+    let bob = remote_member("scan-bob");
+
+    let strand = sourced(next_request(
+        last,
+        arkret_wire::EventKind::StrandCreate,
+        &founder(),
+        serde_json::json!({"object": {
+            "schema":"ak.schema.strand.v1",
+            "realm_id":realm_id,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Scan discussion"},
+            "state":"active",
+            "created_by":founder_actor(),
+            "created_at":at,
+        }}),
+        at,
+    ));
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = sourced(next_request(
+        &strand.authority_commit,
+        arkret_wire::EventKind::RealmSetDefaultStrand,
+        &founder(),
+        serde_json::json!({
+            "realm_id": realm_id,
+            "strand_id": strand_id,
+            "expected_default_strand_id": null,
+        }),
+        at,
+    ));
+    uow.commit_event(default.clone()).await.unwrap();
+    let join = membership_request(&default.authority_commit, bob.clone(), &bob, "join");
+    uow.commit_event(join.clone()).await.unwrap();
+    // A joined member without a grant cannot write a Message.
+    assert_refused(
+        &pool,
+        &uow,
+        sourced(next_request_for_actor(
+            &join.authority_commit,
+            arkret_wire::EventKind::MessageCreate,
+            bob.clone(),
+            message_payload(&strand_id, "not yet"),
+            at,
+        )),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
+    let grant = grant_request(
+        &join.authority_commit,
+        &bob,
+        &["ak.message.create"],
+        &root_event_ref,
+    );
+    uow.commit_event(grant.clone()).await.unwrap();
+    let bob_message = sourced(next_request_for_actor(
+        &grant.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        bob.clone(),
+        message_payload(&strand_id, "hello from the second member"),
+        at,
+    ));
+    uow.commit_event(bob_message.clone()).await.unwrap();
+    let founder_message = sourced(next_request(
+        &bob_message.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        &founder(),
+        message_payload(&strand_id, "welcome"),
+        at,
+    ));
+    uow.commit_event(founder_message.clone()).await.unwrap();
+
+    let join_position = join.authority_commit.commit.stream_position;
+    let floor = arkret_wire::ReadableFloor {
+        oldest_position: join_position,
+        floor_commit_id: join.authority_commit.commit.commit_id.clone(),
+        floor_reason: arkret_wire::ReadableFloorReason::MembershipJoin,
+    };
+    let forward = page(scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await);
+    assert_eq!(forward.readable_floor.as_ref(), Some(&floor));
+    assert!(!forward.truncated);
+    assert_eq!(
+        rows(&forward),
+        vec![
+            (join_position, true),
+            (join_position + 1, false),
+            (join_position + 2, true),
+            (join_position + 3, true),
+        ],
+        "own join and Message and the founder's Message in full; the grant withheld"
+    );
+    // A cursor below the floor still starts at the floor.
+    let below = page(scanned(&store, scan_request(&realm_id, After(Some(2)), 1), &bob).await);
+    assert_eq!(rows(&below), vec![(join_position, true)]);
+    assert!(below.truncated);
+    // Backfill stops at the floor without reporting truncation.
+    let backfill = page(
+        scanned(
+            &store,
+            scan_request(&realm_id, Before(Some(join_position + 1)), 5),
+            &bob,
+        )
+        .await,
+    );
+    assert_eq!(rows(&backfill), vec![(join_position, true)]);
+    assert!(!backfill.truncated);
+    assert_eq!(backfill.readable_floor.as_ref(), Some(&floor));
+    let newest = page(scanned(&store, scan_request(&realm_id, Before(None), 2), &bob).await);
+    assert_eq!(
+        rows(&newest),
+        vec![(join_position + 3, true), (join_position + 2, true)]
+    );
+    assert!(newest.truncated);
+
+    // The founder's interval still starts at the genesis Commit.
+    let founder_page = page(
+        scanned(
+            &store,
+            scan_request(&realm_id, After(None), 50),
+            &founder_actor(),
+        )
+        .await,
+    );
+    assert_eq!(
+        founder_page
+            .readable_floor
+            .as_ref()
+            .map(|floor| (floor.oldest_position, floor.floor_reason)),
+        Some((0, arkret_wire::ReadableFloorReason::StreamStart))
+    );
+    assert_eq!(
+        founder_page.committed_events.len() as u64,
+        join_position + 4
+    );
+    assert!(rows(&founder_page).iter().all(|(_, full)| *full));
+
+    // The stream list names the same floor.
+    let listed = store
+        .list_realm_streams_for_account(
+            &realm_id,
+            bob.as_account_id().unwrap(),
+            &arkret_wire::DidCoreId::new(STATION).unwrap(),
+        )
+        .await
+        .unwrap();
+    let soland_storage::AccountRealmStreamList::Listed(streams) = listed else {
+        panic!("a joined member's stream list is proved, got {listed:?}");
+    };
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0].readable_floor.as_ref(), Some(&floor));
+
+    // A member who left has no readable interval; a rejoin reads only from
+    // the new join.
+    let leave = membership_request(
+        &founder_message.authority_commit,
+        bob.clone(),
+        &bob,
+        "leave",
+    );
+    uow.commit_event(leave.clone()).await.unwrap();
+    assert_eq!(
+        scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await,
+        soland_storage::AccountStreamScan::NotAuthorized
+    );
+    let rejoin = membership_request(&leave.authority_commit, bob.clone(), &bob, "join");
+    uow.commit_event(rejoin.clone()).await.unwrap();
+    let rejoined = page(scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await);
+    assert_eq!(
+        rejoined.readable_floor,
+        Some(arkret_wire::ReadableFloor {
+            oldest_position: rejoin.authority_commit.commit.stream_position,
+            floor_commit_id: rejoin.authority_commit.commit.commit_id.clone(),
+            floor_reason: arkret_wire::ReadableFloorReason::MembershipJoin,
+        })
+    );
+    assert_eq!(
+        rows(&rejoined),
+        vec![(rejoin.authority_commit.commit.stream_position, true)]
     );
 }

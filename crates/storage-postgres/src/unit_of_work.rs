@@ -2335,6 +2335,12 @@ async fn commit_one_in_connection(
         commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
+        // An accepted Invite decides its accepting actor's `leave -> join`
+        // edge against the member row before that row is written.
+        crate::invite_current_results::commit_invite_current_results_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         commit_parent_membership_current_results(conn, event, commit).await?;
         crate::strand_current_results::commit_strand_create_current_result_in_connection(
             conn, event, commit,
@@ -2353,10 +2359,6 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::moderation_state_current_results::commit_moderation_state_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::invite_current_results::commit_invite_current_results_in_connection(
             conn, event, commit,
         )
         .await?;

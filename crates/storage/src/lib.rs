@@ -280,11 +280,20 @@ pub enum ConflictCode {
     InviteKindRequiresRevoke,
     /// The target Invite is already in a terminal lifecycle state.
     InviteAlreadyTerminal,
+    /// A Capability Grant names authority its issuer does not hold at the
+    /// accepting cut (`capabilities.md` §3.2).
+    GrantExceedsIssuerAuthority,
+    /// A Capability Grant's issuer chain loops back on itself.
+    AuthorityCycle,
+    /// A child Capability Grant outlives its issuer's authority.
+    AuthorityExpiryWidening,
+    /// `ak.capability.relinquish` by an actor other than the grant subject.
+    GrantRelinquishNotSubject,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 49] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::BackupRevisionStale,
@@ -330,6 +339,10 @@ impl ConflictCode {
         Self::InviteDirectedInviteeMismatch,
         Self::InviteKindRequiresRevoke,
         Self::InviteAlreadyTerminal,
+        Self::GrantExceedsIssuerAuthority,
+        Self::AuthorityCycle,
+        Self::AuthorityExpiryWidening,
+        Self::GrantRelinquishNotSubject,
     ];
 
     #[must_use]
@@ -386,6 +399,14 @@ impl ConflictCode {
             }
             Self::InviteKindRequiresRevoke => arkret_wire::ReasonCode::INVITE_KIND_REQUIRES_REVOKE,
             Self::InviteAlreadyTerminal => arkret_wire::ReasonCode::INVITE_ALREADY_TERMINAL,
+            Self::GrantExceedsIssuerAuthority => {
+                arkret_wire::ReasonCode::GRANT_EXCEEDS_ISSUER_AUTHORITY
+            }
+            Self::AuthorityCycle => arkret_wire::ReasonCode::AUTHORITY_CYCLE,
+            Self::AuthorityExpiryWidening => arkret_wire::ReasonCode::AUTHORITY_EXPIRY_WIDENING,
+            Self::GrantRelinquishNotSubject => {
+                arkret_wire::ReasonCode::GRANT_RELINQUISH_NOT_SUBJECT
+            }
         }
     }
 

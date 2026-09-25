@@ -1,8 +1,8 @@
 //! A bounded Message create current writer at the accepting RealmCommit cut.
 //!
 //! The supported carrier is a Realm-scope plain text Message in an active
-//! local discussion Strand, authored by the Realm root controller or by a
-//! joined member holding `ak.message.create` at the accepting cut. Other Message forms
+//! local discussion Strand, by a joined author the same-cut evaluator admits
+//! for `ak.message.create` (the Realm root controller included). Other Message forms
 //! require their own source-scope and effect admission and remain closed.
 
 use diesel::OptionalExtension as _;
@@ -121,24 +121,15 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         .map_err(|error| {
             PersistenceError::Internal(format!("stored Realm controller is invalid: {error}"))
         })?;
-    // capabilities.md §2.2: joining does not grant writing. The root
-    // controller holds every action; any other member needs an active,
-    // chain-intact `ak.message.create` grant at this same cut.
-    if controller != event.actor_id
-        && !crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
-            conn,
-            &event.realm_id,
-            &event.actor_id,
-            &[arkret_wire::CapabilityActionId::MESSAGE_CREATE],
-            commit.committed_at,
-        )
-        .await?
-    {
-        return Err(PersistenceError::Conflict(format!(
-            "{}: Message actor holds no same-cut message capability",
-            soland_storage::ConflictCode::CapabilityDenied
-        )));
-    }
+    // capabilities.md §2.2: joining does not grant writing. The same-cut
+    // evaluator admits a joined author holding `ak.message.create`, the root
+    // controller through its effective `ak.realm.owner`.
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
     if event.authorization_ref.as_ref().is_some_and(|reference| {
         controller != event.actor_id || reference.as_str() != root.authority_event_ref.as_str()
     }) {

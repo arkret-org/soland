@@ -11,6 +11,12 @@
 //!   because redacted content must not stay recoverable from another read path
 //!   (`strand-and-message.md` §9.2).
 //!
+//! A joined member reading the Realm stream additionally receives another
+//! actor's Event in full only when its kind is disclosed to every member
+//! ([`crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS`]); every other
+//! kind (Invite, grant or moderator-only records whose per-member disclosure
+//! is not proved here) is withheld unless the caller authored it.
+//!
 //! The Commit slot is always kept, so the caller's chain stays verifiable.
 //! Withholding is never a reducer input and creates no new object.
 
@@ -87,6 +93,35 @@ pub(crate) async fn disclose_in_connection(
             } else {
                 CommittedEventView::Full(row)
             }
+        })
+        .collect())
+}
+
+/// [`disclose_in_connection`] for a joined member of the Realm reading its
+/// Realm stream: another actor's Event of a kind not disclosed to every
+/// member is withheld as well.
+pub(crate) async fn disclose_to_member_in_connection(
+    conn: &mut AsyncPgConnection,
+    rows: Vec<CommittedEventFullView>,
+    caller: &arkret_wire::ActorId,
+) -> PersistenceResult<Vec<CommittedEventView>> {
+    Ok(disclose_in_connection(conn, rows)
+        .await?
+        .into_iter()
+        .map(|item| match item {
+            CommittedEventView::Full(row)
+                if &row.event.actor_id != caller
+                    && !crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS
+                        .contains(&row.event.kind) =>
+            {
+                CommittedEventView::Withheld(CommittedEventWithheldView {
+                    commit: row.commit,
+                    event_disclosure: EventDisclosure {
+                        status: EventDisclosureStatus::Withheld,
+                    },
+                })
+            }
+            other => other,
         })
         .collect())
 }

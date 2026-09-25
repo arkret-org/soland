@@ -225,23 +225,6 @@ mod tests {
     }
 
     #[test]
-    fn invite_acceptance_ref_reads_canonical_invite_id() {
-        let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
-        let operation = op(
-            arkret_wire::EventKind::InviteAccept,
-            json!({
-                "sender": "ak:did_core:web:bob.example",
-                "invite_id": invite_id,
-            }),
-        );
-
-        assert_eq!(
-            invite_acceptance_ref_for_operation(&operation).as_deref(),
-            Some(invite_id)
-        );
-    }
-
-    #[test]
     fn realm_profile_reads_title_without_realm_id_fallback() {
         let operation = op(
             arkret_wire::EventKind::RealmProfile,

@@ -72,8 +72,19 @@ fn schema_violation(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::SchemaViolation(detail.into())
 }
 
+/// A refusal whose detail is a registered conflict code keeps it; any other
+/// reason (reserved or unregistered in the error-code registry) is a bare
+/// `failed_precondition` carrying that reason only as diagnostic text.
 fn conflict(detail: impl Into<String>) -> PersistenceError {
-    PersistenceError::Conflict(detail.into())
+    let detail = detail.into();
+    if soland_storage::ConflictCode::from_detail(&detail).is_some() {
+        PersistenceError::Conflict(detail)
+    } else {
+        PersistenceError::Conflict(format!(
+            "{}: {detail}",
+            soland_storage::ConflictCode::FailedPrecondition
+        ))
+    }
 }
 
 fn u64_from_i64(value: i64, what: &str) -> PersistenceResult<u64> {
@@ -723,6 +734,9 @@ async fn materialize_capability_grant(
         }
     }
 
+    // capabilities.md §3.2 / §10.3: a closed upstream ancestor refuses the
+    // first grant as `grant_exceeds_issuer_authority`; only a loop keeps its
+    // own `authority_cycle`.
     for parent_id in &parent_ids {
         validate_ancestor_graph(
             &grant_id,
@@ -733,7 +747,14 @@ async fn materialize_capability_grant(
             commit.committed_at,
             &mut BTreeSet::new(),
             1,
-        )?;
+        )
+        .map_err(|error| {
+            if error.conflict_code() == Some(soland_storage::ConflictCode::AuthorityCycle) {
+                error
+            } else {
+                conflict("grant_exceeds_issuer_authority")
+            }
+        })?;
     }
     let authority_depth = deepest
         .checked_add(1)
@@ -805,6 +826,25 @@ pub(crate) async fn commit_capability_grant_current_result_in_connection(
     let Some(mutation) = mutation_for_event(event)? else {
         return Ok(());
     };
+    // Grant and revoke are capability-gated: the same-cut evaluator requires
+    // a joined actor holding the kind's action (the root controller through
+    // its effective `ak.realm.owner`). Relinquish is subject-only and needs
+    // no action; it still decides at the Realm authority lock.
+    let cut = match event.kind {
+        arkret_wire::EventKind::CapabilityRelinquish => {
+            crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id)
+                .await?;
+            None
+        }
+        _ => Some(
+            crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+                conn,
+                event,
+                commit.committed_at,
+            )
+            .await?,
+        ),
+    };
     let grant_id = match &mutation {
         CapabilityGrantCurrentMutation::Create { grant_id, .. }
         | CapabilityGrantCurrentMutation::Close { grant_id, .. } => grant_id.clone(),
@@ -850,6 +890,28 @@ pub(crate) async fn commit_capability_grant_current_result_in_connection(
             },
             Some(current),
         ) => {
+            // capabilities.md §10.4 target guards: revoke by the target's
+            // issuer or the current root controller of its own Realm;
+            // relinquish by its subject only.
+            match status {
+                CapabilityGrantCurrentStatus::Revoked => {
+                    let root_controller = cut
+                        .as_ref()
+                        .is_some_and(crate::realm_authorization_cut::RealmAuthorizationCut::actor_is_root_controller);
+                    if current.value.issuer_id != event.actor_id && !root_controller {
+                        return Err(conflict(
+                            "capability_denied: the actor is neither the grant issuer nor the Realm root controller",
+                        ));
+                    }
+                }
+                CapabilityGrantCurrentStatus::Relinquished => {
+                    if !matches!(&current.value.subject, CapabilitySubject::Actor(subject) if subject == &event.actor_id)
+                    {
+                        return Err(conflict("grant_relinquish_not_subject"));
+                    }
+                }
+                CapabilityGrantCurrentStatus::Active => {}
+            }
             if current.status != CapabilityGrantCurrentStatus::Active
                 || !revision_matches(current, &expected_revision)
             {

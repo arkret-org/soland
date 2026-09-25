@@ -13,106 +13,6 @@ use soland_services::operation_semantics as kinds;
 use super::*;
 use crate::state::AppState;
 
-/// Spec invite-addressing.md / event-kind-registry — project an accepted
-/// `ak.invite.accept` durable event. The invitee_id submits it to close the
-/// group-invite loop:
-///   1. resolve the referenced invite, validating it is still `pending` and that the accepting
-///      sender == the invite's `invitee_id`;
-///   2. flip the `RealmInviteRecord` to `accepted`;
-///   3. cascade membership — activate the invitee_id's `ak.member.state(join)` in the target Realm
-///      (in-memory member index) so the capability grants carried on the invite take effect.
-///
-/// Replays and mismatched senders are ignored fail-closed.
-pub(super) async fn project_invite_accept_operation(state: &AppState, operation: &Operation) {
-    if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteAccept {
-        return;
-    }
-    let Some(account) = operation.context.sender.as_account_id() else {
-        return;
-    };
-    let accepter = account.to_string();
-    let member = operation.context.sender.to_string();
-    let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            "ak.invite.accept missing valid invite_ref/invite_id"
-        );
-        return;
-    };
-    let invites = state.realm_invites();
-    let Ok(Some(mut record)) = invites.get(&invite_id).await else {
-        tracing::warn!(invite_id = %invite_id, "ak.invite.accept references unknown invite");
-        return;
-    };
-    if record.invitee_id.as_deref() != Some(accepter.as_str()) {
-        tracing::warn!(
-            invite_id = %invite_id,
-            accepter = %accepter,
-            "ak.invite.accept sender is not the invitee_id; ignored"
-        );
-        return;
-    }
-    if record.realm_id != operation.realm_id.as_str() {
-        tracing::warn!(
-            invite_id = %invite_id,
-            record_realm = %record.realm_id,
-            operation_realm = %operation.realm_id,
-            "ak.invite.accept realm mismatch; ignored"
-        );
-        return;
-    }
-    if !matches!(record.status.as_str(), "pending" | "claimed") {
-        tracing::debug!(
-            invite_id = %invite_id,
-            status = %record.status,
-            "ak.invite.accept on non-acceptable invite; ignored"
-        );
-        return;
-    }
-    if record
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= operation.created_at)
-    {
-        tracing::warn!(invite_id = %invite_id, "ak.invite.accept on expired invite; ignored");
-        return;
-    }
-    record.status = "accepted".to_owned();
-    record.updated_at = Some(operation.created_at);
-    let realm_id = record.realm_id.clone();
-    let invite_created_at = record.created_at;
-    if let Err(error) = invites.put(record).await {
-        tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
-        return;
-    }
-    // Cascade membership: activate the invitee_id's join in the target Realm
-    // member index so subsequent realm-scoped reads include them.
-    if let Ok(realm_id_typed) = RealmId::new(realm_id.clone()) {
-        state
-            .realm_directory()
-            .add_member(&realm_id_typed, account.principal_id.clone());
-    }
-    project_invite_accept_membership(state, &realm_id, &member, invite_created_at, operation);
-    touch_realm(state, &realm_id).await;
-    tracing::info!(
-        invite_id = %invite_id,
-        invitee_id = %accepter,
-        realm_id = %realm_id,
-        "ak.invite.accept projected: invite accepted + membership cascaded"
-    );
-}
-
-fn project_invite_accept_membership(
-    state: &AppState,
-    realm_id: &str,
-    member: &str,
-    invite_created_at: chrono::DateTime<chrono::Utc>,
-    operation: &Operation,
-) {
-    state
-        .projections()
-        .project_invite_acceptance(realm_id, member, invite_created_at, operation);
-}
-
 pub(super) async fn project_invite_third_party_operation(state: &AppState, operation: &Operation) {
     if !kinds::operation_is_invite_third_party(operation) {
         return;
@@ -243,17 +143,6 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
             tracing::warn!(%error, invite_id = %invite_id, "failed to project invite claim")
         }
     }
-}
-
-pub(super) fn invite_acceptance_ref_for_operation(operation: &Operation) -> Option<String> {
-    operation
-        .payload
-        .get("invite_ref")
-        .or_else(|| operation.payload.get("invite_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| arkret_identifiers::InviteId::new((*value).to_owned()).is_ok())
-        .map(str::to_owned)
 }
 
 fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {

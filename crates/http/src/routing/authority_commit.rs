@@ -158,6 +158,25 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            // capabilities.md §10.4: relinquish is subject-only; the refusal
+            // does not reveal whether the target grant exists.
+            Some(soland_storage::ConflictCode::GrantRelinquishNotSubject) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    crate::error::error_http_status(arkret_wire::ErrorCode::CapabilityDenied),
+                    arkret_wire::ErrorCode::CAPABILITY_DENIED,
+                    "the actor is not the subject of the target grant",
+                    arkret_wire::ReasonCode::GRANT_RELINQUISH_NOT_SUBJECT,
+                    None,
+                );
+            }
+            Some(soland_storage::ConflictCode::CasConflict) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::CasConflict,
+                    res,
+                    detail,
+                );
+            }
             // join-policy.md §4: an entry refused by its rule or gates is one
             // non-enumerating `gate_check_failed`, whatever gate failed.
             Some(soland_storage::ConflictCode::GateCheckFailed) => {
@@ -177,7 +196,10 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid
                 | soland_storage::ConflictCode::InviteDirectedInviteeMismatch
                 | soland_storage::ConflictCode::InviteKindRequiresRevoke
-                | soland_storage::ConflictCode::InviteAlreadyTerminal),
+                | soland_storage::ConflictCode::InviteAlreadyTerminal
+                | soland_storage::ConflictCode::GrantExceedsIssuerAuthority
+                | soland_storage::ConflictCode::AuthorityCycle
+                | soland_storage::ConflictCode::AuthorityExpiryWidening),
             ) => {
                 return crate::error::render_error_with_reason_code(
                     res,
