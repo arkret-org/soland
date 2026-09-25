@@ -619,6 +619,54 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
         1
     );
 
+    // Sections 5.5 and 9.1.1: the self carrier takes neither the founding
+    // evidence nor any founding receipt or coordinate, and the outcome
+    // carries no receipt.
+    let carrier = serde_json::to_value(
+        arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::DirectConversationFounding(
+            unit.submission.clone(),
+        ),
+    )
+    .unwrap();
+    serde_json::from_value::<
+        arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest,
+    >(carrier.clone())
+    .expect("the exact carrier parses");
+    for (member, value) in [
+        (
+            "founding_authority_evidence",
+            serde_json::json!({"kind":"human"}),
+        ),
+        ("receipt", serde_json::json!({})),
+        ("source_acceptance_receipt", serde_json::json!({})),
+        ("realm_id", serde_json::to_value(&realm_id).unwrap()),
+    ] {
+        let mut injected = carrier.clone();
+        injected[member] = value;
+        assert!(
+            serde_json::from_value::<
+                arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest,
+            >(injected)
+            .is_err(),
+            "{member} is not a member of the self founding carrier"
+        );
+    }
+    let mut outcome = serde_json::to_value(
+        arkret_models_collaboration::authority_commit::DirectConversationFoundingAcceptanceOutcome {
+            unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
+            status: arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus::Committed,
+            commits: commits.clone(),
+        },
+    )
+    .unwrap();
+    outcome["receipt"] = serde_json::json!({});
+    assert!(
+        serde_json::from_value::<
+            arkret_models_collaboration::authority_commit::DirectConversationFoundingAcceptanceOutcome,
+        >(outcome)
+        .is_err()
+    );
+
     // An exact retry re-signed later still answers with the original four
     // byte-identical Commits; the fourth committed_at never moves.
     let later = at + chrono::Duration::seconds(5);
