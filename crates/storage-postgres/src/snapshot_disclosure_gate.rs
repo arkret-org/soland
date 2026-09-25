@@ -68,6 +68,12 @@ const AUDITED_FAMILIES: &[&str] = &[
     // while any row exists, never silently omitted from a signed cut.
     "moderation_report_current_results",
     "moderation_state_current_results",
+    // Invite families name invitee accounts outside the joined membership;
+    // their per-member disclosure is not proved here, so they refuse the cut
+    // below while any row exists.
+    "invite_lifecycle_current_results",
+    "invite_live_target_current_results",
+    "invite_directed_invitee_current_results",
     "realm_bootstrap_current_results",
     "agent_status_current_results",
     "agent_key_current_results",
@@ -270,6 +276,9 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM invite_lifecycle_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM invite_live_target_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM invite_directed_invitee_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())

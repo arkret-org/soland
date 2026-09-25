@@ -137,6 +137,20 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            Some(soland_storage::ConflictCode::InviteLiveTargetOccupied) => {
+                // The detail is the occupant's exact create Event id; the
+                // closed details are derived from it alone.
+                if let Ok(create_event_id) = arkret_wire::EventId::new(detail.to_owned()) {
+                    return crate::error::render_problem_envelope(
+                        res,
+                        crate::error::error_http_status(ErrorCode::FailedPrecondition),
+                        arkret_wire::problem_details::Problem::invite_live_target_occupied(
+                            "the invitee already has a live directed Invite in this Realm",
+                            arkret_wire::InviteLiveTargetOccupiedProblem::new(create_event_id),
+                        ),
+                    );
+                }
+            }
             Some(soland_storage::ConflictCode::CapabilityDenied) => {
                 return crate::error::render_error_code(
                     arkret_wire::ErrorCode::CapabilityDenied,
@@ -160,7 +174,10 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 code @ (soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired
                 | soland_storage::ConflictCode::JoinRulePolicyMismatch
-                | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid),
+                | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid
+                | soland_storage::ConflictCode::InviteDirectedInviteeMismatch
+                | soland_storage::ConflictCode::InviteKindRequiresRevoke
+                | soland_storage::ConflictCode::InviteAlreadyTerminal),
             ) => {
                 return crate::error::render_error_with_reason_code(
                     res,

@@ -187,7 +187,7 @@ pub enum ConflictCode {
     /// longer current (key-management.md §7.6).
     BackupRevisionStale,
     /// The Event producer holds no capability, at the accepting cut, for the
-    /// transition it requests.
+    /// transition it requests, or is not a joined member of its Realm.
     CapabilityDenied,
     /// `actor_seq` is older than the accepted actor frontier.
     CasConflict,
@@ -270,11 +270,21 @@ pub enum ConflictCode {
     TemporarilyUnavailable,
     /// A structurally valid wire feature has no admissible v1 form.
     UnsupportedFeature,
+    /// A directed `ak.invite.create` targets an account whose live-target
+    /// slot is occupied; the detail after the code is the occupant's exact
+    /// create Event id.
+    InviteLiveTargetOccupied,
+    /// The payload invitee and the stored directed invitee disagree.
+    InviteDirectedInviteeMismatch,
+    /// `ak.invite.cancel` targets an Invite without a stored directed invitee.
+    InviteKindRequiresRevoke,
+    /// The target Invite is already in a terminal lifecycle state.
+    InviteAlreadyTerminal,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 45] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::BackupRevisionStale,
@@ -316,6 +326,10 @@ impl ConflictCode {
         Self::TtlExpired,
         Self::TemporarilyUnavailable,
         Self::UnsupportedFeature,
+        Self::InviteLiveTargetOccupied,
+        Self::InviteDirectedInviteeMismatch,
+        Self::InviteKindRequiresRevoke,
+        Self::InviteAlreadyTerminal,
     ];
 
     #[must_use]
@@ -366,6 +380,12 @@ impl ConflictCode {
             Self::TtlExpired => "ttl_expired",
             Self::TemporarilyUnavailable => arkret_wire::ErrorCode::TEMPORARILY_UNAVAILABLE,
             Self::UnsupportedFeature => "unsupported_feature",
+            Self::InviteLiveTargetOccupied => arkret_wire::ReasonCode::INVITE_LIVE_TARGET_OCCUPIED,
+            Self::InviteDirectedInviteeMismatch => {
+                arkret_wire::ReasonCode::INVITE_DIRECTED_INVITEE_MISMATCH
+            }
+            Self::InviteKindRequiresRevoke => arkret_wire::ReasonCode::INVITE_KIND_REQUIRES_REVOKE,
+            Self::InviteAlreadyTerminal => arkret_wire::ReasonCode::INVITE_ALREADY_TERMINAL,
         }
     }
 

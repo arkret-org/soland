@@ -4394,6 +4394,58 @@ CREATE TABLE moderation_state_current_results (
  CHECK(jsonb_array_length(value->'assertions')>0)
 );
 
+-- `invite_lifecycle` typed current: the process-state register of one Invite,
+-- keyed by its InviteId (the create Event id retyped). The value is only the
+-- state name; every other Invite fact is its own registered family.
+CREATE TABLE invite_lifecycle_current_results (
+ realm_id TEXT NOT NULL,
+ invite_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,invite_id),
+ CHECK(jsonb_typeof(value)='string'),
+ CHECK((value #>> '{}') IN ('pending','claimed','send_failed','accepted','rejected','revoked',
+  'expired','revoked_by_capability_loss','revoked_by_inviter_left','invalidated_by_rate_limit'))
+);
+
+-- `invite_live_target` typed current: the one live directed-invite slot of an
+-- invitee account inside the Realm, keyed by canonical_json(invitee_account_id).
+-- The value is `{create_event_id}` while occupied and JSON null once a
+-- registered release write empties it; the released head is kept.
+CREATE TABLE invite_live_target_current_results (
+ realm_id TEXT NOT NULL,
+ invitee_account_id TEXT COLLATE "C" NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,invitee_account_id),
+ CHECK(jsonb_typeof(value)='null' OR (jsonb_typeof(value)='object'
+  AND (value - 'create_event_id')='{}'::jsonb
+  AND jsonb_typeof(value->'create_event_id')='string'))
+);
+CREATE UNIQUE INDEX invite_live_target_current_results_occupant
+ ON invite_live_target_current_results((value->>'create_event_id'))
+ WHERE jsonb_typeof(value)='object';
+
+-- `invite_directed_invitee` typed current: the create-locked invitee of one
+-- directed Invite, the reverse index of its live-target slot. A third-party
+-- Invite has no row.
+CREATE TABLE invite_directed_invitee_current_results (
+ realm_id TEXT NOT NULL,
+ invite_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,invite_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK((value - 'invitee_account_id')='{}'::jsonb),
+ CHECK(jsonb_typeof(value->'invitee_account_id')='object')
+);
+
 -- Ordinary Realm bootstrap singleton families share one physical table. Each
 -- row is keyed by its registered typed-current-result selector kind and by
 -- the exact RealmCommit that first established it.

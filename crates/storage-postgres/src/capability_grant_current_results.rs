@@ -22,7 +22,7 @@ pub struct PgCapabilityGrantCurrentResultStore {
 }
 
 #[derive(QueryableByName)]
-struct CapabilityGrantCurrentResultReadRow {
+pub(crate) struct CapabilityGrantCurrentResultReadRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
@@ -42,7 +42,7 @@ struct CapabilityGrantCurrentResultReadRow {
 }
 
 #[derive(QueryableByName)]
-struct RealmAuthorityRootReadRow {
+pub(crate) struct RealmAuthorityRootReadRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Jsonb)]
@@ -56,12 +56,12 @@ struct RealmAuthorityRootReadRow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct RealmAuthorityRootCurrent {
-    realm_id: RealmId,
-    controller_actor_id: ActorId,
-    controller_epoch: u64,
-    authority_generation: u64,
-    authority_event_ref: EventId,
+pub(crate) struct RealmAuthorityRootCurrent {
+    pub(crate) realm_id: RealmId,
+    pub(crate) controller_actor_id: ActorId,
+    pub(crate) controller_epoch: u64,
+    pub(crate) authority_generation: u64,
+    pub(crate) authority_event_ref: EventId,
 }
 
 fn corrupt(detail: impl Into<String>) -> PersistenceError {
@@ -80,7 +80,7 @@ fn u64_from_i64(value: i64, what: &str) -> PersistenceResult<u64> {
     u64::try_from(value).map_err(|_| corrupt(format!("stored {what} is negative")))
 }
 
-fn decode_authority_root(
+pub(crate) fn decode_authority_root(
     row: RealmAuthorityRootReadRow,
 ) -> PersistenceResult<RealmAuthorityRootCurrent> {
     Ok(RealmAuthorityRootCurrent {
@@ -238,7 +238,7 @@ pub(crate) async fn commit_realm_authority_root_current_result_in_connection(
     Ok(())
 }
 
-fn decode_row(
+pub(crate) fn decode_row(
     row: CapabilityGrantCurrentResultReadRow,
 ) -> PersistenceResult<CapabilityGrantCurrentResultRecord> {
     let realm_id = RealmId::from_str(&row.realm_id).map_err(|error| {
@@ -317,7 +317,7 @@ fn ordinary_authority_control(
     })
 }
 
-fn selector_covers(parent: &WireResourceSelector, child: &WireResourceSelector) -> bool {
+pub(crate) fn selector_covers(parent: &WireResourceSelector, child: &WireResourceSelector) -> bool {
     if parent.kind == ResourceSelectorKind::All {
         return false;
     }
@@ -368,18 +368,19 @@ fn selector_covers(parent: &WireResourceSelector, child: &WireResourceSelector) 
     })
 }
 
-fn grant_is_active_at(grant: &CapabilityGrant, accepted_at: chrono::DateTime<chrono::Utc>) -> bool {
+pub(crate) fn grant_is_active_at(
+    grant: &CapabilityGrant,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> bool {
     grant.status == CapabilityGrantStatus::Active
         && effective_not_before(grant).is_none_or(|value| value <= accepted_at)
         && effective_expires_at(grant).is_none_or(|value| value > accepted_at)
 }
 
 /// Whether `actor` may exercise one of `actions` over the whole Realm at this
-/// transaction's cut: it is the current Realm root controller, or it is the
-/// Actor subject of an active Capability Grant naming one of the actions on a
-/// selector that covers the Realm, whose temporal window contains `at`, whose
-/// other constraints are absent, and whose issuer chain is intact against the
-/// current root.
+/// transaction's cut: it is the current Realm root controller, or an active
+/// covering Capability Grant names it (see
+/// [`crate::realm_authorization_cut::RealmAuthorizationCut::grants_cover_any`]).
 ///
 /// The Realm root and every grant are Realm-stream typed current results, so a
 /// commit transaction holding the Realm authority lock reads a stable cut, and
@@ -391,90 +392,9 @@ pub(crate) async fn actor_holds_realm_action_in_connection(
     actions: &[&str],
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<bool> {
-    let Some(root) = sql_query(
-        "SELECT realm_id,controller_actor_id,controller_epoch,authority_generation,authority_event_ref \
-         FROM realm_authority_root_current_results WHERE realm_id=$1",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .get_result::<RealmAuthorityRootReadRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .map(decode_authority_root)
-    .transpose()?
-    else {
-        return Ok(false);
-    };
-    if &root.controller_actor_id == actor {
-        return Ok(true);
-    }
-    let stored = sql_query(
-        "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,\
-         current_stream_position,value FROM capability_grant_current_results \
-         WHERE realm_id=$1 ORDER BY grant_id ASC",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .load::<CapabilityGrantCurrentResultReadRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    let mut rows = BTreeMap::new();
-    for row in stored {
-        let record = decode_row(row)?;
-        rows.insert(record.grant_id, record.value);
-    }
-    let realm = WireResourceSelector::realm(realm_id.clone());
-    for (grant_id, grant) in &rows {
-        let covers = matches!(&grant.subject, CapabilitySubject::Actor(subject) if subject == actor)
-            && grant.realm_id.as_ref() == Some(realm_id)
-            && grant_is_active_at(grant, at)
-            && grant
-                .constraints
-                .iter()
-                .all(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
-            && grant
-                .actions
-                .iter()
-                .any(|action| actions.contains(&action.as_str()))
-            && grant
-                .resources
-                .iter()
-                .any(|resource| selector_covers(resource, &realm));
-        if !covers {
-            continue;
-        }
-        let chain_intact = grant.issuer_authority_refs.iter().all(|authority_ref| {
-            match authority_ref {
-                IssuerAuthorityRef::RealmRoot {
-                    realm_id: root_realm_id,
-                    authority_event_ref,
-                    authority_generation,
-                } => {
-                    root_realm_id == realm_id
-                        && root.authority_event_ref == *authority_event_ref
-                        && root.authority_generation == *authority_generation
-                }
-                IssuerAuthorityRef::Grant {
-                    grant_id: parent_id,
-                } => rows.get(parent_id).is_some_and(|parent| {
-                    matches!(&parent.subject, CapabilitySubject::Actor(subject) if subject == &grant.issuer_id)
-                }) && validate_ancestor_graph(
-                    grant_id,
-                    parent_id,
-                    &rows,
-                    &root,
-                    realm_id,
-                    at,
-                    &mut BTreeSet::new(),
-                    1,
-                )
-                .is_ok(),
-            }
-        });
-        if chain_intact && !grant.issuer_authority_refs.is_empty() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    let cut =
+        crate::realm_authorization_cut::RealmAuthorizationCut::read(conn, realm_id, actor).await?;
+    Ok(cut.actor_is_root_controller() || cut.grants_cover_any(actions, at))
 }
 
 fn root_sort_key(root: &AuthorityRootRef) -> PersistenceResult<Vec<u8>> {
@@ -493,7 +413,7 @@ fn sorted_unique_roots(
     Ok(keyed.into_iter().map(|(_, root)| root).collect())
 }
 
-fn validate_ancestor_graph(
+pub(crate) fn validate_ancestor_graph(
     child_id: &GrantId,
     current_id: &GrantId,
     rows: &BTreeMap<GrantId, CapabilityGrant>,

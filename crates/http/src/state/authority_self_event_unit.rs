@@ -43,6 +43,19 @@ pub(super) struct SelfEventUnitEffects {
     pub(super) franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
 }
 
+/// Kinds whose authorization and domain pre-state are decided only at the
+/// accepting transaction's cut, by the same-cut evaluator and their typed
+/// current writers. The in-process projection is neither consulted before
+/// them nor advanced after them.
+fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
+    matches!(
+        kind,
+        arkret_wire::EventKind::InviteCreate
+            | arkret_wire::EventKind::InviteRevoke
+            | arkret_wire::EventKind::InviteCancel
+    )
+}
+
 /// The original outcome of an exact duplicate Event, before any producer,
 /// evidence freshness or admission check runs again.
 pub(super) async fn exact_replay(
@@ -103,20 +116,23 @@ pub(super) async fn commit_event_unit(
         std::slice::from_ref(&operation),
     )
     .map_err(|reason| ServiceError::SchemaViolation(reason.to_owned()))?;
-    crate::routing::events::operations::validate_operation_policy(
-        state,
-        std::slice::from_ref(&operation),
-    )
-    .await
-    .map_err(|reason| ServiceError::Conflict(reason.to_owned()))?;
-    if event.kind == arkret_wire::EventKind::MessageCreate {
-        crate::routing::message_authoring::message_create_send_gate(state, event).await?;
-    }
-    if let Some(reason) = state
-        .projections()
-        .preflight_projected_batch_rejection(std::iter::once(&operation))
-    {
-        return Err(ServiceError::Conflict(reason));
+    let decided_at_cut = decided_at_commit_cut(&event.kind);
+    if !decided_at_cut {
+        crate::routing::events::operations::validate_operation_policy(
+            state,
+            std::slice::from_ref(&operation),
+        )
+        .await
+        .map_err(|reason| ServiceError::Conflict(reason.to_owned()))?;
+        if event.kind == arkret_wire::EventKind::MessageCreate {
+            crate::routing::message_authoring::message_create_send_gate(state, event).await?;
+        }
+        if let Some(reason) = state
+            .projections()
+            .preflight_projected_batch_rejection(std::iter::once(&operation))
+        {
+            return Err(ServiceError::Conflict(reason));
+        }
     }
     let committed_at = Utc::now();
     let method = arkret_wire::DidUrl::new(
@@ -212,6 +228,12 @@ pub(super) async fn commit_event_unit(
             return Ok(outcome);
         }
         return Err(error);
+    }
+    if decided_at_cut {
+        return Ok(AuthoritySubmitOutcome::Accepted {
+            status: AuthorityCommitStatus::Committed,
+            commit: transaction.commit,
+        });
     }
     let effect = state.projections().apply_projected(&operation, state.hlc());
     if matches!(

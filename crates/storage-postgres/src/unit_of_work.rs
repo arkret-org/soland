@@ -2350,6 +2350,10 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::invite_current_results::commit_invite_current_results_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         outcome.outbox_inserted += crate::realm_fanout::plan_realm_fanout_in_connection(
             conn,
             event,

@@ -717,6 +717,18 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM moderation_state_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'invite_lifecycle'::text AS selector_kind, to_jsonb(invite_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM invite_lifecycle_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'invite_live_target'::text AS selector_kind, invitee_account_id::jsonb AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM invite_live_target_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'invite_directed_invitee'::text AS selector_kind, to_jsonb(invite_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM invite_directed_invitee_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
@@ -792,6 +804,35 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         target_ref: serde_json::from_value(target_ref).map_err(|error| {
                             PersistenceError::Internal(format!(
                                 "stored moderation_state target is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
+                ("invite_lifecycle", Some(invite_id)) => {
+                    arkret_wire::CurrentSelector::InviteLifecycle {
+                        invite_id: serde_json::from_value(invite_id).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored invite_lifecycle selector identity is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
+                ("invite_live_target", Some(invitee_account_id)) => {
+                    arkret_wire::CurrentSelector::InviteLiveTarget {
+                        invitee_account_id: serde_json::from_value(invitee_account_id).map_err(
+                            |error| {
+                                PersistenceError::Internal(format!(
+                                    "stored invite_live_target selector identity is invalid: {error}"
+                                ))
+                            },
+                        )?,
+                    }
+                }
+                ("invite_directed_invitee", Some(invite_id)) => {
+                    arkret_wire::CurrentSelector::InviteDirectedInvitee {
+                        invite_id: serde_json::from_value(invite_id).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored invite_directed_invitee selector identity is invalid: {error}"
                             ))
                         })?,
                     }

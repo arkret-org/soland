@@ -4206,3 +4206,808 @@ async fn self_current_reads_answer_only_the_provable_cut() {
         AccountRealmStreamList::Unproved(_)
     ));
 }
+
+fn realm_event_request_as(
+    previous: &EventCommitRequest,
+    actor: &arkret_wire::AccountId,
+    kind: arkret_wire::EventKind,
+    payload: serde_json::Value,
+) -> EventCommitRequest {
+    let mut request = previous.clone();
+    let previous_commit = &previous.authority_commit.commit;
+    let realm_id = previous.authority_commit.event.realm_id.clone();
+    let event = event(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        &actor.principal_id,
+        &actor.station_id,
+        payload,
+        previous_commit.committed_at,
+    );
+    request.authority_commit.event = event.clone();
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("invite:{}", event.event_id).as_bytes()),
+    );
+    request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
+    request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
+    request.event.event_id = event.event_id.to_string();
+    request.event.actor_id = event.actor_id.to_string();
+    request.event.kind = event.kind.as_str().to_owned();
+    request.event.envelope = serde_json::to_value(&event).unwrap();
+    request.event.canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+    request.projections[0].event_kind = event.kind.as_str().to_owned();
+    request.projections[0].sender = Some(event.actor_id.to_string());
+    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request
+}
+
+fn invite_account(principal: &str, station: &str) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{principal}")).unwrap(),
+        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{station}")).unwrap(),
+    )
+}
+
+fn invite_create_payload(
+    invitee: &arkret_wire::AccountId,
+    digest_byte: char,
+    at: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "invitee_account_id": invitee,
+        "introduction_evidence_digest": format!("sha256:{}", digest_byte.to_string().repeat(64)),
+        "expires_at": arkret_canonical::format_timestamp_canonical(
+            at + chrono::TimeDelta::days(7)
+        ),
+    })
+}
+
+fn creator_account(unit: &OrdinaryRealmBootstrapCommitUnit) -> arkret_wire::AccountId {
+    unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone()
+}
+
+fn bootstrap_tail(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommitRequest {
+    // A request shaped on the last bootstrap Commit: the next Event of the
+    // Realm stream is sequenced right after it.
+    let mut request = strand_create_request(unit);
+    let last = unit.transactions.last().unwrap();
+    request.authority_commit.event = last.event.clone();
+    request.authority_commit.commit = last.commit.clone();
+    request
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct InviteFamilies {
+    events: i64,
+    lifecycle: Vec<(String, String, String)>,
+    directed: Vec<(String, serde_json::Value)>,
+    live_target: Vec<(String, serde_json::Value, String)>,
+}
+
+async fn invite_families(
+    pool: &soland_storage_postgres::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> InviteFamilies {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        subject: String,
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let events =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM canonical_events WHERE realm_id=$1")
+            .bind::<Text, _>(realm_id.as_str())
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .unwrap()
+            .count;
+    let mut rows = Vec::new();
+    for sql in [
+        "SELECT invite_id AS subject, value, current_commit_id \
+         FROM invite_lifecycle_current_results WHERE realm_id=$1 ORDER BY invite_id",
+        "SELECT invite_id AS subject, value, current_commit_id \
+         FROM invite_directed_invitee_current_results WHERE realm_id=$1 ORDER BY invite_id",
+        "SELECT invitee_account_id AS subject, value, current_commit_id \
+         FROM invite_live_target_current_results WHERE realm_id=$1 ORDER BY invitee_account_id",
+    ] {
+        rows.push(
+            diesel::sql_query(sql)
+                .bind::<Text, _>(realm_id.as_str())
+                .load::<Row>(&mut *conn)
+                .await
+                .unwrap(),
+        );
+    }
+    let live_target = rows.pop().unwrap();
+    let directed = rows.pop().unwrap();
+    let lifecycle = rows.pop().unwrap();
+    InviteFamilies {
+        events,
+        lifecycle: lifecycle
+            .into_iter()
+            .map(|row| {
+                (
+                    row.subject,
+                    row.value.as_str().unwrap().to_owned(),
+                    row.current_commit_id,
+                )
+            })
+            .collect(),
+        directed: directed
+            .into_iter()
+            .map(|row| (row.subject, row.value))
+            .collect(),
+        live_target: live_target
+            .into_iter()
+            .map(|row| (row.subject, row.value, row.current_commit_id))
+            .collect(),
+    }
+}
+
+fn live_target_key(account: &arkret_wire::AccountId) -> String {
+    String::from_utf8(arkret_canonical::canonical_json_bytes(account).unwrap()).unwrap()
+}
+
+async fn inject_joined_member(
+    pool: &soland_storage_postgres::PgPool,
+    unit: &OrdinaryRealmBootstrapCommitUnit,
+    member: &arkret_wire::AccountId,
+) {
+    let basis = unit.transactions.last().unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,'join',$3,$4,$5,$6)",
+    )
+    .bind::<Text, _>(basis.event.realm_id.as_str())
+    .bind::<Text, _>(arkret_wire::ActorId::account(member.clone()).to_string())
+    .bind::<Text, _>(basis.commit.commit_id.as_str())
+    .bind::<BigInt, _>(basis.commit.stream_position as i64)
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"membership":"join"}))
+    .bind::<diesel::sql_types::Timestamptz, _>(basis.commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+}
+
+fn invite_grant_request(
+    previous: &EventCommitRequest,
+    unit: &OrdinaryRealmBootstrapCommitUnit,
+    root_event_ref: &str,
+    subject: &arkret_wire::AccountId,
+    actions: &[&str],
+) -> EventCommitRequest {
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    realm_event_request_as(
+        previous,
+        &creator_account(unit),
+        arkret_wire::EventKind::CapabilityGrant,
+        serde_json::json!({
+            "grant": {
+                "schema": "ak.schema.capability.v1",
+                "realm_id": realm_id,
+                "issuer_id": unit.transactions[0].event.actor_id,
+                "subject": arkret_wire::ActorId::account(subject.clone()),
+                "actions": actions,
+                "resources": [{"kind": "realm", "realm_id": realm_id}],
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": realm_id,
+                    "authority_event_ref": root_event_ref,
+                    "authority_generation": 0
+                }],
+                "issued_at": arkret_canonical::format_timestamp_canonical(
+                    previous.authority_commit.commit.committed_at
+                ),
+            }
+        }),
+    )
+}
+
+/// Assert `request` was refused with `code` and left zero writes: no Event
+/// row, no Commit and no Invite typed current change.
+async fn assert_refused_with_zero_writes(
+    uow: &PgEventCommitUnitOfWork,
+    store: &PgAuthorityCommitStore,
+    pool: &soland_storage_postgres::PgPool,
+    request: &EventCommitRequest,
+    code: soland_storage::ConflictCode,
+) -> soland_storage::PersistenceError {
+    let realm_id = &request.authority_commit.event.realm_id;
+    let before = invite_families(pool, realm_id).await;
+    let error = uow.commit_event(request.clone()).await.unwrap_err();
+    assert_eq!(error.conflict_code(), Some(code), "{error}");
+    assert!(
+        store
+            .committed_event(&request.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        event_row_count(pool, request.authority_commit.event.event_id.as_str()).await,
+        0
+    );
+    assert_eq!(invite_families(pool, realm_id).await, before);
+    error
+}
+
+/// Real PostgreSQL: a directed `ak.invite.create` opens the three Invite
+/// families in its Commit's transaction, and a second live directed create
+/// for the same account is `invite_live_target_occupied` with zero writes.
+#[tokio::test]
+async fn invite_create_writes_three_families_and_rejects_occupied_live_target() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let creator = creator_account(&unit);
+    let bob = invite_account("bob.example", "bob-station.example");
+
+    let create = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '1', at),
+    );
+    let outcome = uow.commit_event(create.clone()).await.unwrap();
+    assert!(outcome.event_inserted);
+    let create_event_id = create.authority_commit.event.event_id.clone();
+    let invite_id = arkret_wire::InviteId::from_event_id(&create_event_id);
+    let commit_id = create.authority_commit.commit.commit_id.to_string();
+    assert!(
+        store
+            .committed_event(&create_event_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let families = invite_families(&pool, &realm_id).await;
+    assert_eq!(
+        families.lifecycle,
+        vec![(
+            invite_id.to_string(),
+            "pending".to_owned(),
+            commit_id.clone()
+        )]
+    );
+    assert_eq!(
+        families.directed,
+        vec![(
+            invite_id.to_string(),
+            serde_json::json!({"invitee_account_id": bob})
+        )]
+    );
+    assert_eq!(
+        families.live_target,
+        vec![(
+            live_target_key(&bob),
+            serde_json::json!({"create_event_id": create_event_id}),
+            commit_id.clone()
+        )]
+    );
+    let material = store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for selector in [
+        arkret_wire::CurrentSelector::InviteLifecycle {
+            invite_id: invite_id.clone(),
+        },
+        arkret_wire::CurrentSelector::InviteDirectedInvitee {
+            invite_id: invite_id.clone(),
+        },
+        arkret_wire::CurrentSelector::InviteLiveTarget {
+            invitee_account_id: bob.clone(),
+        },
+    ] {
+        assert!(
+            material.current_state_entries.iter().any(|entry| matches!(
+                entry,
+                arkret_wire::TypedCurrentResult::Value { selector: found, revision, source_stream_ref, .. }
+                    if found == &selector
+                        && revision.commit_id == create.authority_commit.commit.commit_id
+                        && source_stream_ref == &create.authority_commit.commit.stream_ref
+            )),
+            "{selector:?}"
+        );
+    }
+
+    // A second live directed create for the same account: rejected before
+    // any write, with the occupant's exact create Event id.
+    let second = realm_event_request_as(
+        &create,
+        &creator,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '2', at),
+    );
+    let error = assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &second,
+        soland_storage::ConflictCode::InviteLiveTargetOccupied,
+    )
+    .await;
+    let soland_storage::PersistenceError::Conflict(detail) = error else {
+        panic!("occupied slot is a conflict");
+    };
+    assert_eq!(
+        detail,
+        format!("invite_live_target_occupied: {create_event_id}")
+    );
+
+    // Another account's slot is independent.
+    let carol = invite_account("carol.example", "carol-station.example");
+    let other = realm_event_request_as(
+        &create,
+        &creator,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&carol, '3', at),
+    );
+    uow.commit_event(other).await.unwrap();
+    assert_eq!(invite_families(&pool, &realm_id).await.live_target.len(), 2);
+}
+
+/// Real PostgreSQL: the same-cut evaluator refuses an actor without an
+/// authorizing action (and a non-member) with `capability_denied` and zero
+/// writes, admits a joined member once the root grants `ak.invite.create`,
+/// and a grant revoked ahead of the create at the same head leaves the
+/// create refused with zero writes.
+#[tokio::test]
+async fn invite_create_without_invite_capability_is_capability_denied_with_zero_writes() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let station = unit.transactions[0].expected_authority.service_id.clone();
+    let member = invite_account(
+        "member.example",
+        &station.as_str()["ak:did_core:web:".len()..],
+    );
+    let stranger = invite_account(
+        "stranger.example",
+        &station.as_str()["ak:did_core:web:".len()..],
+    );
+    let bob = invite_account("bob.example", "bob-station.example");
+    inject_joined_member(&pool, &unit, &member).await;
+    let tail = bootstrap_tail(&unit);
+
+    for actor in [&member, &stranger] {
+        let denied = realm_event_request_as(
+            &tail,
+            actor,
+            arkret_wire::EventKind::InviteCreate,
+            invite_create_payload(&bob, '4', at),
+        );
+        assert_refused_with_zero_writes(
+            &uow,
+            &store,
+            &pool,
+            &denied,
+            soland_storage::ConflictCode::CapabilityDenied,
+        )
+        .await;
+    }
+
+    let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
+    let grant = invite_grant_request(
+        &tail,
+        &unit,
+        &root_event_ref,
+        &member,
+        &["ak.invite.create"],
+    );
+    uow.commit_event(grant.clone()).await.unwrap();
+    let grant_id = arkret_wire::GrantId::from_event_id(&grant.authority_commit.event.event_id);
+
+    // The member's create is prepared against the grant's head, but the
+    // root's revoke of that grant commits at the same head first: the create
+    // cannot commit on that head, and sequenced after the revoke it is
+    // refused by the evaluator at its own cut.
+    let prepared = realm_event_request_as(
+        &grant,
+        &member,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '5', at),
+    );
+    let revoke = realm_event_request_as(
+        &grant,
+        &creator_account(&unit),
+        arkret_wire::EventKind::CapabilityRevoke,
+        serde_json::json!({
+            "grant_id": grant_id,
+            "expected_revision": {
+                "commit_id": grant.authority_commit.commit.commit_id,
+                "stream_position": grant.authority_commit.commit.stream_position,
+            }
+        }),
+    );
+    uow.commit_event(revoke.clone()).await.unwrap();
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &prepared,
+        soland_storage::ConflictCode::TemporarilyUnavailable,
+    )
+    .await;
+    let resequenced = realm_event_request_as(
+        &revoke,
+        &member,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '5', at),
+    );
+    assert_eq!(
+        resequenced.authority_commit.event,
+        prepared.authority_commit.event
+    );
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &resequenced,
+        soland_storage::ConflictCode::CapabilityDenied,
+    )
+    .await;
+
+    // Racing a fresh grant's revoke against a create on one head leaves one
+    // winner; whichever order commits, the create never survives a revoke
+    // that precedes it.
+    // A distinct grant body: the first grant's exact Event is already committed.
+    let regrant = invite_grant_request(
+        &revoke,
+        &unit,
+        &root_event_ref,
+        &member,
+        &["ak.invite.create", "ak.invite.revoke"],
+    );
+    uow.commit_event(regrant.clone()).await.unwrap();
+    let regrant_id = arkret_wire::GrantId::from_event_id(&regrant.authority_commit.event.event_id);
+    let racing_create = realm_event_request_as(
+        &regrant,
+        &member,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '6', at),
+    );
+    let racing_revoke = realm_event_request_as(
+        &regrant,
+        &creator_account(&unit),
+        arkret_wire::EventKind::CapabilityRevoke,
+        serde_json::json!({
+            "grant_id": regrant_id,
+            "expected_revision": {
+                "commit_id": regrant.authority_commit.commit.commit_id,
+                "stream_position": regrant.authority_commit.commit.stream_position,
+            }
+        }),
+    );
+    let create_uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let revoke_uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let (create_result, revoke_result) = tokio::join!(
+        create_uow.commit_event(racing_create.clone()),
+        revoke_uow.commit_event(racing_revoke.clone())
+    );
+    match (create_result, revoke_result) {
+        (Ok(_), Err(error)) => {
+            assert_eq!(
+                error.conflict_code(),
+                Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+            );
+            let after = realm_event_request_as(
+                &racing_create,
+                &creator_account(&unit),
+                arkret_wire::EventKind::CapabilityRevoke,
+                serde_json::to_value(&racing_revoke.authority_commit.event.payload).unwrap(),
+            );
+            uow.commit_event(after).await.unwrap();
+            assert_eq!(invite_families(&pool, &realm_id).await.lifecycle.len(), 1);
+        }
+        (Err(error), Ok(_)) => {
+            assert_eq!(
+                error.conflict_code(),
+                Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+            );
+            let after = realm_event_request_as(
+                &racing_revoke,
+                &member,
+                arkret_wire::EventKind::InviteCreate,
+                invite_create_payload(&bob, '6', at),
+            );
+            assert_refused_with_zero_writes(
+                &uow,
+                &store,
+                &pool,
+                &after,
+                soland_storage::ConflictCode::CapabilityDenied,
+            )
+            .await;
+            assert!(invite_families(&pool, &realm_id).await.lifecycle.is_empty());
+        }
+        (create, revoke) => panic!(
+            "expected exactly one winner: create ok={} revoke ok={}",
+            create.is_ok(),
+            revoke.is_ok()
+        ),
+    }
+}
+
+/// Real PostgreSQL: `ak.invite.revoke` and `ak.invite.cancel` move the
+/// lifecycle only by exact `previous_state` CAS, release the live-target slot
+/// on leaving the live set (and never on `send_failed`), and a released slot
+/// accepts a fresh directed create for the same account.
+#[tokio::test]
+async fn invite_revoke_releases_live_target_and_stale_previous_state_fails() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let creator = creator_account(&unit);
+    let bob = invite_account("bob.example", "bob-station.example");
+    let slot = live_target_key(&bob);
+    let slot_value = |families: &InviteFamilies| {
+        families
+            .live_target
+            .iter()
+            .find(|(key, ..)| key == &slot)
+            .map(|(_, value, commit)| (value.clone(), commit.clone()))
+            .unwrap()
+    };
+    let lifecycle_of = |families: &InviteFamilies, invite_id: &arkret_wire::InviteId| {
+        families
+            .lifecycle
+            .iter()
+            .find(|(id, ..)| id == invite_id.as_str())
+            .map(|(_, state, _)| state.clone())
+            .unwrap()
+    };
+
+    let create = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '1', at),
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let first_event_id = create.authority_commit.event.event_id.clone();
+    let first = arkret_wire::InviteId::from_event_id(&first_event_id);
+    let revoke = |previous: &EventCommitRequest, payload: serde_json::Value| {
+        realm_event_request_as(
+            previous,
+            &creator,
+            arkret_wire::EventKind::InviteRevoke,
+            payload,
+        )
+    };
+
+    // A declared pre-state that is not the frozen register is refused.
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &revoke(
+            &create,
+            serde_json::json!({
+                "invite_id": first, "previous_state": "claimed",
+                "invitee_account_id": bob, "target_state": "revoked"
+            }),
+        ),
+        soland_storage::ConflictCode::FailedPrecondition,
+    )
+    .await;
+
+    // send_failed keeps the Invite live: the slot is not released.
+    let send_failed = revoke(
+        &create,
+        serde_json::json!({
+            "invite_id": first, "previous_state": "pending", "target_state": "send_failed",
+            "reason_code": "delivery_target_unreachable"
+        }),
+    );
+    uow.commit_event(send_failed.clone()).await.unwrap();
+    let families = invite_families(&pool, &realm_id).await;
+    assert_eq!(lifecycle_of(&families, &first), "send_failed");
+    assert_eq!(
+        slot_value(&families),
+        (
+            serde_json::json!({"create_event_id": first_event_id}),
+            create.authority_commit.commit.commit_id.to_string()
+        )
+    );
+
+    // The register moved: the old declared pre-state is now stale.
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &revoke(
+            &send_failed,
+            serde_json::json!({
+                "invite_id": first, "previous_state": "pending",
+                "invitee_account_id": bob, "target_state": "revoked"
+            }),
+        ),
+        soland_storage::ConflictCode::FailedPrecondition,
+    )
+    .await;
+    // A directed Invite cannot keep its slot by omitting its invitee.
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &revoke(
+            &send_failed,
+            serde_json::json!({
+                "invite_id": first, "previous_state": "send_failed", "target_state": "revoked"
+            }),
+        ),
+        soland_storage::ConflictCode::InviteDirectedInviteeMismatch,
+    )
+    .await;
+
+    let revoked = revoke(
+        &send_failed,
+        serde_json::json!({
+            "invite_id": first, "previous_state": "send_failed",
+            "invitee_account_id": bob, "target_state": "revoked"
+        }),
+    );
+    uow.commit_event(revoked.clone()).await.unwrap();
+    let families = invite_families(&pool, &realm_id).await;
+    assert_eq!(lifecycle_of(&families, &first), "revoked");
+    assert_eq!(
+        slot_value(&families),
+        (
+            serde_json::Value::Null,
+            revoked.authority_commit.commit.commit_id.to_string()
+        )
+    );
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &revoke(
+            &revoked,
+            serde_json::json!({
+                "invite_id": first, "previous_state": "pending",
+                "invitee_account_id": bob, "target_state": "expired"
+            }),
+        ),
+        soland_storage::ConflictCode::InviteAlreadyTerminal,
+    )
+    .await;
+
+    // The released slot is a reusable register: a fresh create re-occupies it.
+    let reinvite = realm_event_request_as(
+        &revoked,
+        &creator,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '2', at),
+    );
+    uow.commit_event(reinvite.clone()).await.unwrap();
+    let second_event_id = reinvite.authority_commit.event.event_id.clone();
+    let second = arkret_wire::InviteId::from_event_id(&second_event_id);
+    assert_eq!(
+        slot_value(&invite_families(&pool, &realm_id).await).0,
+        serde_json::json!({"create_event_id": second_event_id})
+    );
+
+    // Cancel: the invitee binding is exact, the invitee may only decline, and
+    // the inviter's cancel releases the slot.
+    let cancel = |previous: &EventCommitRequest,
+                  actor: &arkret_wire::AccountId,
+                  invitee: &arkret_wire::AccountId,
+                  target: &str| {
+        realm_event_request_as(
+            previous,
+            actor,
+            arkret_wire::EventKind::InviteCancel,
+            serde_json::json!({
+                "invite_id": second, "previous_state": "pending",
+                "invitee_account_id": invitee, "target_state": target
+            }),
+        )
+    };
+    let mallory = invite_account("mallory.example", "bob-station.example");
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &cancel(&reinvite, &creator, &mallory, "revoked"),
+        soland_storage::ConflictCode::InviteDirectedInviteeMismatch,
+    )
+    .await;
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &cancel(&reinvite, &bob, &bob, "revoked"),
+        soland_storage::ConflictCode::CapabilityDenied,
+    )
+    .await;
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &cancel(&reinvite, &creator, &bob, "rejected"),
+        soland_storage::ConflictCode::CapabilityDenied,
+    )
+    .await;
+    let declined = cancel(&reinvite, &bob, &bob, "rejected");
+    uow.commit_event(declined.clone()).await.unwrap();
+    let families = invite_families(&pool, &realm_id).await;
+    assert_eq!(lifecycle_of(&families, &second), "rejected");
+    assert_eq!(slot_value(&families).0, serde_json::Value::Null);
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &cancel(&declined, &creator, &bob, "revoked"),
+        soland_storage::ConflictCode::InviteAlreadyTerminal,
+    )
+    .await;
+
+    let third = realm_event_request_as(
+        &declined,
+        &creator,
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(&bob, '3', at),
+    );
+    uow.commit_event(third.clone()).await.unwrap();
+    let third_id = arkret_wire::InviteId::from_event_id(&third.authority_commit.event.event_id);
+    let cancelled = realm_event_request_as(
+        &third,
+        &creator,
+        arkret_wire::EventKind::InviteCancel,
+        serde_json::json!({
+            "invite_id": third_id, "previous_state": "pending",
+            "invitee_account_id": bob, "target_state": "revoked"
+        }),
+    );
+    uow.commit_event(cancelled).await.unwrap();
+    let families = invite_families(&pool, &realm_id).await;
+    assert_eq!(lifecycle_of(&families, &third_id), "revoked");
+    assert_eq!(slot_value(&families).0, serde_json::Value::Null);
+    assert_eq!(families.lifecycle.len(), 3);
+    assert_eq!(families.directed.len(), 3);
+}

@@ -1,0 +1,547 @@
+//! The three Invite typed current writers at the accepting RealmCommit cut.
+//!
+//! `models/governance-objects.md` §5.3 splits one directed Invite into three
+//! registered families, all written in the transaction that installs the
+//! Event's Commit:
+//!
+//! - `invite_lifecycle`, keyed by InviteId: the process-state register;
+//! - `invite_directed_invitee`, keyed by InviteId: the create-locked invitee, absent for a
+//!   third-party Invite;
+//! - `invite_live_target`, keyed by `canonical_json(invitee_account_id)`: the one live
+//!   directed-invite slot of that account in the Realm, whose value is the occupying create Event
+//!   id or null.
+//!
+//! `ak.invite.create` opens all three, `ak.invite.cancel` and every terminal
+//! `ak.invite.revoke` move the register by exact `previous_state` CAS and
+//! release the slot. Every refusal leaves zero writes because the caller rolls
+//! the whole transaction back. Authorization is decided by the same-cut
+//! evaluator in [`crate::realm_authorization_cut`]; the in-process reducer
+//! projection and the retired `realm_invites` mirror are never read.
+
+use arkret_models_collaboration::governance::membership_invite::{
+    InviteCancelPayload, InviteCancelTargetState, InviteCreatePayload, InviteDirectedInviteeValue,
+    InviteLiveTargetOccupant, InviteLiveTargetValue, InvitePreviousState, InviteRevokePayload,
+    InviteRevokePreviousState, InviteRevokeTargetState, validate_invite_create_wire_keys,
+};
+use arkret_wire::{AccountId, ActorId, EventKind, InviteId, InviteState};
+use diesel::OptionalExtension as _;
+use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use serde_json::Value;
+use soland_storage::{ConflictCode, PersistenceError, PersistenceResult};
+
+use crate::realm_authorization_cut::{
+    RealmAuthorizationCut, authorize_capability_gated_event_in_connection,
+    lock_realm_authorization_cut,
+};
+
+#[derive(diesel::QueryableByName)]
+struct ValueRow {
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ActorRow {
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+}
+
+fn coded(code: ConflictCode, detail: impl std::fmt::Display) -> PersistenceError {
+    PersistenceError::Conflict(format!("{code}: {detail}"))
+}
+
+fn corrupt(detail: impl std::fmt::Display) -> PersistenceError {
+    PersistenceError::Internal(format!("stored Invite typed current is invalid: {detail}"))
+}
+
+fn schema_violation(detail: impl std::fmt::Display) -> PersistenceError {
+    PersistenceError::SchemaViolation(detail.to_string())
+}
+
+/// `canonical_json(invitee_account_id)`, the only `invite_live_target` subject.
+fn live_target_key(invitee: &AccountId) -> PersistenceResult<String> {
+    let bytes = arkret_canonical::canonical_json_bytes(invitee).map_err(schema_violation)?;
+    String::from_utf8(bytes).map_err(schema_violation)
+}
+
+fn stream_position(commit: &arkret_wire::RealmCommit) -> PersistenceResult<i64> {
+    i64::try_from(commit.stream_position)
+        .map_err(|_| schema_violation("Invite stream position exceeds BIGINT"))
+}
+
+fn typed_payload<T: serde::de::DeserializeOwned>(
+    event: &arkret_wire::Event,
+) -> PersistenceResult<T> {
+    serde_json::from_value(
+        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+    )
+    .map_err(schema_violation)
+}
+
+/// Invite Events are Realm-scope, carried on the Realm stream and directly
+/// authored: no delegated executor and no Applet may stand in for the actor.
+fn require_realm_stream_carrier(
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    arkret_schema::validate_event_for_submit(event).map_err(schema_violation)?;
+    let realm_stream = arkret_wire::CommitStreamRef::Realm {
+        realm_id: event.realm_id.clone(),
+    };
+    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
+        || commit.stream_ref != realm_stream
+        || commit.event_ref != event.event_id
+    {
+        return Err(PersistenceError::Conflict(
+            "Invite typed current writers require the Realm source stream".to_owned(),
+        ));
+    }
+    if event.executed_by.is_some() || event.applet_id.is_some() {
+        return Err(coded(
+            ConflictCode::CapabilityDenied,
+            "an Invite Event must be directly authored by its actor",
+        ));
+    }
+    Ok(())
+}
+
+async fn locked_value(
+    conn: &mut AsyncPgConnection,
+    sql: &'static str,
+    realm_id: &str,
+    subject: &str,
+) -> PersistenceResult<Option<Value>> {
+    diesel::sql_query(sql)
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(subject)
+        .get_result::<ValueRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(|row| row.value))
+        .map_err(PersistenceError::database)
+}
+
+async fn locked_lifecycle(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    invite_id: &InviteId,
+) -> PersistenceResult<Option<InviteState>> {
+    locked_value(
+        conn,
+        "SELECT value FROM invite_lifecycle_current_results \
+         WHERE realm_id=$1 AND invite_id=$2 FOR UPDATE",
+        realm_id,
+        invite_id.as_str(),
+    )
+    .await?
+    .map(|value| {
+        value
+            .as_str()
+            .and_then(InviteState::from_wire)
+            .ok_or_else(|| corrupt("invite_lifecycle value is not a registered state"))
+    })
+    .transpose()
+}
+
+async fn directed_invitee(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    invite_id: &InviteId,
+) -> PersistenceResult<Option<AccountId>> {
+    locked_value(
+        conn,
+        "SELECT value FROM invite_directed_invitee_current_results \
+         WHERE realm_id=$1 AND invite_id=$2 FOR UPDATE",
+        realm_id,
+        invite_id.as_str(),
+    )
+    .await?
+    .map(|value| {
+        serde_json::from_value::<InviteDirectedInviteeValue>(value)
+            .map(|value| value.invitee_account_id)
+            .map_err(corrupt)
+    })
+    .transpose()
+}
+
+async fn locked_live_target(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    key: &str,
+) -> PersistenceResult<InviteLiveTargetValue> {
+    Ok(locked_value(
+        conn,
+        "SELECT value FROM invite_live_target_current_results \
+         WHERE realm_id=$1 AND invitee_account_id=$2 FOR UPDATE",
+        realm_id,
+        key,
+    )
+    .await?
+    .map(serde_json::from_value::<InviteLiveTargetValue>)
+    .transpose()
+    .map_err(corrupt)?
+    .flatten())
+}
+
+/// The actor that signed the Invite's `ak.invite.create`, found through the
+/// registered retype of its InviteId (`models/common-fields.md` §6.0).
+async fn inviter(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    invite_id: &InviteId,
+) -> PersistenceResult<ActorId> {
+    let create_event_id = invite_id.event_id();
+    let token = crate::ids::parse_event_id(create_event_id.as_str())
+        .ok_or_else(|| corrupt("InviteId does not retype to a canonical Event token"))?;
+    let row = diesel::sql_query(
+        "SELECT e.actor_id FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.realm_id=$2 AND e.kind=$3 AND e.state='committed'",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<Text, _>(realm_id)
+    .bind::<Text, _>(EventKind::InviteCreate.as_str())
+    .get_result::<ActorRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| corrupt("invite_lifecycle has no committed ak.invite.create"))?;
+    serde_json::from_str(&row.actor_id).map_err(corrupt)
+}
+
+async fn upsert(
+    conn: &mut AsyncPgConnection,
+    sql: &'static str,
+    realm_id: &str,
+    subject: &str,
+    value: &Value,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<usize> {
+    diesel::sql_query(sql)
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(subject)
+        .bind::<Text, _>(commit.commit_id.as_str())
+        .bind::<BigInt, _>(stream_position(commit)?)
+        .bind::<Jsonb, _>(value)
+        .bind::<Timestamptz, _>(commit.committed_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)
+}
+
+async fn set_live_target(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    key: &str,
+    value: &InviteLiveTargetValue,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let value = serde_json::to_value(value).map_err(PersistenceError::database)?;
+    upsert(
+        conn,
+        "INSERT INTO invite_live_target_current_results \
+         (realm_id,invitee_account_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (realm_id,invitee_account_id) DO UPDATE SET \
+         current_commit_id=EXCLUDED.current_commit_id, \
+         current_stream_position=EXCLUDED.current_stream_position, \
+         value=EXCLUDED.value, updated_at=EXCLUDED.updated_at",
+        realm_id,
+        key,
+        &value,
+        commit,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn set_lifecycle(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    invite_id: &InviteId,
+    state: InviteState,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let updated = upsert(
+        conn,
+        "UPDATE invite_lifecycle_current_results SET current_commit_id=$3, \
+         current_stream_position=$4, value=$5, updated_at=$6 \
+         WHERE realm_id=$1 AND invite_id=$2",
+        realm_id,
+        invite_id.as_str(),
+        &Value::String(state.as_str().to_owned()),
+        commit,
+    )
+    .await?;
+    if updated != 1 {
+        return Err(corrupt("invite_lifecycle row vanished inside its lock"));
+    }
+    Ok(())
+}
+
+/// Release the slot of a directed Invite that leaves the live set. The slot
+/// must still name this Invite's create Event: a live directed Invite always
+/// occupies its own slot, and it can leave the live set only once.
+async fn release_live_target(
+    conn: &mut AsyncPgConnection,
+    realm_id: &str,
+    invite_id: &InviteId,
+    invitee: &AccountId,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let key = live_target_key(invitee)?;
+    let occupant = locked_live_target(conn, realm_id, &key).await?;
+    if occupant.map(|occupant| occupant.create_event_id) != Some(invite_id.event_id()) {
+        return Err(coded(
+            ConflictCode::ReducerProjectionFailed,
+            "a live directed Invite does not occupy its own live-target slot",
+        ));
+    }
+    set_live_target(conn, realm_id, &key, &None, commit).await
+}
+
+/// `terminal_states` refuse every later transition; otherwise the declared
+/// `previous_state` must equal the frozen register exactly.
+fn require_transition_from(stored: InviteState, declared: InviteState) -> PersistenceResult<()> {
+    if stored.is_terminal() {
+        return Err(coded(
+            ConflictCode::InviteAlreadyTerminal,
+            format!("the Invite is already {}", stored.as_str()),
+        ));
+    }
+    if stored != declared {
+        return Err(coded(
+            ConflictCode::FailedPrecondition,
+            format!(
+                "previous_state {} does not match the current invite_lifecycle {}",
+                declared.as_str(),
+                stored.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+async fn commit_invite_create(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    authorize_capability_gated_event_in_connection(conn, event, commit.committed_at).await?;
+    let wire = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    validate_invite_create_wire_keys(&wire).map_err(schema_violation)?;
+    let payload: InviteCreatePayload = serde_json::from_value(wire).map_err(schema_violation)?;
+    payload
+        .invitee_account_id
+        .validate()
+        .map_err(schema_violation)?;
+    let realm_id = event.realm_id.as_str();
+    let invite_id = InviteId::from_event_id(&event.event_id);
+    let key = live_target_key(&payload.invitee_account_id)?;
+    if let Some(occupant) = locked_live_target(conn, realm_id, &key).await? {
+        return Err(coded(
+            ConflictCode::InviteLiveTargetOccupied,
+            occupant.create_event_id,
+        ));
+    }
+    let inserted = upsert(
+        conn,
+        "INSERT INTO invite_lifecycle_current_results \
+         (realm_id,invite_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+        realm_id,
+        invite_id.as_str(),
+        &Value::String(InviteState::Pending.as_str().to_owned()),
+        commit,
+    )
+    .await?;
+    if inserted != 1 {
+        return Err(coded(
+            ConflictCode::DuplicateConflict,
+            "the Invite already exists",
+        ));
+    }
+    let directed = serde_json::to_value(InviteDirectedInviteeValue {
+        invitee_account_id: payload.invitee_account_id.clone(),
+    })
+    .map_err(PersistenceError::database)?;
+    let inserted = upsert(
+        conn,
+        "INSERT INTO invite_directed_invitee_current_results \
+         (realm_id,invite_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+        realm_id,
+        invite_id.as_str(),
+        &directed,
+        commit,
+    )
+    .await?;
+    if inserted != 1 {
+        return Err(coded(
+            ConflictCode::DuplicateConflict,
+            "the Invite already has a directed invitee",
+        ));
+    }
+    set_live_target(
+        conn,
+        realm_id,
+        &key,
+        &Some(InviteLiveTargetOccupant {
+            create_event_id: event.event_id.clone(),
+        }),
+        commit,
+    )
+    .await
+}
+
+async fn commit_invite_revoke(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    authorize_capability_gated_event_in_connection(conn, event, commit.committed_at).await?;
+    let payload: InviteRevokePayload = typed_payload(event)?;
+    payload.validate().map_err(schema_violation)?;
+    let realm_id = event.realm_id.as_str();
+    let stored = locked_lifecycle(conn, realm_id, &payload.invite_id)
+        .await?
+        .ok_or_else(|| PersistenceError::NotFound("invite not found".to_owned()))?;
+    require_transition_from(
+        stored,
+        match payload.previous_state {
+            InviteRevokePreviousState::Pending => InviteState::Pending,
+            InviteRevokePreviousState::Claimed => InviteState::Claimed,
+            InviteRevokePreviousState::SendFailed => InviteState::SendFailed,
+        },
+    )?;
+    let target = match payload.target_state {
+        InviteRevokeTargetState::Revoked => InviteState::Revoked,
+        InviteRevokeTargetState::Expired => InviteState::Expired,
+        InviteRevokeTargetState::SendFailed => InviteState::SendFailed,
+        InviteRevokeTargetState::RevokedByCapabilityLoss => InviteState::RevokedByCapabilityLoss,
+        InviteRevokeTargetState::RevokedByInviterLeft => InviteState::RevokedByInviterLeft,
+        InviteRevokeTargetState::InvalidatedByRateLimit => InviteState::InvalidatedByRateLimit,
+    };
+    if payload.target_state.releases_live_target() {
+        // `stored_field_matches_payload`, conditioned on target_state: both
+        // absent, or both present and byte-equal.
+        let stored_invitee = directed_invitee(conn, realm_id, &payload.invite_id).await?;
+        if stored_invitee != payload.invitee_account_id {
+            return Err(coded(
+                ConflictCode::InviteDirectedInviteeMismatch,
+                "invitee_account_id does not match the stored directed invitee",
+            ));
+        }
+    }
+    set_lifecycle(conn, realm_id, &payload.invite_id, target, commit).await?;
+    if let Some(invitee) = payload.invitee_account_id.as_ref() {
+        release_live_target(conn, realm_id, &payload.invite_id, invitee, commit).await?;
+    }
+    Ok(())
+}
+
+/// `ak.invite.cancel` is authorized by who the actor is towards this Invite
+/// (`models/governance-objects.md` §5.3): the invitee may only decline
+/// (`rejected`); cancelling (`revoked`) belongs to the inviter while it is a
+/// joined member, or to an actor holding an action authorizing the kind.
+async fn authorize_invite_cancel(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    payload: &InviteCancelPayload,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    match payload.target_state {
+        InviteCancelTargetState::Rejected => {
+            if event.actor_id.as_account_id() == Some(&payload.invitee_account_id) {
+                Ok(())
+            } else {
+                Err(coded(
+                    ConflictCode::CapabilityDenied,
+                    "only the invitee may decline an Invite",
+                ))
+            }
+        }
+        InviteCancelTargetState::Revoked => {
+            let cut = RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id).await?;
+            let inviter = inviter(conn, event.realm_id.as_str(), &payload.invite_id).await?;
+            if inviter == event.actor_id && cut.actor_is_joined() {
+                return Ok(());
+            }
+            cut.require_event_kind(&event.kind, at)
+        }
+    }
+}
+
+async fn commit_invite_cancel(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    let payload: InviteCancelPayload = typed_payload(event)?;
+    payload
+        .invitee_account_id
+        .validate()
+        .map_err(schema_violation)?;
+    let realm_id = event.realm_id.as_str();
+    let stored = locked_lifecycle(conn, realm_id, &payload.invite_id)
+        .await?
+        .ok_or_else(|| PersistenceError::NotFound("invite not found".to_owned()))?;
+    authorize_invite_cancel(conn, event, &payload, commit.committed_at).await?;
+    match directed_invitee(conn, realm_id, &payload.invite_id).await? {
+        None => {
+            return Err(coded(
+                ConflictCode::InviteKindRequiresRevoke,
+                "the Invite has no stored directed invitee",
+            ));
+        }
+        Some(stored_invitee) if stored_invitee != payload.invitee_account_id => {
+            return Err(coded(
+                ConflictCode::InviteDirectedInviteeMismatch,
+                "invitee_account_id does not match the stored directed invitee",
+            ));
+        }
+        Some(_) => {}
+    }
+    require_transition_from(
+        stored,
+        match payload.previous_state {
+            InvitePreviousState::Pending => InviteState::Pending,
+            InvitePreviousState::Claimed => InviteState::Claimed,
+        },
+    )?;
+    let target = match payload.target_state {
+        InviteCancelTargetState::Rejected => InviteState::Rejected,
+        InviteCancelTargetState::Revoked => InviteState::Revoked,
+    };
+    set_lifecycle(conn, realm_id, &payload.invite_id, target, commit).await?;
+    release_live_target(
+        conn,
+        realm_id,
+        &payload.invite_id,
+        &payload.invitee_account_id,
+        commit,
+    )
+    .await
+}
+
+/// Admit and write the registered Invite typed current results of `event`.
+/// Every other kind is left to its own writer.
+pub(crate) async fn commit_invite_current_results_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if !matches!(
+        event.kind,
+        EventKind::InviteCreate | EventKind::InviteRevoke | EventKind::InviteCancel
+    ) {
+        return Ok(());
+    }
+    require_realm_stream_carrier(event, commit)?;
+    match event.kind {
+        EventKind::InviteCreate => commit_invite_create(conn, event, commit).await,
+        EventKind::InviteRevoke => commit_invite_revoke(conn, event, commit).await,
+        EventKind::InviteCancel => commit_invite_cancel(conn, event, commit).await,
+        _ => Ok(()),
+    }
+}

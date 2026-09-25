@@ -49,6 +49,7 @@ mod events;
 mod federation;
 mod governance;
 mod idempotency;
+mod invite_current_results;
 mod invite_locators;
 mod invite_new_source_ledger;
 mod issued_realm_snapshots;
@@ -82,6 +83,7 @@ mod push_handoff;
 #[cfg(test)]
 mod read_capacity_tests;
 mod read_cursors;
+mod realm_authorization_cut;
 mod realm_bootstrap_current_results;
 mod realm_default_strand_current_results;
 mod realm_fanout;
