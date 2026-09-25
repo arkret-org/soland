@@ -67,72 +67,6 @@ struct CountRow {
     count: i64,
 }
 
-#[derive(diesel::QueryableByName)]
-struct JoinedMemberRow {
-    #[diesel(sql_type = Text)]
-    member_id: String,
-}
-
-/// These local-only Realm operations have no federation targets. The Realm authority row is
-/// already locked by the just-installed Commit, so every concurrent member
-/// transition targeting the same Realm waits until this transaction finishes.
-async fn ensure_local_only_realm_source_cut(
-    conn: &mut AsyncPgConnection,
-    event: &arkret_wire::Event,
-    authority_station: &arkret_wire::DidCoreId,
-    outbox: &[soland_storage::FederationOutboxRecord],
-) -> soland_storage::PersistenceResult<()> {
-    if !matches!(
-        event.kind,
-        arkret_wire::EventKind::StrandCreate
-            | arkret_wire::EventKind::RealmSetDefaultStrand
-            | arkret_wire::EventKind::MessageCreate
-            | arkret_wire::EventKind::SelfModerationReport
-            | arkret_wire::EventKind::ModerationDecision
-            | arkret_wire::EventKind::ModerationDecisionLift
-    ) {
-        return Ok(());
-    }
-    if !outbox.is_empty() {
-        return Err(PersistenceError::Conflict(
-            "local Realm Event federation target planning is unavailable".to_owned(),
-        ));
-    }
-    let rows = sql_query(
-        "SELECT m.member_id FROM member_state_current_results m \
-         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
-         WHERE m.realm_id=$1 AND m.membership='join' \
-           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id",
-    )
-    .bind::<Text, _>(event.realm_id.as_str())
-    .load::<JoinedMemberRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if rows.is_empty() {
-        return Err(PersistenceError::Conflict(
-            "local Realm Event has no confirmed joined source member".to_owned(),
-        ));
-    }
-    for row in rows {
-        let member: arkret_wire::ActorId =
-            serde_json::from_str(&row.member_id).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "confirmed member identity is malformed: {error}"
-                ))
-            })?;
-        if member
-            .as_account_id()
-            .is_none_or(|account| &account.station_id != authority_station)
-        {
-            return Err(PersistenceError::Conflict(
-                "local Realm Event remote delivery target set is not planned".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
 const MAX_INLINE_REALM_STATE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 fn enforce_inline_snapshot_capacity(
@@ -499,7 +433,10 @@ fn member_state_mutation(
     Ok(Some((member_id, membership, value)))
 }
 
-async fn advisory_lock(conn: &mut AsyncPgConnection, key: String) -> PersistenceResult<()> {
+pub(crate) async fn advisory_lock(
+    conn: &mut AsyncPgConnection,
+    key: String,
+) -> PersistenceResult<()> {
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind::<Text, _>(key)
         .execute(conn)
@@ -2382,13 +2319,6 @@ async fn commit_one_in_connection(
     }
 
     let commit = &request.authority_commit.commit;
-    ensure_local_only_realm_source_cut(
-        conn,
-        event,
-        &request.authority_commit.expected_authority.service_id,
-        &request.outbox,
-    )
-    .await?;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
         if let Some(retained) = request.forwarded_producer_evidence.as_ref() {
             crate::account_device_signer_evidence::retain_forwarded_producer_evidence_in_connection(
@@ -2418,6 +2348,15 @@ async fn commit_one_in_connection(
         .await?;
         crate::moderation_state_current_results::commit_moderation_state_current_result_in_connection(
             conn, event, commit,
+        )
+        .await?;
+        outcome.outbox_inserted += crate::realm_fanout::plan_realm_fanout_in_connection(
+            conn,
+            event,
+            commit,
+            &request.authority_commit.expected_authority.service_id,
+            request.realm_fanout_source.as_ref(),
+            commit.committed_at.timestamp(),
         )
         .await?;
     }

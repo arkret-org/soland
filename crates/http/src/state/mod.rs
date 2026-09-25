@@ -13,6 +13,7 @@ mod authority_key_backup_pointer;
 mod authority_port;
 mod authority_producer_validation;
 mod authority_self_event_unit;
+mod committed_replication;
 mod member_identity;
 mod notification;
 mod service_route_fetcher;

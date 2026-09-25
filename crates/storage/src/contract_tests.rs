@@ -1466,6 +1466,7 @@ fn contract_applet_event_request(
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
+        realm_fanout_source: None,
     }
 }
 
@@ -2399,6 +2400,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             created_at: now.timestamp(),
             completed_at: None,
         }],
+        realm_fanout_source: None,
     };
 
     let outcome = stores
@@ -2545,6 +2547,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             "{}".to_owned(),
             now.timestamp(),
         )],
+        realm_fanout_source: None,
     };
     stores
         .unit_of_work
@@ -2630,6 +2633,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
                 "{}".to_owned(),
                 now.timestamp(),
             )],
+            realm_fanout_source: None,
         })
         .await;
     assert!(
@@ -2724,6 +2728,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             created_at: now.timestamp(),
             completed_at: None,
         }],
+        realm_fanout_source: None,
     };
     assert!(stores.unit_of_work.commit_event(failed).await.is_err());
     assert!(
@@ -4880,6 +4885,7 @@ fn consent_commit_request(
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
+        realm_fanout_source: None,
     }
 }
 

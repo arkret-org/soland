@@ -21,6 +21,8 @@ use crate::capability_grant_current_results::{
     commit_realm_authority_root_current_result_in_connection,
 };
 
+mod replica;
+
 #[derive(Clone)]
 pub struct PgAuthorityCommitStore {
     pub pool: PgPool,
@@ -2024,6 +2026,51 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                 .into());
             }
             Ok(())
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn record_remote_authority(
+        &self,
+        authority: &CurrentRealmAuthority,
+        local_service_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            replica::record_remote_authority_in_connection(conn, authority, local_service_id).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn realm_fanout_still_owed(
+        &self,
+        event: &arkret_wire::Event,
+        local_service_id: &arkret_wire::DidCoreId,
+        peer: &arkret_wire::DidCoreId,
+        witnesses: &[soland_storage::RealmFanoutAuthorityWitness],
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::realm_fanout::fanout_still_owed_in_connection(
+            &mut conn,
+            event,
+            local_service_id,
+            peer,
+            witnesses,
+            at,
+        )
+        .await
+    }
+
+    async fn install_committed_replica(
+        &self,
+        replica: &soland_storage::CommittedReplica,
+    ) -> PersistenceResult<soland_storage::CommittedReplicaOutcome> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            replica::install_committed_replica_in_connection(conn, replica).await
         })
         .await
         .map_err(PgTransactionError::into_persistence)

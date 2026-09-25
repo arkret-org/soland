@@ -112,6 +112,14 @@ pub fn signature(
 /// is declared the Realm's plaintext-visible service: a local plain-text
 /// Message needs that policy, and a franking notary is that service.
 pub fn bootstrap_unit(seed: &str) -> OrdinaryRealmBootstrapCommitUnit {
+    bootstrap_unit_with_join_rule(seed, "invite")
+}
+
+/// [`bootstrap_unit`] whose initial and typed join rule is `join_rule`.
+pub fn bootstrap_unit_with_join_rule(
+    seed: &str,
+    join_rule: &str,
+) -> OrdinaryRealmBootstrapCommitUnit {
     use arkret_models_collaboration::authority_commit::{
         OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
         SelfAuthoritySubmitRequest,
@@ -136,7 +144,7 @@ pub fn bootstrap_unit(seed: &str) -> OrdinaryRealmBootstrapCommitUnit {
             "trust_domain":"ak:trust_domain:ordinary.example",
             "security_class":"high_assurance",
             "governance_station_id":station,
-            "initial_join_rule":"invite",
+            "initial_join_rule":join_rule,
             "initial_history_access":"since_join",
             "initial_discoverability":"invite_only"
         }}),
@@ -159,7 +167,7 @@ pub fn bootstrap_unit(seed: &str) -> OrdinaryRealmBootstrapCommitUnit {
         ),
         (
             arkret_wire::EventKind::RealmJoinRule,
-            serde_json::json!({"value":"invite"}),
+            serde_json::json!({"value":join_rule}),
         ),
         (
             arkret_wire::EventKind::RealmHistoryAccess,
@@ -350,6 +358,7 @@ pub fn next_request_for_actor(
         projections: vec![projection],
         idempotency: None,
         outbox: Vec::new(),
+        realm_fanout_source: None,
     }
 }
 

@@ -112,7 +112,7 @@ pub(crate) async fn admit_forwarded_event(
     super::authority_port::require_guarded_unit_event(&request.event_submission)?;
     super::authority_self_event_unit::commit_event_unit(
         state,
-        event,
+        &request.event_submission,
         super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
         super::authority_self_event_unit::SelfEventUnitEffects::default(),
     )
@@ -256,6 +256,31 @@ async fn send_forward(
     relay_governance_response(&request, response)
 }
 
+/// The governance Station's registered refusal of a forward, as this
+/// Station's own. The problem type names the code; a registered reason the
+/// refusal carries (such as `epoch_update_required` on
+/// `failed_precondition`) is kept so the relayed refusal renders identically.
+/// A server failure or an unregistered answer is retryable unavailability.
+fn relayed_refusal(status: u16, body: &[u8]) -> ServiceError {
+    let problem = serde_json::from_slice::<arkret_wire::Problem>(body).ok();
+    let code = problem.as_ref().and_then(arkret_wire::Problem::error_code);
+    let (Some(problem), Some(code)) = (problem, code) else {
+        return temporarily_unavailable(format!("governance Station answered HTTP {status}"));
+    };
+    if status >= 500 {
+        return temporarily_unavailable(format!("governance Station answered HTTP {status}"));
+    }
+    let reason = problem
+        .extensions
+        .get("reason_code")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ConflictCode::from_detail);
+    match reason {
+        Some(reason) => ServiceError::Conflict(format!("{reason}: {}", problem.detail)),
+        None => ServiceError::protocol(code, problem.detail),
+    }
+}
+
 /// Relay the governance Station's answer to exactly this forward: a typed
 /// outcome bound to the forwarded Event, or its registered refusal code.
 fn relay_governance_response(
@@ -263,25 +288,7 @@ fn relay_governance_response(
     response: crate::routing::federation::outbox::PeerSubmitResponse,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     if !(200..300).contains(&response.status) {
-        let problem = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
-        let code = problem
-            .as_ref()
-            .and_then(|value| value.get("code"))
-            .and_then(serde_json::Value::as_str)
-            .and_then(ErrorCode::from_wire);
-        let detail = problem
-            .as_ref()
-            .and_then(|value| value.get("detail"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("governance Station refused the forwarded Event")
-            .to_owned();
-        return Err(match code {
-            Some(code) if response.status < 500 => ServiceError::protocol(code, detail),
-            _ => temporarily_unavailable(format!(
-                "governance Station answered HTTP {}",
-                response.status
-            )),
-        });
+        return Err(relayed_refusal(response.status, &response.body));
     }
     let outcome = serde_json::from_slice::<PeerAuthoritySubmitOutcome>(&response.body)
         .map_err(|error| temporarily_unavailable(format!("invalid forward outcome: {error}")))?;

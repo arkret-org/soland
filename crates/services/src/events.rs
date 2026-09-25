@@ -489,6 +489,9 @@ pub struct CommitAcceptedEventCommand {
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDeliveryRecord>,
+    /// The exact admission submission of a Realm-stream Event; its
+    /// committed-replication fanout is planned inside the commit transaction.
+    pub realm_fanout_source: Option<arkret_wire::EventAdmissionSubmission>,
 }
 
 /// The holder-private consent effects of one accepted consent command unit.
@@ -1860,6 +1863,7 @@ mod tests {
                     realm_fanout: None,
                     created_at: now.timestamp(),
                 }],
+                realm_fanout_source: None,
             })
             .await
             .expect("commit accepted event");

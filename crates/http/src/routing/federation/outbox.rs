@@ -986,9 +986,24 @@ impl FederationDispatcher {
             );
             return;
         };
-        if row.delivery.realm_fanout.is_some()
-            && !realm_fanout_authority_is_current(&self.state, &row)
-        {
+        let owed = match realm_fanout_still_owed(&self.state, &row).await {
+            Ok(owed) => owed,
+            Err(error) => {
+                let command = self.transport_retry(
+                    &row,
+                    &lease_token,
+                    row.attempts.saturating_add(1),
+                    None,
+                    error_code::TRANSPORT_ERROR,
+                    excerpt(&format!("fanout_authority_unavailable: {error}")),
+                    None,
+                    now_unix_secs(),
+                );
+                self.commit(command).await;
+                return;
+            }
+        };
+        if !owed {
             self.commit(RecordFederationAttemptCommand {
                 id: row.delivery.id.clone(),
                 lease_token,
@@ -2098,30 +2113,44 @@ impl FederationDispatcher {
     }
 }
 
-fn realm_fanout_authority_is_current(state: &AppState, row: &PendingFederationDelivery) -> bool {
+/// Recheck, at the current accepted cut, that a Realm fanout intent is still
+/// owed to its frozen target (`federation.md` §4.1.1): one frozen basis must
+/// still hold as a whole. A row that is not a Realm fanout is always owed.
+async fn realm_fanout_still_owed(
+    state: &AppState,
+    row: &PendingFederationDelivery,
+) -> Result<bool, String> {
     let Some(binding) = row.delivery.realm_fanout.as_ref() else {
-        return true;
+        return Ok(true);
     };
-    let projection = state.projections().snapshot();
-    realm_fanout_witnesses_are_current(&projection, binding, &row.delivery.peer_id)
-}
-
-fn realm_fanout_witnesses_are_current(
-    projection: &soland_domain::reducer::ProjectionState,
-    binding: &soland_storage::RealmFanoutBinding,
-    peer_id: &arkret_wire::DidCoreId,
-) -> bool {
-    binding.authority_witnesses.iter().any(|witness| {
-        let member_key = witness.member_id.to_string();
-        projection
-            .member(&binding.realm_id, &member_key)
-            .is_some_and(|member| {
-                member.state == "join"
-                    && witness.member_id.route_service_id() == peer_id
-                    && member.membership_event_ref.as_deref()
-                        == Some(witness.membership_event_ref.as_str())
-            })
-    })
+    let request = serde_json::from_str::<
+        arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest,
+    >(&row.delivery.payload_json)
+    .map_err(|error| format!("Realm fanout body is not a peer submission: {error}"))?;
+    let arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest::CommittedReplication(
+        request,
+    ) = request
+    else {
+        return Err("Realm fanout body is not committed_replication".to_owned());
+    };
+    let now = chrono::Utc::now();
+    for item in &request.replications {
+        if !state
+            .authority_commits()
+            .realm_fanout_still_owed(
+                &item.event_submission.event,
+                &state.service_core_id(),
+                &row.delivery.peer_id,
+                &binding.authority_witnesses,
+                now,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Spawn the dispatcher if `config.federation_outbound_enabled` is true.
@@ -2143,92 +2172,6 @@ fn is_retryable_status(status: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn frozen_fanout_witnesses_require_one_complete_current_tuple() {
-        use soland_storage::{RealmFanoutAuthorityWitness, RealmFanoutBinding};
-        let peer = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
-        let other_peer =
-            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
-        let actor = |principal: &str, station: &arkret_wire::DidCoreId| {
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_wire::DidCoreId::new(principal).unwrap(),
-                station.clone(),
-            ))
-        };
-        let alice = actor("ak:did_core:web:alice.example", &peer);
-        let bob = actor("ak:did_core:web:bob.example", &peer);
-        let realm_id = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf".to_owned();
-        let binding = RealmFanoutBinding {
-            realm_id: realm_id.clone(),
-            source_event_ids: Vec::new(),
-            authority_witnesses: vec![
-                RealmFanoutAuthorityWitness {
-                    member_id: alice.clone(),
-                    membership_event_ref: "alice-join".to_owned(),
-                },
-                RealmFanoutAuthorityWitness {
-                    member_id: bob.clone(),
-                    membership_event_ref: "bob-join".to_owned(),
-                },
-            ],
-        };
-        let mut projection = soland_domain::reducer::ProjectionState::default();
-        for (member, event_ref) in [(&alice, "alice-join"), (&bob, "bob-join")] {
-            projection.members.insert(
-                (realm_id.clone(), member.to_string()),
-                soland_domain::reducer::SolandMembershipState {
-                    member: member.to_string(),
-                    realm_id: realm_id.clone(),
-                    state: "join".to_owned(),
-                    role: "member".to_owned(),
-                    membership_event_ref: Some(event_ref.to_owned()),
-                    invited_at: None,
-                    joined_at: chrono::Utc::now(),
-                    updated_at: chrono::Utc::now(),
-                    reason: None,
-                },
-            );
-        }
-        assert!(realm_fanout_witnesses_are_current(
-            &projection,
-            &binding,
-            &peer
-        ));
-        projection
-            .members
-            .get_mut(&(realm_id.clone(), alice.to_string()))
-            .unwrap()
-            .state = "leave".to_owned();
-        assert!(
-            realm_fanout_witnesses_are_current(&projection, &binding, &peer),
-            "the other frozen witness still authorizes the shared service"
-        );
-        projection
-            .members
-            .get_mut(&(realm_id.clone(), bob.to_string()))
-            .unwrap()
-            .membership_event_ref = Some("bob-rejoin".to_owned());
-        assert!(
-            !realm_fanout_witnesses_are_current(&projection, &binding, &peer),
-            "a new membership must not revive an old obligation"
-        );
-        let relocated_alice = actor("ak:did_core:web:alice.example", &other_peer);
-        let mut relocated = projection.members[&(realm_id.clone(), alice.to_string())].clone();
-        relocated.member = relocated_alice.to_string();
-        relocated.state = "join".to_owned();
-        projection
-            .members
-            .insert((realm_id, relocated_alice.to_string()), relocated);
-        assert!(
-            !realm_fanout_witnesses_are_current(&projection, &binding, &peer),
-            "the same principal on a new Station is a different witness"
-        );
-        assert!(
-            !realm_fanout_witnesses_are_current(&projection, &binding, &other_peer),
-            "the frozen target must not redirect"
-        );
-    }
 
     #[test]
     fn transport_backoff_doubles_caps_at_one_hour_and_carries_jitter() {

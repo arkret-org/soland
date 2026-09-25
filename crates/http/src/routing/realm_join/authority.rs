@@ -34,7 +34,7 @@ async fn method_key(state: &AppState, method: &DidUrl) -> Result<PublicKeyMateri
 
 /// Resolve the key of one more authority signature method, such as the method
 /// of a `RealmCommit` verified against an already verified chain.
-pub(in crate::routing) async fn insert_method_key(
+pub(crate) async fn insert_method_key(
     state: &AppState,
     keys: &mut RealmAuthorityKeyMap,
     method: &DidUrl,
@@ -96,13 +96,15 @@ async fn fetch_candidate(
     )
     .map_err(unavailable)?;
     let body = arkret_canonical::canonical_json_bytes(request).map_err(unavailable)?;
-    let mut response = client
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(unavailable)?;
+    let mut response = crate::routing::with_arkret_operation(
+        client.post(url),
+        arkret_wire::ServiceOperationId::OPEN_REALM_AUTHORITY_READ_BUNDLE_V1,
+    )
+    .header(reqwest::header::CONTENT_TYPE, "application/json")
+    .body(body)
+    .send()
+    .await
+    .map_err(unavailable)?;
     if !response.status().is_success() {
         return Err(unavailable(
             "Realm authority candidate did not return a bundle",
@@ -124,10 +126,112 @@ async fn fetch_candidate(
 /// is asked for a bundle bound to `nonce`, each bundle is verified end to end
 /// under keys resolved from its own DIDs, and the verified results must
 /// converge. A locator never establishes authority by itself.
-pub(in crate::routing) struct LocatedRealmAuthority {
+pub(crate) struct LocatedRealmAuthority {
     pub bundle: RealmAuthorityBundle,
     pub authority: VerifiedRealmAuthority,
     pub keys: RealmAuthorityKeyMap,
+}
+
+impl LocatedRealmAuthority {
+    /// The durable current-authority record this verified chain names.
+    pub(crate) fn current_authority(&self) -> soland_storage::CurrentRealmAuthority {
+        let (authority_ref, last_handoff_ref) = match self.bundle.authority_transitions.last() {
+            Some(transition) => (
+                arkret_wire::RealmCommitAuthorityRef::Handoff(
+                    transition.handoff.handoff_id.clone(),
+                ),
+                Some(transition.handoff.handoff_id.clone()),
+            ),
+            None => (
+                arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    self.bundle.genesis_event.event_id.clone(),
+                ),
+                None,
+            ),
+        };
+        soland_storage::CurrentRealmAuthority {
+            realm_id: self.authority.realm_id().clone(),
+            generation: self.authority.current_generation(),
+            service_id: self.authority.current_service_id().clone(),
+            authority_ref,
+            last_handoff_ref,
+        }
+    }
+}
+
+/// Verify one fetched candidate bundle end to end, bound to `request.nonce`,
+/// under keys resolved from the bundle's own DIDs. Every refusal is logged
+/// with its reason; the caller only learns that the candidate did not verify.
+async fn verify_candidate(
+    state: &AppState,
+    locator: &str,
+    request: &AuthorityBundleRequest,
+    fetched: Result<RealmAuthorityBundle, AppError>,
+) -> Option<LocatedRealmAuthority> {
+    let verified = async {
+        let bundle = fetched.map_err(|error| format!("bundle fetch: {}", error.message))?;
+        if bundle.realm_id != request.realm_id {
+            return Err("bundle names another Realm".to_owned());
+        }
+        let keys = verified_keys(state, &bundle)
+            .await
+            .map_err(|error| format!("authority keys: {}", error.message))?;
+        let freshness = RealmAuthorityFreshness::new(crate::wire::now(), request.nonce.clone());
+        let authority = verify_realm_authority_bundle(&bundle, &freshness, &keys)
+            .map_err(|error| format!("bundle verification: {error}"))?;
+        Ok(LocatedRealmAuthority {
+            bundle,
+            authority,
+            keys,
+        })
+    }
+    .await;
+    match verified {
+        Ok(located) => Some(located),
+        Err(reason) => {
+            tracing::warn!(%locator, realm_id = %request.realm_id, %reason,
+                "Realm authority candidate was not verified");
+            None
+        }
+    }
+}
+
+/// Verify the Realm authority an authenticated peer Station serves: its
+/// verified route is the only locator, and the verified chain must name that
+/// Station as the current governance Station.
+pub(crate) async fn resolve_verified_authority_of_service(
+    state: &AppState,
+    realm_id: &RealmId,
+    service_id: &arkret_wire::DidCoreId,
+) -> Result<LocatedRealmAuthority, AppError> {
+    let nonce = Base64UrlString::new(arkret_canonical::base64url_encode(
+        rand::random::<[u8; 32]>(),
+    ))
+    .map_err(unavailable)?;
+    let request = AuthorityBundleRequest {
+        realm_id: realm_id.clone(),
+        nonce,
+    };
+    let endpoint = crate::routing::federation::resolved_peer_route(
+        state,
+        service_id.as_str(),
+        "station",
+        false,
+    )
+    .await
+    .map_err(unavailable)?
+    .base_url()
+    .to_owned();
+    let fetched = fetch_candidate(state, &endpoint, &request).await;
+    let located = verify_candidate(state, &endpoint, &request, fetched)
+        .await
+        .ok_or_else(|| unavailable("the peer Station served no verifiable Realm authority"))?;
+    if located.authority.current_service_id() != service_id {
+        return Err(unavailable(
+            "the peer Station is not the Realm's current governance Station",
+        ));
+    }
+    Ok(located)
 }
 
 pub(in crate::routing) async fn resolve_verified_authority(
@@ -154,22 +258,10 @@ pub(in crate::routing) async fn resolve_verified_authority(
         } else {
             fetch_remote_candidate(state, candidate, &request).await
         };
-        let Ok(bundle) = fetched else {
-            continue;
-        };
-        if bundle.realm_id != *realm_id {
-            continue;
-        }
-        let Ok(keys) = verified_keys(state, &bundle).await else {
-            continue;
-        };
-        let freshness = RealmAuthorityFreshness::new(crate::wire::now(), request.nonce.clone());
-        if let Ok(authority) = verify_realm_authority_bundle(&bundle, &freshness, &keys) {
-            verified.push(LocatedRealmAuthority {
-                bundle,
-                authority,
-                keys,
-            });
+        if let Some(located) =
+            verify_candidate(state, candidate.service_id.as_str(), &request, fetched).await
+        {
+            verified.push(located);
         }
     }
     let authorities: Vec<_> = verified
@@ -206,11 +298,11 @@ async fn fetch_remote_candidate(
     fetch_candidate(state, &endpoint, request).await
 }
 
-pub(super) async fn resolve_authority_bundle(
+pub(super) async fn resolve_join_target_authority(
     state: &AppState,
     target: &RealmJoinTarget,
     request_id: &RequestId,
-) -> Result<RealmAuthorityBundle, AppError> {
+) -> Result<LocatedRealmAuthority, AppError> {
     resolve_verified_authority(
         state,
         &target.realm_id,
@@ -218,5 +310,4 @@ pub(super) async fn resolve_authority_bundle(
         &nonce_for_request(request_id)?,
     )
     .await
-    .map(|located| located.bundle)
 }

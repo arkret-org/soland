@@ -110,6 +110,11 @@ pub struct EventCommitRequest {
     pub projections: Vec<ProjectionEventRecord>,
     pub idempotency: Option<IdempotencyRecord>,
     pub outbox: Vec<FederationOutboxRecord>,
+    /// The exact admission submission a Realm-stream Event was committed
+    /// from. The transaction plans its committed-replication fanout
+    /// (`federation.md` §4.1.1) from the same accepted cut it writes; an
+    /// Event whose Realm has a remote joined member cannot commit without it.
+    pub realm_fanout_source: Option<arkret_wire::EventAdmissionSubmission>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

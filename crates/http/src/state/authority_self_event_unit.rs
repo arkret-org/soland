@@ -69,12 +69,17 @@ pub(super) async fn exact_replay(
 }
 
 /// Admit one producer-verified Event through the guarded unit.
+///
+/// `submission` is the exact admission submission; a committed Event is
+/// replicated to every remote Station hosting a joined member from it, with
+/// the fanout planned in the same transaction.
 pub(super) async fn commit_event_unit(
     state: &AppState,
-    event: &Event,
+    submission: &EventAdmissionSubmission,
     producer: AdmittedProducer,
     effects: SelfEventUnitEffects,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    let event = &submission.event;
     if let Some(outcome) = exact_replay(state, event).await? {
         return Ok(outcome);
     }
@@ -180,6 +185,7 @@ pub(super) async fn commit_event_unit(
         }],
         idempotency: None,
         deliveries: Vec::new(),
+        realm_fanout_source: Some(submission.clone()),
     };
     let committed = match effects.franking_replay_nonce {
         Some(mut nonce) => {
@@ -294,7 +300,7 @@ pub(crate) async fn submit_self_moderation_report(
             });
     commit_event_unit(
         state,
-        event,
+        &request,
         AdmittedProducer::Local(producer_guard),
         SelfEventUnitEffects {
             franking_replay_nonce,

@@ -1094,6 +1094,7 @@ fn franking_event_request(
         projections: Vec::new(),
         idempotency: None,
         outbox: Vec::new(),
+        realm_fanout_source: None,
     }
 }
 

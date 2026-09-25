@@ -79,6 +79,15 @@ fn forward_outcome(outcome: AuthoritySubmitOutcome) -> serde_json::Value {
     .unwrap()
 }
 
+/// The governance Station's refusal as it is rendered on the wire.
+fn problem(code: &str, reason: Option<&str>) -> serde_json::Value {
+    let mut problem = arkret_wire::Problem::from_code(code, "refused by governance");
+    if let Some(reason) = reason {
+        problem = problem.with_extension("reason_code", serde_json::json!(reason));
+    }
+    serde_json::to_value(problem).unwrap()
+}
+
 #[test]
 fn relayed_governance_refusals_keep_their_registered_codes() {
     let request = forwarded_request(0x41);
@@ -88,37 +97,46 @@ fn relayed_governance_refusals_keep_their_registered_codes() {
         "device_generation_fenced",
         "device_unauthorized",
         "signature_invalid",
+        "failed_precondition",
+        "epoch_mismatch",
     ] {
-        let error = relay_governance_response(
-            &request,
-            answer(
-                409,
-                serde_json::json!({"code": code, "detail": "refused by governance"}),
-            ),
-        )
-        .unwrap_err();
+        let error =
+            relay_governance_response(&request, answer(409, problem(code, None))).unwrap_err();
         assert_eq!(
             error.conflict_code().map(ConflictCode::as_str),
             Some(code),
             "{error:?}"
         );
     }
-    assert!(matches!(
-        relay_governance_response(
-            &request,
-            answer(400, serde_json::json!({"code": "schema_violation"}))
-        ),
-        Err(ServiceError::SchemaViolation(_))
-    ));
+    // A registered reason travels with its code, so a relayed pending
+    // key-access Commit is still distinguishable from a plain precondition.
     assert_eq!(
         relay_governance_response(
             &request,
-            answer(500, serde_json::json!({"code": "internal_error"}))
+            answer(
+                409,
+                problem("failed_precondition", Some("epoch_update_required"))
+            )
         )
         .unwrap_err()
         .conflict_code(),
-        Some(ConflictCode::TemporarilyUnavailable)
+        Some(ConflictCode::EpochUpdateRequired)
     );
+    assert!(matches!(
+        relay_governance_response(&request, answer(422, problem("schema_violation", None))),
+        Err(ServiceError::SchemaViolation(_))
+    ));
+    for (status, body) in [
+        (500, problem("internal_error", None)),
+        (409, serde_json::json!({"code": "device_revoked"})),
+    ] {
+        assert_eq!(
+            relay_governance_response(&request, answer(status, body))
+                .unwrap_err()
+                .conflict_code(),
+            Some(ConflictCode::TemporarilyUnavailable)
+        );
+    }
 }
 
 #[test]

@@ -259,7 +259,7 @@ impl AuthorityProtocolPort for AppState {
         require_guarded_unit_event(&request)?;
         super::authority_self_event_unit::commit_event_unit(
             self,
-            event,
+            &request,
             super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
             super::authority_self_event_unit::SelfEventUnitEffects::default(),
         )
@@ -300,6 +300,15 @@ impl AuthorityProtocolPort for AppState {
         request: PeerAuthorityForwardMlsRequest,
     ) -> ServiceResult<AuthoritySubmitOutcome> {
         super::authority_forward::admit_forwarded_mls(self, peer, request, crate::wire::now()).await
+    }
+
+    async fn submit_peer_committed_replication(
+        &self,
+        peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+        request: arkret_models_collaboration::authority_commit::PeerCommittedReplicationRequest,
+    ) -> ServiceResult<arkret_models_collaboration::authority_commit::PeerCommittedReplicationOutcome>
+    {
+        super::committed_replication::receive(self, peer, request).await
     }
 
     async fn scan_stream_for_account(

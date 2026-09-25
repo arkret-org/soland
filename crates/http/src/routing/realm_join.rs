@@ -17,7 +17,10 @@ use crate::state::AppState;
 mod authority;
 mod preview;
 
-pub(in crate::routing) use authority::{insert_method_key, resolve_verified_authority};
+pub(in crate::routing) use authority::resolve_verified_authority;
+pub(crate) use authority::{
+    LocatedRealmAuthority, insert_method_key, resolve_verified_authority_of_service,
+};
 
 pub(super) fn self_router() -> Router {
     Router::new()
@@ -95,7 +98,19 @@ async fn prepare(depot: &mut Depot, req: &mut Request) -> JsonResult<SelfRealmJo
         .await
         .map_err(invalid_request)?;
     body.validate().map_err(invalid_request)?;
-    let bundle = authority::resolve_authority_bundle(state, &body.target, &body.request_id).await?;
+    let located =
+        authority::resolve_join_target_authority(state, &body.target, &body.request_id).await?;
+    // The verified current authority is the join intake state this Station
+    // keeps: the applicant's exact signed Event is then forwarded to that
+    // Station and nowhere else (join-policy.md §6).
+    if located.authority.current_service_id() != &state.service_core_id() {
+        state
+            .authority_commits()
+            .record_remote_authority(&located.current_authority(), &state.service_core_id())
+            .await
+            .map_err(unavailable)?;
+    }
+    let bundle = located.bundle;
     let outcome = SelfRealmJoinPrepareOutcome {
         request_id: body.request_id,
         realm_stream_head: bundle.realm_stream_head.clone(),

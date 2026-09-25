@@ -978,6 +978,42 @@ impl AuthorityCommitApplication {
         Ok(self.store().current_authority(realm_id).await?)
     }
 
+    /// Record a verified remote current authority of a Realm this Station
+    /// does not govern.
+    pub async fn record_remote_authority(
+        &self,
+        authority: &CurrentRealmAuthority,
+        local_service_id: &arkret_wire::DidCoreId,
+    ) -> ServiceResult<()> {
+        Ok(self
+            .store()
+            .record_remote_authority(authority, local_service_id)
+            .await?)
+    }
+
+    /// Whether a frozen Realm fanout intent is still owed at the current cut.
+    pub async fn realm_fanout_still_owed(
+        &self,
+        event: &Event,
+        local_service_id: &arkret_wire::DidCoreId,
+        peer: &arkret_wire::DidCoreId,
+        witnesses: &[soland_storage::RealmFanoutAuthorityWitness],
+        at: DateTime<Utc>,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .realm_fanout_still_owed(event, local_service_id, peer, witnesses, at)
+            .await?)
+    }
+
+    /// Store one verified committed replica (`federation.md` §4.1.1).
+    pub async fn install_committed_replica(
+        &self,
+        replica: &soland_storage::CommittedReplica,
+    ) -> ServiceResult<soland_storage::CommittedReplicaOutcome> {
+        Ok(self.store().install_committed_replica(replica).await?)
+    }
+
     pub async fn stream_head(
         &self,
         stream_ref: &CommitStreamRef,

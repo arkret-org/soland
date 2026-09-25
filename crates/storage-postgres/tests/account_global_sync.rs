@@ -702,6 +702,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             projections: vec![],
             idempotency: None,
             outbox: vec![],
+            realm_fanout_source: None,
         }
     };
     let a = make(1);

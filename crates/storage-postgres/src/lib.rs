@@ -84,6 +84,7 @@ mod read_capacity_tests;
 mod read_cursors;
 mod realm_bootstrap_current_results;
 mod realm_default_strand_current_results;
+mod realm_fanout;
 mod realm_identity;
 mod realm_invites;
 mod recovery;

@@ -491,12 +491,69 @@ pub enum AcceptedDeviceAuthorizationOutcome {
     Duplicate(arkret_wire::RealmCommit),
 }
 
+/// One committed Event a non-governance member Station stores as an exact
+/// source replica (`federation.md` §3, §4.1.1).
+///
+/// The serving layer has already verified the producer proof, the source
+/// RealmCommit under `authority` and the Event/Commit binding. The store
+/// re-proves continuity and the hosted-member basis under its own locks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedReplica {
+    /// This Station's own service id; a replica never names it as governance.
+    pub local_service_id: arkret_wire::DidCoreId,
+    /// The verified remote current authority the source Commit verified under.
+    pub authority: CurrentRealmAuthority,
+    pub event: arkret_wire::Event,
+    pub commit: arkret_wire::RealmCommit,
+    /// The item is a hosted member's own verified `join`, which may open this
+    /// Station's held Realm stream at its position (the bootstrap exception).
+    pub opens_stream: bool,
+    pub received_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Result of storing one committed replica.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommittedReplicaOutcome {
+    Stored,
+    Duplicate,
+}
+
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
     async fn install_genesis_authority(
         &self,
         authority: &CurrentRealmAuthority,
     ) -> PersistenceResult<()>;
+
+    /// Record a verified remote current authority of a Realm this Station
+    /// does not govern, so it can forward to and verify under it. A lower
+    /// generation never replaces a higher one, a same-generation different
+    /// authority is refused, and a Realm this Station governs is never
+    /// rewritten.
+    async fn record_remote_authority(
+        &self,
+        authority: &CurrentRealmAuthority,
+        local_service_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<()>;
+
+    /// Whether the frozen Realm fanout intent of `event` to `peer` is still
+    /// owed at the current accepted cut: one frozen basis must still hold as
+    /// a whole (`federation.md` §4.1.1).
+    async fn realm_fanout_still_owed(
+        &self,
+        event: &arkret_wire::Event,
+        local_service_id: &arkret_wire::DidCoreId,
+        peer: &arkret_wire::DidCoreId,
+        witnesses: &[crate::RealmFanoutAuthorityWitness],
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool>;
+
+    /// Store one verified committed replica with its held-stream continuity,
+    /// hosted-member basis and derived membership in one transaction.
+    async fn install_committed_replica(
+        &self,
+        replica: &CommittedReplica,
+    ) -> PersistenceResult<CommittedReplicaOutcome>;
 
     async fn current_authority(
         &self,

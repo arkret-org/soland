@@ -137,6 +137,7 @@ fn persistence_event_commit_request(
             .into_iter()
             .map(persistence_outbox_row)
             .collect(),
+        realm_fanout_source: command.realm_fanout_source,
     }
 }
 

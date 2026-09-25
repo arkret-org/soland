@@ -137,6 +137,25 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            Some(soland_storage::ConflictCode::CapabilityDenied) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::CapabilityDenied,
+                    res,
+                    detail,
+                );
+            }
+            // join-policy.md §4: an entry refused by its rule or gates is one
+            // non-enumerating `gate_check_failed`, whatever gate failed.
+            Some(soland_storage::ConflictCode::GateCheckFailed) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    crate::error::error_http_status(arkret_wire::ErrorCode::CapabilityDenied),
+                    arkret_wire::ErrorCode::CAPABILITY_DENIED,
+                    "Realm entry was not admitted",
+                    arkret_wire::ReasonCode::GATE_CHECK_FAILED,
+                    None,
+                );
+            }
             Some(
                 code @ (soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired

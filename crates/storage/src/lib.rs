@@ -186,6 +186,9 @@ pub enum ConflictCode {
     /// A KeyBackup request's pointer, series or device generation is no
     /// longer current (key-management.md §7.6).
     BackupRevisionStale,
+    /// The Event producer holds no capability, at the accepting cut, for the
+    /// transition it requests.
+    CapabilityDenied,
     /// `actor_seq` is older than the accepted actor frontier.
     CasConflict,
     /// An exact source needed for a current reducer result is unavailable.
@@ -215,6 +218,9 @@ pub enum ConflictCode {
     EventNotAccepted,
     /// A declared precondition does not hold.
     FailedPrecondition,
+    /// A Realm entry was refused by its join rule or join policy; the
+    /// applicant sees one non-enumerating result (`join-policy.md` §4).
+    GateCheckFailed,
     /// The candidate durable Realm cut cannot be represented by the bounded
     /// inline v1 snapshot.
     SnapshotCapacityExceeded,
@@ -268,10 +274,11 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 41] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::BackupRevisionStale,
+        Self::CapabilityDenied,
         Self::CasConflict,
         Self::DependencyMissing,
         Self::DeviceGenerationFenced,
@@ -285,6 +292,7 @@ impl ConflictCode {
         Self::EventIdDigestMismatch,
         Self::EventNotAccepted,
         Self::FailedPrecondition,
+        Self::GateCheckFailed,
         Self::SnapshotCapacityExceeded,
         Self::MlsActivationRequired,
         Self::JoinRulePolicyMismatch,
@@ -316,6 +324,7 @@ impl ConflictCode {
             Self::ApprovalNonceReused => arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
             Self::AppletRevoked => "applet_revoked",
             Self::BackupRevisionStale => arkret_wire::ReasonCode::BACKUP_REVISION_STALE,
+            Self::CapabilityDenied => arkret_wire::ErrorCode::CAPABILITY_DENIED,
             Self::CasConflict => "cas_conflict",
             Self::DependencyMissing => "dependency_missing",
             Self::DeviceGenerationFenced => arkret_wire::ErrorCode::DEVICE_GENERATION_FENCED,
@@ -329,6 +338,7 @@ impl ConflictCode {
             Self::EventIdDigestMismatch => "event_id_digest_mismatch",
             Self::EventNotAccepted => "event_not_accepted",
             Self::FailedPrecondition => "failed_precondition",
+            Self::GateCheckFailed => arkret_wire::ReasonCode::GATE_CHECK_FAILED,
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
             Self::JoinRulePolicyMismatch => arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH,

@@ -861,6 +861,7 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
         projections: vec![projection],
         idempotency: None,
         outbox: Vec::new(),
+        realm_fanout_source: None,
     }
 }
 
@@ -1516,8 +1517,9 @@ async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_stra
     );
     assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
 
-    // A newly joined remote account makes the empty federation target set
-    // false. The next Message must leave no Event, Commit or revision row.
+    // A remote joined account whose Station is no private plaintext service
+    // of the Realm may not hold a plaintext body: the next Message commits
+    // and owes that Station nothing.
     let remote = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new("ak:did_core:web:message-remote.example").unwrap(),
         arkret_wire::DidCoreId::new("ak:did_core:web:message-remote-station.example").unwrap(),
@@ -1538,14 +1540,15 @@ async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_stra
     .await
     .unwrap();
     drop(conn);
-    let remote_denied = message_create_request(&request, &strand_id, "remote denied");
-    assert!(uow.commit_event(remote_denied.clone()).await.is_err());
+    let unowed = message_create_request(&request, &strand_id, "remote unowed");
+    let outcome = uow.commit_event(unowed.clone()).await.unwrap();
+    assert_eq!(outcome.outbox_inserted, 0);
     assert!(
         store
-            .committed_event(&remote_denied.authority_commit.event.event_id)
+            .committed_event(&unowed.authority_commit.event.event_id)
             .await
             .unwrap()
-            .is_none()
+            .is_some()
     );
     let snapshot_after = store
         .realm_state_snapshot_material(realm_id)
@@ -1564,7 +1567,7 @@ async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_stra
                 }
             ))
             .count(),
-        1
+        2
     );
     assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
 
@@ -3421,7 +3424,8 @@ async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writ
     uow.commit_event(realm_report.clone()).await.unwrap();
     assert_eq!(report_row_count(&pool).await, 2);
 
-    // A newly joined remote account makes the empty source outbox false.
+    // A remote joined account that holds no moderation capability may not
+    // read a moderator-only report, so its Station is owed nothing.
     let remote = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new("ak:did_core:web:report-remote.example").unwrap(),
         arkret_wire::DidCoreId::new("ak:did_core:web:report-remote-station.example").unwrap(),
@@ -3444,13 +3448,10 @@ async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writ
     drop(conn);
     let mut remote_payload = report_payload(&realm_id, &target, &reporter);
     remote_payload["report_reason_code"] = serde_json::json!("illegal");
-    let denied = moderation_report_request(&realm_report, &reporter, remote_payload);
-    let error = uow.commit_event(denied.clone()).await.unwrap_err();
-    assert!(
-        error.to_string().contains("remote delivery target set"),
-        "{error}"
-    );
-    assert_zero_writes(&denied, 2, 1).await;
+    let unowed = moderation_report_request(&realm_report, &reporter, remote_payload);
+    let outcome = uow.commit_event(unowed).await.unwrap();
+    assert_eq!(outcome.outbox_inserted, 0);
+    assert_eq!(report_row_count(&pool).await, 3);
 }
 
 /// Real PostgreSQL: a committed moderation report is moderator-only, so the
