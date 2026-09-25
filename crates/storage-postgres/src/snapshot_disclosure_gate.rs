@@ -76,6 +76,24 @@ const AUDITED_FAMILIES: &[&str] = &[
     "pcr_device_authorization_current_results",
 ];
 
+/// A committed kind of the Realm outside [`DISCLOSED_EVENT_KINDS`].
+pub(crate) fn undisclosed_kind_sql() -> String {
+    let disclosed_kinds = DISCLOSED_EVENT_KINDS
+        .iter()
+        .map(|kind| format!("'{}'", kind.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "SELECT kind FROM realm_commit_event_kinds \
+         WHERE realm_id=$1 AND kind NOT IN ({disclosed_kinds}) LIMIT 1"
+    )
+}
+
+/// Whether a RealmCommit of the Realm names an Event that is not committed.
+pub(crate) const UNSETTLED_COMMIT_SQL: &str = "SELECT EXISTS(SELECT 1 FROM canonical_events \
+     event_row JOIN realm_commits commit_row ON commit_row.event_pk = event_row.pk \
+     WHERE event_row.realm_id=$1 AND event_row.state <> 'committed') AS present";
+
 #[derive(QueryableByName)]
 struct TableNameRow {
     #[diesel(sql_type = SqlText)]
@@ -100,8 +118,6 @@ struct PresenceRow {
 struct KindRow {
     #[diesel(sql_type = SqlText)]
     kind: String,
-    #[diesel(sql_type = SqlText)]
-    state: String,
 }
 
 #[derive(QueryableByName)]
@@ -261,31 +277,26 @@ async fn disclosure_facts_in_connection(
     .await
     .map_err(PersistenceError::database)?
     .present;
-    let disclosed_kinds = DISCLOSED_EVENT_KINDS
-        .iter()
-        .map(|kind| format!("'{}'", kind.as_str()))
-        .collect::<Vec<_>>()
-        .join(",");
-    let undisclosed_kind = sql_query(format!(
-        "SELECT event_row.kind, event_row.state FROM realm_commits commit_row \
-         JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
-         WHERE commit_row.realm_id=$1 \
-           AND (event_row.kind NOT IN ({disclosed_kinds}) OR event_row.state <> 'committed') \
-         LIMIT 1"
-    ))
-    .bind::<Text, _>(realm_id.as_str())
-    .get_result::<KindRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?;
-    let undisclosed_kind = match undisclosed_kind {
-        Some(row) if row.state != "committed" => {
-            return Err(PersistenceError::SchemaViolation(
-                "snapshot cut includes an uncommitted Event".to_owned(),
-            ));
-        }
-        other => other.map(|row| row.kind),
-    };
+    // Both reads are bounded by the Realm's distinct kinds and its unsettled
+    // Events, never by its committed history (0436).
+    let undisclosed_kind = sql_query(undisclosed_kind_sql())
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<KindRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| row.kind);
+    let unsettled_commit = sql_query(UNSETTLED_COMMIT_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<PresenceRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .present;
+    if unsettled_commit {
+        return Err(PersistenceError::SchemaViolation(
+            "snapshot cut includes an uncommitted Event".to_owned(),
+        ));
+    }
     let realm_stream = crate::authority_commit::stream_key(&CommitStreamRef::Realm {
         realm_id: realm_id.clone(),
     })?;

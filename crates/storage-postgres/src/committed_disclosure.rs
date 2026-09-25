@@ -32,7 +32,7 @@ struct WithheldRow {
 
 /// The redaction target expression must stay identical to the one indexed
 /// by `canonical_events_redaction_target_idx`.
-const WITHHELD_COMMITS_SQL: &str = "\
+pub(crate) const WITHHELD_COMMITS_SQL: &str = "\
     SELECT commit_row.commit_id FROM realm_commits commit_row \
     JOIN canonical_events event_row ON event_row.pk = commit_row.event_pk \
     CROSS JOIN LATERAL (SELECT CASE event_row.kind \

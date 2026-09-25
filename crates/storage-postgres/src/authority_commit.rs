@@ -423,6 +423,26 @@ async fn commit_mimi_room_binding_current_result_in_connection(
     Ok(())
 }
 
+/// The head of every commit stream of one Realm, as a loose index scan over
+/// `realm_commits_realm_stream_tail_idx`: one index probe per stream, never
+/// a walk over the Realm's history.
+pub(crate) const REALM_STREAM_HEADS_SQL: &str = "\
+    WITH RECURSIVE stream_keys AS ( \
+      (SELECT stream_key FROM realm_commits WHERE realm_id = $1 \
+       ORDER BY stream_key LIMIT 1) \
+      UNION ALL \
+      SELECT (SELECT next_row.stream_key FROM realm_commits next_row \
+              WHERE next_row.realm_id = $1 AND next_row.stream_key > stream_keys.stream_key \
+              ORDER BY next_row.stream_key LIMIT 1) \
+      FROM stream_keys WHERE stream_keys.stream_key IS NOT NULL \
+    ) \
+    SELECT head.stream_ref, head.stream_position, head.commit_id \
+    FROM stream_keys CROSS JOIN LATERAL ( \
+      SELECT stream_ref, stream_position, commit_id FROM realm_commits \
+      WHERE realm_id = $1 AND stream_key = stream_keys.stream_key \
+      ORDER BY stream_position DESC LIMIT 1) head \
+    WHERE stream_keys.stream_key IS NOT NULL";
+
 #[derive(QueryableByName)]
 struct SnapshotRow {
     #[diesel(sql_type = Jsonb)]
@@ -502,6 +522,24 @@ pub(crate) fn stream_key(stream_ref: &arkret_wire::CommitStreamRef) -> Persisten
     .map_err(PersistenceError::database)
 }
 
+/// The oldest retained Commit of one stream.
+pub(crate) const STREAM_FLOOR_SQL: &str = "SELECT commit_json FROM realm_commits \
+     WHERE stream_key = $1 ORDER BY stream_position ASC LIMIT 1";
+/// One keyset page toward newer Commits.
+pub(crate) const STREAM_PAGE_AFTER_SQL: &str = "SELECT c.commit_json, e.envelope \
+     FROM realm_commits c JOIN canonical_events e ON e.pk = c.event_pk \
+     WHERE c.stream_key = $1 AND c.stream_position > $2 \
+     ORDER BY c.stream_position ASC LIMIT $3";
+/// One keyset page toward older Commits.
+pub(crate) const STREAM_PAGE_BEFORE_SQL: &str = "SELECT c.commit_json, e.envelope \
+     FROM realm_commits c JOIN canonical_events e ON e.pk = c.event_pk \
+     WHERE c.stream_key = $1 AND c.stream_position < $2 \
+     ORDER BY c.stream_position DESC LIMIT $3";
+/// The newest page of one stream.
+pub(crate) const STREAM_PAGE_NEWEST_SQL: &str = "SELECT c.commit_json, e.envelope \
+     FROM realm_commits c JOIN canonical_events e ON e.pk = c.event_pk \
+     WHERE c.stream_key = $1 ORDER BY c.stream_position DESC LIMIT $2";
+
 /// One physical keyset page of a single commit stream on the caller's
 /// connection (and therefore its read cut). This is not an authorization
 /// decision; public callers go through the Account-scoped scan.
@@ -512,15 +550,12 @@ pub(crate) async fn stream_page_in_connection(
     request.validate().map_err(invalid)?;
     let key = stream_key(&request.stream_ref)?;
     let limit = i64::from(request.limit) + 1;
-    let floor = sql_query(
-        "SELECT commit_json FROM realm_commits WHERE stream_key = $1 \
-         ORDER BY stream_position ASC LIMIT 1",
-    )
-    .bind::<Text, _>(&key)
-    .get_result::<CommitRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?;
+    let floor = sql_query(STREAM_FLOOR_SQL)
+        .bind::<Text, _>(&key)
+        .get_result::<CommitRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
     let readable_floor = floor
         .map(|row| {
             let commit: arkret_wire::RealmCommit =
@@ -541,43 +576,28 @@ pub(crate) async fn stream_page_in_connection(
                 .map(|position| to_i64(position, "stream cursor"))
                 .transpose()?
                 .unwrap_or(-1);
-            sql_query(
-                "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                 JOIN canonical_events e ON e.pk = c.event_pk \
-                 WHERE c.stream_key = $1 AND c.stream_position > $2 \
-                 ORDER BY c.stream_position ASC LIMIT $3",
-            )
-            .bind::<Text, _>(&key)
-            .bind::<BigInt, _>(after)
-            .bind::<BigInt, _>(limit)
-            .load::<CommitStreamRow>(&mut *conn)
-            .await
+            sql_query(STREAM_PAGE_AFTER_SQL)
+                .bind::<Text, _>(&key)
+                .bind::<BigInt, _>(after)
+                .bind::<BigInt, _>(limit)
+                .load::<CommitStreamRow>(&mut *conn)
+                .await
         }
         arkret_wire::StreamScanDirection::Before(Some(before)) => {
             let before = to_i64(before, "stream cursor")?;
-            sql_query(
-                "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                 JOIN canonical_events e ON e.pk = c.event_pk \
-                 WHERE c.stream_key = $1 AND c.stream_position < $2 \
-                 ORDER BY c.stream_position DESC LIMIT $3",
-            )
-            .bind::<Text, _>(&key)
-            .bind::<BigInt, _>(before)
-            .bind::<BigInt, _>(limit)
-            .load::<CommitStreamRow>(&mut *conn)
-            .await
+            sql_query(STREAM_PAGE_BEFORE_SQL)
+                .bind::<Text, _>(&key)
+                .bind::<BigInt, _>(before)
+                .bind::<BigInt, _>(limit)
+                .load::<CommitStreamRow>(&mut *conn)
+                .await
         }
         arkret_wire::StreamScanDirection::Before(None) => {
-            sql_query(
-                "SELECT c.commit_json, e.envelope FROM realm_commits c \
-                 JOIN canonical_events e ON e.pk = c.event_pk \
-                 WHERE c.stream_key = $1 \
-                 ORDER BY c.stream_position DESC LIMIT $2",
-            )
-            .bind::<Text, _>(&key)
-            .bind::<BigInt, _>(limit)
-            .load::<CommitStreamRow>(&mut *conn)
-            .await
+            sql_query(STREAM_PAGE_NEWEST_SQL)
+                .bind::<Text, _>(&key)
+                .bind::<BigInt, _>(limit)
+                .load::<CommitStreamRow>(&mut *conn)
+                .await
         }
     }
     .map_err(PersistenceError::database)?;
@@ -635,15 +655,11 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         return Ok(None);
     };
 
-    let rows = sql_query(
-        "SELECT DISTINCT ON (stream_key) stream_ref, stream_position, commit_id \
-         FROM realm_commits WHERE realm_id = $1 \
-         ORDER BY stream_key, stream_position DESC",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .load::<HeadRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
+    let rows = sql_query(REALM_STREAM_HEADS_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .load::<HeadRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
     let mut heads = rows
         .into_iter()
         .map(|row| {
@@ -2306,15 +2322,11 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Vec<arkret_wire::CommitStreamHead>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query(
-            "SELECT DISTINCT ON (stream_key) stream_ref, stream_position, commit_id \
-             FROM realm_commits WHERE realm_id = $1 \
-             ORDER BY stream_key, stream_position DESC",
-        )
-        .bind::<Text, _>(realm_id.as_str())
-        .load::<HeadRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
+        let rows = sql_query(REALM_STREAM_HEADS_SQL)
+            .bind::<Text, _>(realm_id.as_str())
+            .load::<HeadRow>(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
         let mut heads = rows
             .into_iter()
             .map(|row| {
@@ -2385,8 +2397,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         request: &soland_storage::AccountRealmWindowRequest,
         sign: soland_storage::RealmStateSnapshotSigner<'_>,
     ) -> PersistenceResult<Option<soland_storage::AccountRealmWindow>> {
-        crate::issued_realm_snapshots::freeze_account_realm_window(&self.pool, request, sign)
-            .await
+        crate::issued_realm_snapshots::freeze_account_realm_window(&self.pool, request, sign).await
     }
 
     async fn account_window_basis(
@@ -2550,9 +2561,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             }
 
             let rows = sql_query(
-                "SELECT DISTINCT ON (stream_key) stream_ref, stream_position, commit_id \
-                 FROM realm_commits WHERE realm_id = $1 \
-                 ORDER BY stream_key, stream_position DESC",
+                REALM_STREAM_HEADS_SQL,
             )
             .bind::<Text, _>(handoff.realm_id.as_str())
             .load::<HeadRow>(&mut *conn)

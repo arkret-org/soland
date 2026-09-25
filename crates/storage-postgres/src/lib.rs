@@ -99,6 +99,8 @@ mod strand_current_results;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_database;
+#[cfg(test)]
+mod read_capacity_tests;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;

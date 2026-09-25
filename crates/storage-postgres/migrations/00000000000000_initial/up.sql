@@ -744,6 +744,11 @@ CREATE TABLE public.canonical_events (
 CREATE INDEX canonical_events_realm_state_idx
     ON public.canonical_events (realm_id, state, received_at);
 
+-- Events of a Realm that are not committed: a signed cut proves none of them
+-- carries a RealmCommit without walking the committed history.
+CREATE INDEX canonical_events_realm_unsettled_idx
+    ON public.canonical_events (realm_id) WHERE state <> 'committed';
+
 -- Committed-event disclosure: a redaction target is looked up per Realm
 -- without scanning the Realm's history. The expression must stay identical to
 -- the predicate in `committed_disclosure.rs`.
@@ -848,6 +853,30 @@ CREATE TABLE public.realm_commits (
 
 CREATE INDEX realm_commits_realm_stream_tail_idx
     ON public.realm_commits (realm_id, stream_key, stream_position DESC);
+
+-- Every Event kind a Realm has committed, maintained with each RealmCommit.
+-- A signed cut audits these kinds instead of re-reading the Realm history.
+-- A Commit is never removed, so the set only grows and stays exact.
+CREATE TABLE public.realm_commit_event_kinds (
+    realm_id text NOT NULL,
+    kind text NOT NULL,
+    PRIMARY KEY (realm_id, kind)
+);
+
+CREATE FUNCTION public.record_realm_commit_event_kind() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO public.realm_commit_event_kinds (realm_id, kind)
+    SELECT NEW.realm_id, event_row.kind FROM public.canonical_events event_row
+    WHERE event_row.pk = NEW.event_pk
+    ON CONFLICT DO NOTHING;
+    RETURN NULL;
+END
+$$;
+
+CREATE TRIGGER realm_commits_record_event_kind
+AFTER INSERT ON public.realm_commits
+FOR EACH ROW EXECUTE FUNCTION public.record_realm_commit_event_kind();
 
 -- Planned old/new double-signed handoffs only. Consecutive generations are a
 -- CHECK, so a gap cannot be introduced by an unplanned election.

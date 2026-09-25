@@ -1,6 +1,7 @@
 DROP TABLE IF EXISTS mls_welcome_deliveries CASCADE;
 DROP TABLE IF EXISTS mls_group_states CASCADE;
 DROP TABLE IF EXISTS realm_state_snapshot_window_reservations;
+DROP TABLE IF EXISTS realm_commit_event_kinds;
 DROP TABLE IF EXISTS realm_state_snapshot_issuances;
 DROP TABLE IF EXISTS forwarded_producer_device_evidence;
 DROP TABLE IF EXISTS account_device_signer_evidence;
@@ -39,6 +40,7 @@ DROP TABLE IF EXISTS relation_current_results;
 DROP TABLE IF EXISTS current_result_versions;
 DROP TABLE IF EXISTS current_result_heads;
 DROP FUNCTION IF EXISTS enforce_canonical_event_immutability() CASCADE;
+DROP FUNCTION IF EXISTS record_realm_commit_event_kind() CASCADE;
 DROP FUNCTION IF EXISTS invalidate_account_device_create() CASCADE;
 DROP FUNCTION IF EXISTS account_data_source_current(TEXT,TEXT) CASCADE;
 DROP FUNCTION IF EXISTS bind_device_inventory_station() CASCADE;
