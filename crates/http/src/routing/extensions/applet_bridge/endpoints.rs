@@ -1201,11 +1201,7 @@ fn active_applet_grant_revisions(
         {
             continue;
         }
-        let grant = serde_json::from_value::<CapabilityGrant>(row.value).map_err(|error| {
-            AppError::internal(format!(
-                "active Applet Capability Grant current value is invalid: {error}"
-            ))
-        })?;
+        let grant = row.value;
         let subject_matches = matches!(
             &grant.subject,
             CapabilitySubject::Actor(subject) if subject == &expected_subject
@@ -2785,7 +2781,7 @@ mod revoke_saga_tests {
             "sha256:exact",
         )
         .unwrap_err();
-        assert_eq!(error.wire_code(), "applet_already_registered");
+        assert_eq!(error.wire_code(), "duplicate_conflict");
         assert_eq!(error.http_status(), StatusCode::CONFLICT);
     }
 

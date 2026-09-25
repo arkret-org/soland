@@ -151,7 +151,7 @@ pub fn bootstrap_unit(seed: &str) -> OrdinaryRealmBootstrapCommitUnit {
     let kinds = vec![
         (
             arkret_wire::EventKind::RealmProfile,
-            serde_json::json!({"name":"Fixture Realm"}),
+            serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Fixture Realm"}),
         ),
         (
             arkret_wire::EventKind::RealmPolicyBundle,

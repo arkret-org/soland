@@ -637,7 +637,9 @@ fn unit() -> OrdinaryRealmBootstrapCommitUnit {
     .into_iter()
     {
         let payload = match kind {
-            arkret_wire::EventKind::RealmProfile => serde_json::json!({"name":"Test Realm"}),
+            arkret_wire::EventKind::RealmProfile => {
+                serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Test Realm"})
+            }
             arkret_wire::EventKind::RealmPolicyBundle => {
                 serde_json::json!({"policy_revision":1,"federation_policy":"closed"})
             }
@@ -1155,7 +1157,7 @@ async fn confirmed_bootstrap_recovers_after_postcommit_projection_install_is_los
     );
     assert_eq!(
         restored.realm_profile_value(realm_id.as_str()),
-        Some(&serde_json::json!({"name":"Test Realm"}))
+        Some(&serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Test Realm"}))
     );
     assert_eq!(
         restored.realm_policy_bundle_value(realm_id.as_str()),

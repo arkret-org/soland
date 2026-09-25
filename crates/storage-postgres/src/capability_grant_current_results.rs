@@ -267,11 +267,16 @@ fn decode_row(
                 "stored Capability Grant stream ref is invalid: {error}"
             ))
         })?;
+    let value = serde_json::from_value::<CapabilityGrant>(row.value).map_err(|error| {
+        corrupt(format!(
+            "stored Capability Grant current value is invalid: {error}"
+        ))
+    })?;
     CapabilityGrantCurrentResultRecord::try_new(
         realm_id,
         grant_id,
         status,
-        row.value,
+        value,
         CurrentRevision {
             commit_id: commit_id.clone(),
             stream_position,
@@ -415,12 +420,7 @@ pub(crate) async fn actor_holds_realm_action_in_connection(
     let mut rows = BTreeMap::new();
     for row in stored {
         let record = decode_row(row)?;
-        let grant = serde_json::from_value::<CapabilityGrant>(record.value).map_err(|error| {
-            corrupt(format!(
-                "stored Capability Grant current value is invalid: {error}"
-            ))
-        })?;
-        rows.insert(record.grant_id, grant);
+        rows.insert(record.grant_id, record.value);
     }
     let realm = WireResourceSelector::realm(realm_id.clone());
     for (grant_id, grant) in &rows {
@@ -709,7 +709,7 @@ async fn materialize_capability_grant(
     commit: &arkret_wire::RealmCommit,
     grant_id: GrantId,
     body: arkret_models_collaboration::events_payloads::CapabilityGrantCreateBody,
-) -> PersistenceResult<serde_json::Value> {
+) -> PersistenceResult<CapabilityGrant> {
     if body.issuer_authority_refs.is_empty() {
         return Err(schema_violation(
             "Capability Grant authority refs are empty",
@@ -740,12 +740,7 @@ async fn materialize_capability_grant(
     let mut rows = BTreeMap::new();
     for row in locked_rows {
         let record = decode_row(row)?;
-        let grant = serde_json::from_value::<CapabilityGrant>(record.value).map_err(|error| {
-            corrupt(format!(
-                "stored Capability Grant current value is invalid: {error}"
-            ))
-        })?;
-        if rows.insert(record.grant_id, grant).is_some() {
+        if rows.insert(record.grant_id, record.value).is_some() {
             return Err(corrupt("duplicate Capability Grant current row"));
         }
     }
@@ -877,7 +872,7 @@ async fn materialize_capability_grant(
         revoked_by: None,
         revoked_at: None,
     };
-    serde_json::to_value(grant).map_err(PersistenceError::database)
+    Ok(grant)
 }
 
 /// Materialize one of the four registered `capability_grant` writers inside
@@ -942,53 +937,24 @@ pub(crate) async fn commit_capability_grant_current_result_in_connection(
                     "cas_conflict: Capability Grant current revision does not match",
                 ));
             }
-            let typed = serde_json::from_value::<CapabilityGrant>(current.value.clone()).map_err(
-                |error| {
-                    corrupt(format!(
-                        "stored Capability Grant current value is invalid: {error}"
-                    ))
-                },
-            )?;
-            if typed.id != grant_id
-                || typed.realm_id.as_ref() != Some(&event.realm_id)
-                || typed.status != CapabilityGrantStatus::Active
+            let mut value = current.value.clone();
+            if value.id != grant_id
+                || value.realm_id.as_ref() != Some(&event.realm_id)
+                || value.status != CapabilityGrantStatus::Active
             {
                 return Err(corrupt(
                     "stored Capability Grant current value disagrees with its authoritative row",
                 ));
             }
-            let mut value = current.value.clone();
-            let object = value
-                .as_object_mut()
-                .ok_or_else(|| corrupt("stored Capability Grant current value is not an object"))?;
-            object.insert(
-                "status".to_owned(),
-                serde_json::Value::String(status.as_str().to_owned()),
-            );
+            value.status = status.grant_status();
             match status {
                 CapabilityGrantCurrentStatus::Revoked => {
-                    object.insert(
-                        "revoked_by".to_owned(),
-                        serde_json::to_value(&event.actor_id)
-                            .map_err(PersistenceError::database)?,
-                    );
-                    object.insert(
-                        "revoked_at".to_owned(),
-                        serde_json::to_value(event.created_at)
-                            .map_err(PersistenceError::database)?,
-                    );
+                    value.revoked_by = Some(event.actor_id.clone());
+                    value.revoked_at = Some(event.created_at);
                 }
                 CapabilityGrantCurrentStatus::Relinquished => {
-                    object.insert(
-                        "updated_by".to_owned(),
-                        serde_json::to_value(&event.actor_id)
-                            .map_err(PersistenceError::database)?,
-                    );
-                    object.insert(
-                        "updated_at".to_owned(),
-                        serde_json::to_value(event.created_at)
-                            .map_err(PersistenceError::database)?,
-                    );
+                    value.updated_by = Some(event.actor_id.clone());
+                    value.updated_at = Some(event.created_at);
                 }
                 CapabilityGrantCurrentStatus::Active => unreachable!("close cannot remain active"),
             }
@@ -1008,6 +974,7 @@ pub(crate) async fn commit_capability_grant_current_result_in_connection(
     })?;
     let stream_ref =
         serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?;
+    let value = serde_json::to_value(&value).map_err(PersistenceError::database)?;
     sql_query(
         "INSERT INTO capability_grant_current_results \
          (realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,\
@@ -1126,20 +1093,47 @@ mod tests {
             current_commit_id: COMMIT_ID.to_owned(),
             current_stream_ref: serde_json::json!({"kind":"realm","realm_id":REALM_ID}),
             current_stream_position: 7,
-            value: serde_json::json!({
-                "id": GRANT_ID,
-                "schema": "ak.schema.capability.v1",
-                "realm_id": REALM_ID,
-                "status": status
-            }),
+            value: grant_value(status),
         }
+    }
+
+    fn grant_value(status: &str) -> serde_json::Value {
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:reader.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        serde_json::json!({
+            "id": GRANT_ID,
+            "schema": "ak.schema.capability.v1",
+            "realm_id": REALM_ID,
+            "issuer_id": actor,
+            "subject": actor,
+            "actions": ["ak.message.create"],
+            "resources": [{"kind":"realm", "realm_id":REALM_ID}],
+            "issuer_authority_refs": [{
+                "kind":"grant",
+                "grant_id":"ak:grant:AU1_A5a8MMz_OdxEleQlWPFn-ljdJteaJv3ZZ9APkcrZ"
+            }],
+            "authority_depth": 2,
+            "authority_root_refs": [{
+                "kind":"realm_root",
+                "realm_id":REALM_ID,
+                "authority_event_ref":EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x55; 32],
+                ),
+                "authority_generation":0
+            }],
+            "issued_at": "2026-09-21T00:00:00.000Z",
+            "status": status
+        })
     }
 
     #[test]
     fn reader_returns_value_and_exact_commit_revision_from_one_row() {
         let record = decode_row(row("active")).unwrap();
         assert_eq!(record.status, CapabilityGrantCurrentStatus::Active);
-        assert_eq!(record.value["id"], GRANT_ID);
+        assert_eq!(record.value.id.as_str(), GRANT_ID);
         assert_eq!(record.revision.commit_id.as_str(), COMMIT_ID);
         assert_eq!(record.revision.stream_position, 7);
     }

@@ -1,14 +1,24 @@
 //! Durable singleton current results established by an ordinary Realm bootstrap.
 
+use arkret_event_draft::EventPayloadExt;
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use crate::{PersistenceError, PersistenceResult};
 
-fn missing(field: &str) -> PersistenceError {
-    PersistenceError::SchemaViolation(format!(
-        "ordinary Realm bootstrap result is missing {field}"
-    ))
+fn typed_payload<T>(
+    event: &arkret_wire::Event,
+    decode: fn(&arkret_wire::Event) -> arkret_wire::Result<T>,
+) -> PersistenceResult<T> {
+    decode(event).map_err(|error| {
+        PersistenceError::SchemaViolation(format!(
+            "ordinary Realm bootstrap payload is invalid: {error}"
+        ))
+    })
+}
+
+fn result_value<T: serde::Serialize>(value: &T) -> PersistenceResult<serde_json::Value> {
+    serde_json::to_value(value).map_err(PersistenceError::database)
 }
 
 /// Materialize the singleton families declared by the registered ordinary
@@ -20,52 +30,43 @@ pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connec
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<()> {
-    let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
     let (family, value) = match event.kind {
         arkret_wire::EventKind::RealmCreate => (
             "realm_genesis",
-            payload
-                .get("object")
-                .filter(|value| value.is_object())
-                .cloned()
-                .ok_or_else(|| missing("payload.object"))?,
+            result_value(&typed_payload(event, EventPayloadExt::as_realm_create)?.object)?,
         ),
-        arkret_wire::EventKind::RealmProfile => ("realm_profile", payload),
+        arkret_wire::EventKind::RealmProfile => (
+            "realm_profile",
+            result_value(&typed_payload(event, EventPayloadExt::as_realm_profile)?)?,
+        ),
         arkret_wire::EventKind::RealmJoinRule => (
             "realm_join_rule",
-            payload
-                .get("value")
-                .filter(|value| value.is_string())
-                .cloned()
-                .ok_or_else(|| missing("payload.value"))?,
+            result_value(&typed_payload(event, EventPayloadExt::as_realm_join_rule)?.value)?,
         ),
         arkret_wire::EventKind::RealmHistoryAccess => {
-            if payload.get("from") != Some(&serde_json::Value::Null) {
+            let payload = typed_payload(event, EventPayloadExt::as_realm_history_access)?;
+            if payload.from.is_some() {
                 return Err(PersistenceError::Conflict(
                     "ordinary Realm bootstrap history must transition from null".to_owned(),
                 ));
             }
-            (
-                "realm_history_access",
-                payload
-                    .get("to")
-                    .filter(|value| value.is_string())
-                    .cloned()
-                    .ok_or_else(|| missing("payload.to"))?,
-            )
+            ("realm_history_access", result_value(&payload.to)?)
         }
         arkret_wire::EventKind::RealmDiscovery => (
             "realm_discovery",
-            payload
-                .get("value")
-                .filter(|value| value.is_object())
-                .cloned()
-                .ok_or_else(|| missing("payload.value"))?,
+            result_value(&typed_payload(event, EventPayloadExt::as_realm_discovery)?.value)?,
         ),
-        arkret_wire::EventKind::RealmAlias => ("realm_alias", payload),
-        arkret_wire::EventKind::RealmPlaintextVisibleServices => {
-            ("realm_plaintext_visible_services", payload)
-        }
+        arkret_wire::EventKind::RealmAlias => (
+            "realm_alias",
+            result_value(&typed_payload(event, EventPayloadExt::as_realm_alias)?)?,
+        ),
+        arkret_wire::EventKind::RealmPlaintextVisibleServices => (
+            "realm_plaintext_visible_services",
+            result_value(&typed_payload(
+                event,
+                EventPayloadExt::as_realm_plaintext_visible_services,
+            )?)?,
+        ),
         _ => return Ok(()),
     };
     let position = i64::try_from(commit.stream_position).map_err(|_| {

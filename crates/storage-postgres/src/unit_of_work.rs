@@ -1105,27 +1105,15 @@ pub(crate) async fn commit_parent_membership_current_results(
             .map_err(PersistenceError::database)?;
         }
         arkret_wire::EventKind::RealmLink => {
-            let target_realm_id = event
-                .payload
-                .get("target_realm_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    PersistenceError::SchemaViolation("realm_link omits target_realm_id".into())
+            let link =
+                arkret_event_draft::EventPayloadExt::as_realm_link(event).map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "realm_link payload is invalid: {error}"
+                    ))
                 })?;
-            let link_kind = event
-                .payload
-                .get("link_kind")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    PersistenceError::SchemaViolation("realm_link omits link_kind".into())
-                })?;
-            let status = event
-                .payload
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    PersistenceError::SchemaViolation("realm_link omits status".into())
-                })?;
+            let target_realm_id = link.target_realm_id.as_str();
+            let link_kind = link.link_kind.as_str();
+            let status = link.status.as_str();
             advisory_lock(
                 conn,
                 format!(

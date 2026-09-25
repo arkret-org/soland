@@ -37,10 +37,31 @@ async fn test_pool() -> PgPool {
 #[tokio::test]
 async fn postgres_reads_capability_value_and_revision_from_one_current_row() {
     let pool = test_pool().await;
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:reader.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+    ));
+    let root = serde_json::json!({
+        "kind":"realm_root",
+        "realm_id":REALM_ID,
+        "authority_event_ref":arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x55; 32],
+        ),
+        "authority_generation":0
+    });
     let value = serde_json::json!({
         "id": GRANT_ID,
         "schema": "ak.schema.capability.v1",
         "realm_id": REALM_ID,
+        "issuer_id": actor,
+        "subject": actor,
+        "actions": ["ak.message.create"],
+        "resources": [{"kind":"realm", "realm_id":REALM_ID}],
+        "issuer_authority_refs": [root.clone()],
+        "authority_depth": 1,
+        "authority_root_refs": [root],
+        "issued_at": "2026-09-21T00:00:00.000Z",
         "status": "active"
     });
     let now = chrono::Utc::now();
@@ -79,7 +100,7 @@ async fn postgres_reads_capability_value_and_revision_from_one_current_row() {
         .unwrap()
         .expect("current grant row");
     assert_eq!(record.status, CapabilityGrantCurrentStatus::Active);
-    assert_eq!(record.value, value);
+    assert_eq!(serde_json::to_value(&record.value).unwrap(), value);
     assert_eq!(record.revision.commit_id.as_str(), COMMIT_ID);
     assert_eq!(record.revision.stream_position, 41);
 
@@ -88,7 +109,10 @@ async fn postgres_reads_capability_value_and_revision_from_one_current_row() {
         .into_iter()
         .find(|row| row.grant_id == grant_id)
         .expect("grant appears in the same-statement Realm snapshot");
-    assert_eq!(listed.value, record.value);
+    assert_eq!(
+        serde_json::to_value(&listed.value).unwrap(),
+        serde_json::to_value(&record.value).unwrap()
+    );
     assert_eq!(listed.revision, record.revision);
 }
 
@@ -419,9 +443,9 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
     assert_eq!(revoked.status, CapabilityGrantCurrentStatus::Revoked);
     assert_eq!(revoked.revision.commit_id, revoke_tx.commit.commit_id);
     assert_eq!(revoked.source.event_id, revoke.event_id);
-    assert_eq!(revoked.value["status"], "revoked");
     assert_eq!(
-        revoked.value["revoked_by"],
-        serde_json::to_value(&revoke.actor_id).unwrap()
+        revoked.value.status,
+        arkret_models_collaboration::governance::grant_constraint::CapabilityGrantStatus::Revoked
     );
+    assert_eq!(revoked.value.revoked_by.as_ref(), Some(&revoke.actor_id));
 }

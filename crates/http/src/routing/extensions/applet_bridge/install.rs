@@ -1335,26 +1335,6 @@ pub(super) async fn build_install_plan(
         .package_digest
         .clone()
         .ok_or_else(|| AppError::param_missing("applet_package.package_digest is required"))?;
-    let seed = json!({
-        "schema": arkret_wire::SchemaId::APPLET_INSTALL_PLAN_V1,
-        "applet_id": package.applet_id,
-        "package_digest": package_digest,
-        "registration_epoch": package.registration_epoch,
-        "effective_scope": scope,
-        "requested_scopes": package.requested_scopes,
-        "approved_scopes": approved_scopes,
-        "denied_scopes": denied_scopes,
-        "event_submissions": [{
-            "event_kind": arkret_wire::EventKind::AppletRegistration,
-            "payload": registration_payload,
-        }],
-        "capability_constraints": capability_constraints_for_scope(scope),
-        "namespace_conflicts": [],
-        "e2ee_effect": e2ee_effect_for_package(package),
-        "widget_effect": widget_effect_for_package(package),
-        "warnings": [],
-    });
-    let plan_id = deterministic_plan_id(&seed)?;
     let event_payload = serde_json::from_value(registration_payload).map_err(|error| {
         AppError::internal(format!(
             "applet registration payload is not an object: {error}"
@@ -1362,7 +1342,8 @@ pub(super) async fn build_install_plan(
     })?;
     let mut plan = AppletInstallPlan {
         schema: arkret_wire::SchemaId::APPLET_INSTALL_PLAN_V1.to_owned(),
-        plan_id,
+        plan_id: arkret_wire::PlanId::new(UNASSIGNED_PLAN_ID)
+            .map_err(|error| AppError::internal(error.to_string()))?,
         applet_id: package.applet_id.clone(),
         package_digest: package_digest.clone(),
         registration_epoch: package.registration_epoch.clone(),
@@ -1384,6 +1365,7 @@ pub(super) async fn build_install_plan(
         warnings: Vec::new(),
         plan_digest: package_digest.clone(),
     };
+    plan.plan_id = deterministic_plan_id(&plan)?;
     plan.stamp_plan_digest()
         .map_err(|error| AppError::internal(format!("install plan digest failed: {error}")))?;
     Ok(plan)
@@ -1502,8 +1484,23 @@ pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect
     }
 }
 
-pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<arkret_wire::PlanId, AppError> {
-    let digest = crate::util::canonical_digest(plan_seed)?;
+/// Placeholder identity carried only until [`deterministic_plan_id`] replaces
+/// it; both derived identifiers are excluded from the digest seed.
+const UNASSIGNED_PLAN_ID: &str = "ak:plan:unassigned";
+
+/// The plan id is the canonical digest of the plan content with its two
+/// derived identifiers (`plan_id` and `plan_digest`) omitted.
+pub(super) fn deterministic_plan_id(
+    plan: &AppletInstallPlan,
+) -> Result<arkret_wire::PlanId, AppError> {
+    let mut seed = serde_json::to_value(plan)
+        .map_err(|error| AppError::internal(format!("install plan encoding failed: {error}")))?;
+    let object = seed
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("install plan must encode as an object"))?;
+    object.remove("plan_id");
+    object.remove("plan_digest");
+    let digest = crate::util::canonical_digest(&seed)?;
     arkret_wire::PlanId::new(format!("ak:plan:{}", digest.trim_start_matches("sha256:")))
         .map_err(|error| AppError::internal(error.to_string()))
 }

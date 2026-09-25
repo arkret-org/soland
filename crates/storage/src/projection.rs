@@ -118,12 +118,12 @@ pub trait RelationCurrentResultStore: Send + Sync {
 /// `value` and `revision` are one durable row and therefore one read
 /// snapshot.  Consumers must never replace this revision with the in-memory
 /// facet counter, the effective-list digest, or an Event id.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct CapabilityGrantCurrentResultRecord {
     pub realm_id: arkret_wire::RealmId,
     pub grant_id: arkret_wire::GrantId,
     pub status: CapabilityGrantCurrentStatus,
-    pub value: serde_json::Value,
+    pub value: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
     pub revision: arkret_wire::CurrentRevision,
     pub source: arkret_wire::CommittedEventRef,
 }
@@ -135,21 +135,17 @@ impl CapabilityGrantCurrentResultRecord {
         realm_id: arkret_wire::RealmId,
         grant_id: arkret_wire::GrantId,
         status: CapabilityGrantCurrentStatus,
-        value: serde_json::Value,
+        value: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
         revision: arkret_wire::CurrentRevision,
         source: arkret_wire::CommittedEventRef,
     ) -> PersistenceResult<Self> {
-        let object = value.as_object().ok_or_else(|| {
-            PersistenceError::Database("stored Capability Grant value is not an object".to_owned())
-        })?;
-        if object.get("schema").and_then(serde_json::Value::as_str)
-            != Some("ak.schema.capability.v1")
-            || object.get("id").and_then(serde_json::Value::as_str) != Some(grant_id.as_str())
-            || object.get("status").and_then(serde_json::Value::as_str) != Some(status.as_str())
-            || object
-                .get("realm_id")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value_realm| value_realm != realm_id.as_str())
+        if value.schema != arkret_wire::SchemaId::CAPABILITY_V1
+            || value.id != grant_id
+            || value.status != status.grant_status()
+            || value
+                .realm_id
+                .as_ref()
+                .is_some_and(|value_realm| value_realm != &realm_id)
         {
             return Err(PersistenceError::Database(
                 "stored Capability Grant value does not match its row identity".to_owned(),
@@ -183,6 +179,19 @@ pub enum CapabilityGrantCurrentStatus {
 }
 
 impl CapabilityGrantCurrentStatus {
+    /// The lifecycle member the canonical grant value carries for this row.
+    #[must_use]
+    pub const fn grant_status(
+        self,
+    ) -> arkret_models_collaboration::governance::grant_constraint::CapabilityGrantStatus {
+        use arkret_models_collaboration::governance::grant_constraint::CapabilityGrantStatus;
+        match self {
+            Self::Active => CapabilityGrantStatus::Active,
+            Self::Revoked => CapabilityGrantStatus::Revoked,
+            Self::Relinquished => CapabilityGrantStatus::Relinquished,
+        }
+    }
+
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -220,7 +229,7 @@ pub fn effective_capability_grant_rows(
     Vec<arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow>,
 > {
     use arkret_models_collaboration::governance::grant_constraint::{
-        CapabilityGrant, CapabilityGrantStatus, CapabilitySubject,
+        CapabilityGrantStatus, CapabilitySubject,
     };
 
     let mut rows = Vec::new();
@@ -228,11 +237,7 @@ pub fn effective_capability_grant_rows(
         if record.status != CapabilityGrantCurrentStatus::Active {
             continue;
         }
-        let grant = serde_json::from_value::<CapabilityGrant>(record.value).map_err(|error| {
-            PersistenceError::Database(format!(
-                "stored active Capability Grant is invalid: {error}"
-            ))
-        })?;
+        let grant = record.value;
         if grant.id != record.grant_id
             || grant.realm_id.as_ref() != Some(realm_id)
             || grant.status != CapabilityGrantStatus::Active
@@ -295,37 +300,6 @@ mod capability_grant_current_result_tests {
     const GRANT_ID: &str = "ak:grant:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz";
     const COMMIT_ID: &str = "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4";
 
-    fn record(
-        status: CapabilityGrantCurrentStatus,
-    ) -> PersistenceResult<CapabilityGrantCurrentResultRecord> {
-        CapabilityGrantCurrentResultRecord::try_new(
-            REALM_ID.parse().unwrap(),
-            GRANT_ID.parse().unwrap(),
-            status,
-            serde_json::json!({
-                "id": GRANT_ID,
-                "schema": "ak.schema.capability.v1",
-                "realm_id": REALM_ID,
-                "status": status.as_str()
-            }),
-            arkret_wire::CurrentRevision {
-                commit_id: COMMIT_ID.parse().unwrap(),
-                stream_position: 41,
-            },
-            arkret_wire::CommittedEventRef {
-                event_id: arkret_wire::EventId::from_digest(
-                    arkret_canonical::DigestSuite::Sha256,
-                    [0x44; 32],
-                ),
-                commit_id: COMMIT_ID.parse().unwrap(),
-                stream_ref: arkret_wire::CommitStreamRef::Realm {
-                    realm_id: REALM_ID.parse().unwrap(),
-                },
-                stream_position: 41,
-            },
-        )
-    }
-
     fn subject() -> arkret_wire::ActorId {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:reader.example").unwrap(),
@@ -333,9 +307,10 @@ mod capability_grant_current_result_tests {
         ))
     }
 
-    fn complete_record(status: CapabilityGrantCurrentStatus) -> CapabilityGrantCurrentResultRecord {
-        let mut record = record(status).unwrap();
-        record.value = serde_json::json!({
+    fn grant(
+        status: CapabilityGrantCurrentStatus,
+    ) -> arkret_models_collaboration::governance::grant_constraint::CapabilityGrant {
+        serde_json::from_value(serde_json::json!({
             "id": GRANT_ID,
             "schema": "ak.schema.capability.v1",
             "realm_id": REALM_ID,
@@ -360,30 +335,55 @@ mod capability_grant_current_result_tests {
             }],
             "issued_at": "2026-09-21T00:00:00.000Z",
             "status": status.as_str()
-        });
-        record
+        }))
+        .unwrap()
+    }
+
+    fn record_with(
+        status: CapabilityGrantCurrentStatus,
+        value: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+    ) -> PersistenceResult<CapabilityGrantCurrentResultRecord> {
+        CapabilityGrantCurrentResultRecord::try_new(
+            REALM_ID.parse().unwrap(),
+            GRANT_ID.parse().unwrap(),
+            status,
+            value,
+            arkret_wire::CurrentRevision {
+                commit_id: COMMIT_ID.parse().unwrap(),
+                stream_position: 41,
+            },
+            arkret_wire::CommittedEventRef {
+                event_id: arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x44; 32],
+                ),
+                commit_id: COMMIT_ID.parse().unwrap(),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: REALM_ID.parse().unwrap(),
+                },
+                stream_position: 41,
+            },
+        )
+    }
+
+    fn complete_record(status: CapabilityGrantCurrentStatus) -> CapabilityGrantCurrentResultRecord {
+        record_with(status, grant(status)).unwrap()
     }
 
     #[test]
     fn value_and_exact_commit_revision_remain_one_record() {
-        let record = record(CapabilityGrantCurrentStatus::Active).unwrap();
-        assert_eq!(record.value["id"], GRANT_ID);
+        let record = complete_record(CapabilityGrantCurrentStatus::Active);
+        assert_eq!(record.value.id.as_str(), GRANT_ID);
         assert_eq!(record.revision.commit_id.as_str(), COMMIT_ID);
         assert_eq!(record.revision.stream_position, 41);
     }
 
     #[test]
     fn lifecycle_mismatch_fails_closed() {
-        let mut record = record(CapabilityGrantCurrentStatus::Active).unwrap();
-        record.value["status"] = serde_json::json!("revoked");
         assert!(matches!(
-            CapabilityGrantCurrentResultRecord::try_new(
-                record.realm_id,
-                record.grant_id,
-                record.status,
-                record.value,
-                record.revision,
-                record.source,
+            record_with(
+                CapabilityGrantCurrentStatus::Active,
+                grant(CapabilityGrantCurrentStatus::Revoked),
             ),
             Err(PersistenceError::Database(_))
         ));
