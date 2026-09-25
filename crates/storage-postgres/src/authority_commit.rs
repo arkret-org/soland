@@ -2383,8 +2383,10 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn freeze_account_realm_window(
         &self,
         request: &soland_storage::AccountRealmWindowRequest,
+        sign: soland_storage::RealmStateSnapshotSigner<'_>,
     ) -> PersistenceResult<Option<soland_storage::AccountRealmWindow>> {
-        crate::issued_realm_snapshots::freeze_account_realm_window(&self.pool, request).await
+        crate::issued_realm_snapshots::freeze_account_realm_window(&self.pool, request, sign)
+            .await
     }
 
     async fn account_window_basis(

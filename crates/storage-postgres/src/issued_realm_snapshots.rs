@@ -433,12 +433,16 @@ async fn still_disclosable(
 /// One `REPEATABLE READ` cut holds, in order: the shared retention lock that
 /// excludes issued-snapshot GC, the share-locked governing tenure, the
 /// complete sole-founder disclosure proof, the delivered rows, and the
-/// basis reservation. The window's rows are the last `window_limit` Commits
-/// of the Realm stream; `limited` states whether readable history lies below
-/// them.
+/// basis reservation. The window's rows are the live delta after the
+/// Account's delivered head when that head is still an accepted ancestor
+/// within `window_limit`, otherwise the last `window_limit` Commits of the
+/// Realm stream; `limited` states whether readable history lies below them.
+/// The frozen head is issued to the Account in the same cut, so the next
+/// delta can name it as its exact basis.
 pub(crate) async fn freeze_account_realm_window(
     pool: &PgPool,
     request: &soland_storage::AccountRealmWindowRequest,
+    sign: soland_storage::RealmStateSnapshotSigner<'_>,
 ) -> PersistenceResult<Option<soland_storage::AccountRealmWindow>> {
     use arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow;
 
@@ -529,7 +533,21 @@ pub(crate) async fn freeze_account_realm_window(
         {
             return Err(window_rejected("the delivered chain differs from the proved head").into());
         }
-        let start = (head.stream_position + 1).saturating_sub(u64::from(request.window_limit));
+        let tail_start = (head.stream_position + 1).saturating_sub(u64::from(request.window_limit));
+        let start = match &request.delivered_head {
+            Some(delivered)
+                if delivered.stream_ref == stream_ref
+                    && delivered.stream_position < head.stream_position
+                    && delivered.stream_position + 1 >= tail_start
+                    && usize::try_from(delivered.stream_position)
+                        .ok()
+                        .and_then(|index| chain.get(index))
+                        .is_some_and(|view| view.commit.commit_id == delivered.commit_id) =>
+            {
+                delivered.stream_position + 1
+            }
+            _ => tail_start,
+        };
         let start_index = usize::try_from(start).map_err(|_| window_rejected("window start"))?;
         let delivered = chain[start_index..]
             .iter()
@@ -593,6 +611,19 @@ pub(crate) async fn freeze_account_realm_window(
                 basis = Some(candidate_basis);
                 break;
             }
+        }
+        // Issue the frozen head so the next live delta after it has an exact
+        // basis. A head beyond the inline snapshot limit issues nothing and
+        // that delta is preview only.
+        let head_snapshot = sign(&material)?;
+        if !soland_storage::signed_snapshot_matches_material(&head_snapshot, &material) {
+            return Err(PersistenceError::Internal(
+                "snapshot signer changed the proved disclosure material".to_owned(),
+            )
+            .into());
+        }
+        if soland_storage::enforce_inline_realm_state_snapshot_capacity(&head_snapshot).is_ok() {
+            issue_in_connection(conn, &request.account, &head_snapshot).await?;
         }
         let window = RealmStreamWindow {
             stream_ref: stream_ref.clone(),

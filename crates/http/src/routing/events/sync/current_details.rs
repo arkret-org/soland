@@ -1,8 +1,9 @@
 //! Realm detail delivery: one frozen, caller-proved stream window per frame.
 //!
 //! A window is frozen by `freeze_account_realm_window` at a single durable cut
-//! that proves the Account's complete disclosure, delivers the last
-//! `window_limit` Commits of the Realm stream, and names a
+//! that proves the Account's complete disclosure, delivers the live delta
+//! after the head this cursor already delivered (or, without one, the last
+//! `window_limit` Commits of the Realm stream), and names a
 //! `window_start_basis` only when an exact snapshot already issued to the
 //! Account sits at the anchor and is reserved for the window's consumable
 //! period; otherwise a limited window is `preview_only`. The window deadline,
@@ -138,6 +139,7 @@ async fn freeze(
     account: &arkret_wire::AccountId,
     realm: &RealmId,
     window_limit: u32,
+    delivered_head: Option<arkret_wire::CommitStreamHead>,
 ) -> Result<Freeze, String> {
     // Reserve the Account-summary cut first (0441): the reservation keeps
     // it readable until the cursor that carries `retained_revision` is saved.
@@ -160,10 +162,20 @@ async fn freeze(
         expires_at_ms,
         now_ms,
         byte_budget: ACCOUNT_SYNC_MAX_FRAME_BYTES - DETAIL_ENVELOPE_RESERVATION,
+        delivered_head,
     };
+    let verification_method = state
+        .service_verification_method("notary-key")
+        .map_err(|error| error.to_string())?;
+    let signing_key = state.notary_signing_key();
     match state
         .authority_commits()
-        .freeze_account_realm_window(&request)
+        .freeze_account_realm_window(
+            &request,
+            &verification_method,
+            signing_key.as_ref(),
+            crate::wire::now(),
+        )
         .await
     {
         Ok(Some(window)) => {
@@ -258,10 +270,25 @@ pub(super) async fn frame(
                         return Some(control("resync_required"));
                     }
                 };
-                if !needs_new_window(positions.get(realm.as_str()), &heads, now_ms) {
+                let delivered = positions.get(realm.as_str());
+                if !needs_new_window(delivered, &heads, now_ms) {
                     continue;
                 }
-                match freeze(state, account, &realm, window_limit).await {
+                // The Realm stream head this cursor already delivered, if
+                // any: the next window continues after it.
+                let delivered_head = delivered.and_then(|progress| {
+                    progress
+                        .stream_heads
+                        .iter()
+                        .find(|head| {
+                            head.stream_ref
+                                == arkret_wire::CommitStreamRef::Realm {
+                                    realm_id: realm.clone(),
+                                }
+                        })
+                        .cloned()
+                });
+                match freeze(state, account, &realm, window_limit, delivered_head).await {
                     Ok(Freeze::Window(entry, progress)) => {
                         positions.insert(realm.to_string(), progress);
                         entries.insert(realm.to_string(), entry);

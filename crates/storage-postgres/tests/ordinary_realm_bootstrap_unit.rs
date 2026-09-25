@@ -1763,6 +1763,7 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
         expires_at_ms: now_ms + window_ttl,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
+        delivered_head: None,
     };
     let positions = |window: &soland_storage::AccountRealmWindow| {
         window
@@ -1777,7 +1778,7 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
 
     // Whole readable history fits: not limited, so no basis is needed.
     let full = store
-        .freeze_account_realm_window(&request(&creator, 10))
+        .freeze_account_realm_window(&request(&creator, 10), &sign)
         .await
         .unwrap()
         .unwrap();
@@ -1793,7 +1794,7 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
 
     // Limited, and no snapshot was ever issued at the anchor.
     let unbacked = store
-        .freeze_account_realm_window(&request(&creator, 2))
+        .freeze_account_realm_window(&request(&creator, 2), &sign)
         .await
         .unwrap()
         .unwrap();
@@ -1819,14 +1820,14 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
     // Another Account can neither freeze nor be handed the creator's object.
     assert!(
         store
-            .freeze_account_realm_window(&request(&stranger, 2))
+            .freeze_account_realm_window(&request(&stranger, 2), &sign)
             .await
             .is_err()
     );
 
     let backed_request = request(&creator, 2);
     let backed = store
-        .freeze_account_realm_window(&backed_request)
+        .freeze_account_realm_window(&backed_request, &sign)
         .await
         .unwrap()
         .unwrap();
@@ -1850,7 +1851,7 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
 
     // The anchor must be exact: position 7 has no issued snapshot.
     let off_by_one = store
-        .freeze_account_realm_window(&request(&creator, 1))
+        .freeze_account_realm_window(&request(&creator, 1), &sign)
         .await
         .unwrap()
         .unwrap();
@@ -2014,7 +2015,7 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
 
     // A new limited window over the reclaimed anchor is preview only.
     let reclaimed = store
-        .freeze_account_realm_window(&request(&creator, 2))
+        .freeze_account_realm_window(&request(&creator, 2), &sign)
         .await
         .unwrap()
         .unwrap();
@@ -2289,9 +2290,10 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
         expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
+        delivered_head: None,
     };
     let backed = store
-        .freeze_account_realm_window(&request)
+        .freeze_account_realm_window(&request, &sign)
         .await
         .unwrap()
         .unwrap();
@@ -2325,11 +2327,14 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
     // A preview-only window still carries the same-cut current: current
     // never depends on the window start.
     let preview = store
-        .freeze_account_realm_window(&AccountRealmWindowRequest {
-            window_limit: 1,
-            window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
-            ..request.clone()
-        })
+        .freeze_account_realm_window(
+            &AccountRealmWindowRequest {
+                window_limit: 1,
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                ..request.clone()
+            },
+            &sign,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -2341,11 +2346,14 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
     // A consumable deadline beyond the cursor's lifetime is refused whole.
     assert!(
         store
-            .freeze_account_realm_window(&AccountRealmWindowRequest {
-                expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS + 1,
-                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
-                ..request.clone()
-            })
+            .freeze_account_realm_window(
+                &AccountRealmWindowRequest {
+                    expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS + 1,
+                    window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                    ..request.clone()
+                },
+                &sign
+            )
             .await
             .is_err()
     );
@@ -2442,9 +2450,10 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
         expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
+        delivered_head: None,
     };
     let backed = store
-        .freeze_account_realm_window(&request)
+        .freeze_account_realm_window(&request, &sign)
         .await
         .unwrap()
         .unwrap();
@@ -2461,11 +2470,14 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
     );
 
     let unanchored = store
-        .freeze_account_realm_window(&AccountRealmWindowRequest {
-            window_limit: 20,
-            window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
-            ..request.clone()
-        })
+        .freeze_account_realm_window(
+            &AccountRealmWindowRequest {
+                window_limit: 20,
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                ..request.clone()
+            },
+            &sign,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -2488,6 +2500,69 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
             .unwrap(),
         Some(at_head),
     );
+
+    // Live delta: two more messages after the delivered head 30 arrive as a
+    // window of exactly those two Commits, on the snapshot the earlier
+    // freeze issued at its own head; a delivered head that is not an
+    // accepted ancestor falls back to the last `window_limit` Commits.
+    let delivered = arkret_wire::CommitStreamHead {
+        stream_ref: backed.window.stream_ref.clone(),
+        stream_position: backed.window.next_position - 1,
+        commit_id: backed.window.head_commit_ref.clone(),
+    };
+    for index in 0..2 {
+        let message = message_create_request(&previous, &strand_id, &format!("live {index}"));
+        uow.commit_event(message.clone()).await.unwrap();
+        previous = message;
+    }
+    let delta = store
+        .freeze_account_realm_window(
+            &AccountRealmWindowRequest {
+                delivered_head: Some(delivered.clone()),
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                ..request.clone()
+            },
+            &sign,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(delta.window.preview_only, None);
+    assert_eq!(delta.window.next_position, 33);
+    assert_eq!(
+        delta
+            .committed_events
+            .iter()
+            .map(|row| row.commit().stream_position)
+            .collect::<Vec<_>>(),
+        vec![31, 32]
+    );
+    let delta_basis = delta.window.window_start_basis.clone().unwrap();
+    assert_eq!(delta_basis.anchor_position, 30);
+    assert_eq!(delta_basis.anchor_commit_ref, delivered.commit_id);
+    let delta_anchor = store
+        .issued_realm_state_snapshot(&realm_id, &creator, &delta_basis.snapshot_ref, &issuer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(delta_anchor.visible_stream_heads, vec![delivered.clone()]);
+    let forged = store
+        .freeze_account_realm_window(
+            &AccountRealmWindowRequest {
+                delivered_head: Some(arkret_wire::CommitStreamHead {
+                    commit_id: arkret_wire::RealmCommitId::from_digest([0x7f; 32]),
+                    ..delivered
+                }),
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                ..request.clone()
+            },
+            &sign,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(forged.committed_events.len(), 21);
+    assert_eq!(forged.committed_events[0].commit().stream_position, 12);
 }
 
 #[tokio::test]

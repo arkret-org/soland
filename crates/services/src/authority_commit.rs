@@ -1088,11 +1088,28 @@ impl AuthorityCommitApplication {
 
     /// Freeze one Account Realm-stream window at a single proved cut; see
     /// [`soland_storage::AuthorityCommitStore::freeze_account_realm_window`].
+    /// The frozen head is issued to the Account with the Station's current
+    /// service method, exactly like `/head`.
     pub async fn freeze_account_realm_window(
         &self,
         request: &soland_storage::AccountRealmWindowRequest,
+        verification_method: &DidUrl,
+        signing_key: &SigningKey,
+        created_at: DateTime<Utc>,
     ) -> ServiceResult<Option<soland_storage::AccountRealmWindow>> {
-        Ok(self.store().freeze_account_realm_window(request).await?)
+        let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+            build_signed_realm_state_snapshot(
+                material,
+                verification_method.clone(),
+                signing_key,
+                created_at,
+            )
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+        };
+        Ok(self
+            .store()
+            .freeze_account_realm_window(request, &sign)
+            .await?)
     }
 
     /// The reserved basis of a frozen window, or `None` once the by-ref

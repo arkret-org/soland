@@ -144,6 +144,11 @@ pub struct AccountRealmWindowRequest {
     /// Canonical bytes the delivered rows may occupy. The window is atomic:
     /// rows that do not fit fail the freeze instead of being truncated.
     pub byte_budget: usize,
+    /// The Realm-stream head the Account cursor last delivered. When it is
+    /// still an accepted ancestor of the head within `window_limit`, the
+    /// window is the live delta after it instead of the last `window_limit`
+    /// Commits.
+    pub delivered_head: Option<arkret_wire::CommitStreamHead>,
 }
 
 /// One frozen, fully delivered stream window and its committed rows.
@@ -669,11 +674,14 @@ pub trait AuthorityCommitStore: Send + Sync {
     /// Account's complete disclosure. A limited window carries a
     /// `window_start_basis` only when an exact snapshot issued to the Account
     /// matches its anchor and can be reserved for the window's consumable
-    /// period; otherwise the stream is `preview_only`. `None` means the Realm
-    /// has no governed material.
+    /// period; otherwise the stream is `preview_only`. The frozen head is
+    /// issued to the Account in the same cut, signed by `sign`, so the next
+    /// live delta after it names that exact snapshot as its basis. `None`
+    /// means the Realm has no governed material.
     async fn freeze_account_realm_window(
         &self,
         request: &AccountRealmWindowRequest,
+        sign: RealmStateSnapshotSigner<'_>,
     ) -> PersistenceResult<Option<AccountRealmWindow>>;
 
     /// Re-read a frozen window's reserved basis. `None` means the guarantee
