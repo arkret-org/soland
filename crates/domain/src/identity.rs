@@ -177,7 +177,6 @@ pub struct ContactRecord {
     pub requester_id: ActorId,
     pub target_id: ActorId,
     pub contact_round_id: Option<Hash>,
-    pub version: Option<u64>,
     pub granted_to_target_scopes: Vec<String>,
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,

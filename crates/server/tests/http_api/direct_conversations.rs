@@ -232,7 +232,6 @@ async fn seed_accepted_direct_message_contact(
             requester_id: arkret_wire::ActorId::account(requester_id),
             target_id: arkret_wire::ActorId::account(target),
             contact_round_id: Some(evidence.contact_round_id.clone()),
-            version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
@@ -871,7 +870,6 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
             contact_round_id: Some(
                 arkret_identifiers::Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap(),
             ),
-            version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),

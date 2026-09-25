@@ -80,7 +80,6 @@ mod tests {
                 contact_round_id: Some(
                     arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
                 ),
-                version: Some(1),
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
                 granted_to_requester_scopes: vec!["direct_message".to_owned()],
                 status: "accepted".to_owned(),

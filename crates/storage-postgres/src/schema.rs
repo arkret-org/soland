@@ -489,7 +489,6 @@ diesel::table! {
         requester_id -> Text,
         target_id -> Text,
         contact_round_id -> Nullable<Text>,
-        version -> Nullable<Int8>,
         granted_to_target_scopes -> Array<Text>,
         granted_to_requester_scopes -> Array<Text>,
         status -> Text,

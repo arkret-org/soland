@@ -1623,7 +1623,6 @@ async fn finalize_contact_proof_refresh(
         record.status = "accepted".to_owned();
         record.request_receipts.clear();
         record.request_mirror_receipts.clear();
-        record.version = Some(1);
     }
     let expected_updated_at = record.updated_at;
     record.contact_round_evidence = Some(bundle);
@@ -2645,14 +2644,13 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     .accepted_commit_event_ids
                     .contains(&remote_proof.head_event_ref)
                 || remote_attestation.complete_through == 0
-                || !remote_attestation
-                    .observed_commit_event_ids
-                    .iter()
-                    .all(|event_ref| {
-                        request_receipts
-                            .iter()
-                            .any(|receipt| &receipt.core.request_event_ref == event_ref)
-                    })
+                || !request_receipts.iter().all(|receipt| {
+                    // The peer's slot prefix must have observed both requests;
+                    // it may also hold that slot's earlier accepted Events.
+                    remote_attestation
+                        .observed_commit_event_ids
+                        .contains(&receipt.core.request_event_ref)
+                })
             {
                 return Err(super::super::events::peer::schema_violation(
                     "glare finalize outcome proof/frontier is incomplete",
@@ -2815,7 +2813,6 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
             if !outcome_stored || record.status != "accepted" {
                 let expected_updated_at = record.updated_at;
                 record.contact_round_id = Some(contact_round_id.clone());
-                record.version = Some(1);
                 record.status = "accepted".to_owned();
                 record.request_receipts.clear();
                 record.request_mirror_receipts.clear();
@@ -3435,7 +3432,6 @@ async fn project_delivered_contact_fact(
                         requester_id: issuer_id.clone(),
                         target_id: subject_actor_id.clone(),
                         contact_round_id: None,
-                        version: None,
                         granted_to_target_scopes: projected_scopes.clone(),
                         granted_to_requester_scopes: Vec::new(),
                         status: "pending".to_owned(),
@@ -3476,7 +3472,6 @@ async fn project_delivered_contact_fact(
                         requester_id: issuer_id.clone(),
                         target_id: subject_actor_id.clone(),
                         contact_round_id: None,
-                        version: None,
                         granted_to_target_scopes: projected_scopes.clone(),
                         granted_to_requester_scopes: Vec::new(),
                         status: "pending".to_owned(),
@@ -3585,7 +3580,6 @@ async fn project_delivered_contact_fact(
                 requester_id: issuer_id.clone(),
                 target_id: subject_actor_id.clone(),
                 contact_round_id: None,
-                version: None,
                 granted_to_target_scopes: projected_scopes,
                 granted_to_requester_scopes: Vec::new(),
                 status: "pending".to_owned(),
@@ -3699,7 +3693,6 @@ async fn project_delivered_contact_fact(
             let expected_updated_at = contact.updated_at;
             contact.granted_to_requester_scopes = granted_scopes(payload);
             contact.contact_round_id = Some(accepted.contact_round_id.clone());
-            contact.version = Some(accepted.version);
             contact.status = "accepted".to_owned();
             contact.request_receipts.clear();
             contact.request_mirror_receipts.clear();
@@ -3887,7 +3880,10 @@ async fn project_delivered_contact_fact(
                     .as_ref()
                     .map(|value| value.as_str())
                     != Some(update.contact_round_id.as_str())
-                || contact.version.and_then(|value| value.checked_add(1)) != Some(update.version)
+                || super::account::direction_version(state, &contact, issuer_id)
+                    .await?
+                    .and_then(|value| value.checked_add(1))
+                    != Some(update.version)
                 || predecessor != Some(update.predecessor_event_ref.as_str())
             {
                 return Err(super::super::events::peer::schema_violation(
@@ -3895,7 +3891,6 @@ async fn project_delivered_contact_fact(
                 ));
             }
             let expected_updated_at = contact.updated_at;
-            contact.version = Some(update.version);
             if contact.requester_id == *issuer_id {
                 contact.granted_to_target_scopes = projected_scopes;
                 contact.request_event_ref = Some(contact_event_ref.clone());
@@ -3971,7 +3966,10 @@ async fn project_delivered_contact_fact(
             };
             if row.contact_round_id.as_ref().map(|value| value.as_str())
                 != Some(tombstone.contact_round_id.as_str())
-                || row.version.and_then(|value| value.checked_add(1)) != Some(tombstone.version)
+                || super::account::direction_version(state, &row, issuer_id)
+                    .await?
+                    .and_then(|value| value.checked_add(1))
+                    != Some(tombstone.version)
                 || predecessor != Some(tombstone.predecessor_event_ref.as_str())
             {
                 return Err(super::super::events::peer::schema_violation(
@@ -3979,7 +3977,6 @@ async fn project_delivered_contact_fact(
                 ));
             }
             let expected_updated_at = row.updated_at;
-            row.version = Some(tombstone.version);
             row.status = "tombstoned".to_owned();
             row.request_receipts.clear();
             row.request_mirror_receipts.clear();
@@ -4395,7 +4392,6 @@ mod tests {
             requester_id: account_actor(ALICE, ALICE_SERVICE),
             target_id: account_actor(BOB, BOB_SERVICE),
             contact_round_id: None,
-            version: None,
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "pending".to_owned(),
@@ -4476,7 +4472,6 @@ mod tests {
                 requester_id: account_actor(ALICE, ALICE_SERVICE),
                 target_id: account_actor(BOB, BOB_SERVICE),
                 contact_round_id: None,
-                version: None,
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
                 granted_to_requester_scopes: vec!["direct_message".to_owned()],
                 status: "pending".to_owned(),
@@ -4578,7 +4573,6 @@ mod tests {
             requester_id: account_actor(ALICE, ALICE_SERVICE),
             target_id: account_actor(BOB, BOB_SERVICE),
             contact_round_id: None,
-            version: None,
             granted_to_target_scopes: Vec::new(),
             granted_to_requester_scopes: Vec::new(),
             status: "pending".to_owned(),

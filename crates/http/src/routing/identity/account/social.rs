@@ -13,7 +13,7 @@ pub(crate) use direct::{
 mod contact_write;
 
 pub(crate) use contact_write::{
-    canonical_contact_digest, contact_detached_jws, local_direction_current,
+    canonical_contact_digest, contact_detached_jws, direction_version, local_direction_current,
     local_requester_current_proof, materialize_contact_completions,
     validate_request_receipt_cryptography, verify_contact_service_signature,
     verify_contact_service_signature_bytes,
@@ -453,23 +453,20 @@ async fn contact_list_rows(
                 .contact_round_id
                 .as_ref()
                 .ok_or_else(|| AppError::internal("accepted Contact has no contact_round_id"))?;
-            let current_version = record
-                .version
-                .ok_or_else(|| AppError::internal("accepted Contact has no lineage version"))?;
-            let predecessor = if record.requester_id == *actor {
-                record.request_event_ref.as_ref()
-            } else {
-                record.response_event_ref.as_ref()
-            }
-            .ok_or_else(|| {
-                AppError::internal("accepted Contact has no holder-local lineage head")
-            })?;
+            // The holder's own direction: its committed head and that head's
+            // confirmed version (section 3 founding edge included).
+            let (predecessor, current_version) =
+                contact_write::local_direction_current(state, &record, actor)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::internal("accepted Contact has no holder-local lineage head")
+                    })?;
             Some(ContactNextPrepareInput {
                 contact_round_id: contact_round_id.clone(),
                 version: current_version.checked_add(1).ok_or_else(|| {
                     AppError::internal("accepted Contact lineage version overflow")
                 })?,
-                predecessor_event_ref: predecessor.clone(),
+                predecessor_event_ref: predecessor,
             })
         } else {
             None

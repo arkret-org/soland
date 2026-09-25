@@ -1869,7 +1869,6 @@ CREATE TABLE public.contacts (
     requester_id text NOT NULL,
     target_id text NOT NULL,
     contact_round_id text,
-    version bigint CHECK (version >= 1),
     granted_to_target_scopes text[] DEFAULT '{}'::text[] NOT NULL,
     granted_to_requester_scopes text[] DEFAULT '{}'::text[] NOT NULL,
     status text NOT NULL,

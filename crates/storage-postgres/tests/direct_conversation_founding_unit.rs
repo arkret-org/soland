@@ -230,7 +230,6 @@ async fn accept_contact(
             requester_id: ActorId::account(requester.clone()),
             target_id: ActorId::account(responder.clone()),
             contact_round_id: Some(contact_round_id.clone()),
-            version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: status.to_owned(),

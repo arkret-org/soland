@@ -687,12 +687,14 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
                         .with_wire_code("contact_lineage_conflict")
                 })?;
             validate_lineage_head(
+                state,
                 &record,
                 &holder_actor,
                 contact_round_id,
                 *version,
                 predecessor_event_ref,
-            )?;
+            )
+            .await?;
         }
         _ => {}
     }
@@ -1197,6 +1199,39 @@ pub(crate) async fn local_direction_current(
     )))
 }
 
+/// The confirmed lineage version of the direction whose issuer is `issuer`
+/// on this row: a local issuer's committed head, otherwise the issuer
+/// Station's authenticated current proof for that direction, and the founding
+/// edge (version 1) while the issuer's head is still its own request.
+pub(crate) async fn direction_version(
+    state: &AppState,
+    record: &ContactRecord,
+    issuer: &arkret_wire::ActorId,
+) -> Result<Option<u64>, AppError> {
+    if let Some((_, version)) = local_direction_current(state, record, issuer).await? {
+        return Ok(Some(version));
+    }
+    let direction_peer = if &record.requester_id == issuer {
+        &record.target_id
+    } else if &record.target_id == issuer {
+        &record.requester_id
+    } else {
+        return Ok(None);
+    };
+    if let Some(proof) = record.contact_round_evidence.as_ref().and_then(|bundle| {
+        bundle
+            .current_proofs
+            .iter()
+            .find(|proof| !proof.terminal && &proof.peer.contact_actor_id() == direction_peer)
+    }) {
+        return Ok(Some(proof.complete_through));
+    }
+    Ok((&record.requester_id == issuer
+        && record.contact_round_id.is_some()
+        && record.request_event_ref.is_some())
+    .then_some(1))
+}
+
 pub(crate) async fn local_requester_current_proof(
     state: &AppState,
     contact_round_id: &Hash,
@@ -1637,7 +1672,6 @@ async fn plan_contact_commit(
                     requester_id: holder.clone(),
                     target_id: peer.clone(),
                     contact_round_id: None,
-                    version: None,
                     granted_to_target_scopes: contact_scope_strings(granted_to_peer_scopes),
                     granted_to_requester_scopes: Vec::new(),
                     status: "pending".to_owned(),
@@ -1752,7 +1786,6 @@ async fn plan_contact_commit(
             record.request_receipts.clear();
             record.request_mirror_receipts.clear();
             record.contact_round_id = Some(contact_round_id.clone());
-            record.version = Some(1);
             record.granted_to_requester_scopes = contact_scope_strings(granted_to_peer_scopes);
             record.response_event_ref = Some(event.event_id.clone());
             record.contact_round_evidence = None;
@@ -1821,19 +1854,20 @@ async fn plan_contact_commit(
                 return Err(AppError::not_found("accepted Contact round not found"));
             };
             validate_lineage_head(
+                state,
                 &record,
                 &holder,
                 contact_round_id,
                 *version,
                 predecessor_event_ref,
-            )?;
+            )
+            .await?;
             let expected_updated_at = record.updated_at;
             set_holder_scopes(
                 &mut record,
                 &holder,
                 contact_scope_strings(granted_to_peer_scopes),
             );
-            record.version = Some(*version);
             record.updated_at = contact_revision_after(expected_updated_at, event.created_at);
             // The accepted contact_round remains accepted even when its directional
             // intersection is empty. Authorization reads the exact full-set
@@ -1861,14 +1895,15 @@ async fn plan_contact_commit(
                 return Err(AppError::not_found("accepted Contact round not found"));
             };
             validate_lineage_head(
+                state,
                 &record,
                 &holder,
                 contact_round_id,
                 *version,
                 predecessor_event_ref,
-            )?;
+            )
+            .await?;
             let expected_updated_at = record.updated_at;
-            record.version = Some(*version);
             record.status = "tombstoned".to_owned();
             record.request_receipts.clear();
             record.request_mirror_receipts.clear();
@@ -2250,15 +2285,24 @@ fn set_holder_scopes(
     }
 }
 
-fn validate_lineage_head(
+async fn validate_lineage_head(
+    state: &AppState,
     record: &ContactRecord,
     holder: &arkret_wire::ActorId,
     contact_round_id: &Hash,
     version: u64,
     predecessor: &EventId,
 ) -> Result<(), AppError> {
+    // Each issuer direction carries its own lineage version: the next Event
+    // extends the holder's own committed head by exactly one
+    // (contact-and-direct-conversation.md section 3).
+    let current = local_direction_current(state, record, holder).await?;
     if record.contact_round_id.as_ref() != Some(contact_round_id)
-        || record.version.and_then(|current| current.checked_add(1)) != Some(version)
+        || current
+            .as_ref()
+            .and_then(|(_, current)| current.checked_add(1))
+            != Some(version)
+        || current.as_ref().map(|(head, _)| head) != Some(predecessor)
         || holder_head(record, holder) != Some(predecessor)
     {
         return Err(AppError::conflict("Contact lineage CAS mismatch")
@@ -2800,7 +2844,6 @@ mod device_authorization_account_tests {
                 requester_id: receipt.core.holder.contact_actor_id(),
                 target_id: receipt.core.peer.contact_actor_id(),
                 contact_round_id: None,
-                version: None,
                 granted_to_target_scopes: Vec::new(),
                 granted_to_requester_scopes: Vec::new(),
                 status: "pending".to_owned(),
@@ -3288,7 +3331,6 @@ mod device_authorization_account_tests {
             requester_id: receipt.core.holder.contact_actor_id(),
             target_id: receipt.core.peer.contact_actor_id(),
             contact_round_id: None,
-            version: None,
             granted_to_target_scopes: Vec::new(),
             granted_to_requester_scopes: Vec::new(),
             status: "pending".to_owned(),

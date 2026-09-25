@@ -194,7 +194,6 @@ async fn requested(database: &TestDatabase, seed: &str) -> Requested {
         requester_id: alice().contact_actor_id(),
         target_id: bob().contact_actor_id(),
         contact_round_id: None,
-        version: None,
         granted_to_target_scopes: vec!["direct_message".to_owned()],
         granted_to_requester_scopes: Vec::new(),
         status: "pending".to_owned(),
@@ -317,7 +316,6 @@ fn response(
     let mut row = requested.row.clone();
     row.status = "accepted".to_owned();
     row.contact_round_id = Some(contact_round_id);
-    row.version = Some(1);
     row.granted_to_requester_scopes = vec!["direct_message".to_owned()];
     row.response_event_ref = Some(event.event_id.clone());
     row.updated_at = accepted_at;

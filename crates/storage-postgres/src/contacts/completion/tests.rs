@@ -231,7 +231,6 @@ fn pending_row(intent: &ContactCompletionIntent) -> soland_storage::ContactRecor
         requester_id: intent.plan.event.actor_id.clone(),
         target_id: peer.contact_actor_id(),
         contact_round_id: None,
-        version: None,
         granted_to_target_scopes: vec!["direct_message".to_owned()],
         granted_to_requester_scopes: Vec::new(),
         status: "pending".to_owned(),

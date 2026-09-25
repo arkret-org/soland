@@ -720,7 +720,6 @@ mod refs_limit_tests {
             requester_id: bob,
             target_id: alice,
             contact_round_id: None,
-            version: Some(1),
             granted_to_target_scopes: vec!["direct_message".into()],
             granted_to_requester_scopes: vec!["direct_message".into()],
             status: "accepted".into(),

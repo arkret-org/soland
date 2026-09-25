@@ -2470,7 +2470,6 @@ pub async fn assert_event_commit_unit_of_work_contract(
             DidCoreId::new("ak:did_core:web:peer-principal.example").unwrap(),
         )),
         contact_round_id: None,
-        version: None,
         granted_to_target_scopes: vec!["direct_conversation".to_owned()],
         granted_to_requester_scopes: Vec::new(),
         status: "pending".to_owned(),
