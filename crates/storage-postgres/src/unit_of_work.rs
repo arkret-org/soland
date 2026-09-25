@@ -2298,6 +2298,12 @@ async fn commit_one_in_connection(
     }
 
     prepare_parent_membership_transaction(conn, &request).await?;
+    crate::member_state_admission::admit_member_state_in_connection(
+        conn,
+        event,
+        &request.authority_commit.commit,
+    )
+    .await?;
 
     if let Some(selector) = request.device_revocation_gate.as_ref() {
         ensure_gate_allowed_in_transaction(conn, selector).await?;

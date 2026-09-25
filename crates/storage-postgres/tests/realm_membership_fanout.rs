@@ -322,6 +322,121 @@ fn assert_code(error: &soland_storage::PersistenceError, code: ConflictCode) {
     assert_eq!(error.conflict_code(), Some(code), "{error}");
 }
 
+async fn assert_refused(
+    pool: &PgPool,
+    uow: &PgEventCommitUnitOfWork,
+    request: EventCommitRequest,
+    code: ConflictCode,
+) {
+    let outbox = outbox_count(pool).await;
+    let error = uow.commit_event(request.clone()).await.unwrap_err();
+    assert_code(&error, code);
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    assert!(
+        store
+            .committed_event(&request.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a refused membership Event is not committed"
+    );
+    assert_eq!(
+        outbox_count(pool).await,
+        outbox,
+        "a refusal plans no fanout"
+    );
+}
+
+/// Only the listed FSM edges by their listed writers are admitted, and every
+/// refusal writes nothing.
+#[tokio::test]
+async fn membership_transitions_need_their_listed_writer_and_entry_rule() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let alice = remote_member("fsm-alice");
+    let bob = remote_member("fsm-bob");
+
+    // An invite-only Realm has no self entry.
+    let invite = admit(&pool, "fsm-invite", "invite").await;
+    let last = invite.transactions.last().unwrap();
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(last, alice.clone(), &alice, "join"),
+        ConflictCode::GateCheckFailed,
+    )
+    .await;
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(last, alice.clone(), &alice, "knock"),
+        ConflictCode::GateCheckFailed,
+    )
+    .await;
+
+    let public = admit(&pool, "fsm-public", "public").await;
+    let last = public.transactions.last().unwrap();
+    // Even the Realm root controller cannot enter someone else.
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(last, founder_actor(), &alice, "join"),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    let alice_join = membership_request(last, alice.clone(), &alice, "join");
+    uow.commit_event(alice_join.clone()).await.unwrap();
+    // `join -> join` is not an edge.
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&alice_join.authority_commit, alice.clone(), &alice, "join"),
+        ConflictCode::FailedPrecondition,
+    )
+    .await;
+    let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
+    uow.commit_event(bob_join.clone()).await.unwrap();
+    // A member without `ak.realm.admin` cannot ban or remove another.
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&bob_join.authority_commit, alice.clone(), &bob, "ban"),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&bob_join.authority_commit, alice.clone(), &bob, "leave"),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    // The root controller holds every action and bans Bob.
+    let ban = membership_request(&bob_join.authority_commit, founder_actor(), &bob, "ban");
+    uow.commit_event(ban.clone()).await.unwrap();
+    let realm_id = public.transactions[0].event.realm_id.clone();
+    assert_eq!(
+        member_state(&pool, &realm_id, &bob).await.as_deref(),
+        Some("ban")
+    );
+    // Bob cannot lift his own ban, and a banned member cannot rejoin.
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&ban.authority_commit, bob.clone(), &bob, "leave"),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    assert_refused(
+        &pool,
+        &uow,
+        membership_request(&ban.authority_commit, bob.clone(), &bob, "join"),
+        ConflictCode::FailedPrecondition,
+    )
+    .await;
+}
+
 /// An Event owed to a remote Station cannot commit without the exact source
 /// submission its fanout carries.
 #[tokio::test]

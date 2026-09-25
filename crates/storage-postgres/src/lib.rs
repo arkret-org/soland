@@ -58,6 +58,7 @@ mod key_backup;
 mod key_backup_current_results;
 mod key_backup_unlock;
 mod member_identity;
+mod member_state_admission;
 mod message_revision_current_results;
 mod mls;
 mod moderation;

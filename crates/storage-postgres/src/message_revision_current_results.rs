@@ -1,7 +1,8 @@
 //! A bounded Message create current writer at the accepting RealmCommit cut.
 //!
-//! The supported carrier is a root-controller-authored, Realm-scope plain
-//! text Message in an active local discussion Strand. Other Message forms
+//! The supported carrier is a Realm-scope plain text Message in an active
+//! local discussion Strand, authored by the Realm root controller or by a
+//! joined member holding `ak.message.create` at the accepting cut. Other Message forms
 //! require their own source-scope and effect admission and remain closed.
 
 use diesel::OptionalExtension as _;
@@ -120,14 +121,27 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         .map_err(|error| {
             PersistenceError::Internal(format!("stored Realm controller is invalid: {error}"))
         })?;
-    if controller != event.actor_id {
-        return Err(conflict("Message actor has no same-cut root capability"));
-    }
-    if event
-        .authorization_ref
-        .as_ref()
-        .is_some_and(|reference| reference.as_str() != root.authority_event_ref.as_str())
+    // capabilities.md §2.2: joining does not grant writing. The root
+    // controller holds every action; any other member needs an active,
+    // chain-intact `ak.message.create` grant at this same cut.
+    if controller != event.actor_id
+        && !crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
+            conn,
+            &event.realm_id,
+            &event.actor_id,
+            &[arkret_wire::CapabilityActionId::MESSAGE_CREATE],
+            commit.committed_at,
+        )
+        .await?
     {
+        return Err(PersistenceError::Conflict(format!(
+            "{}: Message actor holds no same-cut message capability",
+            soland_storage::ConflictCode::CapabilityDenied
+        )));
+    }
+    if event.authorization_ref.as_ref().is_some_and(|reference| {
+        controller != event.actor_id || reference.as_str() != root.authority_event_ref.as_str()
+    }) {
         return Err(conflict(
             "Message authorization ref differs from current Realm root",
         ));

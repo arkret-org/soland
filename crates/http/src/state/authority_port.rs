@@ -47,6 +47,8 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::StrandCreate
         | EventKind::RealmSetDefaultStrand
         | EventKind::MessageCreate
+        | EventKind::MemberState
+        | EventKind::CapabilityGrant
         | EventKind::ModerationDecision
         | EventKind::ModerationDecisionLift
         | EventKind::InviteCreate
@@ -395,6 +397,8 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
+            EventKind::MemberState,
+            EventKind::CapabilityGrant,
             EventKind::ModerationDecision,
             EventKind::ModerationDecisionLift,
             EventKind::InviteCreate,
@@ -415,6 +419,8 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
+            EventKind::MemberState,
+            EventKind::CapabilityGrant,
             EventKind::ModerationDecision,
             EventKind::ModerationDecisionLift,
             EventKind::InviteCreate,
