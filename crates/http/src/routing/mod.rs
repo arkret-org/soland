@@ -26,6 +26,7 @@ pub(crate) mod system;
 pub(crate) mod message_authoring;
 mod realm_join;
 pub(crate) mod realm_organization;
+mod self_current_reads;
 
 use access::policy::policy_document_to_response;
 pub(crate) use admin::audit::append_audit_log;

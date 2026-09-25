@@ -31,7 +31,7 @@ pub(super) fn open_router() -> Router {
 
 /// Responses carrying authorization results, authority bundles, or Commits
 /// are never cacheable (`service-http-binding.md` §6).
-fn no_store(res: &mut Response) {
+pub(super) fn no_store(res: &mut Response) {
     res.headers_mut().insert(
         salvo::http::header::CACHE_CONTROL,
         salvo::http::HeaderValue::from_static("no-store"),
@@ -40,7 +40,7 @@ fn no_store(res: &mut Response) {
 
 /// Decode the exact body as the closed request type: malformed JSON is
 /// `json_invalid`, a well-formed body outside the schema `schema_violation`.
-async fn parse_closed_body<T: serde::de::DeserializeOwned>(
+pub(super) async fn parse_closed_body<T: serde::de::DeserializeOwned>(
     req: &mut Request,
     res: &mut Response,
 ) -> Option<T> {

@@ -3095,3 +3095,250 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
     ));
     assert!(items(queue.queue_view_for_actor(&stranger, None).await.unwrap()).is_empty());
 }
+
+/// Real PostgreSQL: the exact self reads decide visibility, generation, head
+/// and row on one governing cut. Non-members, unknown Realms and foreign
+/// watchers collapse to not-found; a provable Realm-scope row is answered;
+/// everything this Station cannot prove fails closed instead of being
+/// inferred from absence.
+#[tokio::test]
+async fn self_current_reads_answer_only_the_provable_cut() {
+    use arkret_models_collaboration::exact_current_results::{
+        ExactCurrentResultEntry, ExactCurrentResultsReadOutcome, ExactCurrentResultsReadRequestBody,
+    };
+    use arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentRequestBody;
+    use soland_storage::{AccountRealmStreamList, MediaServiceAnchorRead, SelfExactCurrentRead};
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap();
+    let other_station =
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+    let stranger = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    let unknown = arkret_wire::RealmId::from_event_id(&unit.transactions[1].event.event_id);
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let head = &unit.transactions[6].commit;
+
+    // Streams: the sole founder sees the Realm stream with its genesis floor.
+    let AccountRealmStreamList::Listed(rows) = store
+        .list_realm_streams_for_account(&realm_id, &creator, &station)
+        .await
+        .unwrap()
+    else {
+        panic!("the founding Realm stream is listable");
+    };
+    assert_eq!(
+        rows,
+        vec![arkret_wire::RealmStreamRow {
+            stream_ref: arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            head_commit_ref: head.commit_id.clone(),
+            next_position: 7,
+            readable_floor: Some(arkret_wire::ReadableFloor {
+                oldest_position: 0,
+                floor_commit_id: unit.transactions[0].commit.commit_id.clone(),
+                floor_reason: arkret_wire::ReadableFloorReason::StreamStart,
+            }),
+        }]
+    );
+    for (realm, account) in [(&realm_id, &stranger), (&unknown, &creator)] {
+        assert_eq!(
+            store
+                .list_realm_streams_for_account(realm, account, &station)
+                .await
+                .unwrap(),
+            AccountRealmStreamList::NotVisible
+        );
+    }
+    assert!(matches!(
+        store
+            .list_realm_streams_for_account(&realm_id, &creator, &other_station)
+            .await
+            .unwrap(),
+        AccountRealmStreamList::Unproved(_)
+    ));
+
+    // Exact Relation read: no row is never inferred as never_written.
+    let domain = serde_json::json!({
+        "domain_kind":"tuple",
+        "relation_kind":"references",
+        "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+        "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-"
+    });
+    let relation_request = |realm: &arkret_wire::RealmId| {
+        serde_json::from_value::<ExactCurrentResultsReadRequestBody>(serde_json::json!({
+            "realm_id": realm,
+            "selector": {"kind":"relation","primary_conflict_domain": domain},
+        }))
+        .unwrap()
+    };
+    let exact = |request: ExactCurrentResultsReadRequestBody,
+                 account: arkret_wire::AccountId,
+                 issuer: arkret_wire::DidCoreId| {
+        let store = store.clone();
+        async move {
+            store
+                .exact_current_result_for_account(&request, &account, &issuer)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(matches!(
+        exact(
+            relation_request(&realm_id),
+            creator.clone(),
+            station.clone()
+        )
+        .await,
+        SelfExactCurrentRead::Unresolved(_)
+    ));
+    let relation_id = "ak:relation:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz";
+    let value = serde_json::json!({
+        "schema":"ak.schema.relation.v1",
+        "id":relation_id,
+        "realm_id":realm_id,
+        "effective_scope":{"kind":"realm","realm_id":realm_id},
+        "relation_kind":"references",
+        "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
+        "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
+        "state":"active",
+        "created_by":unit.transactions[0].event.actor_id,
+        "created_at":"2026-09-21T00:00:00.000Z"
+    });
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO relation_current_results \
+         (realm_id,domain_key,domain,relation_id,state,current_commit_id,current_stream_position,\
+          value,updated_at) VALUES ($1,$2,$3,$4,'active',$5,6,$6,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(arkret_canonical::canonical_json_string(&domain).unwrap())
+    .bind::<diesel::sql_types::Jsonb, _>(&domain)
+    .bind::<Text, _>(relation_id)
+    .bind::<Text, _>(head.commit_id.as_str())
+    .bind::<diesel::sql_types::Jsonb, _>(&value)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    let SelfExactCurrentRead::Answer(ExactCurrentResultsReadOutcome::Present {
+        realm_id: answered_realm,
+        governance_generation,
+        effective_stream_head,
+        entry: ExactCurrentResultEntry::Relation(entry),
+    }) = exact(
+        relation_request(&realm_id),
+        creator.clone(),
+        station.clone(),
+    )
+    .await
+    else {
+        panic!("a Realm-scope Relation row is answered present");
+    };
+    assert_eq!(answered_realm, realm_id);
+    assert_eq!(governance_generation, 0);
+    assert_eq!(effective_stream_head.commit_id, head.commit_id);
+    assert_eq!(effective_stream_head.stream_position, 6);
+    assert_eq!(entry.revision.commit_id, head.commit_id);
+    assert_eq!(entry.revision.stream_position, 6);
+    assert_eq!(entry.source_stream_ref, effective_stream_head.stream_ref);
+    // Non-members and unknown Realms cannot distinguish present from absent.
+    assert!(matches!(
+        exact(
+            relation_request(&realm_id),
+            stranger.clone(),
+            station.clone()
+        )
+        .await,
+        SelfExactCurrentRead::NotFound
+    ));
+    assert!(matches!(
+        exact(relation_request(&unknown), creator.clone(), station.clone()).await,
+        SelfExactCurrentRead::NotFound
+    ));
+    assert!(matches!(
+        exact(
+            relation_request(&realm_id),
+            creator.clone(),
+            other_station.clone()
+        )
+        .await,
+        SelfExactCurrentRead::Unresolved(_)
+    ));
+    let moderation =
+        serde_json::from_value::<ExactCurrentResultsReadRequestBody>(serde_json::json!({
+            "realm_id": realm_id,
+            "selector": {"kind":"moderation_state","target_ref": relation_id},
+        }))
+        .unwrap();
+    assert!(matches!(
+        exact(moderation, creator.clone(), station.clone()).await,
+        SelfExactCurrentRead::Unresolved(_)
+    ));
+
+    // Strand watch: only the watcher itself, only a known Strand.
+    let watch = |watcher: &arkret_wire::AccountId| StrandWatchCurrentRequestBody {
+        realm_id: realm_id.clone(),
+        strand_id: arkret_wire::StrandId::new(
+            "ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4".to_owned(),
+        )
+        .unwrap(),
+        watcher_actor_id: arkret_wire::ActorId::account(watcher.clone()),
+    };
+    for (request, account) in [(watch(&stranger), &creator), (watch(&creator), &creator)] {
+        assert!(matches!(
+            store
+                .strand_watch_current_for_account(&request, account, &station)
+                .await
+                .unwrap(),
+            SelfExactCurrentRead::NotFound
+        ));
+    }
+
+    // Media service: no accepted assignment in the visible Realm.
+    for account in [&creator, &stranger] {
+        assert_eq!(
+            store
+                .media_service_anchor_for_account(&realm_id, account, &station)
+                .await
+                .unwrap(),
+            MediaServiceAnchorRead::NotFound
+        );
+    }
+
+    // A second joined member makes the founder's floor unprovable.
+    let second_member = arkret_wire::ActorId::account(stranger.clone()).to_string();
+    diesel::sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES ($1,$2,'join',$3,6,'{\"membership\":\"join\"}'::jsonb,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(&second_member)
+    .bind::<Text, _>(head.commit_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store
+            .list_realm_streams_for_account(&realm_id, &creator, &station)
+            .await
+            .unwrap(),
+        AccountRealmStreamList::Unproved(_)
+    ));
+}

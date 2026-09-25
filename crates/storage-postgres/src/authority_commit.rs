@@ -2381,6 +2381,62 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         crate::account_stream_scan::scan_stream_for_peer(&self.pool, request, peer, issuer).await
     }
 
+    async fn list_realm_streams_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::AccountRealmStreamList> {
+        crate::self_current_reads::list_realm_streams_for_account(
+            &self.pool, realm_id, account, issuer,
+        )
+        .await
+    }
+
+    async fn exact_current_result_for_account(
+        &self,
+        request: &arkret_models_collaboration::exact_current_results::ExactCurrentResultsReadRequestBody,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        soland_storage::SelfExactCurrentRead<
+            arkret_models_collaboration::exact_current_results::ExactCurrentResultsReadOutcome,
+        >,
+    > {
+        crate::self_current_reads::exact_current_result_for_account(
+            &self.pool, request, account, issuer,
+        )
+        .await
+    }
+
+    async fn strand_watch_current_for_account(
+        &self,
+        request: &arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentRequestBody,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        soland_storage::SelfExactCurrentRead<
+            arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentOutcome,
+        >,
+    > {
+        crate::self_current_reads::strand_watch_current_for_account(
+            &self.pool, request, account, issuer,
+        )
+        .await
+    }
+
+    async fn media_service_anchor_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::MediaServiceAnchorRead> {
+        crate::self_current_reads::media_service_anchor_for_account(
+            &self.pool, realm_id, account, issuer,
+        )
+        .await
+    }
+
     async fn install_handoff(
         &self,
         handoff: &arkret_wire::RealmAuthorityHandoff,

@@ -348,6 +348,9 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(events::router())
                 // self/streams/scan (ak.self.committed_event.read.scan.v1).
                 .push(authority_commit::self_router())
+                // self/realms/{realm_id}/streams, self/current-results/exact,
+                // self/strands/watch/current, self/media-service-bindings/query.
+                .push(self_current_reads::router())
                 // self/authz/*. (Owner-scoped policy
                 // document CRUD lives on the product surface at
                 // `/_soland/self/policies*`, see `soland_local_router`.)
@@ -647,27 +650,11 @@ mod tests {
         ),
         (
             "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::SelfCurrentResultsReadExactV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::SelfMediaServiceBindingReadResolveV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::SelfRealmReadStreamsV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfRealmJoinReadApplicationStatusV1,
         ),
         (
             "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::SelfRealmJoinReadPreviewV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::SelfStrandWatchReadCurrentV1,
         ),
     ];
 
@@ -766,6 +753,61 @@ mod tests {
             body["type"], "https://arkret.org/problems/unauthenticated",
             "{body}"
         );
+    }
+
+    /// The four self current reads are selectable and reach the
+    /// authenticated handler instead of the unrecognized-endpoint catch-all.
+    #[tokio::test]
+    async fn self_current_reads_dispatch_to_authenticated_handlers() {
+        use salvo::test::{ResponseExt as _, TestClient};
+
+        let service = crate::service(AppState::new(
+            crate::config::AppConfig::test_default(),
+            Db { pool: None },
+        ));
+        let realm = "ak:realm:AUGIFvQctz4TjQTmvvO4Wdy-xdc5XP2ZnJ5Qpbh4s8Ru";
+        for (operation, request) in [
+            (
+                arkret_wire::ServiceOperationId::SELF_REALM_READ_STREAMS_V1,
+                TestClient::get(format!("http://server/_arkret/self/realms/{realm}/streams")),
+            ),
+            (
+                arkret_wire::ServiceOperationId::SELF_CURRENT_RESULTS_READ_EXACT_V1,
+                TestClient::post("http://server/_arkret/self/current-results/exact")
+                    .json(&serde_json::json!({})),
+            ),
+            (
+                arkret_wire::ServiceOperationId::SELF_STRAND_WATCH_READ_CURRENT_V1,
+                TestClient::post("http://server/_arkret/self/strands/watch/current")
+                    .json(&serde_json::json!({})),
+            ),
+            (
+                arkret_wire::ServiceOperationId::SELF_MEDIA_SERVICE_BINDING_READ_RESOLVE_V1,
+                TestClient::post("http://server/_arkret/self/media-service-bindings/query")
+                    .json(&serde_json::json!({})),
+            ),
+        ] {
+            let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+            let operation_id = arkret_wire::ServiceOperationId::from_wire(operation).unwrap();
+            assert!(
+                locally_advertises(&state, operation_id, arkret_wire::BindingKind::HttpJson),
+                "{operation}"
+            );
+            let mut response = request
+                .add_header("Arkret-Operation", operation, true)
+                .send(&service)
+                .await;
+            let body: serde_json::Value = response.take_json().await.expect("problem body");
+            assert_eq!(
+                response.status_code,
+                Some(StatusCode::UNAUTHORIZED),
+                "{operation}: {body}"
+            );
+            assert_eq!(
+                body["type"], "https://arkret.org/problems/unauthenticated",
+                "{operation}: {body}"
+            );
+        }
     }
 
     #[test]

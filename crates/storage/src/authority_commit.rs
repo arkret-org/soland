@@ -28,6 +28,45 @@ pub enum AccountStreamScan {
     Unproved(&'static str),
 }
 
+/// Result of `ak.self.realm.read.streams.v1` for one authenticated Account
+/// at one governing read cut.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AccountRealmStreamList {
+    /// Every row the caller may know exists, in JCS(stream_ref) order.
+    Listed(Vec<arkret_wire::RealmStreamRow>),
+    /// Unknown Realm or a caller that is not a currently joined member: the
+    /// universal non-enumerating `not_found`.
+    NotVisible,
+    /// The caller is a member, but the stream set it may know about or a
+    /// row's readable floor cannot be proved at this cut.
+    Unproved(&'static str),
+}
+
+/// Result of an exact, non-enumerating self current read at one governing
+/// read cut (`ak.self.current_results.read.exact.v1`,
+/// `ak.self.strand.watch.read.current.v1`).
+#[derive(Clone, Debug)]
+pub enum SelfExactCurrentRead<T> {
+    /// A selector-identical answer bound to the cut's generation and head.
+    Answer(T),
+    /// Unknown, foreign, invisible or unauthorized selector.
+    NotFound,
+    /// The current governing basis for the selector cannot be confirmed at
+    /// this cut; absence is never inferred from it.
+    Unresolved(&'static str),
+}
+
+/// Anchor state behind `ak.self.media_service_binding.read.resolve.v1` for one
+/// authenticated Account at one governing read cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaServiceAnchorRead {
+    /// Invisible Realm, non-member caller, or no accepted media service
+    /// assignment in the Realm.
+    NotFound,
+    /// A media service assignment was accepted in the visible Realm.
+    Anchored,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueuedEventStatus {
     Queued,
@@ -670,6 +709,53 @@ pub trait AuthorityCommitStore: Send + Sync {
         peer: &arkret_wire::DidCoreId,
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<AccountStreamScan>;
+
+    /// `ak.self.realm.read.streams.v1` for one authenticated Account. The
+    /// stream set, each head and each readable floor come from one read cut at
+    /// which `issuer` holds the Realm's governing tenure; a set or floor this
+    /// Station cannot prove fails closed instead of omitting a stream.
+    async fn list_realm_streams_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<AccountRealmStreamList>;
+
+    /// `ak.self.current_results.read.exact.v1` for one authenticated Account:
+    /// membership, governance generation, effective stream head and the
+    /// selector's durable current row from one read cut.
+    async fn exact_current_result_for_account(
+        &self,
+        request: &arkret_models_collaboration::exact_current_results::ExactCurrentResultsReadRequestBody,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        SelfExactCurrentRead<
+            arkret_models_collaboration::exact_current_results::ExactCurrentResultsReadOutcome,
+        >,
+    >;
+
+    /// `ak.self.strand.watch.read.current.v1` for the authenticated Account,
+    /// which is also the request's watcher.
+    async fn strand_watch_current_for_account(
+        &self,
+        request: &arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentRequestBody,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        SelfExactCurrentRead<
+            arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentOutcome,
+        >,
+    >;
+
+    /// Membership visibility and the accepted media service anchor of one
+    /// Realm for `ak.self.media_service_binding.read.resolve.v1`.
+    async fn media_service_anchor_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<MediaServiceAnchorRead>;
 
     async fn install_handoff(
         &self,

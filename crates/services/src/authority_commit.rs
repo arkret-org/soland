@@ -11,7 +11,13 @@ use arkret_models_collaboration::authority_commit::{
     PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
     PeerRegisteredAtomicUnitOutcomeValue, SelfAuthoritySubmitOutcome, SelfAuthoritySubmitRequest,
 };
+use arkret_models_collaboration::exact_current_results::{
+    ExactCurrentResultsReadOutcome, ExactCurrentResultsReadRequestBody,
+};
 use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput;
+use arkret_models_collaboration::strand_watch_operations::{
+    StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody,
+};
 use arkret_wire::{
     AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome, CommitStreamHead,
     CommitStreamRef, DetachedSignatureContext, DidCoreId, DidUrl, Event, EventAdmissionSubmission,
@@ -1116,6 +1122,107 @@ impl AuthorityCommitApplication {
             })?;
         }
         Ok(scan)
+    }
+
+    /// `ak.self.realm.read.streams.v1`: stream set, heads and floors at one
+    /// governing read cut. See
+    /// [`soland_storage::AuthorityCommitStore::list_realm_streams_for_account`].
+    pub async fn list_realm_streams_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::AccountRealmStreamList> {
+        let listing = self
+            .store()
+            .list_realm_streams_for_account(realm_id, account, issuer)
+            .await?;
+        if let soland_storage::AccountRealmStreamList::Listed(streams) = &listing {
+            arkret_wire::RealmStreamList {
+                realm_id: realm_id.clone(),
+                streams: streams.clone(),
+                next_cursor: None,
+                has_more: false,
+            }
+            .validate()
+            .map_err(|error| {
+                crate::ServiceError::Internal(format!("invalid realm stream list: {error}"))
+            })?;
+        }
+        Ok(listing)
+    }
+
+    /// `ak.self.current_results.read.exact.v1` at one governing read cut. The
+    /// answer is checked against the exact request and the cut's generation
+    /// before it can leave the Station.
+    pub async fn exact_current_result_for_account(
+        &self,
+        request: &ExactCurrentResultsReadRequestBody,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::SelfExactCurrentRead<ExactCurrentResultsReadOutcome>> {
+        request.validate().map_err(|error| {
+            crate::ServiceError::SchemaViolation(format!(
+                "invalid exact current-result request: {error}"
+            ))
+        })?;
+        let read = self
+            .store()
+            .exact_current_result_for_account(request, account, issuer)
+            .await?;
+        if let soland_storage::SelfExactCurrentRead::Answer(outcome) = &read {
+            let generation = match outcome {
+                ExactCurrentResultsReadOutcome::Present {
+                    governance_generation,
+                    ..
+                }
+                | ExactCurrentResultsReadOutcome::NeverWritten {
+                    governance_generation,
+                    ..
+                } => *governance_generation,
+            };
+            outcome
+                .validate_for_request(request, generation)
+                .map_err(|error| {
+                    crate::ServiceError::Internal(format!(
+                        "invalid exact current-result outcome: {error}"
+                    ))
+                })?;
+        }
+        Ok(read)
+    }
+
+    /// `ak.self.strand.watch.read.current.v1` at one governing read cut.
+    pub async fn strand_watch_current_for_account(
+        &self,
+        request: &StrandWatchCurrentRequestBody,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::SelfExactCurrentRead<StrandWatchCurrentOutcome>> {
+        let read = self
+            .store()
+            .strand_watch_current_for_account(request, account, issuer)
+            .await?;
+        if let soland_storage::SelfExactCurrentRead::Answer(outcome) = &read {
+            outcome.validate_for_request(request).map_err(|error| {
+                crate::ServiceError::Internal(format!("invalid watch-current outcome: {error}"))
+            })?;
+        }
+        Ok(read)
+    }
+
+    /// Visibility and accepted media service anchor behind
+    /// `ak.self.media_service_binding.read.resolve.v1`.
+    pub async fn media_service_anchor_for_account(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::MediaServiceAnchorRead> {
+        Ok(self
+            .store()
+            .media_service_anchor_for_account(realm_id, account, issuer)
+            .await?)
     }
 
     pub async fn install_handoff(&self, request: &AuthorityHandoffRequest) -> ServiceResult<()> {
