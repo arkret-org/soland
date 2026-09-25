@@ -1246,8 +1246,9 @@ mod tests {
             })
             .await
             .expect("holder account saved");
-        // A verified directory row that no accepted `ak.device.authorize`
-        // stands behind is not an active device and must not be reached.
+        // A directory row that no accepted `ak.device.authorize` stands behind
+        // is not an active device and must not be reached. The directory write
+        // path only ever creates such a row unverified.
         let unauthorized_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
         let registered_at = now();
         state
@@ -1260,7 +1261,7 @@ mod tests {
                     actor_id: holder.clone(),
                     device_id: unauthorized_device.to_owned(),
                     display_name: None,
-                    verification_state: "verified".to_owned(),
+                    verification_state: "unverified".to_owned(),
                     payload: json!({"device_id": unauthorized_device}),
                     created_at: registered_at,
                     updated_at: registered_at,
