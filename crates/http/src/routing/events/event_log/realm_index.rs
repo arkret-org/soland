@@ -579,7 +579,6 @@ mod tests {
             invitee_id: Some(account.to_string()),
             introduction_evidence_digest: None,
             third_party_invite: None,
-            invite_token: String::new(),
             status: "pending".to_owned(),
             claim_nonces: Default::default(),
             expires_at: Some(timestamp + chrono::Duration::hours(1)),

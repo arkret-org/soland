@@ -1,4 +1,3 @@
-use super::*;
 use crate::state::AppState;
 
 fn snapshot_unavailable(message: &'static str) -> soland_http::error::AppError {
@@ -89,13 +88,6 @@ pub(crate) async fn issued_realm_state_snapshot_for_account(
         }
         Err(error) => Err(soland_http::error::AppError::internal(error.to_string())),
     }
-}
-
-pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee_id: &str) -> String {
-    format!(
-        "ak:invite-token:{}",
-        sha256_hex(format!("{invite_id}:{realm_id}:{invitee_id}").as_bytes())
-    )
 }
 
 #[cfg(test)]

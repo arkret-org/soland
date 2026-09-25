@@ -1249,7 +1249,6 @@ diesel::table! {
         invitee_id -> Nullable<Text>,
         introduction_evidence_digest -> Nullable<Text>,
         third_party_invite -> Nullable<Jsonb>,
-        invite_token -> Text,
         status -> Text,
         claim_nonces -> Jsonb,
         expires_at -> Nullable<Timestamptz>,

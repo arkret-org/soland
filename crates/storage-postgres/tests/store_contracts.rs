@@ -627,7 +627,6 @@ async fn postgres_structured_projection_and_invite_identities_round_trip() {
         invitee_id: Some(other_account.to_string()),
         introduction_evidence_digest: None,
         third_party_invite: None,
-        invite_token: String::new(),
         status: "pending".into(),
         claim_nonces: Default::default(),
         expires_at: None,

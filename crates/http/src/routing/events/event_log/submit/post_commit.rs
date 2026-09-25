@@ -66,7 +66,6 @@ pub(super) async fn record_rejected_invite_claim_effect(
         .is_some_and(|expires_at| expires_at <= operation.created_at)
     {
         record.status = "expired".to_owned();
-        record.invite_token.clear();
         remove_rejected_claim_active_material(&mut record.third_party_invite, true);
         changed = true;
     }

@@ -27,7 +27,7 @@ use soland_http::error::AppError;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::AuthArgs;
-use crate::state::{AppState, RealmDirectoryEntry};
+use crate::state::AppState;
 use crate::wire::now;
 use crate::{JsonResult, json_ok};
 
@@ -504,65 +504,6 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     // Only the exact projected member and its effective Agent binding prove
     // membership. Principal-only directory entries are not authority.
     true
-}
-
-pub async fn realm_search_visible_to(
-    state: &AppState,
-    realm: &RealmDirectoryEntry,
-    session: Option<&SessionRecord>,
-) -> bool {
-    if realm_meta_deleted(state, realm.realm_id.as_str()).await {
-        return false;
-    }
-    if realm_id_accessible_for_id(state, realm.realm_id.as_str(), session).await {
-        return true;
-    }
-    matches!(
-        realm_discoverability_for_id(state, realm.realm_id.as_str())
-            .await
-            .as_str(),
-        "public" | "listed" | "restricted"
-    )
-}
-
-pub async fn realm_resolvable_to(
-    state: &AppState,
-    realm: &RealmDirectoryEntry,
-    session: Option<&SessionRecord>,
-    invite_token: Option<&str>,
-    signed_link: Option<&str>,
-) -> bool {
-    if realm_meta_deleted(state, realm.realm_id.as_str()).await {
-        return false;
-    }
-    if realm_id_accessible_for_id(state, realm.realm_id.as_str(), session).await {
-        return true;
-    }
-    match realm_discoverability_for_id(state, realm.realm_id.as_str())
-        .await
-        .as_str()
-    {
-        "public" | "listed" | "restricted" | "unlisted" => true,
-        "invite_only" => match invite_token {
-            Some(token) => invite_token_matches_realm(state, realm.realm_id.as_str(), token).await,
-            None => false,
-        },
-        "secret" => signed_link.is_some_and(|link| !link.trim().is_empty()),
-        _ => false,
-    }
-}
-
-pub async fn invite_token_matches_realm(state: &AppState, realm_id: &str, token: &str) -> bool {
-    invite_token_realm_id(state, token)
-        .await
-        .is_some_and(|resolved_realm_id| resolved_realm_id == realm_id)
-}
-
-/// A pending invite has no proven lifecycle state until the accepted
-/// Event/Commit projection exposes an authority cut for that invite, so no
-/// token resolves to a Realm yet.
-pub async fn invite_token_realm_id(_state: &AppState, _token: &str) -> Option<String> {
-    None
 }
 
 // `realm_id_accessible_for_id` is the visibility path with looser semantics

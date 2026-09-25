@@ -5,9 +5,8 @@ mod read_cursor;
 pub(super) mod space;
 
 use super::{
-    AuthArgs, authenticated_session, handle_for_did, invite_token_matches_realm, is_realm_deleted,
-    now, realm_discoverability, realm_has_member, realm_history_access, realm_resolvable_to,
-    realm_search_visible_to,
+    AuthArgs, authenticated_session, handle_for_did, is_realm_deleted, now, realm_discoverability,
+    realm_has_member, realm_history_access,
 };
 
 /// `self`-segment spaces surface. The directory surface is split out into

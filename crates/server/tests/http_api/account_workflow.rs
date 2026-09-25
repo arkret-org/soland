@@ -1369,12 +1369,11 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         arkret_canonical::canonical_sha256(&IntroductionEvidence::ExplicitAddress)
             .expect("same-station evidence digest")
     );
-    // The private delivery token is transport material and MUST NOT be surfaced
-    // through the Invite read model (`governance-objects.md` §5.3). It is read
-    // from Bob's holder-private delivery cell, the normative §7 carrier.
+    // A directed invite carries no bearer token (decision 0108): neither the
+    // Invite read model nor Bob's holder-private delivery entry names one.
     assert!(
         bob_invites["invites"][0].get("invite_token").is_none(),
-        "invite read model must not surface the private delivery token: {bob_invites}"
+        "invite read model must not surface a token: {bob_invites}"
     );
     let invite_delivery = state
         .test_persistence()
@@ -1386,27 +1385,12 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .await
         .expect("Bob invite-delivery cell read")
         .expect("Bob invite-delivery cell exists");
-    let invite_token = invite_delivery.payload["delivery_entries"][0]["invite_token"]
-        .as_str()
-        .expect("private invite token")
-        .to_owned();
-    let invalid_invite_resolve =
-        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
-            .json(&serde_json::json!({"invite_token": "ak:invite-token:invalid"}))
-            .send(&app_from_state(state.clone()))
-            .await;
-    assert_eq!(invalid_invite_resolve.status_code.unwrap().as_u16(), 404);
-    let invite_resolve: Value =
-        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
-            .json(&serde_json::json!({"invite_token": invite_token}))
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(
-        invite_resolve["realm_preview"]["realm_id"], invite_realm_id,
-        "invite resolve response: {invite_resolve}"
+    assert!(
+        invite_delivery.payload["delivery_entries"][0]
+            .get("invite_token")
+            .is_none(),
+        "delivery entry must not carry a token: {}",
+        invite_delivery.payload
     );
 
     let listed_realm = seed_test_realm(

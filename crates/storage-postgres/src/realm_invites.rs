@@ -2,8 +2,8 @@ use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvit
 
 use super::{
     Binary, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RealmInviteRecord, RealmInviteStore, RunQueryDsl, Text, Timestamptz, Utc,
-    Value, async_trait, ids, pg_conn, sql_query,
+    QueryableByName, RealmInviteRecord, RealmInviteStore, RunQueryDsl, Text, Timestamptz, Value,
+    async_trait, ids, pg_conn, sql_query,
 };
 pub struct PgRealmInviteStore {
     pub pool: PgPool,
@@ -22,8 +22,6 @@ struct RealmInviteRow {
     introduction_evidence_digest: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     third_party_invite: Option<Value>,
-    #[diesel(sql_type = Text)]
-    invite_token: String,
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Jsonb)]
@@ -64,7 +62,6 @@ impl RealmInviteRow {
             invitee_id: self.invitee_id.map(|account| account.to_string()),
             introduction_evidence_digest: self.introduction_evidence_digest,
             third_party_invite,
-            invite_token: self.invite_token,
             status: self.status,
             claim_nonces: serde_json::from_value(self.claim_nonces).unwrap_or_default(),
             expires_at: self.expires_at,
@@ -82,7 +79,7 @@ impl RealmInviteStore for PgRealmInviteStore {
         let invite_id_token =
             ids::event_token_part_or_schema_violation(invite_id, "invite")?.to_vec();
         sql_query(
-            "SELECT id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
+            "SELECT id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, introduction_evidence_digest, third_party_invite, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites WHERE id = $1",
         )
         .bind::<Binary, _>(invite_id_token)
@@ -119,15 +116,14 @@ impl RealmInviteStore for PgRealmInviteStore {
             })?;
         sql_query(
             "INSERT INTO realm_invites \
-             (id, realm_id, inviter_id, invitee_id, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             (id, realm_id, inviter_id, invitee_id, introduction_evidence_digest, third_party_invite, status, claim_nonces, expires_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 inviter_id = EXCLUDED.inviter_id, \
                 invitee_id = EXCLUDED.invitee_id, \
                 introduction_evidence_digest = EXCLUDED.introduction_evidence_digest, \
                 third_party_invite = EXCLUDED.third_party_invite, \
-                invite_token = EXCLUDED.invite_token, \
                 status = EXCLUDED.status, \
                 claim_nonces = EXCLUDED.claim_nonces, \
                 expires_at = EXCLUDED.expires_at, \
@@ -139,7 +135,6 @@ impl RealmInviteStore for PgRealmInviteStore {
         .bind::<Nullable<Text>, _>(&invitee_id)
         .bind::<Nullable<Text>, _>(&record.introduction_evidence_digest)
         .bind::<Nullable<Jsonb>, _>(&third_party_invite)
-        .bind::<Text, _>(&record.invite_token)
         .bind::<Text, _>(&record.status)
         .bind::<Jsonb, _>(serde_json::to_value(&record.claim_nonces).unwrap_or_default())
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
@@ -151,61 +146,12 @@ impl RealmInviteStore for PgRealmInviteStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn consume_third_party_token(
-        &self,
-        token_digest: &str,
-        now: chrono::DateTime<Utc>,
-    ) -> PersistenceResult<Option<RealmInviteRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let consumed = sql_query(
-            "UPDATE realm_invites \
-             SET invite_token = '', updated_at = $2 \
-             WHERE invite_token = $1 \
-               AND third_party_invite IS NOT NULL \
-               AND status = 'pending' \
-               AND (expires_at IS NULL OR expires_at > $2) \
-             RETURNING id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at",
-        )
-        .bind::<Text, _>(token_digest)
-        .bind::<Timestamptz, _>(now)
-        .get_result::<RealmInviteRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?
-        .map(RealmInviteRow::try_into_record)
-        .transpose()?;
-        if consumed.is_some() {
-            return Ok(consumed);
-        }
-        sql_query(
-            "UPDATE realm_invites \
-             SET status = 'expired', \
-                 invite_token = '', \
-                 third_party_invite = ((((((third_party_invite - 'token_salt') - 'token_salt_id') - 'lookup_table_ref') - 'pepper') - 'pepper_id') - 'token_commitment'), \
-                 updated_at = $2 \
-             WHERE invite_token = $1 \
-               AND third_party_invite IS NOT NULL \
-               AND status = 'pending' \
-               AND expires_at IS NOT NULL \
-               AND expires_at <= $2",
-        )
-        .bind::<Text, _>(token_digest)
-        .bind::<Timestamptz, _>(now)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)?;
-        Ok(None)
-    }
-
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, introduction_evidence_digest, third_party_invite, invite_token, status, claim_nonces, expires_at, created_at, updated_at \
+            "SELECT id, realm_id, inviter_id AS inviter_id, invitee_id AS invitee_id, introduction_evidence_digest, third_party_invite, status, claim_nonces, expires_at, created_at, updated_at \
              FROM realm_invites ORDER BY created_at ASC, pk ASC",
         )
         .load::<RealmInviteRow>(&mut *conn)
@@ -240,7 +186,6 @@ mod tests {
             invitee_id: None,
             introduction_evidence_digest: None,
             third_party_invite,
-            invite_token: String::new(),
             status: "pending".to_owned(),
             claim_nonces: serde_json::json!({}),
             expires_at: None,

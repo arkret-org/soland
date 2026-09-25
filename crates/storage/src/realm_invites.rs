@@ -1,16 +1,11 @@
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 
-use super::{PersistenceResult, RealmInviteRecord, Utc, async_trait};
-/// realm invite tokens.
+use super::{PersistenceResult, RealmInviteRecord, async_trait};
+/// Projected Realm invites.
 #[async_trait]
 pub trait RealmInviteStore: Send + Sync {
     async fn get(&self, invite_id: &str) -> PersistenceResult<Option<RealmInviteRecord>>;
     async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()>;
-    async fn consume_third_party_token(
-        &self,
-        token_digest: &str,
-        now: chrono::DateTime<Utc>,
-    ) -> PersistenceResult<Option<RealmInviteRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmInviteRecord>>;
 }
 #[doc(hidden)]

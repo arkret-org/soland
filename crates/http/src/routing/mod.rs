@@ -47,9 +47,9 @@ use soland_http::util::{
     render_error, sha256_hex, validate_device_id, validate_did, validate_space_id,
 };
 use spaces::space::{
-    invite_token_matches_realm, is_realm_deleted, realm_allows_plaintext_service_for_data_class,
-    realm_discoverability, realm_event_visible_to_session, realm_has_member, realm_history_access,
-    realm_id_accessible, realm_resolvable_to, realm_search_visible_to, touch_realm,
+    is_realm_deleted, realm_allows_plaintext_service_for_data_class, realm_discoverability,
+    realm_event_visible_to_session, realm_has_member, realm_history_access, realm_id_accessible,
+    touch_realm,
 };
 use system::extract::AuthArgs;
 
@@ -84,11 +84,9 @@ pub use events::sync::{
 };
 pub(crate) use interop::{MAX_BLOB_UPLOAD_BYTES, push_target_privacy_derivation_claim};
 pub use interop::{spawn_public_push_revoke_retry_worker, spawn_resumable_upload_ttl_sweeper};
-// Snapshot manifest builder + small JSON/token helpers reachable from children
-// and other crate modules via `crate::routing::*`.
-pub(crate) use realm_state_snapshot::{
-    generate_invite_token, realm_state_snapshot_manifest_for_realm,
-};
+// Snapshot manifest builder reachable from children and other crate modules
+// via `crate::routing::*`.
+pub(crate) use realm_state_snapshot::realm_state_snapshot_manifest_for_realm;
 // CORS handler consumed by `crate::service`.
 pub(crate) use router_build::{cors_handler_for_origin_spec, openapi_surface_router};
 pub use router_build::{

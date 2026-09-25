@@ -3300,7 +3300,6 @@ CREATE TABLE public.realm_invites (
     invitee_id text,
     introduction_evidence_digest text,
     third_party_invite jsonb,
-    invite_token text NOT NULL,
     status text NOT NULL,
     claim_nonces jsonb DEFAULT '{}'::jsonb NOT NULL,
     expires_at timestamp with time zone,

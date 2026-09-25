@@ -472,7 +472,6 @@ pub(super) fn admin_invite_item(
         kind: "invite_token".to_owned(),
         id: invite.invite_id.clone(),
         invite_id: invite.invite_id.clone(),
-        token: invite.invite_token.clone(),
         realm_id: invite.realm_id.clone(),
         inviter_id: DidCoreId::new(invite.inviter_id.clone())
             .expect("RealmInviteRecord inviter_id must be a validated DID core id"),
@@ -483,7 +482,6 @@ pub(super) fn admin_invite_item(
                 .expect("RealmInviteRecord invitee_id must be a validated DID core id")
         }),
         introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
-        token_hash: arkret_canonical::sha256_digest(invite.invite_token.as_bytes()),
         status: invite.status.clone(),
         uses_allowed: 1,
         uses_completed: if invite.status == "accepted" { 1 } else { 0 },

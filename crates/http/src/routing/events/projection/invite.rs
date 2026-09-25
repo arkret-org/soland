@@ -78,7 +78,6 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     }
     record.status = "accepted".to_owned();
     record.updated_at = Some(operation.created_at);
-    record.invite_token.clear();
     let realm_id = record.realm_id.clone();
     let invite_created_at = record.created_at;
     if let Err(error) = invites.put(record).await {
@@ -302,7 +301,6 @@ async fn project_invite_terminal_operation(
     }
     record.status = terminal_status.to_owned();
     record.updated_at = Some(operation.created_at);
-    record.invite_token.clear();
     remove_third_party_active_material(
         &mut record.third_party_invite,
         terminal_status != "rejected",
@@ -402,7 +400,6 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         invitee_id: None,
         introduction_evidence_digest: None,
         third_party_invite,
-        invite_token: String::new(),
         status,
         claim_nonces: std::collections::BTreeMap::new(),
         expires_at,
@@ -453,7 +450,6 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     {
         record.status = "expired".to_owned();
         record.updated_at = Some(operation.created_at);
-        record.invite_token.clear();
         remove_third_party_active_material(&mut record.third_party_invite, true);
         let _ = invites.put(record).await;
         return;
@@ -477,7 +473,6 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     record.status = "claimed".to_owned();
     record.invitee_id = Some(subject_id);
     record.updated_at = Some(operation.created_at);
-    record.invite_token.clear();
     remove_third_party_active_material(&mut record.third_party_invite, false);
     match invites.put(record).await {
         Ok(()) => touch_realm(state, operation.realm_id.as_str()).await,
@@ -593,11 +588,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     // live" depend on a local `expires_at` comparison, which the same section
     // forbids. An Event that reaches this point has already been admitted with
     // its `head_eq` on the slot.
-    let invite_token = crate::routing::generate_invite_token(
-        &invite_id,
-        operation.realm_id.as_str(),
-        invitee_id.as_str(),
-    );
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
@@ -605,7 +595,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         invitee_id: Some(invitee_id.as_str().to_owned()),
         introduction_evidence_digest,
         third_party_invite: None,
-        invite_token,
         // The accepted create always initializes the reducer lifecycle at
         // `pending`. A private delivery target is routing metadata, not a
         // second lifecycle state; delivery failure requires its own signed

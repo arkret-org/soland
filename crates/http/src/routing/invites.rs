@@ -863,11 +863,6 @@ async fn persist_private_invite_projection(
         invitee_id: Some(account_id.to_string()),
         introduction_evidence_digest,
         third_party_invite: None,
-        invite_token: crate::routing::generate_invite_token(
-            &invite_id,
-            validated.realm_id.as_str(),
-            &account_id.to_string(),
-        ),
         status: "pending".to_owned(),
         claim_nonces: std::collections::BTreeMap::new(),
         expires_at,
@@ -3690,10 +3685,6 @@ mod invite_locator_security_tests {
         assert_eq!(
             invite.invitee_id.as_deref(),
             Some(account_id.to_string().as_str())
-        );
-        assert_eq!(
-            invite.invite_token,
-            crate::routing::generate_invite_token(&invite_id, realm_id, &account_id.to_string())
         );
         let foreign_account = arkret_wire::AccountId::new(
             account_id.principal_id.clone(),

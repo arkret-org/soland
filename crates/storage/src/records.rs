@@ -360,7 +360,6 @@ pub struct RealmInviteRecord {
     pub invitee_id: Option<String>,
     pub introduction_evidence_digest: Option<String>,
     pub third_party_invite: Option<ThirdPartyInvite>,
-    pub invite_token: String,
     pub status: String,
     pub claim_nonces: BTreeMap<String, String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
