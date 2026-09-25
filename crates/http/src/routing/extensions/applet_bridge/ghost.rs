@@ -361,7 +361,6 @@ pub(super) async fn validate_signed_ghost_provision_events(
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
         && actor_profile.accountable_principal_ids[0].as_str() == basis.service_id.as_str();
     if &actor_profile.principal_id != ghost_actor_id.signing_principal_id()
-        || actor_profile.realm_id.as_ref() != Some(&basis.realm_id)
         || actor_profile.actor_kind != arkret_wire::ActorKind::Integration
         || actor_profile.display_name != expected_display_name
         || actor_profile

@@ -1188,34 +1188,179 @@ async fn update_profile(
     body: JsonBody<AccountUpdateProfileRequestBody>,
 ) -> JsonResult<AccountUpdateProfileOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    body.into_inner()
-        .validate()
-        .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "accepted account profile current provider is unavailable"
-    ))
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    validate_profile_request(&body)?;
+    let session_actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
+    let event = &body.profile_event.event;
+    if event.actor_id != session_actor {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "profile Event actor is not the authenticated account",
+        ));
+    }
+    let committed_at = chrono::Utc::now();
+    let method = arkret_wire::DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    // Signer device, PCR lineage, create/update presence, target, patch,
+    // expected_state_digest and accountability are decided by the PCR unit
+    // at the locked cut.
+    let transaction = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
+        .await
+        .map_err(|error| profile_admission_error(error.conflict_code(), error.detail()))?;
+    let outcome = state
+        .persistence()
+        .admit_actor_profile(soland_storage::ActorProfileAdmissionWrite {
+            commit: transaction,
+            queued_at: committed_at,
+        })
+        .await
+        .map_err(|error| profile_admission_error(error.conflict_code(), &error.to_string()))?;
+    let record = match outcome {
+        soland_storage::ActorProfileAdmissionOutcome::Committed(record)
+        | soland_storage::ActorProfileAdmissionOutcome::Duplicate(record) => record,
+    };
+    json_ok(AccountUpdateProfileOutcome {
+        profile: AccountMaterializedProfile::new(record.profile)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        commit: record.commit,
+    })
 }
 
+/// `account_profile_event_submission`: a patch path outside the self-service
+/// surface is `unsupported_profile_patch_path`; every other shape failure is
+/// a schema violation.
+fn validate_profile_request(body: &AccountUpdateProfileRequestBody) -> Result<(), AppError> {
+    let event = &body.profile_event.event;
+    if event.kind == arkret_wire::EventKind::ProfileUpdate
+        && let Ok(update) = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::ActorProfileUpdatePayload,
+        >(Value::Object(event.payload.clone().into_iter().collect()))
+        && let Err(error) = update.validate_for_account_self_service()
+    {
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::UnsupportedProfilePatchPath,
+            error.to_string(),
+        ));
+    }
+    body.validate()
+        .map_err(|error| AppError::schema_violation(format!("profile_event: {error}")))
+}
+
+/// The registered `ak.self.account.command.update_profile.v1` mapping:
+/// deterministic admission guards are `failed_precondition` (with the
+/// `accountability_grant_missing` reason), a head that moved before commit is
+/// retry-safe `revision_unavailable`, and signer-device refusals keep their
+/// device codes (device-lifecycle §8.2.2).
+fn profile_admission_error(code: Option<soland_storage::ConflictCode>, detail: &str) -> AppError {
+    use soland_storage::ConflictCode;
+    match code {
+        Some(ConflictCode::AccountabilityGrantMissing) => {
+            AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+                .with_reason_code(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)
+        }
+        Some(ConflictCode::FailedPrecondition) => {
+            AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+        }
+        Some(ConflictCode::TemporarilyUnavailable | ConflictCode::CasConflict) => {
+            AppError::new(arkret_wire::ErrorCode::RevisionUnavailable, detail)
+        }
+        Some(ConflictCode::DuplicateConflict | ConflictCode::EventHashCollision) => {
+            AppError::new(arkret_wire::ErrorCode::DuplicateConflict, detail)
+        }
+        Some(ConflictCode::SignatureInvalid) => {
+            AppError::new(arkret_wire::ErrorCode::SignatureInvalid, detail)
+        }
+        Some(ConflictCode::SchemaViolation | ConflictCode::EventIdDigestMismatch) => {
+            AppError::schema_violation(detail)
+        }
+        Some(ConflictCode::DeviceRevoked) => {
+            AppError::new(arkret_wire::ErrorCode::DeviceRevoked, detail)
+        }
+        Some(ConflictCode::DeviceRevocationPending) => {
+            AppError::new(arkret_wire::ErrorCode::DeviceRevocationPending, detail)
+        }
+        Some(ConflictCode::DeviceGenerationFenced) => {
+            AppError::new(arkret_wire::ErrorCode::DeviceGenerationFenced, detail)
+        }
+        Some(ConflictCode::DeviceUnauthorized) => {
+            AppError::new(arkret_wire::ErrorCode::DeviceUnauthorized, detail)
+        }
+        _ => AppError::internal(detail),
+    }
+}
+
+/// The authenticated local account's accepted global Actor Profile, read from
+/// the `actor_profile` typed current of its PCR.
 pub(crate) async fn accepted_account_profile(
-    _state: &AppState,
-    _principal: &str,
+    state: &AppState,
+    principal: &str,
 ) -> Result<Option<AccountMaterializedProfile>, AppError> {
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "accepted account profile current provider is unavailable"
-    ))
+    let account = arkret_wire::AccountId::new(
+        DidCoreId::new(principal.to_owned())
+            .map_err(|error| AppError::internal(format!("invalid account principal: {error}")))?,
+        state.service_core_id().clone(),
+    );
+    state
+        .persistence()
+        .current_actor_profile(&account)
+        .await
+        .map_err(|error| AppError::internal(format!("read accepted Actor Profile: {error}")))?
+        .map(|record| {
+            AccountMaterializedProfile::new(record.profile)
+                .map_err(|error| AppError::internal(error.to_string()))
+        })
+        .transpose()
 }
 
+/// One resolved row: the current value, the exact Event that produced it and
+/// its covering PCR Commit. A remote account's PCR is not hosted here, so it
+/// is simply unavailable.
 async fn resolved_actor_profile_evidence(
-    _state: &AppState,
-    _actor_id: &arkret_wire::ActorId,
+    state: &AppState,
+    actor_id: &arkret_wire::ActorId,
 ) -> Result<Option<ResolvedActorProfile>, AppError> {
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "accepted Actor Profile current provider is unavailable"
-    ))
+    let Some(account) = actor_id.as_account_id() else {
+        return Ok(None);
+    };
+    if account.station_id != state.service_core_id() {
+        return Ok(None);
+    }
+    let Some(record) = state
+        .persistence()
+        .current_actor_profile(account)
+        .await
+        .map_err(|error| AppError::internal(format!("read accepted Actor Profile: {error}")))?
+    else {
+        return Ok(None);
+    };
+    let row = ResolvedActorProfile {
+        actor_id: actor_id.clone(),
+        actor_profile: record.profile,
+        profile_event: record.event,
+        profile_commit: record.commit,
+        account_status: None,
+    };
+    arkret_models_collaboration::actor_profile_resolution::validate_resolved_actor_profile(&row)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "stored Actor Profile evidence is inconsistent: {error}"
+            ))
+        })?;
+    Ok(Some(row))
 }
 #[salvo::oapi::endpoint(operation_id = "ak.self.actor_profile.read.resolve", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.actor_profile.read.resolve.v1"))]

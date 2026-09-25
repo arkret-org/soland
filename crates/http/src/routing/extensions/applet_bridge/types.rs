@@ -434,7 +434,6 @@ fn validate_managed_actor_unit(
             &accountability_event.event_id,
         )
         || profile.principal_id != *actor_id.signing_principal_id()
-        || profile.realm_id.as_ref() != Some(authority_realm_id)
         || profile.actor_kind != expected_actor_kind
         || profile.accountable_principal_ids.as_slice() != [authority_package.service_id.clone()]
         || profile

@@ -4014,3 +4014,589 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
             == arkret_wire::DeviceRevocationAdmissionDecision::Allow
     );
 }
+
+#[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+struct ProfileFootprint {
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    commits: i64,
+    #[diesel(sql_type = BigInt)]
+    profiles: i64,
+    #[diesel(sql_type = BigInt)]
+    versions: i64,
+    #[diesel(sql_type = BigInt)]
+    endorsements: i64,
+}
+
+/// Every durable row a profile or accountability admission can write for
+/// these Realms.
+async fn profile_footprint(pool: &PgPool, realms: &[&RealmId]) -> ProfileFootprint {
+    let realms = realms
+        .iter()
+        .map(|realm| realm.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=ANY($1)) AS events, \
+                (SELECT COUNT(*) FROM realm_commits WHERE realm_id=ANY($1)) AS commits, \
+                (SELECT COUNT(*) FROM actor_profile_current_results WHERE realm_id=ANY($1)) \
+                  AS profiles, \
+                (SELECT COUNT(*) FROM actor_profile_result_versions v \
+                   JOIN realm_commits c ON c.commit_id=v.commit_id \
+                  WHERE c.realm_id=ANY($1)) AS versions, \
+                (SELECT COUNT(*) FROM identity_accountability_current_results \
+                  WHERE realm_id=ANY($1)) AS endorsements",
+    )
+    .bind::<diesel::sql_types::Array<Text>, _>(realms)
+    .get_result::<ProfileFootprint>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+/// One device-signed profile Event of `account` in its PCR.
+fn profile_event(
+    account: &arkret_wire::AccountId,
+    realm_id: &RealmId,
+    method: &DidUrl,
+    seed: [u8; 32],
+    kind: EventKind,
+    payload: serde_json::Value,
+) -> arkret_wire::Event {
+    device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            kind.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            payload,
+        )
+        .unwrap(),
+        method.clone(),
+        seed,
+    )
+}
+
+/// One issuer-signed accountability grant whose inner proof is a compact
+/// detached JWS by `proof_seed` over the registered binding transcript.
+#[allow(clippy::too_many_arguments)]
+fn accountability_grant_event(
+    issuer: &arkret_wire::AccountId,
+    realm_id: &RealmId,
+    method: &DidUrl,
+    seed: [u8; 32],
+    proof_seed: [u8; 32],
+    subject: &DidCoreId,
+    scope: serde_json::Value,
+    status: &str,
+    not_before: chrono::DateTime<chrono::Utc>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> arkret_wire::Event {
+    use arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload;
+    let mut value = serde_json::json!({
+        "schema": "ak.schema.accountability_grant.v1",
+        "issuer_id": issuer.principal_id,
+        "subject_id": subject,
+        "accountability_scope": scope,
+        "not_before": arkret_canonical::format_timestamp_canonical(not_before),
+        "grant_status": status,
+        "proof": {
+            "kind": "detached_jws",
+            "verification_method": method,
+            "payload_digest": format!("sha256:{}", "0".repeat(64)),
+            "created_at": arkret_canonical::format_timestamp_canonical(not_before),
+            "jws": ""
+        }
+    });
+    if let Some(expires_at) = expires_at {
+        value["expires_at"] =
+            serde_json::json!(arkret_canonical::format_timestamp_canonical(expires_at));
+    }
+    let mut grant: AccountabilityGrantPayload = serde_json::from_value(value).unwrap();
+    grant.proof.payload_digest = grant.payload_digest().unwrap();
+    grant.proof.jws = arkret_signatures::sign_ed25519_detached_jws(
+        &SigningKey::from_bytes(&proof_seed),
+        &grant.canonical_proof_binding_bytes().unwrap(),
+    )
+    .unwrap();
+    device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::IdentityAccountabilityGrant.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            issuer.principal_id.clone(),
+            issuer.station_id.clone(),
+            serde_json::to_value(&grant).unwrap(),
+        )
+        .unwrap(),
+        method.clone(),
+        seed,
+    )
+}
+
+#[tokio::test]
+async fn profile_update_commits_actor_profile_current_and_rejects_forbidden_patch() {
+    use soland_storage::{
+        ActorProfileAdmissionOutcome, ActorProfileAdmissionWrite, ActorProfileStore,
+    };
+
+    let (pool, station) = contract_store().await;
+    let fixture = fixture(&station);
+    let account = fixture.account.clone();
+    let realm_id = RealmId::new(fixture.events[0].realm_id.to_string()).unwrap();
+    let station_did = fixture.station_did.clone();
+    let method = fixture.device_verification_method.clone();
+    let seed = fixture.founding_device_signing_seed;
+    let genesis = assemble(station.clone(), fixture);
+    let at = genesis.transactions[1].commit.committed_at;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store.admit_pcr_genesis_unit(&genesis, at).await.unwrap();
+    let authority = genesis.transactions[1].expected_authority.clone();
+    let head = genesis.transactions[1].commit.clone();
+    let tx =
+        |event: arkret_wire::Event, commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+            expected_authority: authority.clone(),
+            event,
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        };
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    let admit = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        profiles
+            .admit_profile(ActorProfileAdmissionWrite {
+                commit: tx(event.clone(), commit),
+                queued_at: at,
+            })
+            .await
+    };
+
+    let create = profile_event(
+        &account,
+        &realm_id,
+        &method,
+        seed,
+        EventKind::ProfileCreate,
+        serde_json::json!({"object": {
+            "principal_id": account.principal_id,
+            "actor_kind": "user",
+            "display_name": "Alice",
+            "profile_fields": {"bio": "first"}
+        }}),
+    );
+    // The generic Event path cannot commit profile state.
+    let create_commit = station_successor(&head, &create, &station_did, 1);
+    assert!(
+        store
+            .admit_event_transaction(&tx(create.clone(), create_commit.clone()), at)
+            .await
+            .is_err()
+    );
+    let empty = profile_footprint(&pool, &[&realm_id]).await;
+    let ActorProfileAdmissionOutcome::Committed(created) =
+        admit(&create, create_commit.clone()).await.unwrap()
+    else {
+        panic!("the first profile Event commits");
+    };
+    let profile_id = arkret_wire::ActorProfileId::from_event_id(&create.event_id);
+    assert_eq!(created.profile.id.as_ref(), Some(&profile_id));
+    assert_eq!(created.profile.realm_id.as_ref(), Some(&realm_id));
+    assert_eq!(created.commit, create_commit);
+    assert_eq!(
+        profiles
+            .current_profile(&account)
+            .await
+            .unwrap()
+            .unwrap()
+            .profile,
+        created.profile
+    );
+    let after_create = profile_footprint(&pool, &[&realm_id]).await;
+    assert_eq!(
+        after_create,
+        ProfileFootprint {
+            events: empty.events + 1,
+            commits: empty.commits + 1,
+            profiles: 1,
+            versions: 1,
+            endorsements: 0,
+        }
+    );
+    // Exact replay returns the stored outcome and writes nothing.
+    let ActorProfileAdmissionOutcome::Duplicate(replayed) = admit(
+        &create,
+        station_successor(&create_commit, &create, &station_did, 2),
+    )
+    .await
+    .unwrap() else {
+        panic!("an exact retry is a duplicate");
+    };
+    assert_eq!(replayed.commit, create_commit);
+    assert_eq!(profile_footprint(&pool, &[&realm_id]).await, after_create);
+
+    let refusal = async |event: &arkret_wire::Event| {
+        let error = admit(
+            event,
+            station_successor(&create_commit, event, &station_did, 1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            profile_footprint(&pool, &[&realm_id]).await,
+            after_create,
+            "a refused profile Event must write nothing"
+        );
+        error.conflict_code()
+    };
+    let update = |payload: serde_json::Value| {
+        profile_event(
+            &account,
+            &realm_id,
+            &method,
+            seed,
+            EventKind::ProfileUpdate,
+            payload,
+        )
+    };
+    // A second create against the PCR's accepted lineage.
+    let second = profile_event(
+        &account,
+        &realm_id,
+        &method,
+        seed,
+        EventKind::ProfileCreate,
+        serde_json::json!({"object": {
+            "principal_id": account.principal_id,
+            "actor_kind": "user",
+            "display_name": "Alice again"
+        }}),
+    );
+    assert_eq!(
+        refusal(&second).await,
+        Some(ConflictCode::FailedPrecondition)
+    );
+    // target_ref that is not the accepted create-derived id.
+    let foreign = update(serde_json::json!({
+        "target_ref": arkret_wire::ActorProfileId::from_event_id(&second.event_id),
+        "patch": {"display_name": "Mallory"}
+    }));
+    assert_eq!(
+        refusal(&foreign).await,
+        Some(ConflictCode::FailedPrecondition)
+    );
+    // Create-locked and reducer-managed patch paths.
+    for patch in [
+        serde_json::json!({"principal_id": "ak:did_core:web:mallory.example"}),
+        serde_json::json!({"actor_kind": "agent"}),
+        serde_json::json!({"resolution.did": "did:web:mallory.example"}),
+        serde_json::json!({"created_at": "2026-01-01T00:00:00.000Z"}),
+    ] {
+        let forbidden = update(serde_json::json!({"target_ref": profile_id, "patch": patch}));
+        assert_eq!(
+            refusal(&forbidden).await,
+            Some(ConflictCode::SchemaViolation),
+            "{patch}"
+        );
+    }
+    // A stale expected_state_digest.
+    let stale = update(serde_json::json!({
+        "target_ref": profile_id,
+        "patch": {"display_name": "Alice C."},
+        "expected_state_digest": format!("sha256:{}", "0".repeat(64))
+    }));
+    assert_eq!(
+        refusal(&stale).await,
+        Some(ConflictCode::FailedPrecondition)
+    );
+
+    // A guarded delta commits with its derived update members.
+    let digest =
+        arkret_models_collaboration::events_payloads::ActorProfileUpdatePayload::state_digest(
+            &created.profile,
+        )
+        .unwrap();
+    let delta = update(serde_json::json!({
+        "target_ref": profile_id,
+        "patch": {"display_name": "Alice C.", "profile_fields.bio": {"$op": "unset"}},
+        "expected_state_digest": digest
+    }));
+    let delta_commit = station_successor(&create_commit, &delta, &station_did, 1);
+    let ActorProfileAdmissionOutcome::Committed(updated) =
+        admit(&delta, delta_commit.clone()).await.unwrap()
+    else {
+        panic!("the guarded update commits");
+    };
+    assert_eq!(updated.profile.display_name, "Alice C.");
+    assert!(updated.profile.profile_fields.is_empty());
+    assert_eq!(updated.profile.updated_by.as_ref(), Some(&delta.actor_id));
+    assert_eq!(updated.profile.created_at, created.profile.created_at);
+    let current = profiles.current_profile(&account).await.unwrap().unwrap();
+    assert_eq!(current.profile, updated.profile);
+    assert_eq!(current.event.event_id, delta.event_id);
+    assert_eq!(current.commit, delta_commit);
+    // Replaying the older create still answers with what that Event produced.
+    let ActorProfileAdmissionOutcome::Duplicate(old) = admit(
+        &create,
+        station_successor(&delta_commit, &create, &station_did, 1),
+    )
+    .await
+    .unwrap() else {
+        panic!("an exact retry of the create is a duplicate");
+    };
+    assert_eq!(old.profile, created.profile);
+}
+
+#[tokio::test]
+async fn profile_accountability_requires_active_grant_at_commit_cut() {
+    use soland_storage::{
+        AccountabilityGrantAdmissionOutcome, AccountabilityGrantAdmissionWrite,
+        ActorProfileAdmissionOutcome, ActorProfileAdmissionWrite, ActorProfileStore,
+    };
+
+    let (pool, station) = contract_store().await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let admit_genesis = async |fixture: DeviceHistoryFixture| {
+        let genesis = assemble(station.clone(), fixture);
+        store
+            .admit_pcr_genesis_unit(&genesis, genesis.transactions[1].commit.committed_at)
+            .await
+            .unwrap();
+        genesis
+    };
+    let issuer_fixture = fixture(&station);
+    let issuer = issuer_fixture.account.clone();
+    let issuer_realm = RealmId::new(issuer_fixture.events[0].realm_id.to_string()).unwrap();
+    let issuer_method = issuer_fixture.device_verification_method.clone();
+    let issuer_seed = issuer_fixture.founding_device_signing_seed;
+    let station_did = issuer_fixture.station_did.clone();
+    let issuer_genesis = admit_genesis(issuer_fixture).await;
+    let subject_fixture = fixture(&station);
+    let subject = subject_fixture.account.clone();
+    let subject_realm = RealmId::new(subject_fixture.events[0].realm_id.to_string()).unwrap();
+    let subject_method = subject_fixture.device_verification_method.clone();
+    let subject_seed = subject_fixture.founding_device_signing_seed;
+    let subject_genesis = admit_genesis(subject_fixture).await;
+
+    let tx = |authority: &soland_storage::CurrentRealmAuthority,
+              event: arkret_wire::Event,
+              commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+        expected_authority: authority.clone(),
+        event,
+        commit,
+        mls_state: None,
+        welcomes: Vec::new(),
+        recipient_queue_capacity: 0,
+    };
+    let issuer_authority = issuer_genesis.transactions[1].expected_authority.clone();
+    let subject_authority = subject_genesis.transactions[1].expected_authority.clone();
+    let issuer_head = issuer_genesis.transactions[1].commit.clone();
+    let subject_head = subject_genesis.transactions[1].commit.clone();
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    let admit_profile = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        profiles
+            .admit_profile(ActorProfileAdmissionWrite {
+                commit: tx(&subject_authority, event.clone(), commit.clone()),
+                queued_at: commit.committed_at,
+            })
+            .await
+    };
+    let admit_grant = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        profiles
+            .admit_accountability_grant(AccountabilityGrantAdmissionWrite {
+                commit: tx(&issuer_authority, event.clone(), commit.clone()),
+                queued_at: commit.committed_at,
+            })
+            .await
+    };
+    let realms = [&issuer_realm, &subject_realm];
+    // The profile's Commit instant is subject_head + 60s unless stated.
+    let t0 = subject_head.committed_at;
+    let expires_at = t0 + chrono::TimeDelta::seconds(120);
+    let accountable_create = profile_event(
+        &subject,
+        &subject_realm,
+        &subject_method,
+        subject_seed,
+        EventKind::ProfileCreate,
+        serde_json::json!({"object": {
+            "principal_id": subject.principal_id,
+            "actor_kind": "service",
+            "display_name": "Endorsed service",
+            "accountable_principal_ids": [issuer.principal_id]
+        }}),
+    );
+
+    // No committed record: the whole Event is refused with zero writes.
+    let before = profile_footprint(&pool, &realms).await;
+    let missing = admit_profile(
+        &accountable_create,
+        station_successor(&subject_head, &accountable_create, &station_did, 60),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        missing.conflict_code(),
+        Some(ConflictCode::AccountabilityGrantMissing)
+    );
+    assert_eq!(profile_footprint(&pool, &realms).await, before);
+
+    // An inner proof by a key other than the issuer's active device fails.
+    let forged = accountability_grant_event(
+        &issuer,
+        &issuer_realm,
+        &issuer_method,
+        issuer_seed,
+        [0x5a; 32],
+        &subject.principal_id,
+        serde_json::json!("employment"),
+        "active",
+        t0 - chrono::TimeDelta::days(1),
+        Some(expires_at),
+    );
+    assert_eq!(
+        admit_grant(
+            &forged,
+            station_successor(&issuer_head, &forged, &station_did, 1)
+        )
+        .await
+        .unwrap_err()
+        .conflict_code(),
+        Some(ConflictCode::SignatureInvalid)
+    );
+    assert_eq!(profile_footprint(&pool, &realms).await, before);
+
+    // The issuer endorses the subject; the typed current row lands with the
+    // Commit and an exact retry writes nothing.
+    let grant = accountability_grant_event(
+        &issuer,
+        &issuer_realm,
+        &issuer_method,
+        issuer_seed,
+        issuer_seed,
+        &subject.principal_id,
+        serde_json::json!(["employment"]),
+        "active",
+        t0 - chrono::TimeDelta::days(1),
+        Some(expires_at),
+    );
+    let grant_commit = station_successor(&issuer_head, &grant, &station_did, 1);
+    let AccountabilityGrantAdmissionOutcome::Committed(endorsed) =
+        admit_grant(&grant, grant_commit.clone()).await.unwrap()
+    else {
+        panic!("the issuer's grant commits");
+    };
+    assert_eq!(endorsed.commit, grant_commit);
+    assert_eq!(endorsed.realm_id, issuer_realm);
+    let endorsed_footprint = profile_footprint(&pool, &realms).await;
+    assert_eq!(endorsed_footprint.endorsements, 1);
+    assert!(matches!(
+        admit_grant(
+            &grant,
+            station_successor(&grant_commit, &grant, &station_did, 1)
+        )
+        .await
+        .unwrap(),
+        AccountabilityGrantAdmissionOutcome::Duplicate(_)
+    ));
+    assert_eq!(profile_footprint(&pool, &realms).await, endorsed_footprint);
+
+    // A Commit instant after expires_at is outside the grant, whatever the
+    // Event's own signed time says.
+    let late = admit_profile(
+        &accountable_create,
+        station_successor(&subject_head, &accountable_create, &station_did, 180),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        late.conflict_code(),
+        Some(ConflictCode::AccountabilityGrantMissing)
+    );
+    assert_eq!(profile_footprint(&pool, &realms).await, endorsed_footprint);
+
+    // Inside the window the profile commits.
+    let create_commit = station_successor(&subject_head, &accountable_create, &station_did, 60);
+    let ActorProfileAdmissionOutcome::Committed(created) =
+        admit_profile(&accountable_create, create_commit.clone())
+            .await
+            .unwrap()
+    else {
+        panic!("an endorsed profile commits");
+    };
+    assert_eq!(
+        created.profile.accountable_principal_ids,
+        vec![issuer.principal_id.clone()]
+    );
+
+    // The issuer revokes the same exact set, spelled as the singleton string;
+    // the revoke replaces the same typed current row.
+    let revoke = accountability_grant_event(
+        &issuer,
+        &issuer_realm,
+        &issuer_method,
+        issuer_seed,
+        issuer_seed,
+        &subject.principal_id,
+        serde_json::json!("employment"),
+        "revoked",
+        t0 - chrono::TimeDelta::days(1),
+        Some(expires_at),
+    );
+    let revoke_commit = station_successor(&grant_commit, &revoke, &station_did, 1);
+    assert!(matches!(
+        admit_grant(&revoke, revoke_commit).await.unwrap(),
+        AccountabilityGrantAdmissionOutcome::Committed(_)
+    ));
+    let revoked_footprint = profile_footprint(&pool, &realms).await;
+    assert_eq!(revoked_footprint.endorsements, 1);
+
+    // A later update that keeps the declaration is refused at its Commit.
+    let rename = profile_event(
+        &subject,
+        &subject_realm,
+        &subject_method,
+        subject_seed,
+        EventKind::ProfileUpdate,
+        serde_json::json!({
+            "target_ref": created.profile.id,
+            "patch": {"display_name": "Renamed service"}
+        }),
+    );
+    let refused = admit_profile(
+        &rename,
+        station_successor(&create_commit, &rename, &station_did, 1),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        refused.conflict_code(),
+        Some(ConflictCode::AccountabilityGrantMissing)
+    );
+    assert_eq!(profile_footprint(&pool, &realms).await, revoked_footprint);
+
+    // Dropping the declaration is always admissible.
+    let drop_declaration = profile_event(
+        &subject,
+        &subject_realm,
+        &subject_method,
+        subject_seed,
+        EventKind::ProfileUpdate,
+        serde_json::json!({
+            "target_ref": created.profile.id,
+            "patch": {"accountable_principal_ids": {"$op": "unset"}}
+        }),
+    );
+    let ActorProfileAdmissionOutcome::Committed(cleared) = admit_profile(
+        &drop_declaration,
+        station_successor(&create_commit, &drop_declaration, &station_did, 1),
+    )
+    .await
+    .unwrap() else {
+        panic!("removing accountable principals commits");
+    };
+    assert!(cleared.profile.accountable_principal_ids.is_empty());
+}

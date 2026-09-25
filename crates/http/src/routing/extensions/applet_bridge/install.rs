@@ -422,6 +422,7 @@ fn validate_bot_managed_actor_unit(
             != Some(provision.applet_authority_ref.as_str())
         || profile.kind.as_str() != "ak.profile.create"
         || profile.actor_id != bot_actor_id
+        || &profile.realm_id != basis.effective_scope.realm_id()
         || profile.executed_by.as_ref() != Some(&service_actor_id)
         || profile.applet_id.as_ref() != Some(&expected_applet_id)
         || profile.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
@@ -494,7 +495,6 @@ fn validate_bot_managed_actor_unit(
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
         && actor_profile.accountable_principal_ids[0].as_str() == package.service_id.as_str();
     if actor_profile.principal_id != *package.bot_actor_id.signing_principal_id()
-        || actor_profile.realm_id.as_ref() != Some(basis.effective_scope.realm_id())
         || actor_profile.actor_kind != arkret_wire::ActorKind::Bot
         || actor_profile
             .profile_fields

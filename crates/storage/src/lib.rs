@@ -31,6 +31,7 @@ pub use records::*;
 mod account_device_signer_evidence;
 mod account_status;
 mod accounts;
+mod actor_profiles;
 mod agents;
 mod applets;
 mod audit;
@@ -79,6 +80,7 @@ mod webvh_freshness;
 pub use account_device_signer_evidence::*;
 pub use account_status::*;
 pub use accounts::*;
+pub use actor_profiles::*;
 pub use agents::*;
 pub use applets::*;
 pub use audit::*;
@@ -183,6 +185,10 @@ pub enum ConflictCode {
     ApprovalNonceReused,
     /// The applet was revoked between admission and commit.
     AppletRevoked,
+    /// An Actor Profile `accountable_principal_ids` entry has no committed
+    /// active accountability record at the accepting Commit
+    /// (`zh/models/actor.md` section 3.3.1).
+    AccountabilityGrantMissing,
     /// A KeyBackup request's pointer, series or device generation is no
     /// longer current (key-management.md §7.6).
     BackupRevisionStale,
@@ -293,9 +299,10 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
+        Self::AccountabilityGrantMissing,
         Self::BackupRevisionStale,
         Self::CapabilityDenied,
         Self::CasConflict,
@@ -350,6 +357,9 @@ impl ConflictCode {
         match self {
             Self::ApprovalNonceReused => arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
             Self::AppletRevoked => "applet_revoked",
+            Self::AccountabilityGrantMissing => {
+                arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
+            }
             Self::BackupRevisionStale => arkret_wire::ReasonCode::BACKUP_REVISION_STALE,
             Self::CapabilityDenied => arkret_wire::ErrorCode::CAPABILITY_DENIED,
             Self::CasConflict => "cas_conflict",
@@ -473,6 +483,7 @@ pub trait DeliveryPolicyStoreRegistry: Send + Sync {
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore;
+    fn actor_profiles(&self) -> &dyn ActorProfileStore;
     fn security_transactions(&self) -> &dyn SecurityTransactionStore;
     fn webvh(&self) -> &dyn WebvhStore;
     fn service_identity(&self) -> &dyn ServiceIdentityStore;

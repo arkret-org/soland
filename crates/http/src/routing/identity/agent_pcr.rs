@@ -6,7 +6,6 @@ use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Event};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_http::error::AppError;
-use soland_services::events::ActiveAgentAccountabilityQuery;
 use soland_services::identity::{
     AgentPairingState as AgentPrincipalRecord, PinnedDidVersionStatus,
 };
@@ -448,36 +447,20 @@ pub(crate) fn agent_initial_resolution_for_record(
     })
 }
 
+/// The controller must hold an `identity_accountability` record for this
+/// Agent that is active at `accepted_at`: the provision projection or a later
+/// independent grant in the controller PCR (`zh/models/actor.md` 3.3.1).
 async fn validate_active_agent_accountability(
     state: &AppState,
     agent_record: &AgentPrincipalRecord,
     accepted_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    let accountability_event_id = agent_record
-        .provision_event_refs
-        .as_ref()
-        .and_then(|refs| refs.get("provision_event_id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            failed_precondition(
-                "Agent provisioning accountability reference is missing",
-                arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
-            )
-        })?;
     let controller_account_id = agent_controller_account(state, agent_record).await?;
-    let query = ActiveAgentAccountabilityQuery {
-        accountability_event_id: accountability_event_id.to_owned(),
-        agent_account_id: AccountId::new(
-            DidCoreId::new(agent_record.id.clone())
-                .map_err(|_| schema_error("stored Agent principal is invalid"))?,
-            controller_account_id.station_id.clone(),
-        ),
-        controller_account_id,
-        accepted_at,
-    };
+    let agent_id = DidCoreId::new(agent_record.id.clone())
+        .map_err(|_| schema_error("stored Agent principal is invalid"))?;
     let active = state
-        .event_queries()
-        .has_active_agent_accountability(&query)
+        .persistence()
+        .accountability_verified_at(&controller_account_id.principal_id, &agent_id, accepted_at)
         .await
         .map_err(|error| AppError::internal(format!("accountability lookup failed: {error}")))?;
     if !active {

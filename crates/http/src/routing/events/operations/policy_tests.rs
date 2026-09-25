@@ -105,26 +105,6 @@ fn op(
     operation
 }
 
-fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::Value {
-    json!({
-        "schema": "ak.schema.accountability_grant.v1",
-        "sender": ALICE_CORE_ID,
-        "issuer_id": ALICE_CORE_ID,
-        "subject_id": AGENT_CORE_ID,
-        "accountability_scope": "agent_operator",
-        "not_before": "2026-01-01T00:00:00.000Z",
-        "expires_at": expires_at,
-        "grant_status": status,
-        "proof": {
-            "kind": "detached_jws",
-            "verification_method": format!("{ALICE_DID}#key-1"),
-            "payload_digest": format!("sha256:{}", "3".repeat(64)),
-            "created_at": "2026-01-01T00:00:00.000Z",
-            "jws": "AAAA.BBBB.CCCC"
-        }
-    })
-}
-
 #[test]
 fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
     let realm_id =
@@ -1327,24 +1307,180 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     );
 }
 
-#[tokio::test]
-async fn profile_accountable_principal_requires_active_grant() {
+/// One issuer-signed accountability grant: `issuer`'s founding device signs
+/// the Event, and `proof_seed` signs the inner compact detached JWS over the
+/// registered `ak.accountability-grant-v1` binding transcript.
+#[allow(clippy::too_many_arguments)]
+fn signed_accountability_grant(
+    issuer: &soland_test_support::pcr_genesis::PcrGenesisFixture,
+    issuer_id: &arkret_wire::DidCoreId,
+    subject_id: &arkret_wire::DidCoreId,
+    status: &str,
+    not_before: &str,
+    expires_at: Option<&str>,
+    proof_seed: [u8; 32],
+) -> arkret_wire::Event {
+    let method = issuer.history.device_verification_method.clone();
+    let mut value = json!({
+        "schema": "ak.schema.accountability_grant.v1",
+        "issuer_id": issuer_id,
+        "subject_id": subject_id,
+        "accountability_scope": "agent_operator",
+        "not_before": not_before,
+        "grant_status": status,
+        "proof": {
+            "kind": "detached_jws",
+            "verification_method": method,
+            "payload_digest": format!("sha256:{}", "0".repeat(64)),
+            "created_at": not_before,
+            "jws": ""
+        }
+    });
+    if let Some(expires_at) = expires_at {
+        value["expires_at"] = json!(expires_at);
+    }
+    let mut grant: arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload =
+        serde_json::from_value(value).unwrap();
+    grant.proof.payload_digest = grant.payload_digest().unwrap();
+    grant.proof.jws = arkret_signatures::sign_ed25519_detached_jws(
+        &SigningKey::from_bytes(&proof_seed),
+        &grant.canonical_proof_binding_bytes().unwrap(),
+    )
+    .unwrap();
+    let account = &issuer.history.account;
+    soland_test_support::device_authorization_history::sign_event(
+        arkret_wire::test_support::raw_event(
+            arkret_wire::EventKind::IdentityAccountabilityGrant.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: issuer.history.events[0].realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            serde_json::to_value(&grant).unwrap(),
+        )
+        .unwrap(),
+        method,
+        issuer.history.founding_device_signing_seed,
+    )
+}
+
+/// Admit `event` through the issuer PCR accountability unit: a real
+/// Station-signed RealmCommit at the PCR head, written with the
+/// `identity_accountability` row in one transaction.
+async fn commit_accountability_grant(
+    state: &AppState,
+    event: &arkret_wire::Event,
+) -> soland_storage::PersistenceResult<soland_storage::AccountabilityGrantAdmissionOutcome> {
+    let committed_at = chrono::Utc::now();
+    let method = arkret_wire::DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .unwrap();
+    let transaction = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
+        .await
+        .expect("PCR head transaction");
+    state
+        .persistence()
+        .admit_accountability_grant(soland_storage::AccountabilityGrantAdmissionWrite {
+            commit: transaction,
+            queued_at: committed_at,
+        })
+        .await
+}
+
+/// A PG-backed state with the issuer's PCR genesis accepted.
+async fn accountability_state() -> (
+    AppState,
+    soland_test_support::pcr_genesis::PcrGenesisFixture,
+    arkret_identifiers::RealmId,
+) {
     let state = test_state();
+    let issuer = soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
+    issuer
+        .admit_into(state.test_persistence().as_ref())
+        .await
+        .expect("accepted issuer PCR genesis");
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:ARHX7LGKk2svV3upZ10pEmGoLdgEaEPI06-04trUQQdu".to_owned(),
     )
     .unwrap();
     install_collaboration_realm(&state, &realm_id);
-    let profile = op(
+    (state, issuer, realm_id)
+}
+
+fn accountable_profile_create(
+    realm_id: arkret_identifiers::RealmId,
+    seed: &str,
+    subject: &str,
+    issuer: &arkret_wire::DidCoreId,
+) -> Operation {
+    op(
         realm_id,
-        "0000000007a3",
+        seed,
         "ak.profile.create",
         json!({
-            "principal_id": "ak:did_core:web:agent.example",
-            "display_name": "Agent",
-            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
+            "sender": subject,
+            "object": {
+                "principal_id": subject,
+                "actor_kind": "agent",
+                "display_name": "Agent",
+                "accountable_principal_ids": [issuer]
+            }
         }),
+    )
+}
+
+#[tokio::test]
+async fn profile_accountable_principal_requires_active_grant() {
+    let (state, issuer, realm_id) = accountability_state().await;
+    let issuer_id = issuer.history.account.principal_id.clone();
+    let profile = accountable_profile_create(realm_id, "0000000007a3", AGENT_CORE_ID, &issuer_id);
+
+    assert_eq!(
+        validate_operation_policy(&state, &[profile])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+        "no committed identity_accountability record exists for the pair"
     );
+}
+
+#[tokio::test]
+async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
+    let (state, mallory, realm_id) = accountability_state().await;
+    let claimed_issuer = arkret_wire::DidCoreId::new(ALICE_CORE_ID).unwrap();
+    let agent = arkret_wire::DidCoreId::new(AGENT_CORE_ID).unwrap();
+    // Mallory signs a grant naming Alice as the issuer. The accountability
+    // unit refuses it -- the issuer is not the Event actor -- so no record
+    // for (Alice, Agent) is ever committed.
+    let fake = signed_accountability_grant(
+        &mallory,
+        &claimed_issuer,
+        &agent,
+        "active",
+        "2026-01-01T00:00:00.000Z",
+        Some("2099-01-01T00:00:00.000Z"),
+        mallory.history.founding_device_signing_seed,
+    );
+    let refused = commit_accountability_grant(&state, &fake)
+        .await
+        .expect_err("a grant whose issuer is not its actor is refused");
+    assert_eq!(
+        refused.conflict_code(),
+        Some(soland_storage::ConflictCode::SignatureInvalid)
+    );
+    let profile =
+        accountable_profile_create(realm_id, "0000000007a4", AGENT_CORE_ID, &claimed_issuer);
 
     assert_eq!(
         validate_operation_policy(&state, &[profile])
@@ -1355,149 +1491,102 @@ async fn profile_accountable_principal_requires_active_grant() {
 }
 
 #[tokio::test]
-async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AcDBmaLJmexYp8de9kbZez_sjHqo3WTTKGdS8F_Tamb6".to_owned(),
-    )
-    .unwrap();
-    install_collaboration_realm(&state, &realm_id);
-    let profile = op(
-        realm_id.clone(),
-        "0000000007a4",
-        "ak.profile.create",
-        json!({
-            "sender": "ak:did_core:web:agent.example",
-            "principal_id": "ak:did_core:web:agent.example",
-            "display_name": "Agent",
-            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
-        }),
+async fn profile_accountable_principal_accepts_committed_active_grant() {
+    let (state, issuer, realm_id) = accountability_state().await;
+    let issuer_id = issuer.history.account.principal_id.clone();
+    let agent = arkret_wire::DidCoreId::new(AGENT_CORE_ID).unwrap();
+    let grant = signed_accountability_grant(
+        &issuer,
+        &issuer_id,
+        &agent,
+        "active",
+        "2026-01-01T00:00:00.000Z",
+        Some("2099-01-01T00:00:00.000Z"),
+        issuer.history.founding_device_signing_seed,
     );
-    let fake_grant = op(
-        realm_id,
-        "0000000007a5",
-        "ak.identity.accountability_grant",
-        json!({
-            "sender": "ak:did_core:web:mallory.example",
-            "issuer_id": "ak:did_core:web:alice.example",
-            "subject_id": "did:web:agent.example",
-            "grant_status": "active",
-            "not_before": "2026-01-01T00:00:00.000Z",
-            "expires_at": "2099-01-01T00:00:00.000Z"
-        }),
-    );
+    assert!(matches!(
+        commit_accountability_grant(&state, &grant).await.unwrap(),
+        soland_storage::AccountabilityGrantAdmissionOutcome::Committed(_)
+    ));
+    let profile = accountable_profile_create(realm_id, "0000000007a9", AGENT_CORE_ID, &issuer_id);
 
-    assert_eq!(
-        validate_operation_policy(&state, &[fake_grant, profile])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
-    );
-}
-
-#[tokio::test]
-async fn profile_accountable_principal_accepts_active_atomic_grant() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AWT48tEXpBf1y4S4objnI4XLvPGbMAHzCgphs0-WDJPH".to_owned(),
-    )
-    .unwrap();
-    install_collaboration_realm(&state, &realm_id);
-    let grant = op(
-        realm_id.clone(),
-        "0000000007a8",
-        arkret_wire::EventKind::IdentityAccountabilityGrant,
-        accountability_grant_payload("active", "2099-01-01T00:00:00.000Z"),
-    );
-    let profile = op(
-        realm_id,
-        "0000000007a9",
-        "ak.profile.create",
-        json!({
-            "sender": AGENT_CORE_ID,
-            "principal_id": AGENT_CORE_ID,
-            "display_name": "Agent",
-            "accountable_principal_ids": [ALICE_CORE_ID]
-        }),
-    );
-
-    validate_operation_policy(&state, &[grant, profile])
+    validate_operation_policy(&state, &[profile])
         .await
-        .expect("active atomic grant must satisfy the profile");
+        .expect("a committed active grant satisfies the profile");
 }
 
 #[tokio::test]
-async fn profile_accountable_principal_atomic_revoke_wins() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AaajU0E3YekQlILA6KFwZaoB7JHYohg-O0crFYr4hwuS".to_owned(),
-    )
-    .unwrap();
-    install_collaboration_realm(&state, &realm_id);
-    let grant = op(
-        realm_id.clone(),
-        "0000000007aa",
-        arkret_wire::EventKind::IdentityAccountabilityGrant,
-        accountability_grant_payload("active", "2099-01-01T00:00:00.000Z"),
-    );
-    let revoke = op(
-        realm_id.clone(),
-        "0000000007ab",
-        arkret_wire::EventKind::IdentityAccountabilityGrant,
-        accountability_grant_payload("revoked", "2099-01-01T00:00:00.000Z"),
-    );
+async fn profile_accountable_principal_committed_revoke_wins() {
+    let (state, issuer, realm_id) = accountability_state().await;
+    let issuer_id = issuer.history.account.principal_id.clone();
+    let agent = arkret_wire::DidCoreId::new(AGENT_CORE_ID).unwrap();
+    for status in ["active", "revoked"] {
+        let grant = signed_accountability_grant(
+            &issuer,
+            &issuer_id,
+            &agent,
+            status,
+            "2026-01-01T00:00:00.000Z",
+            Some("2099-01-01T00:00:00.000Z"),
+            issuer.history.founding_device_signing_seed,
+        );
+        commit_accountability_grant(&state, &grant)
+            .await
+            .expect("the issuer's grant and revoke commit in order");
+    }
     let profile = op(
         realm_id,
         "0000000007ac",
         "ak.profile.update",
         json!({
-            "sender": "ak:did_core:web:agent.example",
-            "principal_id": "ak:did_core:web:agent.example",
-            "display_name": "Agent",
-            "accountable_principal_ids": ["ak:did_core:web:alice.example"]
+            "sender": AGENT_CORE_ID,
+            "target_ref": "ak:actor_profile:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-",
+            "patch": {"accountable_principal_ids": [issuer_id]}
         }),
     );
 
     assert_eq!(
-        validate_operation_policy(&state, &[grant, revoke, profile])
+        validate_operation_policy(&state, &[profile])
             .await
             .unwrap_err(),
-        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING
+        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+        "the revoke replaced the same exact-set record"
     );
 }
 
 #[tokio::test]
-async fn profile_accountability_uses_signed_frozen_time() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:ASQslZEMbgHWd6DWpeEhQbJIgft2QchUND7vZal60zaI".to_owned(),
-    )
-    .unwrap();
-    install_collaboration_realm(&state, &realm_id);
-    let grant = op(
-        realm_id.clone(),
-        "0000000007ad",
-        arkret_wire::EventKind::IdentityAccountabilityGrant,
-        accountability_grant_payload("active", "2026-06-01T00:00:00.000Z"),
+async fn profile_accountability_is_judged_at_the_commit_time_coordinate() {
+    let (state, issuer, realm_id) = accountability_state().await;
+    let issuer_id = issuer.history.account.principal_id.clone();
+    let agent = arkret_wire::DidCoreId::new(AGENT_CORE_ID).unwrap();
+    let grant = signed_accountability_grant(
+        &issuer,
+        &issuer_id,
+        &agent,
+        "active",
+        "2026-01-01T00:00:00.000Z",
+        Some("2026-06-01T00:00:00.000Z"),
+        issuer.history.founding_device_signing_seed,
     );
-    let mut profile = op(
-        realm_id,
-        "0000000007ae",
-        "ak.profile.update",
-        json!({
-            "sender": AGENT_CORE_ID,
-            "principal_id": AGENT_CORE_ID,
-            "display_name": "Agent",
-            "accountable_principal_ids": [ALICE_CORE_ID]
-        }),
-    );
+    commit_accountability_grant(&state, &grant)
+        .await
+        .expect("an issuer may commit a bounded grant");
+    let mut profile =
+        accountable_profile_create(realm_id, "0000000007ae", AGENT_CORE_ID, &issuer_id);
+    // The Event's own signed time is inside the grant, but the Station decides
+    // at its Commit time coordinate (event-auth-state-resolution: the
+    // governance Station reads current state when it assigns the Commit).
     profile.created_at = chrono::DateTime::parse_from_rfc3339("2026-05-01T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
 
-    validate_operation_policy(&state, &[grant, profile])
-        .await
-        .expect("grant validity must use the profile Event's signed time, not wall clock");
+    assert_eq!(
+        validate_operation_policy(&state, &[profile])
+            .await
+            .unwrap_err(),
+        arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+        "an expired grant does not verify a profile accepted after expires_at"
+    );
 }
 
 #[tokio::test]

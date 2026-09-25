@@ -29,6 +29,8 @@ use super::AppState;
 enum SelfEventRoute {
     /// `ak.key_backup.active_series`: the same-cut pointer unit.
     KeyBackupPointer,
+    /// `ak.identity.accountability_grant`: the issuer-PCR accountability unit.
+    AccountabilityGrant,
     /// Realm-scope kinds with a guarded current-result authority cut.
     GuardedUnit,
 }
@@ -44,6 +46,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
     use arkret_wire::EventKind;
     match kind {
         EventKind::KeyBackupActiveSeries => Ok(SelfEventRoute::KeyBackupPointer),
+        EventKind::IdentityAccountabilityGrant => Ok(SelfEventRoute::AccountabilityGrant),
         EventKind::StrandCreate
         | EventKind::RealmSetDefaultStrand
         | EventKind::MessageCreate
@@ -258,11 +261,20 @@ impl AuthorityProtocolPort for AppState {
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
             return super::authority_forward::forward_self_event(self, &governance, request).await;
         }
-        if self_event_route(&event.kind)? == SelfEventRoute::KeyBackupPointer {
-            return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
-                self, &request,
-            )
-            .await;
+        match self_event_route(&event.kind)? {
+            SelfEventRoute::KeyBackupPointer => {
+                return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
+                    self, &request,
+                )
+                .await;
+            }
+            SelfEventRoute::AccountabilityGrant => {
+                return super::authority_accountability_grant::submit_self_accountability_grant(
+                    self, &request,
+                )
+                .await;
+            }
+            SelfEventRoute::GuardedUnit => {}
         }
         require_guarded_unit_event(&request)?;
         super::authority_self_event_unit::commit_event_unit(
@@ -396,6 +408,10 @@ mod tests {
             self_event_route(&EventKind::KeyBackupActiveSeries).unwrap(),
             SelfEventRoute::KeyBackupPointer
         );
+        assert_eq!(
+            self_event_route(&EventKind::IdentityAccountabilityGrant).unwrap(),
+            SelfEventRoute::AccountabilityGrant
+        );
         for kind in [
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
@@ -422,6 +438,7 @@ mod tests {
     fn every_other_active_kind_is_unsupported_event_kind_not_internal() {
         let routed = [
             EventKind::KeyBackupActiveSeries,
+            EventKind::IdentityAccountabilityGrant,
             EventKind::StrandCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,

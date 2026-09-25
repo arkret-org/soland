@@ -1142,6 +1142,21 @@ pub(crate) async fn commit_verified_recovery_policy_in_connection(
     .await
 }
 
+/// Only the Actor Profile and accountability grant units may call this after
+/// rechecking the signing device and the kind's same-cut admission under the
+/// PCR authority lock; the same transaction then writes the typed result.
+pub(crate) async fn commit_verified_pcr_typed_current_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::ProfileOrAccountability,
+    )
+    .await
+}
+
 /// The registered PCR unit whose same-cut checks already ran on this
 /// connection. Generic admission is `None` and cannot write these kinds.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1151,6 +1166,7 @@ enum VerifiedPcrUnit {
     RevokeProposal,
     KeyBackupPointer,
     RecoveryPolicy,
+    ProfileOrAccountability,
 }
 
 fn is_recovery_policy_set(event: &arkret_wire::Event) -> bool {
@@ -1189,6 +1205,29 @@ async fn commit_transaction_in_connection_with_device_guard(
     {
         return Err(PersistenceError::Conflict(
             "recovery_policy_publication_unit_required".to_owned(),
+        )
+        .into());
+    }
+    // Profile and accountability results are PCR typed current written only
+    // by their units, which decide the signer and the accountability cut.
+    if matches!(
+        transaction.event.kind,
+        arkret_wire::EventKind::ProfileCreate
+            | arkret_wire::EventKind::ProfileUpdate
+            | arkret_wire::EventKind::IdentityAccountabilityGrant
+    ) && verified_unit != VerifiedPcrUnit::ProfileOrAccountability
+    {
+        return Err(PersistenceError::Conflict(
+            "actor_profile_or_accountability_unit_required".to_owned(),
+        )
+        .into());
+    }
+    // ak.agent.provision projects four typed results atomically
+    // (key-management.md section 3.6.3); no unit writes that set yet, so a
+    // partial acceptance is refused.
+    if transaction.event.kind == arkret_wire::EventKind::AgentProvision {
+        return Err(PersistenceError::Conflict(
+            "agent_provision_atomic_unit_unavailable".to_owned(),
         )
         .into());
     }

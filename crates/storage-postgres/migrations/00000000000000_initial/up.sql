@@ -4567,6 +4567,61 @@ CREATE TABLE pcr_device_revocation_proposals (
 CREATE INDEX pcr_device_revocation_proposals_commit
  ON pcr_device_revocation_proposals(commit_id);
 
+-- actor_profile typed current (profiles-presence.md section 2.3). One global
+-- Actor Profile per create-derived id, projected in its owner's Principal
+-- Control Realm by the transaction that writes the accepting RealmCommit. The
+-- self-service surface keeps one profile lineage per PCR, so the Realm is
+-- unique; the value is the complete materialized object.
+CREATE TABLE actor_profile_current_results (
+ realm_id TEXT NOT NULL UNIQUE,
+ actor_profile_id TEXT PRIMARY KEY,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'id'=actor_profile_id),
+ CHECK(value->>'realm_id'=realm_id),
+ CHECK(value->>'schema'='ak.schema.actor_profile.v1')
+);
+
+-- The stored outcome of every accepted profile Event, so an exact replay
+-- returns the value that Event produced after later updates have moved the
+-- current row.
+CREATE TABLE actor_profile_result_versions (
+ commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
+ actor_profile_id TEXT NOT NULL,
+ value JSONB NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'id'=actor_profile_id)
+);
+
+-- identity_accountability typed current (actor.md section 3.3.1). One record
+-- per (Realm, issuer, subject, normalized exact scope set); the scope
+-- component is its ak.accountability_scope_set.v1 digest. Both registered
+-- writers -- ak.identity.accountability_grant and the atomic projection of
+-- ak.agent.provision -- write the same row with the accepting RealmCommit.
+CREATE TABLE identity_accountability_current_results (
+ realm_id TEXT NOT NULL,
+ issuer_id TEXT NOT NULL,
+ subject_id TEXT NOT NULL,
+ accountability_scope JSONB NOT NULL,
+ scope_set_digest TEXT NOT NULL CHECK(scope_set_digest ~ '^sha256:[0-9a-f]{64}$'),
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,issuer_id,subject_id,scope_set_digest),
+ CHECK(jsonb_typeof(accountability_scope)='array'),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'issuer_id'=issuer_id),
+ CHECK(value->>'subject_id'=subject_id),
+ CHECK(value->'accountability_scope'=accountability_scope),
+ CHECK(value->>'grant_status' IN ('active','revoked'))
+);
+CREATE INDEX identity_accountability_current_result_pair
+ ON identity_accountability_current_results(subject_id,issuer_id);
+
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.
 CREATE TABLE current_selector_origins (

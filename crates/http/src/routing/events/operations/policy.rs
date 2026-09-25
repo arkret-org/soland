@@ -164,8 +164,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
 /// so re-running the per-operation gates on not-yet-committed siblings would
 /// judge them against a state their own in-batch predecessors have not
 /// landed. Only the batch-aware validators (history_access × content_scheme,
-/// read-receipt combinations,
-/// accountability profile) receive the full sibling slice; every other gate
+/// read-receipt combinations) receive the full sibling slice; every other gate
 /// sees exactly the Operation being admitted.
 pub(crate) async fn validate_single_operation_policy_in_batch(
     state: &AppState,
@@ -254,7 +253,7 @@ async fn validate_one_operation_policy(
         }
         validate_principal_control_realm_binding(state, operation)?;
         message_rules::validate_agent_control_realm_binding(state, operation).await?;
-        validate_accountability_profile_policy(state, operations, operation).await?;
+        validate_accountability_profile_policy(state, operation).await?;
         // Verify the canonical device possession proof on every
         // ak.device.authorize at ingest.
         if kinds::canonical_kind(operation) == arkret_wire::EventKind::DeviceAuthorize {

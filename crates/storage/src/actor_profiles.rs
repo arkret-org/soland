@@ -1,0 +1,99 @@
+//! PCR-resident Actor Profile and accountability typed current results.
+//!
+//! `actor_profile` (`zh/discovery/profiles-presence.md` section 2.3) and
+//! `identity_accountability` (`zh/models/actor.md` section 3.3.1) are written
+//! only by the transaction that commits their source Event. Profile admission
+//! reads the accountability records at that same transaction, with the
+//! accepting Commit's time as the frozen admission instant.
+
+use arkret_models_collaboration::governance::accountability::AccountabilityProjection;
+use arkret_models_identity::ActorProfile;
+use arkret_wire::{AccountId, DidCoreId, Event, RealmCommit, RealmId};
+use async_trait::async_trait;
+
+use crate::{AuthorityCommitTransaction, PersistenceResult};
+
+/// One holder-signed `ak.profile.create` / `ak.profile.update` and the
+/// Station-signed PCR Commit prepared at the head it was read against.
+#[derive(Clone, Debug)]
+pub struct ActorProfileAdmissionWrite {
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The profile value one accepted profile Event produced, with that exact
+/// Event and its covering Commit.
+#[derive(Clone, Debug)]
+pub struct ActorProfileResultRecord {
+    pub profile: ActorProfile,
+    pub event: Event,
+    pub commit: RealmCommit,
+}
+
+#[derive(Clone, Debug)]
+pub enum ActorProfileAdmissionOutcome {
+    /// This call accepted the Event, its Commit and the profile result.
+    Committed(ActorProfileResultRecord),
+    /// The exact Event was already accepted; this is the result it produced.
+    Duplicate(ActorProfileResultRecord),
+}
+
+/// One issuer-signed `ak.identity.accountability_grant` and the PCR Commit
+/// prepared at the head it was read against.
+#[derive(Clone, Debug)]
+pub struct AccountabilityGrantAdmissionWrite {
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// One `identity_accountability` current row with its head Commit.
+#[derive(Clone, Debug)]
+pub struct IdentityAccountabilityRecord {
+    pub realm_id: RealmId,
+    pub value: AccountabilityProjection,
+    pub commit: RealmCommit,
+}
+
+#[derive(Clone, Debug)]
+pub enum AccountabilityGrantAdmissionOutcome {
+    Committed(IdentityAccountabilityRecord),
+    Duplicate(IdentityAccountabilityRecord),
+}
+
+#[async_trait]
+pub trait ActorProfileStore: Send + Sync {
+    /// Admit one profile Event under the owner's PCR authority lock: the
+    /// signing device is active at the same cut, create/update presence and
+    /// target match the PCR's one profile lineage, the registered projection
+    /// applies, and every `accountable_principal_ids` entry has an active
+    /// accountability record at the Commit time. Any refusal writes nothing.
+    async fn admit_profile(
+        &self,
+        write: ActorProfileAdmissionWrite,
+    ) -> PersistenceResult<ActorProfileAdmissionOutcome>;
+
+    /// Admit one accountability grant in the issuer's PCR: the signing device
+    /// is active at the same cut, the inner issuer proof and the Event proof
+    /// verify against its accepted key, and the typed current row is written
+    /// with the Commit. Any refusal writes nothing.
+    async fn admit_accountability_grant(
+        &self,
+        write: AccountabilityGrantAdmissionWrite,
+    ) -> PersistenceResult<AccountabilityGrantAdmissionOutcome>;
+
+    /// The current profile of the account's local PCR, with the exact Event
+    /// and Commit that produced it.
+    async fn current_profile(
+        &self,
+        account: &AccountId,
+    ) -> PersistenceResult<Option<ActorProfileResultRecord>>;
+
+    /// Whether some committed `identity_accountability` record with this
+    /// issuer and subject verifies at `at`.
+    async fn accountability_verified_at(
+        &self,
+        issuer_id: &DidCoreId,
+        subject_id: &DidCoreId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool>;
+}

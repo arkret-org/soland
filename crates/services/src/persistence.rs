@@ -86,6 +86,50 @@ impl PersistenceHandle {
         self.persistence.read_cursors().list(owner, realm_id).await
     }
 
+    /// Admit one holder-signed Actor Profile Event through its PCR unit.
+    pub async fn admit_actor_profile(
+        &self,
+        write: soland_storage::ActorProfileAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::ActorProfileAdmissionOutcome> {
+        self.persistence.actor_profiles().admit_profile(write).await
+    }
+
+    /// Admit one issuer-signed accountability grant through its PCR unit.
+    pub async fn admit_accountability_grant(
+        &self,
+        write: soland_storage::AccountabilityGrantAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AccountabilityGrantAdmissionOutcome> {
+        self.persistence
+            .actor_profiles()
+            .admit_accountability_grant(write)
+            .await
+    }
+
+    /// The account's current PCR Actor Profile with its exact Event and Commit.
+    pub async fn current_actor_profile(
+        &self,
+        account: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<soland_storage::ActorProfileResultRecord>> {
+        self.persistence
+            .actor_profiles()
+            .current_profile(account)
+            .await
+    }
+
+    /// Whether a committed `identity_accountability` record verifies the
+    /// `(issuer, subject)` endorsement at `at`.
+    pub async fn accountability_verified_at(
+        &self,
+        issuer_id: &arkret_wire::DidCoreId,
+        subject_id: &arkret_wire::DidCoreId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.persistence
+            .actor_profiles()
+            .accountability_verified_at(issuer_id, subject_id, at)
+            .await
+    }
+
     pub(crate) fn authority_commit_store(&self) -> &dyn soland_storage::AuthorityCommitStore {
         self.persistence.authority_commits()
     }

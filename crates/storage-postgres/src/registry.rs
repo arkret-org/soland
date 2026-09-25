@@ -61,6 +61,7 @@ pub struct PgPersistenceStore {
     key_backups: PgKeyBackupStore,
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
+    actor_profiles: crate::actor_profiles::PgActorProfileStore,
     recovery_sessions: PgRecoverySessionStore,
     security_transactions: PgSecurityTransactionStore,
     space_container_projections: PgSpaceContainerProjectionStore,
@@ -144,6 +145,7 @@ impl PgPersistenceStore {
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
+            actor_profiles: crate::actor_profiles::PgActorProfileStore { pool: pool.clone() },
             recovery_sessions: PgRecoverySessionStore { pool: pool.clone() },
             security_transactions: PgSecurityTransactionStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
@@ -341,6 +343,10 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
 
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore {
         &self.recovery_policies
+    }
+
+    fn actor_profiles(&self) -> &dyn soland_storage::ActorProfileStore {
+        &self.actor_profiles
     }
 
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore {

@@ -453,36 +453,23 @@ async fn realm_member_is_joined(
     crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, &actor_key).await
 }
 
+/// The controller's accountability for the Agent, read from the committed
+/// `identity_accountability` typed current (`zh/models/actor.md` section
+/// 3.3.1): either the provision projection or an independent grant.
 async fn has_active_accountability_grant(
     state: &AppState,
     agent_id: &arkret_wire::ActorId,
     controller_actor_id: &arkret_wire::ActorId,
 ) -> bool {
-    let now = chrono::Utc::now();
     state
-        .event_queries()
-        .accepted_events()
+        .persistence()
+        .accountability_verified_at(
+            controller_actor_id.signing_principal_id(),
+            agent_id.signing_principal_id(),
+            chrono::Utc::now(),
+        )
         .await
-        .unwrap_or_default()
-        .iter()
-        .any(|record| {
-            record.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
-                && record
-                    .envelope
-                    .get("executed_by")
-                    .or_else(|| record.envelope.get("actor_id"))
-                    .and_then(|value| {
-                        serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
-                    })
-                    .as_ref()
-                    == Some(controller_actor_id)
-                && accountability_grant_value_active_for(
-                    record.envelope.get("payload").unwrap_or(&record.envelope),
-                    controller_actor_id.signing_principal_id().as_str(),
-                    agent_id.signing_principal_id().as_str(),
-                    now,
-                )
-        })
+        .unwrap_or(false)
 }
 
 async fn agent_controlled_by(

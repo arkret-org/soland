@@ -463,6 +463,9 @@ impl soland_storage::DeliveryPolicyStoreRegistry for FaultInjectingStore {
     fn recovery_policies(&self) -> &dyn soland_storage::RecoveryPolicyStore {
         self.inner.recovery_policies()
     }
+    fn actor_profiles(&self) -> &dyn soland_storage::ActorProfileStore {
+        self.inner.actor_profiles()
+    }
     fn recovery_sessions(&self) -> &dyn soland_storage::RecoverySessionStore {
         self.inner.recovery_sessions()
     }

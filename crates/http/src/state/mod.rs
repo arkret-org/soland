@@ -7,6 +7,7 @@ pub mod did_resolver_chain;
 mod account_authority_device_pairing;
 mod actor_private;
 mod app_state;
+mod authority_accountability_grant;
 mod authority_bootstrap_validation;
 mod authority_forward;
 mod authority_key_backup_pointer;
