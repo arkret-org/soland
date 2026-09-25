@@ -1,3 +1,956 @@
-//! The former MLS lifecycle test required retired Seal/Cell accepted-state fixtures.
-//! Formal Event/RealmCommit fixture migration is tracked in
-//! arkret-work/tasks/impl-active/2026-09-19-2011.
+//! MLS lifecycle over the Station's current HTTP surfaces, formal authority
+//! units and a restart, on real PostgreSQL (encryption-and-audit §2,
+//! device-lifecycle §9, client-sync §10).
+//!
+//! Alice founds a public Realm and activates its scope; Bob joins by his own
+//! `ak.member.state`. Over HTTP Bob publishes device KeyPackages (a mislabeled
+//! suite is refused), Alice self-claims one (exact replay is byte-identical, a
+//! conflicting reuse of the claim identity is `duplicate_conflict`), and Bob
+//! later reads the Welcome from his recipient queue, joins from it against the
+//! accepted Commit, finds consume still fail closed and ACKs the Welcome.
+//! Every Realm fact -- the bootstrap unit, the joins, `ak.mls.genesis` and the
+//! inline Add `ak.mls.commit` with its Welcome -- is a formal Event with its
+//! RealmCommit admitted through the authority store's own unit of work, with
+//! the public MLS state computed from the real Commit bytes and the Welcome
+//! bound to the ledger row the HTTP claim wrote. A second `AppState` over the
+//! same database then proves the claim ledger, the MLS current and the queue
+//! survive a restart.
+//!
+//! The self-submit admission of the MLS Events needs an Account-Authority
+//! standard grant and runs live in Cotest `keypackage_lifecycle`
+//! (`scenarios::mls_lifecycle_live`).
+
+#[path = "../../storage-postgres/tests/support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
+
+use std::sync::Arc;
+
+use arkret_mls::{ArkretMlsGroup, ArkretMlsIdentity, ArkretMlsSigner, MlsPublicGroupTracker};
+use arkret_models_collaboration::authority_commit::{
+    OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
+    SelfAuthoritySubmitRequest,
+};
+use arkret_models_collaboration::device_messages::{
+    DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome, RecipientDelivery,
+};
+use arkret_models_collaboration::governance::membership_invite::MembershipPayload;
+use arkret_models_crypto::{
+    KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody, KeyPackagesUploadOutcome,
+    MlsCommitPayload, MlsGovernanceBindingPayload,
+};
+use arkret_wire::{AccountId, ActorId, EventKind, MlsWelcomeDelivery, RealmId, ScopeRef};
+use base64::Engine as _;
+use ed25519_dalek::{Signer as _, SigningKey};
+use salvo::http::StatusCode;
+use salvo::test::{ResponseExt, TestClient};
+use serde_json::{Value, json};
+use soland_http::config::AppConfig;
+use soland_http::service;
+use soland_http::state::AppState;
+use soland_storage::{
+    AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, EventCommitRequest,
+    EventCommitUnitOfWork, MlsInstalledBase, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
+    OrdinaryRealmBootstrapCommitUnit, PersistenceStore, VerifiedMlsWelcome,
+};
+use soland_storage_postgres::{
+    PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore, PgPool, TestDatabase,
+};
+use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
+const ACTIVE_SUITE: &str = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
+const RESERVED_SUITE: &str = "MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519";
+const REGISTRATION_BEARER: &str = "fixture-registration";
+
+fn test_config() -> AppConfig {
+    AppConfig {
+        development_mode: true,
+        embedded_webvh_registration_bearer: Some(REGISTRATION_BEARER.to_owned()),
+        jws_replay_window_seconds: 0,
+        ..soland_test_support::app_config()
+    }
+}
+
+/// One accepted PCR Account with a development session bound to its
+/// founding device, and that device's key.
+struct Member {
+    account: AccountId,
+    actor: ActorId,
+    device: arkret_wire::DeviceId,
+    method: arkret_wire::DidUrl,
+    authorize_event_id: arkret_wire::EventId,
+    seed: [u8; 32],
+    key: SigningKey,
+    token: String,
+}
+
+impl Member {
+    async fn provision(
+        state: &AppState,
+        persistence: &dyn PersistenceStore,
+        name: &str,
+        index: u8,
+    ) -> Self {
+        let fixture = PcrGenesisFixture::new_with(
+            state.service_did(),
+            soland_test_support::device_authorization_history::DeviceHistoryFixtureOptions {
+                local_id: format!("mls-{index}-{}", uuid::Uuid::now_v7().simple()),
+                founding_device_id: soland_test_support::device_authorization_history::device(
+                    index,
+                ),
+                founding_device_signing_seed: [0x80 + index; 32],
+                founding_device_hpke_seed: [0x90 + index; 32],
+                ..Default::default()
+            },
+        );
+        fixture
+            .admit_into(persistence)
+            .await
+            .expect("durable PCR genesis");
+        let app = service(state.clone());
+        let mut registration = TestClient::post("http://server/_soland/gate/account/project")
+            .add_header(
+                "authorization",
+                format!("Bearer {REGISTRATION_BEARER}"),
+                true,
+            )
+            .json(&json!({
+                "principal_id": fixture.history.account.principal_id,
+                "did": fixture.history.did,
+                "display_name": name,
+            }))
+            .send(&app)
+            .await;
+        assert!(
+            matches!(
+                registration.status_code,
+                Some(StatusCode::OK | StatusCode::CONFLICT)
+            ),
+            "account projection: {:?}",
+            registration.take_string().await
+        );
+        let mut login = TestClient::post("http://server/_soland/gate/auth/dev-login")
+            .json(&json!({
+                "actor": fixture.history.account.principal_id,
+                "device_id": fixture.history.founding_device_id,
+                "display_name": name,
+            }))
+            .send(&app)
+            .await;
+        assert_eq!(login.status_code, Some(StatusCode::OK));
+        let body: Value = login.take_json().await.expect("dev-login JSON");
+        Self {
+            actor: ActorId::account(fixture.history.account.clone()),
+            account: fixture.history.account.clone(),
+            device: fixture.history.founding_device_id.clone(),
+            method: fixture.history.device_verification_method.clone(),
+            authorize_event_id: fixture.history.events[1].event_id.clone(),
+            seed: fixture.history.founding_device_signing_seed,
+            key: SigningKey::from_bytes(&fixture.history.founding_device_signing_seed),
+            token: body["session_credential"]
+                .as_str()
+                .expect("session credential")
+                .to_owned(),
+        }
+    }
+
+    /// One Event by this Account, signed by its founding device.
+    fn signed_event(
+        &self,
+        kind: EventKind,
+        scope_ref: ScopeRef,
+        payload: Value,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> arkret_wire::Event {
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            kind.as_str(),
+            scope_ref,
+            self.actor.clone(),
+            payload,
+            at,
+        )
+        .expect("fixture Event");
+        soland_test_support::device_authorization_history::sign_event(
+            event,
+            self.method.clone(),
+            self.seed,
+        )
+    }
+
+    /// Replace the fixture's structural producer proof of `request` with
+    /// this Account's device signature.
+    fn sign_request(&self, request: &mut EventCommitRequest) {
+        let event = soland_test_support::device_authorization_history::sign_event(
+            request.authority_commit.event.clone(),
+            self.method.clone(),
+            self.seed,
+        );
+        assert_eq!(event.event_id, request.authority_commit.event.event_id);
+        request.event.envelope = serde_json::to_value(&event).expect("signed envelope");
+        request.authority_commit.event = event;
+    }
+
+    fn mls_identity(&self) -> ArkretMlsIdentity {
+        ArkretMlsIdentity::new_human_device(
+            self.actor.clone(),
+            self.device.clone(),
+            ArkretMlsSigner::from_ed25519_signing_key(self.key.clone()),
+        )
+        .expect("device MLS identity")
+    }
+
+    async fn post(
+        &self,
+        state: &AppState,
+        path: &str,
+        operation: &str,
+        body: &impl serde::Serialize,
+    ) -> Response {
+        let mut response = TestClient::post(format!("http://server{path}"))
+            .add_header("authorization", format!("Bearer {}", self.token), true)
+            .add_header("arkret-operation", operation, true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(body).expect("canonical body"))
+            .send(&service(state.clone()))
+            .await;
+        Response::take(&mut response).await
+    }
+
+    async fn claim(&self, state: &AppState, body: &KeyPackagesClaimRequestBody) -> Response {
+        let mut response = TestClient::post("http://server/_arkret/self/keys/keypackages/claim")
+            .add_header("authorization", format!("Bearer {}", self.token), true)
+            .add_header(
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::SELF_KEYS_KEYPACKAGES_COMMAND_CLAIM_V1,
+                true,
+            )
+            .add_header("idempotency-key", body.claim_request_id.as_str(), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(body).expect("canonical claim"))
+            .send(&service(state.clone()))
+            .await;
+        Response::take(&mut response).await
+    }
+
+    async fn recipient_queue(&self, state: &AppState) -> DeviceMessagesGetOutcome {
+        let mut response = TestClient::get("http://server/_arkret/self/device_messages")
+            .add_header("authorization", format!("Bearer {}", self.token), true)
+            .add_header(
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+                true,
+            )
+            .send(&service(state.clone()))
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        response.take_json().await.expect("recipient queue page")
+    }
+}
+
+struct Response {
+    status: StatusCode,
+    bytes: Vec<u8>,
+}
+
+impl Response {
+    async fn take(response: &mut salvo::Response) -> Self {
+        Self {
+            status: response.status_code.expect("status"),
+            bytes: response.take_bytes(None).await.expect("body").to_vec(),
+        }
+    }
+
+    fn json(&self) -> Value {
+        serde_json::from_slice(&self.bytes).expect("JSON body")
+    }
+
+    fn problem(&self) -> String {
+        self.json()["type"]
+            .as_str()
+            .and_then(|kind| kind.rsplit('/').next())
+            .unwrap_or_default()
+            .to_owned()
+    }
+}
+
+/// The ordinary bootstrap unit of a public Realm Alice founds, governed by
+/// the Station under test.
+/// The governing Station's detached signature over one fixture RealmCommit.
+fn commit_signature(
+    station_did: &arkret_wire::Did,
+    at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::DetachedObjectSignature {
+    arkret_wire::DetachedObjectSignature {
+        verification_method: arkret_wire::DidUrl::new(format!("{station_did}#authority"))
+            .expect("Station method"),
+        ..ordinary_realm::signature(
+            &arkret_wire::DidCoreId::new("ak:did_core:web:unused.example").unwrap(),
+            at,
+        )
+    }
+}
+
+fn bootstrap(
+    founder: &Member,
+    station: &arkret_wire::DidCoreId,
+    station_did: &arkret_wire::Did,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    let at = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
+        .expect("fixture time");
+    let salt = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
+    );
+    let genesis = founder.signed_event(
+        EventKind::RealmCreate,
+        ScopeRef::RealmGenesis,
+        json!({"object":{
+            "schema":"ak.schema.realm_genesis.v1",
+            "purpose":"collaboration",
+            "genesis_salt":salt,
+            "trust_domain":"ak:trust_domain:mls-lifecycle.example",
+            "security_class":"high_assurance",
+            "governance_station_id":station,
+            "initial_join_rule":"public",
+            "initial_history_access":"since_join",
+            "initial_discoverability":"invite_only"
+        }}),
+        at,
+    );
+    let realm_id = genesis.realm_id.clone();
+    let realm_scope = || ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let mut events = vec![genesis];
+    for (kind, payload) in [
+        (
+            EventKind::RealmProfile,
+            json!({"schema":"ak.schema.realm_profile.v1","title":"MLS lifecycle"}),
+        ),
+        (
+            EventKind::RealmPolicyBundle,
+            json!({"policy_revision":1,"federation_policy":"closed"}),
+        ),
+        (EventKind::RealmJoinRule, json!({"value":"public"})),
+        (
+            EventKind::RealmHistoryAccess,
+            json!({"from":null,"to":"since_join"}),
+        ),
+        (
+            EventKind::RealmDiscovery,
+            json!({"value":{"discoverability":"invite_only"}}),
+        ),
+        (
+            EventKind::MemberState,
+            json!({"member_id":founder.actor,"membership":"join"}),
+        ),
+    ] {
+        events.push(founder.signed_event(kind, realm_scope(), payload, at));
+    }
+    let authority = CurrentRealmAuthority {
+        realm_id: realm_id.clone(),
+        generation: 0,
+        service_id: station.clone(),
+        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+            events[0].event_id.clone(),
+        ),
+        last_handoff_ref: None,
+    };
+    let mut previous = None;
+    let transactions = events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let commit_id = arkret_wire::RealmCommitId::from_digest(
+                arkret_canonical::sha256_bytes(format!("{}:{index}", event.event_id).as_bytes()),
+            );
+            let transaction = AuthorityCommitTransaction {
+                expected_authority: authority.clone(),
+                event: event.clone(),
+                commit: arkret_wire::RealmCommit {
+                    commit_id: commit_id.clone(),
+                    realm_id: realm_id.clone(),
+                    stream_ref: arkret_wire::CommitStreamRef::Realm {
+                        realm_id: realm_id.clone(),
+                    },
+                    stream_position: index as u64,
+                    previous_commit_ref: previous.clone(),
+                    event_ref: event.event_id.clone(),
+                    governance_generation: 0,
+                    authority_ref: authority.authority_ref.clone(),
+                    committed_at: at,
+                    signature: commit_signature(station_did, at),
+                },
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            };
+            previous = Some(commit_id);
+            transaction
+        })
+        .collect();
+    let submission = OrdinaryRealmBootstrapUnitSubmission {
+        unit_kind: OrdinaryRealmBootstrapUnitKind::OrdinaryRealmBootstrap,
+        idempotency_key: arkret_wire::UuidV7::new(uuid::Uuid::now_v7()).unwrap(),
+        events: events
+            .into_iter()
+            .map(arkret_wire::EventAdmissionSubmission::new)
+            .collect(),
+    };
+    let exact_request_body = serde_json::to_vec(
+        &SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(submission.clone()),
+    )
+    .unwrap();
+    OrdinaryRealmBootstrapCommitUnit {
+        submission,
+        exact_request_body,
+        transactions,
+    }
+}
+
+/// Commit one Event after `previous` through the authority unit of work.
+async fn commit_next(
+    uow: &PgEventCommitUnitOfWork,
+    previous: &AuthorityCommitTransaction,
+    station_did: &arkret_wire::Did,
+    kind: EventKind,
+    actor: &Member,
+    payload: Value,
+    mls_state: Option<MlsStateInstallation>,
+    welcomes: Vec<VerifiedMlsWelcome>,
+) -> EventCommitRequest {
+    let label = kind.as_str().to_owned();
+    let mut request = ordinary_realm::next_request_for_actor(
+        previous,
+        kind,
+        actor.actor.clone(),
+        payload,
+        previous.commit.committed_at,
+    );
+    actor.sign_request(&mut request);
+    request.authority_commit.commit.signature =
+        commit_signature(station_did, request.authority_commit.commit.committed_at);
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        request.authority_commit.event.clone(),
+    ));
+    request.authority_commit.mls_state = mls_state;
+    if !welcomes.is_empty() {
+        request.authority_commit.recipient_queue_capacity = 16;
+    }
+    request.authority_commit.welcomes = welcomes;
+    uow.commit_event(request.clone())
+        .await
+        .unwrap_or_else(|error| panic!("commit {label}: {error}"));
+    request
+}
+
+fn blob_ref(bytes: &[u8]) -> arkret_wire::BlobRef {
+    arkret_wire::BlobRef::new(format!(
+        "ak:blob:{}",
+        arkret_canonical::sha256_digest(bytes)
+    ))
+    .expect("content-addressed Blob ref")
+}
+
+/// A self claim for Bob's device package, signed by Alice's device over the
+/// exact request and the local service binding.
+fn claim_request(
+    requester: &Member,
+    target: &Member,
+    station: &arkret_wire::DidCoreId,
+    realm_id: &RealmId,
+    mls_group_id: &str,
+    claim_request_id: [u8; 16],
+    lifetime: chrono::Duration,
+) -> KeyPackagesClaimRequestBody {
+    let signed_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let mut body: KeyPackagesClaimRequestBody = serde_json::from_value(json!({
+        "claim_request_id": base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(claim_request_id),
+        "target_account_id": target.account,
+        "target_device_ids": [target.device],
+        "requester_account_id": requester.account,
+        "intended_realm_id": realm_id,
+        "mls_group_id": mls_group_id,
+        "claim_purpose": "realm_membership",
+        "required_capabilities": ["ak.content.v1"],
+        "expires_at": arkret_canonical::format_timestamp_canonical(signed_at + lifetime),
+        "timeout_ms": null,
+        "service_binding": {"source_id": station, "destination_id": station},
+        "requester_authorization": {
+            "kind": "device",
+            "verification_method": requester.method,
+            "requester_device_id": requester.device,
+            "device_authorize_event_id": requester.authorize_event_id,
+            "signed_at": arkret_canonical::format_timestamp_canonical(signed_at),
+            "signature": {"kid": requester.method, "signature_algorithm": "Ed25519", "sig": "AA"},
+        },
+    }))
+    .expect("typed claim request");
+    let bytes = arkret_models_crypto::keypackage_claim_authorization_signing_bytes(
+        &body.unsigned_request(),
+        &body.service_binding,
+        &body.requester_authorization,
+    )
+    .expect("claim authorization transcript");
+    let arkret_models_crypto::PeerKeyPackageRequesterAuthorization::Device { signature, .. } =
+        &mut body.requester_authorization
+    else {
+        unreachable!("the fixture builds the device branch");
+    };
+    signature.sig = arkret_wire::Base64UrlString::new(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(requester.key.sign(&bytes).to_bytes()),
+    )
+    .expect("signature encoding");
+    body
+}
+
+async fn station_state(pool: &PgPool) -> (AppState, Arc<dyn PersistenceStore>) {
+    let persistence: Arc<dyn PersistenceStore> = Arc::new(PgPersistenceStore::new(pool.clone()));
+    let state =
+        soland_test_support::app_state_with_persistence(test_config(), persistence.clone()).await;
+    (state, persistence)
+}
+
+/// The Station router is deep; run the body on a large stack.
+fn run_on_deep_stack<F>(name: &'static str, body: impl FnOnce() -> F + Send + 'static)
+where
+    F: std::future::Future<Output = ()>,
+{
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(body());
+        })
+        .expect("deep-stack test thread")
+        .join()
+        .expect("test body");
+}
+
+#[test]
+fn mls_lifecycle_runs_over_http_formal_units_and_a_restart() {
+    run_on_deep_stack(
+        "mls_lifecycle_runs_over_http_formal_units_and_a_restart",
+        mls_lifecycle_body,
+    );
+}
+
+async fn mls_lifecycle_body() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (state, persistence) = station_state(&pool).await;
+    let station = state.service_core_id();
+    let alice = Member::provision(&state, persistence.as_ref(), "MLS Alice", 1).await;
+    let bob = Member::provision(&state, persistence.as_ref(), "MLS Bob", 2).await;
+
+    // The public Realm Alice founds on this Station, and Bob's own join.
+    let station_did = state.service_did();
+    let unit = bootstrap(&alice, &station, &station_did);
+    unit.validate().expect("bootstrap unit shape");
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .expect("admit the Realm bootstrap unit");
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let scope = ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let group_id = scope.canonical_mls_group_id().expect("Realm MLS group id");
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let join = commit_next(
+        &uow,
+        unit.transactions.last().unwrap(),
+        &station_did,
+        EventKind::MemberState,
+        &bob,
+        MembershipPayload::join(realm_id.clone(), bob.actor.clone(), "MLS lifecycle member")
+            .to_value()
+            .expect("join payload"),
+        None,
+        Vec::new(),
+    )
+    .await;
+
+    // Publish: two device packages, and one whose outer label names a suite
+    // its bytes do not declare.
+    let bob_identity = bob.mls_identity();
+    let first = bob_identity.key_package_record().unwrap();
+    let second = bob_identity.key_package_record().unwrap();
+    let mut mislabeled = bob_identity.key_package_record().unwrap();
+    mislabeled.cipher_suites = vec![RESERVED_SUITE.to_owned()];
+    let upload = bob_identity
+        .signed_key_packages_upload_request(
+            &[first.clone(), second.clone(), mislabeled],
+            bob.method.as_str(),
+            None,
+        )
+        .unwrap();
+    let uploaded = bob
+        .post(
+            &state,
+            "/_arkret/self/keys/keypackages/upload",
+            arkret_wire::ServiceOperationId::SELF_KEYS_KEYPACKAGES_UPLOAD_CREATE_V1,
+            &upload,
+        )
+        .await;
+    assert_eq!(
+        uploaded.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&uploaded.bytes)
+    );
+    let uploaded: KeyPackagesUploadOutcome = serde_json::from_slice(&uploaded.bytes).unwrap();
+    assert_eq!(uploaded.accepted, 2, "{uploaded:?}");
+    assert_eq!(uploaded.rejections.len(), 1, "{uploaded:?}");
+    assert_eq!(
+        uploaded.rejections[0].reason_code.as_str(),
+        "unsupported_ciphersuite"
+    );
+
+    // Claim: one CAS, exact replay, conflicting reuse, a genuinely new attempt.
+    let request = claim_request(
+        &alice,
+        &bob,
+        &station,
+        &realm_id,
+        group_id.as_str(),
+        [0x51; 16],
+        chrono::Duration::minutes(4),
+    );
+    let claimed = alice.claim(&state, &request).await;
+    assert_eq!(
+        claimed.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&claimed.bytes)
+    );
+    let outcome: KeyPackagesClaimOutcome = serde_json::from_slice(&claimed.bytes).unwrap();
+    outcome.validate_shape().unwrap();
+    assert_eq!(outcome.claims.len(), 1);
+    let claim = outcome.claims[0].clone();
+    assert!(
+        [
+            first.keypackage_ref.to_string(),
+            second.keypackage_ref.to_string()
+        ]
+        .contains(&claim.keypackage_ref)
+    );
+    assert_eq!(claim.actor_id, bob.actor);
+    let replay = alice.claim(&state, &request).await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(
+        replay.json(),
+        claimed.json(),
+        "exact replay is the stored outcome"
+    );
+    let conflicting = claim_request(
+        &alice,
+        &bob,
+        &station,
+        &realm_id,
+        group_id.as_str(),
+        [0x51; 16],
+        chrono::Duration::minutes(3),
+    );
+    let conflict = alice.claim(&state, &conflicting).await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT);
+    assert_eq!(conflict.problem(), "duplicate_conflict");
+
+    // Genesis: Alice's epoch-0 group with herself as the only leaf.
+    let alice_identity = alice.mls_identity();
+    let genesis_binding = MlsGovernanceBindingPayload::new(scope.clone(), None, 0, 0, 0).unwrap();
+    let mut alice_group = alice_identity
+        .create_group_with_governance_binding(&scope, &genesis_binding)
+        .unwrap();
+    let (group_info, tree) = alice_group.public_group_state_bytes().unwrap();
+    let tracker = MlsPublicGroupTracker::from_external(&group_info, &tree, group_id.as_str(), 0)
+        .expect("Genesis public state");
+    let genesis_state = tracker.export_state().unwrap();
+    let genesis = commit_next(
+        &uow,
+        &join.authority_commit,
+        &station_did,
+        EventKind::MlsGenesis,
+        &alice,
+        json!({
+            "cipher_suite": ACTIVE_SUITE,
+            "group_info_ref": blob_ref(&group_info),
+            "ratchet_tree_ref": blob_ref(&tree),
+            "governance_binding": genesis_binding,
+            "created_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
+        }),
+        Some(MlsStateInstallation {
+            effective_scope: scope.clone(),
+            base: None,
+            epoch: 0,
+            public_state: genesis_state.clone(),
+        }),
+        Vec::new(),
+    )
+    .await;
+    let genesis_ref = genesis.authority_commit.event.event_id.clone();
+
+    // The inline Add Commit whose Welcome names the HTTP claim's ledger row.
+    let add_binding =
+        MlsGovernanceBindingPayload::new(scope.clone(), Some(genesis_ref.clone()), 0, 1, 0)
+            .unwrap();
+    let claimed_record = arkret_models_crypto::MlsKeyPackageRecord {
+        keypackage_id: format!("ak:mls:kp:{}", uuid::Uuid::now_v7()),
+        actor_id: claim.actor_id.clone(),
+        endpoint: arkret_models_crypto::MlsEndpointIdentity::human_device(
+            bob.account.principal_id.clone(),
+            bob.device.clone(),
+        ),
+        keypackage: claim.keypackage.clone(),
+        keypackage_ref: arkret_wire::Hash::new(claim.keypackage_ref.clone()).unwrap(),
+        cipher_suites: vec![ACTIVE_SUITE.to_owned()],
+        capabilities: claim.capabilities.clone(),
+        state: arkret_models_crypto::MlsKeyPackageState::Claimed,
+        claim_id: Some(claim.claim_id.clone()),
+        created_at: chrono::Utc::now(),
+        expires_at: Some(claim.expires_at),
+        last_resort: false,
+    };
+    let add = alice_group
+        .add_member_with_governance_binding(&claimed_record, &add_binding)
+        .unwrap();
+    let mut public = MlsPublicGroupTracker::restore(&genesis_state, group_id.as_str(), 0).unwrap();
+    public
+        .process_public_handshake(
+            &arkret_canonical::base64url_decode(add.commit.commit.as_str()).unwrap(),
+        )
+        .expect("the Add Commit is a valid public transition");
+    let ledger = persistence
+        .mls_key_packages()
+        .get_peer_claim_by_claim_id(&claim.claim_id)
+        .await
+        .unwrap()
+        .expect("the HTTP claim wrote its ledger row");
+    let commit_payload =
+        MlsCommitPayload::new(genesis_ref.clone(), 0, &add.commit, add_binding).unwrap();
+    let mut commit_request = ordinary_realm::next_request_for_actor(
+        &genesis.authority_commit,
+        EventKind::MlsCommit,
+        alice.actor.clone(),
+        serde_json::to_value(&commit_payload).unwrap(),
+        genesis.authority_commit.commit.committed_at,
+    );
+    alice.sign_request(&mut commit_request);
+    commit_request.authority_commit.commit.signature = commit_signature(
+        &station_did,
+        commit_request.authority_commit.commit.committed_at,
+    );
+    let commit_event = commit_request.authority_commit.event.clone();
+    let welcome = MlsWelcomeDelivery {
+        welcome_id: arkret_wire::MlsWelcomeDeliveryId::new(format!(
+            "ak:mls_welcome_delivery:{}",
+            uuid::Uuid::now_v7()
+        ))
+        .unwrap(),
+        realm_id: realm_id.clone(),
+        effective_scope: scope.clone(),
+        commit_event_ref: commit_event.event_id.clone(),
+        recipient_actor_id: bob.actor.clone(),
+        recipient_endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+            device_id: bob.device.clone(),
+        },
+        keypackage_claim_ref: add.welcome.keypackage_claim_ref.clone(),
+        ciphertext_b64: add.welcome.ciphertext_b64.clone(),
+        producer_proof: arkret_wire::DetachedObjectSignature {
+            context: arkret_wire::DetachedSignatureContext::MlsWelcomeDelivery,
+            signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+            verification_method: commit_event
+                .producer_proof
+                .as_ref()
+                .unwrap()
+                .verification_method
+                .clone(),
+            signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "5".repeat(64))).unwrap(),
+            created_at: commit_request.authority_commit.commit.committed_at,
+            sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+        },
+    };
+    commit_request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        commit_event.clone(),
+    ));
+    commit_request.authority_commit.mls_state = Some(MlsStateInstallation {
+        effective_scope: scope.clone(),
+        base: Some(MlsInstalledBase {
+            current_mls_commit_event_ref: genesis_ref.clone(),
+            epoch: 0,
+        }),
+        epoch: 1,
+        public_state: public.export_state().unwrap(),
+    });
+    commit_request.authority_commit.welcomes = vec![VerifiedMlsWelcome {
+        delivery: welcome.clone(),
+        claim: MlsWelcomeClaimLedgerKey {
+            source_id: ledger.source_id.clone(),
+            claim_request_id: ledger.claim_request_id.clone(),
+            request_digest: ledger.request_digest.clone(),
+        },
+    }];
+    commit_request.authority_commit.recipient_queue_capacity = 16;
+    uow.commit_event(commit_request.clone())
+        .await
+        .expect("the Add Commit and its Welcome commit together");
+    let accepted = arkret_wire::CommittedEventFullView {
+        commit: commit_request.authority_commit.commit.clone(),
+        event: commit_event.clone(),
+    };
+
+    // Bob reads the Welcome from his own queue and joins from it.
+    let page = bob.recipient_queue(&state).await;
+    let queued = page
+        .deliveries
+        .iter()
+        .filter_map(|delivery| match delivery {
+            RecipientDelivery::MlsWelcome { mls_welcome } => Some(mls_welcome.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(queued, vec![welcome.clone()]);
+    let mut bob_group =
+        ArkretMlsGroup::join_from_verified_welcome_delivery(bob_identity, &welcome, &accepted)
+            .expect("Bob joins from the queued Welcome");
+    assert_eq!(bob_group.epoch(), 1);
+    let base = arkret_wire::MlsGroupCurrent {
+        effective_scope: scope.clone(),
+        genesis_event_ref: genesis_ref.clone(),
+        current_mls_commit_event_ref: genesis_ref.clone(),
+        epoch: 0,
+        current_key_access_revision: 0,
+        covered_key_access_revision: 0,
+        public_tree_ref: blob_ref(&tree),
+    };
+    assert_eq!(
+        alice_group
+            .install_accepted_commit(&accepted, &base)
+            .unwrap(),
+        1
+    );
+    let header = arkret_models_crypto::EventContentPreEncryptionHeader::reconstruct(
+        "1.0",
+        "application/vnd.arkret.message+json",
+        arkret_wire::EncryptedPayloadScheme::MlsRfc9420,
+        scope.clone(),
+        EventKind::MessageCreate.as_str(),
+        1,
+        commit_event.event_id.clone(),
+        alice_group.local_content_sender_domain().unwrap(),
+        None,
+        arkret_models_crypto::EventContentRoutingContext::None,
+    )
+    .unwrap();
+    let sealed =
+        arkret_mls::MessageCrypto::encrypt(&mut alice_group, "mls-lifecycle", header, b"epoch 1")
+            .unwrap();
+    assert_eq!(
+        arkret_mls::MessageCrypto::decrypt(&mut bob_group, &sealed).unwrap(),
+        b"epoch 1"
+    );
+
+    // Consume stays fail closed until the durable receipt's Welcome binding is
+    // specified (arkret-work spec-open 0715).
+    let receipt = arkret_models_crypto::RecipientMlsDurableReceipt {
+        domain: arkret_wire::NonEmptyString::new(
+            arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1.to_owned(),
+        )
+        .unwrap(),
+        claim_request_id: request.claim_request_id.clone(),
+        key_package_ref: arkret_wire::NonEmptyString::new(claim.keypackage_ref.clone()).unwrap(),
+        recipient: arkret_models_crypto::RecipientMlsDurableSigner::Device {
+            recipient_account_id: bob.account.clone(),
+            recipient_device_id: bob.device.clone(),
+            device_verification_method: bob.method.clone(),
+        },
+        recipient_id: station.clone(),
+        realm_id: realm_id.clone(),
+        mls_group_id: group_id.clone(),
+        mls_epoch: 1,
+        welcome_ref: welcome.welcome_id.clone(),
+        welcome_digest: arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&serde_json::to_value(&welcome).unwrap()).unwrap(),
+        )
+        .unwrap(),
+        durable_at: chrono::Utc::now(),
+        signature: arkret_models_crypto::KeyOperationSignature {
+            kid: arkret_wire::NonEmptyString::new(bob.method.to_string()).unwrap(),
+            signature_algorithm: None,
+            sig: arkret_wire::Base64UrlString::new("AA".to_owned()).unwrap(),
+        },
+    };
+    let signer = bob.mls_identity();
+    let consume = signer
+        .signed_key_packages_consume_request(
+            arkret_wire::KeypackageClaimId::new(claim.claim_id.clone()).unwrap(),
+            signer.sign_recipient_mls_durable_receipt(receipt).unwrap(),
+        )
+        .unwrap();
+    let refused = bob
+        .post(
+            &state,
+            "/_arkret/self/keys/keypackages/consume",
+            arkret_wire::ServiceOperationId::SELF_KEYS_KEYPACKAGES_COMMAND_CONSUME_V1,
+            &consume,
+        )
+        .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::CONFLICT,
+        "{}",
+        String::from_utf8_lossy(&refused.bytes)
+    );
+    assert_eq!(refused.problem(), "failed_precondition");
+
+    let ack_token = page
+        .ack_token
+        .clone()
+        .expect("a non-empty page carries its ack token");
+    let acked = bob
+        .post(
+            &state,
+            "/_arkret/self/device_messages/ack",
+            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1,
+            &DeviceMessagesAckRequestBody { ack_token },
+        )
+        .await;
+    assert_eq!(acked.status, StatusCode::OK);
+    drop(state);
+
+    // Restart: a new Station process over the same database.
+    let (restarted, restarted_persistence) = station_state(&pool).await;
+    let replay = alice.claim(&restarted, &request).await;
+    assert_eq!(replay.status, StatusCode::OK);
+    assert_eq!(
+        replay.json(),
+        claimed.json(),
+        "the claim ledger replays its stored outcome after restart"
+    );
+    let conflict = alice.claim(&restarted, &conflicting).await;
+    assert_eq!(conflict.problem(), "duplicate_conflict");
+    let current = restarted_persistence
+        .mls_groups()
+        .current(&scope)
+        .await
+        .unwrap()
+        .expect("the scope's MLS current survives restart");
+    assert_eq!(current.value.epoch, 1);
+    assert_eq!(
+        current.value.current_mls_commit_event_ref,
+        commit_event.event_id
+    );
+    assert_eq!(current.value.genesis_event_ref, genesis_ref);
+    let page = bob.recipient_queue(&restarted).await;
+    assert!(
+        page.deliveries
+            .iter()
+            .all(|delivery| !matches!(delivery, RecipientDelivery::MlsWelcome { .. })),
+        "the ACKed Welcome is not delivered again after restart"
+    );
+}
