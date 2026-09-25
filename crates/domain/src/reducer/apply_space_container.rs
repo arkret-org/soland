@@ -689,22 +689,6 @@ impl ProjectionState {
             None => self.realm_scope_is_mls_activated(child_realm_id),
         }
     }
-
-    fn projected_object_scope_and_realm(
-        &self,
-        object_ref: &str,
-    ) -> Option<(Option<String>, String)> {
-        if let Some(strand) = self.strands.get(object_ref) {
-            return Some((strand.scope_circle_id.clone(), strand.realm_id.clone()));
-        }
-        if let Some(space) = self.space_containers.get(object_ref) {
-            return Some((space.scope_circle_id.clone(), space.realm_id.clone()));
-        }
-        if let Some(morph) = self.morphs.get(object_ref) {
-            return Some((None, morph.realm_id.clone()));
-        }
-        None
-    }
 }
 
 fn child_scope_policy_from_object(
