@@ -16,15 +16,16 @@ use soland_storage::{
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, single_member_bootstrap_snapshot_material,
+    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, account_snapshot_material,
 };
 
 #[tokio::test]
-async fn single_member_bootstrap_disclosure_requires_the_complete_accepted_cut() {
+async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let unit = unit();
+    // Plain-text messages need the Station in the plaintext-services facet.
+    let unit = unit_with_plaintext_service();
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let creator = unit.transactions[0]
         .event
@@ -41,13 +42,20 @@ async fn single_member_bootstrap_disclosure_requires_the_complete_accepted_cut()
         .admit_ordinary_realm_bootstrap_unit(&unit, at)
         .await
         .unwrap();
-    let material = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+    let material = account_snapshot_material(&pool, &realm_id, &creator)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(material.current_state_entries.len(), 8);
+    assert_eq!(material.current_state_entries.len(), 9);
+    assert!(material.current_state_entries.iter().any(|entry| matches!(
+        entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::RealmPlaintextVisibleServices,
+            ..
+        }
+    )));
     assert!(
-        single_member_bootstrap_snapshot_material(&pool, &realm_id, &stranger)
+        account_snapshot_material(&pool, &realm_id, &stranger)
             .await
             .is_err()
     );
@@ -63,7 +71,7 @@ async fn single_member_bootstrap_disclosure_requires_the_complete_accepted_cut()
     .bind::<Text, _>(unit.transactions[6].commit.commit_id.as_str())
     .execute(&mut conn).await.unwrap();
     assert!(
-        single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+        account_snapshot_material(&pool, &realm_id, &creator)
             .await
             .is_err()
     );
@@ -74,22 +82,60 @@ async fn single_member_bootstrap_disclosure_requires_the_complete_accepted_cut()
         .unwrap();
     drop(conn);
 
+    // Every accepted cut is disclosed, not a closed chain of fixed length:
+    // a Strand without a default pointer, then the pointer, then messages.
     let strand = strand_create_request(&unit);
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     uow.commit_event(strand.clone()).await.unwrap();
-    assert!(
-        single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
-            .await
-            .is_err()
-    );
-    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
-    let default = set_default_strand_request(&strand, &strand_id, None);
-    uow.commit_event(default).await.unwrap();
-    let material = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+    let material = account_snapshot_material(&pool, &realm_id, &creator)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(material.current_state_entries.len(), 10);
+    assert_eq!(material.visible_stream_heads[0].stream_position, 8);
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    let material = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.current_state_entries.len(), 11);
+    let first = message_create_request(&default, &strand_id, "first");
+    uow.commit_event(first.clone()).await.unwrap();
+    let second = message_create_request(&first, &strand_id, "second");
+    uow.commit_event(second.clone()).await.unwrap();
+    let material = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.current_state_entries.len(), 13);
+    assert_eq!(material.visible_stream_heads[0].stream_position, 11);
+    assert_eq!(
+        material.retention_and_history_floor.stream_floors[0].oldest_position,
+        0
+    );
+    for request in [&first, &second] {
+        let message_id =
+            arkret_wire::MessageId::from_event_id(&request.authority_commit.event.event_id);
+        let commit = &request.authority_commit.commit;
+        assert!(material.current_state_entries.iter().any(|entry| matches!(
+            entry,
+            arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
+                revision,
+                ..
+            } if found == &message_id
+                && revision.commit_id == commit.commit_id
+                && revision.stream_position == commit.stream_position
+        )));
+    }
+    // The founder stays the only one who may receive the cut.
+    assert!(
+        account_snapshot_material(&pool, &realm_id, &stranger)
+            .await
+            .is_err()
+    );
 }
 
 async fn issuance_count(
@@ -122,7 +168,7 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let unit = unit();
+    let unit = unit_with_plaintext_service();
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let creator = unit.transactions[0]
         .event
@@ -190,7 +236,7 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(first.current_state_entries.len(), 8);
+    assert_eq!(first.current_state_entries.len(), 9);
     assert_eq!(issuance_count(&pool, &realm_id).await, 1);
     let unsigned = arkret_canonical::unsigned_value(&first, &["signature"]).unwrap();
     arkret_signatures::detached_object::verify_detached_object_signature(
@@ -268,14 +314,10 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
     let strand = strand_create_request(&unit);
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     uow.commit_event(strand.clone()).await.unwrap();
-    assert!(
-        store
-            .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
-            .await
-            .is_err()
-    );
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
-    uow.commit_event(set_default_strand_request(&strand, &strand_id, None))
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    uow.commit_event(message_create_request(&default, &strand_id, "hello"))
         .await
         .unwrap();
     let second = store
@@ -283,9 +325,22 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(second.current_state_entries.len(), 10);
+    assert_eq!(second.current_state_entries.len(), 12);
+    assert_eq!(second.visible_stream_heads[0].stream_position, 10);
     assert_ne!(second.snapshot_id, first.snapshot_id);
     assert_eq!(issuance_count(&pool, &realm_id).await, 2);
+    // A cut carrying a message row is re-provable by reference.
+    assert_eq!(
+        by_ref(
+            creator.clone(),
+            realm_id.clone(),
+            second.snapshot_id.clone(),
+            issuer.clone()
+        )
+        .await
+        .unwrap(),
+        Some(second.clone()),
+    );
     assert_eq!(
         by_ref(
             creator.clone(),
@@ -2219,7 +2274,7 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
     uow.commit_event(set_default_strand_request(&strand, &strand_id, None))
         .await
         .unwrap();
-    let head_material = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+    let head_material = account_snapshot_material(&pool, &realm_id, &creator)
         .await
         .unwrap()
         .unwrap();
@@ -2293,6 +2348,145 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
             })
             .await
             .is_err()
+    );
+}
+
+/// Real PostgreSQL: a founder Realm (with the plaintext-services facet that
+/// plain-text messages require) grows past the product's 20-row window with a
+/// message tail. The window over the last 21 Commits names the snapshot
+/// issued at the default-Strand head as its basis; its
+/// same-cut current and a fresh head both carry one `message_revision` row
+/// per message, and that head is re-provable by reference. A window whose
+/// anchor was never issued is preview only.
+#[tokio::test]
+async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
+    use soland_storage::AccountRealmWindowRequest;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit_with_plaintext_service();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let issuer = store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .service_id;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let mut previous = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(previous.clone()).await.unwrap();
+    let at_nine = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(at_nine.visible_stream_heads[0].stream_position, 9);
+    for index in 0..21 {
+        let message = message_create_request(&previous, &strand_id, &format!("message {index}"));
+        uow.commit_event(message.clone()).await.unwrap();
+        previous = message;
+    }
+    let head_material = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(head_material.visible_stream_heads[0].stream_position, 30);
+    assert_eq!(head_material.current_state_entries.len(), 32);
+    assert_eq!(
+        head_material
+            .current_state_entries
+            .iter()
+            .filter(|entry| matches!(
+                entry,
+                arkret_wire::TypedCurrentResult::Value {
+                    selector: arkret_wire::CurrentSelector::MessageRevision { .. },
+                    ..
+                }
+            ))
+            .count(),
+        21
+    );
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let request = AccountRealmWindowRequest {
+        realm_id: realm_id.clone(),
+        account: creator.clone(),
+        issuer: issuer.clone(),
+        window_limit: 21,
+        window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+        expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS,
+        now_ms,
+        byte_budget: 7 * 1024 * 1024,
+    };
+    let backed = store
+        .freeze_account_realm_window(&request)
+        .await
+        .unwrap()
+        .unwrap();
+    let basis = backed.window.window_start_basis.clone().unwrap();
+    assert_eq!(basis.snapshot_ref, at_nine.snapshot_id);
+    assert_eq!(basis.anchor_position, 9);
+    assert_eq!(backed.window.preview_only, None);
+    assert_eq!(backed.window.next_position, 31);
+    assert_eq!(backed.committed_events.len(), 21);
+    assert_eq!(backed.committed_events[0].commit().stream_position, 10);
+    assert_eq!(
+        backed.current_state_entries,
+        head_material.current_state_entries
+    );
+
+    let unanchored = store
+        .freeze_account_realm_window(&AccountRealmWindowRequest {
+            window_limit: 20,
+            window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+            ..request.clone()
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unanchored.window.preview_only, Some(true));
+    assert!(unanchored.window.window_start_basis.is_none());
+
+    let at_head = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &issuer, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        at_head.current_state_entries,
+        head_material.current_state_entries
+    );
+    assert_eq!(
+        store
+            .issued_realm_state_snapshot(&realm_id, &creator, &at_head.snapshot_id, &issuer)
+            .await
+            .unwrap(),
+        Some(at_head),
     );
 }
 
@@ -2772,10 +2966,10 @@ async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writ
 }
 
 /// Real PostgreSQL: a committed moderation report is moderator-only, so the
-/// caller-unaware single-member disclosure subset refuses the whole cut
+/// founder disclosure refuses the whole cut
 /// instead of signing a snapshot that omits or discloses it.
 #[tokio::test]
-async fn moderation_report_row_refuses_the_single_member_disclosure_cut() {
+async fn moderation_report_row_refuses_the_founder_disclosure_cut() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
@@ -2798,7 +2992,7 @@ async fn moderation_report_row_refuses_the_single_member_disclosure_cut() {
     let default = set_default_strand_request(&strand, &strand_id, None);
     uow.commit_event(default.clone()).await.unwrap();
     assert_eq!(
-        single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+        account_snapshot_material(&pool, &realm_id, &creator)
             .await
             .unwrap()
             .unwrap()
@@ -2814,7 +3008,7 @@ async fn moderation_report_row_refuses_the_single_member_disclosure_cut() {
     );
     uow.commit_event(report).await.unwrap();
     assert_eq!(report_row_count(&pool).await, 1);
-    let error = single_member_bootstrap_snapshot_material(&pool, &realm_id, &creator)
+    let error = account_snapshot_material(&pool, &realm_id, &creator)
         .await
         .unwrap_err();
     assert!(

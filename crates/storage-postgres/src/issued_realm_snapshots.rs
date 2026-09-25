@@ -219,7 +219,7 @@ fn undisclosable(reason: &str) -> PersistenceError {
 }
 
 /// Re-prove, per row, head, and floor, that the issued object may still be
-/// returned. Only the single-member Realm-stream shape admitted by the
+/// returned. Only the sole-founder Realm-stream shape admitted by the
 /// issuance gate is re-provable: the Account's `join` row in the object must
 /// still be its unchanged current membership revision, every head must still
 /// be the accepted Commit it names, and this Station must still hold the
@@ -287,8 +287,11 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmJoinRule
             | CurrentSelector::RealmHistoryAccess
             | CurrentSelector::RealmDiscovery
+            | CurrentSelector::RealmAlias
+            | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::Strand { .. }
-            | CurrentSelector::RealmSetDefaultStrand => {}
+            | CurrentSelector::RealmSetDefaultStrand
+            | CurrentSelector::MessageRevision { .. } => {}
             CurrentSelector::MemberState { actor_id }
                 if actor_id == &actor
                     && own_membership.is_none()
@@ -429,7 +432,7 @@ async fn still_disclosable(
 ///
 /// One `REPEATABLE READ` cut holds, in order: the shared retention lock that
 /// excludes issued-snapshot GC, the share-locked governing tenure, the
-/// complete single-member disclosure proof, the delivered rows, and the
+/// complete sole-founder disclosure proof, the delivered rows, and the
 /// basis reservation. The window's rows are the last `window_limit` Commits
 /// of the Realm stream; `limited` states whether readable history lies below
 /// them.
@@ -480,7 +483,7 @@ pub(crate) async fn freeze_account_realm_window(
             return Err(window_rejected("this Station does not hold the governing tenure").into());
         }
         let Some(material) =
-            crate::snapshot_disclosure_gate::single_member_bootstrap_material_in_connection(
+            crate::snapshot_disclosure_gate::account_snapshot_material_in_connection(
                 conn,
                 &request.realm_id,
                 &request.account,
@@ -538,7 +541,7 @@ pub(crate) async fn freeze_account_realm_window(
         if encoded.len() > request.byte_budget {
             return Err(window_rejected("the atomic window exceeds its byte budget").into());
         }
-        // The single-member cut proved a readable floor at genesis.
+        // The sole-founder cut proved a readable floor at genesis.
         let limited = start > 0;
         let mut basis = None;
         if start > 0 {

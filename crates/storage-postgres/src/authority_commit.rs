@@ -2351,10 +2351,8 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         realm_id: &arkret_wire::RealmId,
         account: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
-        crate::snapshot_disclosure_gate::single_member_bootstrap_snapshot_material(
-            &self.pool, realm_id, account,
-        )
-        .await
+        crate::snapshot_disclosure_gate::account_snapshot_material(&self.pool, realm_id, account)
+            .await
     }
 
     async fn issue_realm_state_snapshot_for_account(
@@ -2364,7 +2362,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         issuer: &arkret_wire::DidCoreId,
         sign: soland_storage::RealmStateSnapshotSigner<'_>,
     ) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
-        crate::snapshot_disclosure_gate::issue_single_member_bootstrap_snapshot(
+        crate::snapshot_disclosure_gate::issue_account_snapshot(
             &self.pool, realm_id, account, issuer, sign,
         )
         .await
