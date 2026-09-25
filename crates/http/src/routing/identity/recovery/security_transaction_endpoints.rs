@@ -515,7 +515,7 @@ async fn try_advance_rotation_step(
 /// pending proposal: the registered storage unit rechecks, under the PCR
 /// authority lock, that the authorizing device is active and signed the Event
 /// with its current key, and commits Event, covering RealmCommit, proposal
-/// dot, conflict-index marker and `revoke_proposal` in one PostgreSQL
+/// dot and `revoke_proposal` in one PostgreSQL
 /// transaction. The terminal unit then commits `revoke_command_outcome`
 /// together with `accepted_steps[0]`. Between the two the target device is
 /// pending and fails closed; a crash there is resumed by the next sweep,
@@ -1202,9 +1202,12 @@ async fn execute_rotation_erase(
             "backup-series erase request is not authorized for this transaction",
         ));
     }
-    // One PCR snapshot answers both execution-time checks (§3 step 4): the
-    // authorizing device is still active, and the durable secret_storage
-    // pointer with its covering head is the basis the request names.
+    // One PCR snapshot answers whether the authorizing device is still active
+    // and what the authoritative secret_storage pointer is (§3 step 4). The
+    // request's authority_commit_id is only the provenance of the first
+    // decision: an unrelated later PCR Commit does not make the frozen
+    // old-backup manifest stale (key-management.md §7.6); only a changed
+    // pointer or device generation stops the erase.
     let confirmed = state
         .key_backups()
         .confirmed_active_series_for_device(
@@ -1221,12 +1224,6 @@ async fn execute_rotation_erase(
                 "authorizing device or confirmed backup pointer is not current",
             )
         })?;
-    if confirmed.authority_commit_id != request.authority_commit_id {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "backup-series erase authority commit is no longer current",
-        ));
-    }
     for prepared in &plan.backup_rotations {
         let rotation = &prepared.binding;
         for expected in &rotation.new_backups {
@@ -1272,10 +1269,16 @@ async fn execute_rotation_erase(
                     "replacement active-series Event is not accepted"
                 )
             })?;
+        // The frozen basis is the pointer this rotation switched to: its new
+        // series and `series_pointer_version` must still be the authoritative
+        // pointer, verbatim.
         if !matches!(
             &confirmed.secret_storage,
-            arkret_models_crypto::BackupActiveSeriesPointer::Active { active_series_id, .. }
-                if active_series_id == &rotation.new_series_id
+            arkret_models_crypto::BackupActiveSeriesPointer::Active {
+                active_series_id,
+                series_pointer_version,
+            } if active_series_id == &rotation.new_series_id
+                && *series_pointer_version == active.series_pointer_version
         ) || active.active_series_id != rotation.new_series_id
             || !active
                 .previous_series_ids
@@ -1284,6 +1287,20 @@ async fn execute_rotation_erase(
             return Err(crate::app_error!(
                 FailedPrecondition,
                 "replacement backup series pointer changed before old-series erasure",
+            ));
+        }
+        let generation = crate::routing::identity::device_generation::current_device_generation(
+            state,
+            transaction.resource.account_id.principal_id.as_str(),
+        )
+        .await
+        .map_err(recovery_service_error)?;
+        if generation.map(|generation| generation.current_ref)
+            != Some(active.source_commit_ref.device_generation_ref)
+        {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "the PCR device generation changed before old-series erasure",
             ));
         }
     }

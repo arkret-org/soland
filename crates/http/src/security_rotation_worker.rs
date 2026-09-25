@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use crate::state::AppState;
 
-const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-
 pub fn spawn(state: AppState) -> Arc<tokio::task::JoinHandle<()>> {
+    let interval =
+        std::time::Duration::from_secs(state.config().security_rotation_worker_interval_seconds);
     Arc::new(tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(POLL_INTERVAL);
+        let mut ticker = tokio::time::interval(interval);
         loop {
             ticker.tick().await;
             crate::routing::identity::recovery::sweep_rotation_worker(&state).await;

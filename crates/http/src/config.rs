@@ -467,6 +467,10 @@ pub struct AppConfig {
     /// default until its probe and fallback paths are incrementally bounded.
     /// Env: `SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS` (default `0`).
     pub federation_frontier_interval_seconds: u64,
+    /// Cadence of the durable SecurityRotation worker sweep in seconds.
+    /// Env: `SOLAND_SECURITY_ROTATION_WORKER_INTERVAL_SECONDS` (default `5`,
+    /// `1..=3600`).
+    pub security_rotation_worker_interval_seconds: u64,
     /// Default page size for `GET /_soland/admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
     /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
@@ -955,6 +959,7 @@ impl AppConfig {
             federation_outbound_enabled: false,
             deactivation_propagation_window_ms: 86_400_000,
             federation_frontier_interval_seconds: 0,
+            security_rotation_worker_interval_seconds: 5,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_ids: Vec::new(),
@@ -1256,6 +1261,20 @@ impl AppConfig {
                 .and_then(|value| value.trim().parse::<u64>().ok())
                 .filter(|seconds| *seconds <= 3_600)
                 .unwrap_or(0);
+        let security_rotation_worker_interval_seconds =
+            match env_non_empty(values, "SOLAND_SECURITY_ROTATION_WORKER_INTERVAL_SECONDS") {
+                None => 5,
+                Some(raw) => raw
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|seconds| (1..=3_600).contains(seconds))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "SOLAND_SECURITY_ROTATION_WORKER_INTERVAL_SECONDS must be in 1..=3600"
+                        )
+                    })?,
+            };
         let admin_default_page_limit = lookup(values, "SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
@@ -1444,6 +1463,7 @@ impl AppConfig {
             federation_outbound_enabled,
             deactivation_propagation_window_ms,
             federation_frontier_interval_seconds,
+            security_rotation_worker_interval_seconds,
             admin_default_page_limit,
             admin_max_page_limit,
             admin_principal_ids,
