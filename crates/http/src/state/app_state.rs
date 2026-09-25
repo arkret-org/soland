@@ -474,6 +474,13 @@ mod test_construction {
                     // driving the durable ones from a current-thread test
                     // runtime deadlocks the connection that serves them.
                     let leased = Arc::new(TestDatabase::lease_blocking());
+                    leased.bind_device_inventory_station(
+                        &development_fixture_service_identity(&config)
+                            .identity()
+                            .expect("fixture has a serving identity")
+                            .service_id
+                            .to_string(),
+                    );
                     (
                         Db { pool: None },
                         Arc::new(PgPersistenceStore::leased(leased)),

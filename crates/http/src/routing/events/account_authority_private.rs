@@ -114,10 +114,13 @@ mod tests {
 
     #[test]
     fn private_adapter_is_not_a_protocol_operation() {
-        let source = include_str!("account_authority_private.rs");
+        let source = include_str!("account_authority_private.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production section");
         assert!(!source.contains("oapi::endpoint"));
         assert!(!source.contains("Arkret-Operation"));
-        assert!(source.contains("authority_commits().admit_event"));
+        assert!(source.contains(".authority_commits()") && source.contains(".admit_event("));
         assert!(source.contains("authority_transaction_unavailable"));
     }
 }

@@ -300,7 +300,9 @@ mod tests {
             "device_public_key_did": "did:key:z6MkFixture",
             "hpke_key": "z6LSFixture",
             "algorithms": ["ak.mls.v1"],
+            "device_key_algorithm": "Ed25519",
             "authorized_by": "ak:did_core:web:alice.example",
+            "authorized_generation_ref": 1,
             "not_before": "2026-09-01T00:00:00.000Z",
             "authorization_binding_kind": "registration_anchor",
             "device_signature": "c2ln"

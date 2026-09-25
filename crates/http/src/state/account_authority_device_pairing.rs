@@ -265,7 +265,10 @@ mod tests {
 
     #[test]
     fn transport_retry_source_keeps_stage_key_without_protocol_headers() {
-        let source = include_str!("account_authority_device_pairing.rs");
+        let source = include_str!("account_authority_device_pairing.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production section");
         assert!(source.contains("for attempt in 0..TRANSPORT_ATTEMPTS"));
         assert!(source.contains("private_headers(state, idempotency_key)"));
         assert!(source.contains("Err(error) if attempt + 1 < TRANSPORT_ATTEMPTS"));

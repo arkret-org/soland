@@ -964,7 +964,11 @@ mod tests {
             })
             .expect_err("published signing material must be terminally refused");
 
-        assert_eq!(error.to_string(), "test_signing_material_denied");
+        assert!(
+            matches!(&error, IdentityError::Protocol(reason)
+                if reason == arkret_identity::test_material::TEST_SIGNING_MATERIAL_DENIED),
+            "{error}"
+        );
         assert!(resolver.local_snapshot.read().is_empty());
         assert!(resolver.cached_document(&did).is_none());
     }
@@ -1008,7 +1012,11 @@ mod tests {
                     updated_at: now,
                 })
                 .expect_err("a reserved identifier must not enter the snapshot");
-            assert_eq!(error.to_string(), "test_signing_material_denied");
+            assert!(
+                matches!(&error, IdentityError::Protocol(reason)
+                    if reason == arkret_identity::test_material::TEST_SIGNING_MATERIAL_DENIED),
+                "{error}"
+            );
             assert!(resolver.cached_document(&did).is_none());
         }
         assert!(resolver.local_snapshot.read().is_empty());

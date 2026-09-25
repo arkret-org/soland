@@ -246,9 +246,10 @@ mod tests {
         let descriptor = SERVICE_OPERATION_DESCRIPTORS
             .iter()
             .find(|descriptor| {
-                descriptor.http_method == "QUERY" && descriptor.http_path == "/_arkret/self/events"
+                descriptor.http_method == "QUERY"
+                    && descriptor.http_path == "/_arkret/self/events/delivery-status"
             })
-            .expect("the canonical events read QUERY operation is registered");
+            .expect("the delivery-status QUERY operation is registered");
         assert_eq!(descriptor.body_class, Some("non_streaming_json"));
 
         let class = WireBodyClass::NonStreamingJsonOperation {

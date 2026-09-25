@@ -64,8 +64,7 @@ mod tests {
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": "ak:realm:AcnJ4V0xcEtprkV1EojkpKLTdP6Jene1sZpnjB6IqB8I",
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
+                        "authority_event_ref": "ak:event:AcnJ4V0xcEtprkV1EojkpKLTdP6Jene1sZpnjB6IqB8I",
                         "authority_generation": 0
                     }]
                 }

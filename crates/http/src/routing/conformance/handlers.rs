@@ -469,10 +469,12 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
     let signing_key = SigningKey::from_bytes(&seed);
     let verifying_key: VerifyingKey = signing_key.verifying_key();
 
-    // Build the canonical Event digest preimage defined by encoding.md §2/§6.
-    // `event_id` is derived from this digest, so including it would make the
-    // definition circular.
-    let canonical = canonical_json(&canonical_event_digest_preimage(event))
+    // The canonical Event digest preimage is the SDK's single exit for it:
+    // `event_id` (derived from this digest) and `producer_proof` (which
+    // cannot sign itself) are the only omitted members.
+    let preimage = arkret_wire::event_digest_preimage(event)
+        .map_err(|err| crate::app_error!(SchemaViolation, format!("preimage: {err}")))?;
+    let canonical = canonical_json(&preimage)
         .map_err(|err| crate::app_error!(SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = sha256_digest(canonical.as_bytes());
     let signature = signing_key.sign(canonical.as_bytes());
@@ -484,18 +486,6 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
         public_key: URL_SAFE_NO_PAD.encode(verifying_key.to_bytes()),
         algorithm: "ed25519".to_owned(),
     })
-}
-
-fn canonical_event_digest_preimage(event: &Value) -> Value {
-    let mut payload = Map::new();
-    if let Some(object) = event.as_object() {
-        for (key, value) in object {
-            if !matches!(key.as_str(), "proofs" | "unsigned" | "event_id") {
-                payload.insert(key.clone(), value.clone());
-            }
-        }
-    }
-    Value::Object(payload)
 }
 
 #[salvo::oapi::endpoint(
@@ -1531,25 +1521,6 @@ mod tests {
                 "event_id": "ak:event:1",
                 "payload": { "kind": "msg" },
                 "sender": "did:alice",
-            })
-        );
-    }
-
-    #[test]
-    fn event_digest_preimage_excludes_exact_unsigned_members() {
-        let event = json!({
-            "event_id": "ak:event:derived",
-            "actor_id": "ak:did_core:web:alice.example",
-            "payload": {"body": "hello"},
-            "producer_proof": {"kind": "detached_jws"},
-            "unsigned": {"local": true}
-        });
-
-        assert_eq!(
-            canonical_event_digest_preimage(&event),
-            json!({
-                "actor_id": "ak:did_core:web:alice.example",
-                "payload": {"body": "hello"}
             })
         );
     }

@@ -2300,8 +2300,13 @@ mod tests {
 
     #[test]
     fn trusted_push_gateway_registry_is_validated_and_injected_from_config() {
-        let mut values =
-            BTreeMap::from([("SOLAND_DEVELOPMENT_MODE".to_owned(), "true".to_owned())]);
+        let mut values = BTreeMap::from([
+            ("SOLAND_DEVELOPMENT_MODE".to_owned(), "true".to_owned()),
+            (
+                "SOLAND_TRUST_DOMAIN".to_owned(),
+                "ak:trust_domain:station.example".to_owned(),
+            ),
+        ]);
         values.insert(
             "SOLAND_TRUSTED_PUSH_GATEWAYS".to_owned(),
             serde_json::json!([{

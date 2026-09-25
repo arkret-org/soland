@@ -208,6 +208,30 @@ impl TestDatabase {
     pub fn slot(&self) -> u32 {
         self.slot
     }
+
+    /// Bind the leased database's device inventory to `station_id`: the
+    /// effect a production Station gets from persisting its serving service
+    /// identity before any device row is written.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the binding cannot be written.
+    pub fn bind_device_inventory_station(&self, station_id: &str) {
+        let pool = self.pool.clone();
+        let station_id = station_id.to_owned();
+        block_on_lease_runtime(async move {
+            let mut conn = crate::pg_conn(&pool)
+                .await
+                .expect("leased database connection");
+            diesel::sql_query(
+                "INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)",
+            )
+            .bind::<Text, _>(station_id)
+            .execute(&mut *conn)
+            .await
+            .expect("bind the fixture device inventory Station");
+        });
+    }
 }
 
 /// Run one setup future to completion from a synchronous fixture.

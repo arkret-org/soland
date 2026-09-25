@@ -167,6 +167,12 @@ fn pending_pairing_record(
         )
         .unwrap(),
     );
+    record.approval_request_id = Some(
+        arkret_wire::OpaqueLocalId::new(
+            "agent_approval_request:01999999-0000-7000-8000-00000000beef",
+        )
+        .unwrap(),
+    );
     record.pairing_code = Some(pairing_code.to_owned());
     record.pairing_expires_at = Some(
         chrono::DateTime::parse_from_rfc3339(pairing_expires_at)
@@ -372,7 +378,7 @@ fn key_pair_request_body(
         "proofs": [{
             "kind": "detached_jws",
             "verification_method": "did:web:controller.example#key-1",
-            "event_digest": format!("sha256:{}", "0".repeat(64)),
+            "payload_digest": format!("sha256:{}", "0".repeat(64)),
             "created_at": "2026-07-06T00:00:00.000Z",
             "jws": "eyJhbGciOiJFZDI1NTE5In0..c2ln"
         }]

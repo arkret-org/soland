@@ -22,37 +22,38 @@ fn wire_operation(kind: arkret_wire::EventKind, payload: Value) -> Operation {
     )
 }
 
-#[test]
-fn consent_revoke_empty_observed_dots_rejected() {
-    let err = validate_consent_revoke_payload(&json!({
-        "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
-        "observed_dot_ids": [],
-    }))
-    .unwrap_err();
-    assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+const TEST_CONSENT: &str = "ak:consent:01904100-0000-7000-8000-000000000001";
+
+fn consent_revision() -> Value {
+    json!({
+        "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
+        "stream_position": 3
+    })
 }
 
 #[test]
-fn consent_revoke_accepts_non_empty_observed_dots() {
+fn consent_revoke_accepts_the_exact_current_revision() {
     validate_consent_revoke_payload(&json!({
-        "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
-        "observed_dot_ids": [
-            "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1:1"
-        ],
+        "consent_id": TEST_CONSENT,
+        "expected_revision": consent_revision(),
     }))
     .unwrap();
 }
 
 #[test]
-fn consent_revoke_rejects_untyped_consent_id() {
-    let err = validate_consent_revoke_payload(&json!({
-        "consent_id": "cid",
-        "observed_dot_ids": [
-            "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1:1"
-        ],
-    }))
-    .unwrap_err();
-    assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+fn consent_revoke_rejects_missing_revision_untyped_id_and_retired_dots() {
+    for payload in [
+        json!({"consent_id": TEST_CONSENT}),
+        json!({"consent_id": "cid", "expected_revision": consent_revision()}),
+        json!({
+            "consent_id": TEST_CONSENT,
+            "expected_revision": consent_revision(),
+            "observed_dot_ids": ["ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1:1"],
+        }),
+    ] {
+        let err = validate_consent_revoke_payload(&payload).unwrap_err();
+        assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION, "{payload}");
+    }
 }
 
 /// `relation.md` §2 — `effective_scope` is reducer-stamped, and on the create
@@ -128,8 +129,7 @@ fn capability_grant_payload() -> Value {
         "issuer_authority_refs": [{
             "kind": "realm_root",
             "realm_id": TEST_REALM,
-            "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-            "controller_epoch_at_issuance": 0,
+            "authority_event_ref": "ak:event:AWBLVNs9HeoGO5lSMOgHAujzyX_u-d_6wfDWF_3lEM2J",
             "authority_generation": 0
         }]
     });

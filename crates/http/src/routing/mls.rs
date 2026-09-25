@@ -4386,7 +4386,7 @@ mod trust_binding_tests {
                 "station_id": source.clone()
             },
             "intended_realm_id": "ak:realm:ARaz6Z8HFGLoPkpji4ac9NxCUjXT81HDezufw7yJGiju",
-            "mls_group_id": "claim-authorization-fixture",
+            "mls_group_id": URL_SAFE_NO_PAD.encode([73_u8; 32]),
             "claim_purpose": "realm_membership",
             "required_capabilities": ["ak.content.v1"],
             "expires_at": signed_at + chrono::Duration::minutes(4),

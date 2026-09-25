@@ -1590,8 +1590,20 @@ mod did_binding_tests {
         let jws = signed(&published_key, payload);
         let typed_method = arkret_wire::DidUrl::new(verification_method.clone()).unwrap();
 
-        arkret_identity::verify_jws_with_document(payload, &jws, &typed_method, &did, &document)
-            .expect("the published fixture signature is cryptographically valid");
+        // The SDK formal verifier refuses published fixture material before
+        // any signature work, so no layer can treat it as a valid signer.
+        assert!(matches!(
+            arkret_identity::verify_jws_with_document(
+                payload,
+                &jws,
+                &typed_method,
+                &did,
+                &document
+            ),
+            Err(arkret_identity::BindingVerifyError::TestMaterial(
+                arkret_identity::test_material::FormalTestMaterialPolicyError::Denied(_)
+            ))
+        ));
         let binding_error =
             principal_binding_acceptance(&state, &did, &verification_method, &document)
                 .expect_err("published material must not form an accepted binding");
