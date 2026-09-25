@@ -746,7 +746,7 @@ impl CommittedRealm {
                 "trust_domain":"ak:trust_domain:device-lists.example",
                 "security_class":"high_assurance",
                 "governance_station_id":founder.station_id,
-                "initial_join_rule":"invite",
+                "initial_join_rule":"public",
                 "initial_history_access":"since_join",
                 "initial_discoverability":"invite_only"
             }}),
@@ -768,7 +768,7 @@ impl CommittedRealm {
             ),
             (
                 arkret_wire::EventKind::RealmJoinRule,
-                json!({"value":"invite"}),
+                json!({"value":"public"}),
             ),
             (
                 arkret_wire::EventKind::RealmHistoryAccess,
@@ -928,8 +928,9 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         state.service_verification_method("notary-key").unwrap(),
     )
     .await;
+    // The public Realm admits the peer by its own join.
     realm
-        .member_state(store.as_ref(), &caller, &actor, "join")
+        .member_state(store.as_ref(), &actor, &actor, "join")
         .await;
 
     let body = roster_body(state.service_id());

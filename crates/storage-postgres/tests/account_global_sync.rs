@@ -510,11 +510,31 @@ async fn device_interest_requires_exact_actor_current_membership() {
         ));
         request
     };
-    let join = with_fanout_source(next_request(
+    // The invite-only Realm admits the peer by the founder's directed Invite
+    // and the peer's own acceptance.
+    let invite = next_request(
         &discussion.head.authority_commit,
-        arkret_wire::EventKind::MemberState,
+        arkret_wire::EventKind::InviteCreate,
         &founder(),
-        serde_json::json!({"member_id": peer_actor, "membership": "join"}),
+        serde_json::json!({
+            "invitee_account_id": peer_actor.as_account_id().unwrap(),
+            "introduction_evidence_digest": format!("sha256:{}", "d".repeat(64)),
+            "expires_at": arkret_canonical::format_timestamp_canonical(
+                at + chrono::TimeDelta::days(7)
+            ),
+        }),
+        at,
+    );
+    uow.commit_event(invite.clone()).await.unwrap();
+    let join = with_fanout_source(ordinary_realm::next_request_for_actor(
+        &invite.authority_commit,
+        arkret_wire::EventKind::InviteAccept,
+        peer_actor.clone(),
+        serde_json::json!({
+            "invite_id": arkret_wire::InviteId::from_event_id(&invite.authority_commit.event.event_id),
+            "previous_state": "pending",
+            "invitee_account_id": peer_actor.as_account_id().unwrap(),
+        }),
         at,
     ));
     uow.commit_event(join.clone()).await.unwrap();

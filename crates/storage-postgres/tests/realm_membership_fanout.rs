@@ -621,6 +621,33 @@ async fn accept_state(pool: &PgPool, realm_id: &arkret_wire::RealmId) -> AcceptS
     }
 }
 
+/// `(membership, available)` of the member's current Account summary row.
+async fn account_summary(
+    pool: &PgPool,
+    realm_id: &arkret_wire::RealmId,
+    member: &arkret_wire::ActorId,
+) -> Option<(Option<String>, bool)> {
+    #[derive(diesel::QueryableByName)]
+    struct SummaryRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+        membership: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        available: bool,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT membership, available FROM account_summary_current \
+         WHERE realm_id=$1 AND actor_key=$2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .load::<SummaryRow>(&mut *conn)
+    .await
+    .unwrap()
+    .pop()
+    .map(|row| (row.membership, row.available))
+}
+
 fn invite_create_request(
     previous: &AuthorityCommitTransaction,
     invitee: &arkret_wire::AccountId,
@@ -752,6 +779,11 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
         serde_json::json!({"membership": "join"}),
         accept_commit.clone()
     )));
+    // The Account summary follows the accepting Commit.
+    assert_eq!(
+        account_summary(&pool, &realm_id, &bob).await,
+        Some((Some("join".to_owned()), true))
+    );
 
     // `accepted` is terminal: a second accept is refused before any write.
     assert_accept_refused(
@@ -772,6 +804,13 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
     // After leaving, Bob returns only through a fresh Invite.
     let leave = membership_request(&accept.authority_commit, bob.clone(), &bob, "leave");
     uow.commit_event(leave.clone()).await.unwrap();
+    assert_eq!(
+        account_summary(&pool, &realm_id, &bob)
+            .await
+            .map(|(membership, _)| membership),
+        Some(None),
+        "leaving withdraws Bob's Realm from his Account summary"
+    );
     let reinvite = invite_create_request(&leave.authority_commit, &bob_account);
     uow.commit_event(reinvite.clone()).await.unwrap();
     let rejoin = accept_request(
@@ -1400,4 +1439,201 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         rows(&rejoined),
         vec![(rejoin.authority_commit.commit.stream_position, true)]
     );
+}
+
+/// A revoke or relinquish of the grant `grant` created, expecting `revision`.
+fn close_grant_request(
+    previous: &AuthorityCommitTransaction,
+    kind: arkret_wire::EventKind,
+    actor: &arkret_wire::ActorId,
+    grant: &EventCommitRequest,
+    revision: &arkret_wire::RealmCommit,
+) -> EventCommitRequest {
+    sourced(next_request_for_actor(
+        previous,
+        kind,
+        actor.clone(),
+        serde_json::json!({
+            "grant_id": arkret_wire::GrantId::from_event_id(&grant.authority_commit.event.event_id),
+            "expected_revision": {
+                "commit_id": revision.commit_id,
+                "stream_position": revision.stream_position,
+            },
+        }),
+        previous.commit.committed_at,
+    ))
+}
+
+async fn grant_status(pool: &PgPool, grant: &EventCommitRequest) -> String {
+    #[derive(diesel::QueryableByName)]
+    struct StatusRow {
+        #[diesel(sql_type = Text)]
+        status: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT status FROM capability_grant_current_results WHERE grant_id=$1")
+        .bind::<Text, _>(
+            arkret_wire::GrantId::from_event_id(&grant.authority_commit.event.event_id).to_string(),
+        )
+        .get_result::<StatusRow>(&mut *conn)
+        .await
+        .unwrap()
+        .status
+}
+
+/// Real PostgreSQL: `ak.capability.revoke` needs an authorizing action at the
+/// same cut and then targets only the grant's issuer or the Realm root
+/// controller; `ak.capability.relinquish` needs no action but only the
+/// grant's own subject may release it, by exact revision. Every refusal is
+/// zero-write.
+#[tokio::test]
+async fn capability_revoke_and_relinquish_follow_their_target_guards() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = admit(&pool, "grant-guards", "public").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let alice = remote_member("guard-alice");
+    let bob = remote_member("guard-bob");
+    let alice_join = membership_request(
+        unit.transactions.last().unwrap(),
+        alice.clone(),
+        &alice,
+        "join",
+    );
+    uow.commit_event(alice_join.clone()).await.unwrap();
+    let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
+    uow.commit_event(bob_join.clone()).await.unwrap();
+    let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
+
+    // A joined member without any grant cannot issue one.
+    let unauthorized_issue = sourced(next_request_for_actor(
+        &bob_join.authority_commit,
+        arkret_wire::EventKind::CapabilityGrant,
+        alice.clone(),
+        serde_json::json!({
+            "grant": {
+                "schema": "ak.schema.capability.v1",
+                "realm_id": realm_id,
+                "issuer_id": alice,
+                "subject": bob,
+                "actions": ["ak.message.create"],
+                "resources": [{"kind": "realm", "realm_id": realm_id}],
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": realm_id,
+                    "authority_event_ref": root_event_ref,
+                    "authority_generation": 0
+                }],
+                "issued_at": arkret_canonical::format_timestamp_canonical(
+                    bob_join.authority_commit.commit.committed_at
+                ),
+            }
+        }),
+        bob_join.authority_commit.commit.committed_at,
+    ));
+    assert_refused(
+        &pool,
+        &uow,
+        unauthorized_issue,
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+
+    let bob_grant = grant_request(
+        &bob_join.authority_commit,
+        &bob,
+        &["ak.message.create"],
+        &root_event_ref,
+    );
+    uow.commit_event(bob_grant.clone()).await.unwrap();
+    let revision = bob_grant.authority_commit.commit.clone();
+    let head = &bob_grant.authority_commit;
+    for (kind, actor, code) in [
+        // No authorizing action for revoke.
+        (
+            arkret_wire::EventKind::CapabilityRevoke,
+            &alice,
+            ConflictCode::CapabilityDenied,
+        ),
+        // Relinquish is the subject's own.
+        (
+            arkret_wire::EventKind::CapabilityRelinquish,
+            &alice,
+            ConflictCode::GrantRelinquishNotSubject,
+        ),
+    ] {
+        assert_refused(
+            &pool,
+            &uow,
+            close_grant_request(head, kind, actor, &bob_grant, &revision),
+            code,
+        )
+        .await;
+    }
+    // Holding ak.capability.revoke is not enough to revoke another issuer's
+    // grant.
+    let alice_revoker = grant_request(head, &alice, &["ak.capability.revoke"], &root_event_ref);
+    uow.commit_event(alice_revoker.clone()).await.unwrap();
+    assert_refused(
+        &pool,
+        &uow,
+        close_grant_request(
+            &alice_revoker.authority_commit,
+            arkret_wire::EventKind::CapabilityRevoke,
+            &alice,
+            &bob_grant,
+            &revision,
+        ),
+        ConflictCode::CapabilityDenied,
+    )
+    .await;
+    // The subject releases by exact revision only, once.
+    let mut stale = revision.clone();
+    stale.stream_position += 100;
+    assert_refused(
+        &pool,
+        &uow,
+        close_grant_request(
+            &alice_revoker.authority_commit,
+            arkret_wire::EventKind::CapabilityRelinquish,
+            &bob,
+            &bob_grant,
+            &stale,
+        ),
+        ConflictCode::CasConflict,
+    )
+    .await;
+    let relinquish = close_grant_request(
+        &alice_revoker.authority_commit,
+        arkret_wire::EventKind::CapabilityRelinquish,
+        &bob,
+        &bob_grant,
+        &revision,
+    );
+    uow.commit_event(relinquish.clone()).await.unwrap();
+    assert_eq!(grant_status(&pool, &bob_grant).await, "relinquished");
+    assert_refused(
+        &pool,
+        &uow,
+        close_grant_request(
+            &relinquish.authority_commit,
+            arkret_wire::EventKind::CapabilityRevoke,
+            &founder_actor(),
+            &bob_grant,
+            &revision,
+        ),
+        ConflictCode::CasConflict,
+    )
+    .await;
+    // The root controller revokes the grant it issued.
+    let revoke = close_grant_request(
+        &relinquish.authority_commit,
+        arkret_wire::EventKind::CapabilityRevoke,
+        &founder_actor(),
+        &alice_revoker,
+        &alice_revoker.authority_commit.commit,
+    );
+    uow.commit_event(revoke).await.unwrap();
+    assert_eq!(grant_status(&pool, &alice_revoker).await, "revoked");
 }
