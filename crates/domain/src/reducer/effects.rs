@@ -8,8 +8,8 @@ use arkret_wire::{AppletId, DidCoreId, EventKind};
 use serde_json::Value;
 
 use super::{
-    CircleLifecycleState, MessageState, ObjectLifecycleState, PushRouteSubject,
-    SolandRelationState, SpaceContainerLifecycleState,
+    CircleLifecycleState, MessageState, ObjectLifecycleState, SolandRelationState,
+    SpaceContainerLifecycleState,
 };
 
 /// The effect of applying an operation to the projection state.
@@ -237,13 +237,6 @@ pub enum ProjectionEffect {
         agent_id: String,
         key_id: String,
     },
-    /// REDU-2 — `actor_private_event` accepted (reducer_input=false).
-    /// Wire-accepted and surfaced to audit-log consumers, but does NOT
-    /// advance the seal frontier / actor_seq.
-    AgentPrivateEventAccepted {
-        kind: EventKind,
-        event_id: String,
-    },
     /// The registry classifies this committed Event as a durable fact with no
     /// typed current projection.  Emitting an explicit effect keeps that
     /// ownership distinguishable from an unimplemented reducer branch.
@@ -276,12 +269,6 @@ pub enum ProjectionEffect {
     /// so the routing layer can dispatch on `MlsEffect` without
     /// growing four near-identical `ProjectionEffect` arms.
     Mls(MlsEffect),
-    /// `ak.device.push_route` actor-private state projected into the
-    /// per-recipient Station push-route cell cache.
-    PushRouteUpdated {
-        subject: PushRouteSubject,
-        action: String,
-    },
     /// An accepted projection event referenced a target that has not reached
     /// this reducer yet. The operation is retained in
     /// `ProjectionState::pending_replay` and replayed once the target is

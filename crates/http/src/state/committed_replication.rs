@@ -96,6 +96,7 @@ async fn replicate_one(
     item.validate()
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
     let event = &item.event_submission.event;
+    super::authority_port::refuse_actor_private_event(&event.kind)?;
     let commit = &item.source_commit;
     if !matches!(commit.stream_ref, CommitStreamRef::Realm { .. }) {
         return Err(ServiceError::UnsupportedEventKind(

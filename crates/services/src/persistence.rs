@@ -75,6 +75,18 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Admit one producer-verified Event of the generic actor-private submit
+    /// operation into its owner's private store with the exact-retry ledger.
+    pub async fn submit_actor_private_event(
+        &self,
+        submission: &soland_storage::ActorPrivateEventSubmission,
+    ) -> PersistenceResult<soland_storage::ActorPrivateEventSubmitResult> {
+        self.persistence
+            .actor_private_events()
+            .submit(submission)
+            .await
+    }
+
     /// The owner's durable read cursor winners.
     pub async fn read_cursor_winners(
         &self,

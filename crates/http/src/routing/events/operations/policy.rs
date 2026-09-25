@@ -229,7 +229,6 @@ async fn validate_one_operation_policy(
         if !(agent_membership_cascade && cleanup_transition) {
             validate_agent_operation_membership(state, operation).await?;
         }
-        validate_agent_private_controller_account(state, operation).await?;
         if kinds::canonical_kind_for_operation(operation)
             == Some(arkret_wire::EventKind::SidecarCreate)
         {
@@ -342,51 +341,6 @@ async fn validate_agent_operation_membership(
         .await
     };
     result.map_err(|_| "agent_membership_inactive")
-}
-
-async fn validate_agent_private_controller_account(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if !matches!(
-        kinds::canonical_kind_for_operation(operation),
-        Some(arkret_wire::EventKind::AgentDraftPropose)
-            | Some(arkret_wire::EventKind::AgentActionRequest)
-    ) {
-        return Ok(());
-    }
-    let agent_id = operation
-        .payload
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .ok_or("agent_private_controller_binding_invalid")?;
-    let declared_controller = operation
-        .payload
-        .get("controller_account_id")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok())
-        .ok_or("agent_private_controller_binding_invalid")?;
-    let sender = operation
-        .context
-        .sender
-        .as_account_id()
-        .ok_or("agent_private_actor_not_account")?;
-    if sender.principal_id.as_str() != agent_id {
-        return Err("agent_private_actor_mismatch");
-    }
-    let record = state
-        .agent_pairings()
-        .agent(agent_id)
-        .await
-        .map_err(|_| "agent_private_controller_lookup_failed")?
-        .ok_or("agent_private_controller_binding_missing")?;
-    let controller = crate::routing::identity::agent_pcr::agent_controller_account(state, &record)
-        .await
-        .map_err(|_| "agent_private_controller_binding_missing")?;
-    if declared_controller != controller {
-        return Err("agent_private_controller_binding_mismatch");
-    }
-    Ok(())
 }
 
 #[cfg(test)]

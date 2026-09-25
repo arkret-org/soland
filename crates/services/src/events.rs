@@ -465,8 +465,6 @@ pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub contact_projection: Option<CommitContactProjection>,
-    /// Station-private pending intent created by `ak.agent.draft.propose`.
-    pub agent_draft_pending_intent: Option<soland_storage::AgentDraftPendingIntentCommit>,
     /// Holder-private consent grant mutation plus its eager cache
     /// invalidation, staged by admission and committed with the Event.
     pub consent_projection: Option<CommitConsentProjection>,
@@ -1615,7 +1613,6 @@ mod tests {
                 forwarded_producer_evidence: None,
                 parent_membership_admission: None,
                 contact_projection: None,
-                agent_draft_pending_intent: None,
                 consent_projection: None,
                 event: AcceptedEvent {
                     event_id: event_id.clone(),

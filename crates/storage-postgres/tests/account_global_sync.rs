@@ -684,7 +684,6 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             parent_membership_admission: None,
             event: record,
             contact_projection: None,
-            agent_draft_pending_intent: None,
             consent_projection: None,
             device_revocation_transition: None,
             device_revocation_gate: None,

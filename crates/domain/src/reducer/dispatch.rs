@@ -19,8 +19,8 @@ use arkret_wire::EventKind;
 use serde_json::Value;
 
 use super::{
-    AgentActionRequestStatus, CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect,
-    ProjectionState, RealmLinkState, SpaceContainerLifecycleTransition, mls,
+    CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect, ProjectionState,
+    RealmLinkState, SpaceContainerLifecycleTransition, mls,
 };
 use crate::hlc::ServerHlc;
 
@@ -555,18 +555,33 @@ fn apply_agent_key_authorize_dispatch(
     s.apply_agent_key_authorize(op)
 }
 
-/// Dispatch for `ak.agent.action_approve`. Unlike `ak.agent.action_request`
-/// and `ak.agent.action_reject` — both `actor_private_event` — the approval is
-/// a `durable_event` with `reducer_input: true` in the event-kind registry,
-/// because the nonce is allocated to the complete `approved_event_id` inside
-/// the target Realm's security confirmation. It therefore has to resolve here
-/// rather than on the private-event path.
+/// Dispatch for `ak.agent.action_approve`: a durable confirmation fact in
+/// the target Realm. The request it confirms is controller-private state that
+/// no shared reducer holds (actor-private-effects.md §3.2); the reducer only
+/// indexes the confirmation by the complete `approved_event_id` whose nonce it
+/// allocated, first confirmation wins.
 fn apply_agent_action_approve_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_agent_action_resolution(op, AgentActionRequestStatus::Approved)
+    let Some(approved_event_id) = op
+        .payload
+        .get("approved_event_id")
+        .and_then(Value::as_str)
+        .filter(|value| arkret_wire::EventId::new(*value).is_ok())
+    else {
+        return ProjectionEffect::Rejected {
+            reason: "agent_action_approval_missing_event_id".to_owned(),
+        };
+    };
+    s.agent_action_confirmations
+        .entry(approved_event_id.to_owned())
+        .or_insert_with(|| op.context.event_id.clone());
+    ProjectionEffect::DurableFactRetained {
+        kind: EventKind::AgentActionApprove,
+        event_id: op.context.event_id.to_string(),
+    }
 }
 
 /// AKP-0008 §4.11 — dispatch for `ak.agent.key.revoke`.
@@ -1186,9 +1201,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::AgentKeyRevoke,
         apply_agent_key_revoke_dispatch,
     );
-    // Draft approval state machine `proposed → approved → published`: only the
-    // approve leg is a durable reducer input, so it is registered here while
-    // request/reject stay on the private-event path.
+    // The approve leg is the only durable reducer input of the Agent draft
+    // workflow; request/reject are actor-private and never reach here.
     m.insert(
         arkret_wire::EventKind::AgentActionApprove,
         apply_agent_action_approve_dispatch,

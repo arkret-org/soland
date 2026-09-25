@@ -97,10 +97,10 @@ pub trait AccountDataStore: Send + Sync {
         record: &AccountDataRecord,
         expected_revision: u64,
     ) -> PersistenceResult<AccountDataCasResult>;
-    /// Admit one producer-verified actor-private `ak.account_data.set` or
-    /// `ak.account.blocklist` Event (actor-private-effects.md section 3.1) in
-    /// one private transaction: an exact retry of the same Event bytes
-    /// returns `Replayed` before any other check, the same Event identity with
+    /// Admit one producer-verified actor-private `ak.account_data.set` Event
+    /// (actor-private-effects.md section 3.1) in one private transaction: an
+    /// exact retry of the same Event bytes returns `Replayed` before any other
+    /// check, the same Event identity with
     /// other bytes is `duplicate_conflict`, the producer guard is rechecked,
     /// and the Event is recorded in the actor-private ledger together with the
     /// holder CAS and its account sync publication. A CAS mismatch is

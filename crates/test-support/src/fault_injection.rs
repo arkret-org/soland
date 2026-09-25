@@ -144,6 +144,10 @@ impl PersistenceStore for FaultInjectingStore {
     fn read_cursors(&self) -> &dyn soland_storage::ReadCursorStore {
         self.inner.read_cursors()
     }
+
+    fn actor_private_events(&self) -> &dyn soland_storage::ActorPrivateEventStore {
+        self.inner.actor_private_events()
+    }
 }
 
 #[async_trait]

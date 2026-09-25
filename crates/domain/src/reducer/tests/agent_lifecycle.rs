@@ -15,33 +15,10 @@ fn expect_rejected(effect: ProjectionEffect, expected: &str) {
     }
 }
 
-/// Assert a private Agent Event was accepted under `expected` kind.
-#[track_caller]
-fn expect_agent_event_accepted(effect: ProjectionEffect, expected: arkret_wire::EventKind) {
-    match effect {
-        ProjectionEffect::AgentPrivateEventAccepted { kind, .. } => assert_eq!(kind, expected),
-        other => panic!("expected {expected} to be accepted, got {other:?}"),
-    }
-}
-
 fn agent_operation(kind: arkret_wire::EventKind, payload: serde_json::Value) -> Operation {
     let mut operation = make_operation(kind, REALM, payload);
     operation.context.sender = account_actor(AGENT);
     operation
-}
-
-fn action_request(request_id: &str) -> Operation {
-    agent_operation(
-        arkret_wire::EventKind::AgentActionRequest,
-        serde_json::json!({
-            "agent_id": AGENT,
-            "controller_account_id": arkret_wire::AccountId::new(
-                arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
-                arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
-            ),
-            "request_id": request_id
-        }),
-    )
 }
 
 fn action_approve(request_id: &str) -> Operation {
@@ -90,15 +67,9 @@ fn deactivate_agent() -> Operation {
 }
 
 #[test]
-fn pause_suspends_pending_requests_and_resume_restores_them() {
+fn lifecycle_transitions_are_guarded_and_deactivate_is_terminal() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-
-    state.apply(&action_request(REQUEST), &hlc);
-    assert_eq!(
-        state.agent_action_requests[REQUEST].status,
-        AgentActionRequestStatus::Pending
-    );
 
     let effect = state.apply(&pause_agent(), &hlc);
     assert!(matches!(
@@ -108,84 +79,39 @@ fn pause_suspends_pending_requests_and_resume_restores_them() {
             new_state: AgentLifecycleState::Paused,
         } if agent_id == AGENT
     ));
-    let request = &state.agent_action_requests[REQUEST];
-    assert_eq!(request.status, AgentActionRequestStatus::AwaitingResume);
-    assert!(request.cancel_reason.is_none());
-    assert!(request.resolved_at.is_none());
-    assert!(request.resolution_event_id.is_none());
     state.apply(&resume_agent(), &hlc);
-    assert_eq!(
-        state.agent_action_requests[REQUEST].status,
-        AgentActionRequestStatus::Pending
-    );
-    state.apply(&pause_agent(), &hlc);
     state.apply(&deactivate_agent(), &hlc);
-    assert_eq!(
-        state.agent_action_requests[REQUEST].status,
-        AgentActionRequestStatus::Cancelled
-    );
+    expect_rejected(state.apply(&resume_agent(), &hlc), "agent_deactivated");
 }
 
+/// Action requests and rejections are actor-private: they are admitted only
+/// into the controller's private store, so the shared reducer refuses them
+/// and holds no request state. The approval is a durable confirmation fact.
 #[test]
-fn lifecycle_state_blocks_new_action_requests() {
+fn actor_private_agent_kinds_never_reach_the_shared_reducer() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
 
-    state.apply(&pause_agent(), &hlc);
-    let paused_effect = state.apply(&action_request(REQUEST), &hlc);
-    expect_rejected(paused_effect, "agent_paused");
-    assert!(!state.agent_action_requests.contains_key(REQUEST));
-
-    state.apply(&resume_agent(), &hlc);
-    state.apply(&deactivate_agent(), &hlc);
-    let deactivated_effect = state.apply(&action_request(REQUEST), &hlc);
-    expect_rejected(deactivated_effect, "agent_deactivated");
-    assert!(!state.agent_action_requests.contains_key(REQUEST));
-}
-
-#[test]
-fn approved_action_request_is_not_cancelled_by_lifecycle() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-
-    expect_agent_event_accepted(
-        state.apply(&action_request(REQUEST), &hlc),
+    for kind in [
         arkret_wire::EventKind::AgentActionRequest,
-    );
-    expect_agent_event_accepted(
+        arkret_wire::EventKind::AgentActionReject,
+        arkret_wire::EventKind::AgentDraftPropose,
+        arkret_wire::EventKind::DevicePushRoute,
+    ] {
+        let effect = state.apply(
+            &agent_operation(kind.clone(), serde_json::json!({"request_id": REQUEST})),
+            &hlc,
+        );
+        assert!(
+            matches!(effect, ProjectionEffect::Rejected { .. }),
+            "{kind} reached the shared reducer: {effect:?}"
+        );
+    }
+    assert!(matches!(
         state.apply(&action_approve(REQUEST), &hlc),
-        arkret_wire::EventKind::AgentActionApprove,
-    );
-    assert_eq!(
-        state.agent_action_requests[REQUEST].status,
-        AgentActionRequestStatus::Approved
-    );
-
-    state.apply(&pause_agent(), &hlc);
-    let request = &state.agent_action_requests[REQUEST];
-    assert_eq!(request.status, AgentActionRequestStatus::Approved);
-    let approval = request.approval.as_ref().expect("approval projection");
-    assert_eq!(approval.approval_nonce, "nonce-01904100");
-    assert_eq!(approval.proposed_action, "ak.message.create");
-    assert!(request.cancel_reason.is_none());
-}
-
-#[test]
-fn action_resolution_requires_the_complete_controller_account() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-
-    state.apply(&action_request(REQUEST), &hlc);
-    let mut approval = action_approve(REQUEST);
-    approval.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
-        arkret_identifiers::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ProjectionEffect::DurableFactRetained {
+            kind: arkret_wire::EventKind::AgentActionApprove,
+            ..
+        }
     ));
-    let effect = state.apply(&approval, &hlc);
-
-    expect_rejected(effect, "agent_action_resolution_controller_mismatch");
-    assert_eq!(
-        state.agent_action_requests[REQUEST].status,
-        AgentActionRequestStatus::Pending
-    );
 }

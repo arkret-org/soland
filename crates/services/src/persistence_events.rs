@@ -93,7 +93,6 @@ fn persistence_event_commit_request(
         event: command.event,
         parent_membership_admission: command.parent_membership_admission,
         contact_projection: command.contact_projection,
-        agent_draft_pending_intent: command.agent_draft_pending_intent,
         consent_projection: command.consent_projection.map(|commit| {
             soland_storage::ConsentProjectionCommit {
                 grant: commit.grant,

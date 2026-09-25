@@ -61,6 +61,9 @@ pub enum ReadCursorAdvanceRefusal {
     NotMember,
     /// The position names no committed Event of the Realm.
     PositionNotInRealm,
+    /// The position is a committed Event of the Realm before the owner's
+    /// current join Commit, outside the owner's readable interval.
+    PositionNotReadable,
     /// This Station cannot prove the position's visibility to the owner or
     /// its causal relation to the current winner; the candidate stays
     /// provisional and must not change the durable winner.

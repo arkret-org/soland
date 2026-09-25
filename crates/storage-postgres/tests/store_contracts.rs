@@ -1075,7 +1075,6 @@ fn franking_event_request(
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,
-        agent_draft_pending_intent: None,
         consent_projection: None,
         event: soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),

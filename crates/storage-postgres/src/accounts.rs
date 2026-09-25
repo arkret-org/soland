@@ -893,19 +893,11 @@ pub(crate) async fn compare_account_data_in_transaction(
     }
     let applied = sql_query(
             "WITH source AS MATERIALIZED ( SELECT e.envelope FROM actor_private_events e \
-                 WHERE e.id=$9 AND e.actor_id=$2 \
-                   AND ( \
-                     (e.kind='ak.account_data.set' \
-                       AND e.envelope->'payload'->>'key'=$3 \
-                       AND (e.envelope->'payload'->>'expected_server_revision')::bigint=$8 \
-                       AND COALESCE((e.envelope->'payload'->>'tombstone')::boolean,FALSE)=$6 \
-                       AND ($6 OR COALESCE(e.envelope->'payload'->'body',e.envelope->'payload'->'encrypted_payload')=$5)) \
-                     OR \
-                     (e.kind='ak.account.blocklist' AND $3='ak.account.blocklist' \
-                       AND (e.envelope->'payload'->>'version')::bigint=$4 \
-                       AND e.envelope->'payload'=$5 \
-                       AND (jsonb_array_length(e.envelope->'payload'->'entries')=0)=$6) \
-                   ) \
+                 WHERE e.id=$9 AND e.actor_id=$2 AND e.kind='ak.account_data.set' \
+                   AND e.envelope->'payload'->>'key'=$3 \
+                   AND (e.envelope->'payload'->>'expected_server_revision')::bigint=$8 \
+                   AND COALESCE((e.envelope->'payload'->>'tombstone')::boolean,FALSE)=$6 \
+                   AND ($6 OR COALESCE(e.envelope->'payload'->'body',e.envelope->'payload'->'encrypted_payload')=$5) \
                    FOR SHARE OF e \
              ), updated AS ( \
                  UPDATE account_datas SET revision = $4, payload = $5, tombstone = $6, updated_at = $7 \

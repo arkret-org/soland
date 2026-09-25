@@ -72,6 +72,20 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
     }
 }
 
+/// actor-private-effects.md §2.1: the self Event submit and the peer Event
+/// ingress admit only shared durable Events. Every `actor_private_event` kind
+/// is refused as `unsupported_event_kind` before any producer, forwarding or
+/// storage step, so it never enters RealmCommit coverage.
+pub(super) fn refuse_actor_private_event(kind: &arkret_wire::EventKind) -> ServiceResult<()> {
+    if kind.wire_scope() == arkret_wire::EventWireScope::ActorPrivateEvent {
+        return Err(ServiceError::UnsupportedEventKind(format!(
+            "{} is an actor-private Event and is never a shared Realm Event",
+            kind.as_str()
+        )));
+    }
+    Ok(())
+}
+
 /// Preconditions shared by every Event admitted through the guarded unit,
 /// whether its producer was resolved locally or from a forward.
 pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> ServiceResult<()> {
@@ -257,6 +271,7 @@ impl AuthorityProtocolPort for AppState {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.event;
+        refuse_actor_private_event(&event.kind)?;
         let producer_guard =
             super::authority_producer_validation::verify_self_event_producer(self, session, event)
                 .await?;
@@ -402,7 +417,7 @@ mod tests {
     use arkret_wire::EventKind;
     use soland_services::ServiceError;
 
-    use super::{SelfEventRoute, self_event_route};
+    use super::{SelfEventRoute, refuse_actor_private_event, self_event_route};
 
     #[test]
     fn only_kinds_with_a_self_authority_cut_are_routed() {
@@ -473,6 +488,33 @@ mod tests {
             refused += 1;
         }
         assert_eq!(refused, EventKind::ALL.len() - routed.len());
+    }
+
+    #[test]
+    fn every_actor_private_kind_is_refused_by_the_shared_ingress() {
+        let mut refused = Vec::new();
+        for kind in EventKind::ALL {
+            if refuse_actor_private_event(kind).is_err() {
+                refused.push(kind.as_str());
+            }
+        }
+        refused.sort_unstable();
+        assert_eq!(
+            refused,
+            [
+                "ak.account_data.set",
+                "ak.agent.action_reject",
+                "ak.agent.action_request",
+                "ak.agent.draft.propose",
+                "ak.device.push_route",
+                "ak.read_cursor.advance",
+            ]
+        );
+        assert!(matches!(
+            refuse_actor_private_event(&EventKind::DevicePushRoute),
+            Err(ServiceError::UnsupportedEventKind(_))
+        ));
+        assert!(refuse_actor_private_event(&EventKind::MessageCreate).is_ok());
     }
 
     #[test]

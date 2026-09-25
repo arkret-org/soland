@@ -18,8 +18,7 @@ use soland_storage::{
 };
 
 use crate::agent_draft_pending_intents::{
-    AgentDraftConsumptionLock, commit_agent_draft_pending_intent_in_connection,
-    lock_agent_draft_consumption_source, mark_agent_draft_consumed,
+    AgentDraftConsumptionLock, lock_agent_draft_consumption_source, mark_agent_draft_consumed,
 };
 use crate::authority_commit::{
     commit_transaction_in_connection, queue_event_in_connection,
@@ -2400,19 +2399,6 @@ async fn commit_one_in_connection(
     if let Some(commit) = request.contact_projection {
         commit_contact_projection(conn, &committed_ref, commit).await?;
     }
-    if let Some(commit) = request.agent_draft_pending_intent.as_ref() {
-        if event.kind != arkret_wire::EventKind::AgentDraftPropose
-            || commit.record.accepted_event_id != event.event_id
-            || commit.record.canonical_event_digest.as_str()
-                != request.event.canonical_digest.as_str()
-        {
-            return Err(PersistenceError::SchemaViolation(
-                "agent draft pending intent does not bind its accepted proposal Event".to_owned(),
-            )
-            .into());
-        }
-        commit_agent_draft_pending_intent_in_connection(conn, commit).await?;
-    }
     if let Some(commit) = request.consent_projection {
         commit_consent_projection(conn, commit).await?;
     }
@@ -2556,6 +2542,7 @@ mod agent_draft_consumption_tests {
     };
 
     use super::*;
+    use crate::agent_draft_pending_intents::commit_agent_draft_pending_intent_in_connection;
 
     fn hash(byte: char) -> arkret_wire::Hash {
         arkret_wire::Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()

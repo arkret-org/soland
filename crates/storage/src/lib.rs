@@ -31,6 +31,7 @@ pub use records::*;
 mod account_device_signer_evidence;
 mod account_status;
 mod accounts;
+mod actor_private_events;
 mod actor_profiles;
 mod agents;
 mod applets;
@@ -80,6 +81,7 @@ mod webvh_freshness;
 pub use account_device_signer_evidence::*;
 pub use account_status::*;
 pub use accounts::*;
+pub use actor_private_events::*;
 pub use actor_profiles::*;
 pub use agents::*;
 pub use applets::*;
@@ -560,6 +562,8 @@ pub trait PersistenceStore:
     fn account_device_signer_evidence(&self) -> &dyn AccountDeviceSignerEvidenceStore;
     /// `ak.private.read_cursor.v1` account-private winners.
     fn read_cursors(&self) -> &dyn ReadCursorStore;
+    /// Private effects of `ak.self.actor_private_events.command.submit.v1`.
+    fn actor_private_events(&self) -> &dyn ActorPrivateEventStore;
 }
 
 #[cfg(test)]

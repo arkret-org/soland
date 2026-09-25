@@ -579,6 +579,9 @@ pub fn describe(
         },
         profile_bindings: Default::default(),
         supported_operation_bundles: vec![
+            // Caller-signed actor-private Events without a dedicated operation
+            // (actor-private-effects.md §2.1).
+            "ak.operation_bundle.station.actor_private_events.v1".to_owned(),
             "ak.operation_bundle.station.agent_pairing_handoff.v1".to_owned(),
             "ak.operation_bundle.station.agent_runtime.v1".to_owned(),
             "ak.operation_bundle.station.applet.v1".to_owned(),
@@ -919,6 +922,9 @@ mod tests {
         let bundles = value["supported_operation_bundles"]
             .as_array()
             .expect("operation bundle ids are present");
+        assert!(bundles.contains(&json!(
+            "ak.operation_bundle.station.actor_private_events.v1"
+        )));
         assert!(bundles.contains(&json!("ak.operation_bundle.station.describe.v1")));
         assert!(bundles.contains(&json!(
             "ak.operation_bundle.station.device_pairing_handoff.v1"

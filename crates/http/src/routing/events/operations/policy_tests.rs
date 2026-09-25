@@ -710,62 +710,25 @@ fn act_on_behalf_message(
     )
 }
 
-/// Project a private Agent request as `Approved` whose confirmation is an
-/// Event nobody committed. The private projection alone must never authorize.
-fn insert_approved_agent_action(
-    state: &AppState,
-    message: &Operation,
-    request_id: &str,
-    agent_id: &str,
-    approval_nonce: &str,
-) {
+/// Index a confirmation for `message` that nobody committed. The index alone
+/// must never authorize.
+fn insert_approved_agent_action(state: &AppState, message: &Operation) {
     insert_resolved_agent_action(
         state,
         message,
-        request_id,
-        agent_id,
-        approval_nonce,
         "ak:event:AbuDfbb-uv82LvhWbTydj5wUDvzph0PSFjJTtTJxq7P5",
     );
 }
 
-fn insert_resolved_agent_action(
-    state: &AppState,
-    message: &Operation,
-    request_id: &str,
-    agent_id: &str,
-    approval_nonce: &str,
-    resolution_event_id: &str,
-) {
-    state.test_projection().lock().agent_action_requests.insert(
-        request_id.to_owned(),
-        soland_domain::reducer::AgentActionRequestProjection {
-            request_id: request_id.to_owned(),
-            agent_id: agent_id.to_owned(),
-            controller_account_id: message
-                .context
-                .sender
-                .as_account_id()
-                .expect("test message has an Account actor")
-                .clone(),
-            status: soland_domain::reducer::AgentActionRequestStatus::Approved,
-            requested_at: message.created_at - chrono::Duration::minutes(1),
-            resolved_at: Some(message.created_at),
-            resolution_event_id: Some(resolution_event_id.to_owned()),
-            cancel_reason: None,
-            approval: Some(soland_domain::reducer::AgentActionApprovalProjection {
-                approval_id: "ak:agent_approval:01904100-0000-7000-8000-0000000007aa".to_owned(),
-                proposed_action: kinds::canonical_kind(message).as_str().to_owned(),
-                target: json!({
-                    "kind": "realm",
-                    "realm_id": message.realm_id.as_str(),
-                }),
-                approved_event_id: message.context.event_id.clone(),
-                approval_nonce: approval_nonce.to_owned(),
-                expires_at: message.created_at + chrono::Duration::minutes(10),
-            }),
-        },
-    );
+fn insert_resolved_agent_action(state: &AppState, message: &Operation, resolution_event_id: &str) {
+    state
+        .test_projection()
+        .lock()
+        .agent_action_confirmations
+        .insert(
+            message.context.event_id.to_string(),
+            arkret_wire::EventId::new(resolution_event_id).expect("confirmation Event id"),
+        );
 }
 
 #[tokio::test]
@@ -1136,7 +1099,7 @@ async fn act_on_behalf_private_approval_cannot_replace_exact_consumption() {
             "approval_nonce": "nonce-7c4"
         }),
     );
-    insert_approved_agent_action(&state, &operation, "request-7c4", agent, "nonce-7c4");
+    insert_approved_agent_action(&state, &operation);
 
     assert_eq!(
         validate_agent_reply_participation(
@@ -1715,7 +1678,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
         Some(grant.grant_id.as_str()),
         Some(("request-703", "nonce-703")),
     );
-    insert_approved_agent_action(&state, &message, "request-703", agent, "nonce-703");
+    insert_approved_agent_action(&state, &message);
 
     assert_eq!(
         validate_agent_reply_participation(&state, &[message], covering_committed_at())
@@ -1899,14 +1862,7 @@ async fn act_on_behalf_covered_at(
     let (controller, controller_did) = confirm(&message, &mut payload);
     let confirmation =
         commit_agent_action_approval(&state, &realm_id, controller, controller_did, payload).await;
-    insert_resolved_agent_action(
-        &state,
-        &message,
-        request_id,
-        agent,
-        CONFIRMED_APPROVAL_NONCE,
-        confirmation.as_str(),
-    );
+    insert_resolved_agent_action(&state, &message, confirmation.as_str());
     validate_agent_reply_participation(&state, &[message], covering_committed_at).await
 }
 

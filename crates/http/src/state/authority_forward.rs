@@ -93,6 +93,7 @@ pub(crate) async fn admit_forwarded_event(
     now: DateTime<Utc>,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     let event = &request.event_submission.event;
+    super::authority_port::refuse_actor_private_event(&event.kind)?;
     if let Some(outcome) = super::authority_self_event_unit::exact_replay(state, event).await? {
         return Ok(outcome);
     }

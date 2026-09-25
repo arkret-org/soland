@@ -16,13 +16,6 @@ use arkret_wire::{AppletId, DidCoreId, EventId, Hash, ObjectStage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PushRouteSubject {
-    pub account_id: arkret_wire::AccountId,
-    pub device_id: String,
-    pub push_route: String,
-}
-
 #[derive(Clone, Debug)]
 pub struct PendingReplayEntry {
     pub target_ref: String,
@@ -39,16 +32,6 @@ pub struct StrandWatchProjection {
     pub level: Option<String>,
     pub level_public: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PushRouteCellValue {
-    pub revision: u64,
-    pub push_target_id: Option<String>,
-    pub push_gateway_id: Option<String>,
-    pub encryption_key: Option<String>,
-    pub capabilities: Vec<String>,
-    pub revoked: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -594,44 +577,6 @@ pub struct AppletProjection {
     pub registration_scope_ref: Option<Value>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AgentActionRequestStatus {
-    Pending,
-    AwaitingResume,
-    Approved,
-    Rejected,
-    Cancelled,
-}
-
-/// Server-side pending approval queue entry for `ak.agent.action_request`.
-///
-/// Actor-private action events do not advance reducer input clocks, but the
-/// controller still needs a fail-closed projection so lifecycle revocation can
-/// suspend outstanding requests until resume, or cancel them on terminal
-/// runtime endpoint.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentActionRequestProjection {
-    pub request_id: String,
-    pub agent_id: String,
-    pub controller_account_id: arkret_wire::AccountId,
-    pub status: AgentActionRequestStatus,
-    pub requested_at: chrono::DateTime<chrono::Utc>,
-    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub resolution_event_id: Option<String>,
-    pub cancel_reason: Option<String>,
-    pub approval: Option<AgentActionApprovalProjection>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentActionApprovalProjection {
-    pub approval_id: String,
-    pub proposed_action: String,
-    pub target: serde_json::Value,
-    pub approved_event_id: arkret_wire::EventId,
-    pub approval_nonce: String,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// State enum shared by Strand and Morph projections (mirrors SDK

@@ -167,11 +167,10 @@ pub struct ProjectionState {
     /// for any Agent Account we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
-    /// Actor-private action approval queue keyed by `request_id`.
-    /// `ak.agent.action_request` creates pending entries; approve/reject
-    /// resolves them, and pause/deactivate cancels every still-pending request
-    /// for the target agent before any future endpoint can be registered.
-    pub agent_action_requests: BTreeMap<String, AgentActionRequestProjection>,
+    /// Committed `ak.agent.action_approve` confirmations keyed by the complete
+    /// `approved_event_id` whose nonce they allocated. Only an index: the
+    /// act-on-behalf gate re-reads and verifies the committed Event itself.
+    pub agent_action_confirmations: BTreeMap<String, arkret_wire::EventId>,
     /// Accepted, non-revoked agent key authorizations keyed by `agent_id`.
     /// An entry is the set of authorized `key_id`s the agent currently holds
     /// (cleared on `ak.agent.key.revoke`).
@@ -224,28 +223,11 @@ pub struct ProjectionState {
     /// that Realm. For MLS-backed Circle scopes, the same transition queues an
     /// obligation for the MLS path to issue a remove proposal/commit.
     pub pending_mls_removals: Vec<MlsRemoveObligation>,
-    /// Device push-route projection keyed by the protocol composite
-    /// `(recipient_id, principal_id, device_id, push_route)`.
-    /// These are actor-private state cells and MUST stay isolated per
-    /// recipient Station.
-    pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
-    /// Optional local Principal/Sync service DID. When set, incoming
-    /// `ak.device.push_route` writes whose `recipient_id` does
-    /// not match this service are rejected instead of cached.
-    pub local_service_id: Option<String>,
 }
 
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn set_local_service_id(&mut self, service_id: impl Into<String>) {
-        self.local_service_id = Some(service_id.into());
-    }
-
-    pub fn push_route_cell_value(&self, subject: &PushRouteSubject) -> Option<&PushRouteCellValue> {
-        self.push_routes.get(subject)
     }
 
     pub(crate) fn queue_pending_replay(
@@ -378,110 +360,6 @@ impl ProjectionState {
             }
         }
         replayed
-    }
-
-    pub(crate) fn apply_device_push_route(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload = match serde_json::from_value::<
-            arkret_models_identity::device_push_route::DevicePushRoutePayload,
-        >(operation.payload.clone())
-        {
-            Ok(payload) => payload,
-            Err(error) => {
-                return ProjectionEffect::Rejected {
-                    reason: format!("push_route_payload_invalid:{error}"),
-                };
-            }
-        };
-        let scope = payload.scope();
-        let recipient_id = scope.account_id.station_id.as_str();
-        if let Some(local_service_id) = self.local_service_id.as_deref()
-            && local_service_id != recipient_id
-        {
-            return ProjectionEffect::Rejected {
-                reason: "recipient_id_mismatch".to_owned(),
-            };
-        }
-        let device_id = scope.device_id.as_str();
-        let push_route = scope.push_route.as_str();
-
-        let subject = PushRouteSubject {
-            account_id: scope.account_id.clone(),
-            device_id: device_id.to_owned(),
-            push_route: push_route.to_owned(),
-        };
-        let expected_revision = payload.expected_server_revision();
-        let current_revision = self.push_routes.get(&subject).map(|value| value.revision);
-        let incoming_revision = match arkret_models_identity::device_push_route::decide_server_revision_cas(
-            current_revision,
-            expected_revision,
-        ) {
-            arkret_models_identity::device_push_route::ServerRevisionCasDecision::Accepted {
-                next_revision,
-            } => next_revision,
-            arkret_models_identity::device_push_route::ServerRevisionCasDecision::Overflow => {
-                return ProjectionEffect::Rejected {
-                    reason: "push_route_revision_overflow".to_owned(),
-                };
-            }
-            arkret_models_identity::device_push_route::ServerRevisionCasDecision::Conflict => {
-                return ProjectionEffect::Rejected {
-                    reason: "push_route_cas_conflict".to_owned(),
-                };
-            }
-        };
-
-        match payload {
-            arkret_models_identity::device_push_route::DevicePushRoutePayload::Revoked(_) => {
-                self.store_push_route_cell(
-                    subject.clone(),
-                    PushRouteCellValue {
-                        revision: incoming_revision,
-                        push_target_id: None,
-                        push_gateway_id: None,
-                        encryption_key: None,
-                        capabilities: Vec::new(),
-                        revoked: true,
-                    },
-                );
-                ProjectionEffect::PushRouteUpdated {
-                    subject,
-                    action: "revoked".to_owned(),
-                }
-            }
-            arkret_models_identity::device_push_route::DevicePushRoutePayload::Active(active) => {
-                let action = if self
-                    .push_routes
-                    .get(&subject)
-                    .and_then(|value| value.push_target_id.as_deref())
-                    .is_some_and(|previous| previous != active.push_target_id.as_str())
-                {
-                    "rotated"
-                } else {
-                    "active"
-                };
-                self.store_push_route_cell(
-                    subject.clone(),
-                    PushRouteCellValue {
-                        revision: incoming_revision,
-                        push_target_id: Some(active.push_target_id.into_string()),
-                        push_gateway_id: Some(active.push_gateway_id.into_string()),
-                        encryption_key: Some(active.encryption_key),
-                        capabilities: active.capabilities,
-                        revoked: false,
-                    },
-                );
-                ProjectionEffect::PushRouteUpdated {
-                    subject,
-                    action: action.to_owned(),
-                }
-            }
-        }
-    }
-
-    fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
-        // Actor-private routes never enter the shared Realm projection: the
-        // recipient Station keeps this revision-CAS value privately.
-        self.push_routes.insert(subject, value);
     }
 
     /// Look up a settled facet value of one Realm.
@@ -668,16 +546,9 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         match kind {
-            arkret_wire::EventKind::DevicePushRoute => self.apply_device_push_route(operation),
-            arkret_wire::EventKind::AgentActionRequest => {
-                self.apply_agent_action_request(operation)
-            }
-            // `ak.agent.action_approve` is deliberately absent: the registry
-            // marks it `durable_event` / `reducer_input: true`, so it is
-            // dispatched through `APPLY_REGISTRY` and can never reach here.
-            arkret_wire::EventKind::AgentActionReject => {
-                self.apply_agent_action_resolution(operation, AgentActionRequestStatus::Rejected)
-            }
+            // Actor-private kinds never reach a shared reducer: they are
+            // admitted only into their owner's private store
+            // (actor-private-effects.md §2.1).
             arkret_wire::EventKind::AuditErasureReceipt => ProjectionEffect::DurableFactRetained {
                 kind: operation.event_kind.clone(),
                 event_id: operation.context.event_id.to_string(),

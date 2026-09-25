@@ -168,9 +168,7 @@ async fn prove_position(
         )));
     }
     if position.stream_position < floor.current_stream_position {
-        return Ok(Err(ReadCursorAdvanceRefusal::Unproved(
-            "a position before the owner's current join is not proved visible",
-        )));
+        return Ok(Err(ReadCursorAdvanceRefusal::PositionNotReadable));
     }
     Ok(Ok(ProvedPosition {
         stream_key: position.stream_key,

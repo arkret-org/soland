@@ -386,79 +386,130 @@ pub(super) async fn validate_agent_act_on_behalf_approval(
         .ok_or("agent_act_on_behalf_approval_nonce_missing")?;
     let action = agent_participation_action(operation)
         .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
-    let projected = state
+    let approval_event_id = state
         .projections()
-        .validate_agent_action_approval(
-            operation,
+        .agent_action_confirmation(&operation.context.event_id)
+        .ok_or("dependency_missing")?;
+    let confirmed = require_committed_agent_action_approval(
+        state,
+        operation,
+        &approval_event_id,
+        ConfirmationClaim {
             agent_id,
             request_id,
             approval_nonce,
-            action.as_str(),
-        )
-        .await?;
-    let confirmed =
-        require_committed_agent_action_approval(state, operation, agent_id, &projected).await?;
+            action: action.as_str(),
+        },
+    )
+    .await?;
     if !confirmed.admits_commit_at(covering_committed_at) {
         return Err(arkret_wire::ReasonCode::APPROVAL_REQUIRED);
     }
     Ok(())
 }
 
-/// The private request projection only names a confirmation. Publication is
-/// authorized by the exact `ak.agent.action_approve` Event the governing
-/// Station committed in the target Realm: that confirmation consumed the
-/// controller's nonce for this complete `approved_event_id` and nothing else
-/// (`constraint-schema.md` §9.2.6; `event-payload.schema.json`
-/// `agent_action_approve_payload`). Anything short of that exact committed
-/// Event is a missing dependency, so the gate fails closed.
+/// What the act-on-behalf Operation claims its confirmation approved.
+struct ConfirmationClaim<'a> {
+    agent_id: &'a str,
+    request_id: &'a str,
+    approval_nonce: &'a str,
+    action: &'a str,
+}
+
+/// Publication is authorized only by the exact `ak.agent.action_approve`
+/// Event the governing Station committed in the target Realm: that
+/// confirmation consumed the controller's nonce for this complete
+/// `approved_event_id` and nothing else (`constraint-schema.md` §9.2.6;
+/// `event-payload.schema.json` `agent_action_approve_payload`). The
+/// controller-private request it confirms is never read here; every bound
+/// field comes from the committed Event itself, and anything short of it is a
+/// missing dependency, so the gate fails closed.
 async fn require_committed_agent_action_approval(
     state: &AppState,
     operation: &Operation,
-    agent_id: &str,
-    projected: &soland_services::projection::ProjectedAgentActionApproval,
+    approval_event_id: &arkret_wire::EventId,
+    claim: ConfirmationClaim<'_>,
 ) -> Result<
     arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload,
     &'static str,
 > {
     let committed = state
         .authority_commits()
-        .committed_event(&projected.approval_event_id)
+        .committed_event(approval_event_id)
         .await
         .map_err(|_| "dependency_missing")?
         .ok_or("dependency_missing")?;
     let event = &committed.event;
-    if event.event_id != projected.approval_event_id
-        || committed.commit.event_ref != projected.approval_event_id
+    let controller = event.actor_id.as_account_id();
+    if &event.event_id != approval_event_id
+        || &committed.commit.event_ref != approval_event_id
         || event.kind != arkret_wire::EventKind::AgentActionApprove
         || event.realm_id != operation.realm_id
         || committed.commit.realm_id != operation.realm_id
         || event.executed_by.is_some()
-        || event.actor_id.as_account_id() != Some(&projected.controller_account_id)
-        || operation.context.sender.as_account_id() != Some(&projected.controller_account_id)
+        || controller.is_none()
+        || operation.context.sender.as_account_id() != controller
     {
         return Err("dependency_missing");
     }
     let payload = serde_json::to_value(&event.payload).map_err(|_| "dependency_missing")?;
     let confirmed: arkret_models_collaboration::events_payloads::agent::AgentActionApprovePayload =
         serde_json::from_value(payload.clone()).map_err(|_| "dependency_missing")?;
-    let approval = &projected.approval;
     let request_matches = confirmed
         .request_id
         .as_deref()
         .or(confirmed.draft_id.as_deref())
-        == Some(projected.request_id.as_str());
+        == Some(claim.request_id);
     if !request_matches
-        || confirmed.agent_id.as_str() != agent_id
-        || confirmed.approval_id != approval.approval_id
-        || confirmed.approval_nonce != approval.approval_nonce
+        || confirmed.approval_nonce != claim.approval_nonce
         || confirmed.approved_event_id != operation.context.event_id
-        || confirmed.approved_event_id != approval.approved_event_id
-        || confirmed.proposed_action != approval.proposed_action
-        || payload.get("target") != Some(&approval.target)
     {
         return Err("dependency_missing");
     }
+    if confirmed.agent_id.as_str() != claim.agent_id {
+        return Err("agent_act_on_behalf_approval_agent_mismatch");
+    }
+    if confirmed.proposed_action != claim.action {
+        return Err("agent_act_on_behalf_approval_action_mismatch");
+    }
+    if !payload
+        .get("target")
+        .is_some_and(|target| agent_action_target_matches(target, operation))
+    {
+        return Err("agent_act_on_behalf_approval_target_mismatch");
+    }
     Ok(confirmed)
+}
+
+fn agent_action_target_matches(target: &Value, operation: &Operation) -> bool {
+    match target.get("kind").and_then(Value::as_str) {
+        Some("realm") => target
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .is_some_and(|realm_id| realm_id == operation.realm_id.as_str()),
+        Some("strand") => {
+            let Some(target_ref) = target.get("object_ref").and_then(Value::as_str) else {
+                return false;
+            };
+            operation
+                .payload
+                .get("strand_id")
+                .and_then(Value::as_str)
+                .is_some_and(|strand_id| strand_id == target_ref)
+        }
+        Some("message") | Some("object") => {
+            let Some(target_ref) = target.get("object_ref").and_then(Value::as_str) else {
+                return false;
+            };
+            operation.object_id.as_deref() == Some(target_ref)
+                || operation
+                    .payload
+                    .get("message_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message_id| message_id == target_ref)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn operation_agent_context(operation: &Operation) -> Option<&Value> {

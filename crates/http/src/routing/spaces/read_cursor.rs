@@ -147,6 +147,11 @@ fn advance_refusal(refusal: ReadCursorAdvanceRefusal) -> AppError {
         ReadCursorAdvanceRefusal::PositionNotInRealm => {
             AppError::param_invalid("position.event_id is not a committed Event of realm_id")
         }
+        // Decision 0108 (0809): a known position outside the owner's readable
+        // interval is `param_invalid`, not a retryable unproved position.
+        ReadCursorAdvanceRefusal::PositionNotReadable => {
+            AppError::param_invalid("position.event_id precedes the owner's current join")
+        }
         ReadCursorAdvanceRefusal::Unproved(detail) => {
             crate::app_error!(
                 TemporarilyUnavailable,

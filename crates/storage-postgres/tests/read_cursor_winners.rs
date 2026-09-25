@@ -269,13 +269,14 @@ async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
         ReadCursorAdvanceRefusal::NotMember
     );
 
-    // A position before the owner's current join is not proved visible.
+    // A position before the owner's current join is outside its readable
+    // interval.
     let genesis = discussion.unit.transactions[0].event.event_id.clone();
     let before_join = advance(&discussion, &founder(), DEVICE_A, &genesis, hlc, 3);
-    assert!(matches!(
+    assert_eq!(
         refused(store.advance(&before_join).await.unwrap()),
-        ReadCursorAdvanceRefusal::Unproved(_)
-    ));
+        ReadCursorAdvanceRefusal::PositionNotReadable
+    );
 
     // A Station that does not govern the Realm cannot classify the position.
     let elsewhere = advance(&discussion, &founder(), DEVICE_A, &second, hlc, 4);

@@ -67,7 +67,11 @@ fn actor_private_effects_share_one_exact_retry_ledger_outside_realm_history() {
         "CONSTRAINT read_cursor_winners_pk PRIMARY KEY (account_key, realm_id, read_scope_key)"
     ));
     assert!(INITIAL_UP.contains("CREATE TABLE public.actor_private_events"));
-    assert!(INITIAL_UP.contains("(kind = 'ak.read_cursor.advance') = (outcome IS NOT NULL)"));
+    assert!(INITIAL_UP.contains("(kind <> 'ak.account_data.set') = (outcome IS NOT NULL)"));
+    assert!(INITIAL_UP.contains("CREATE TABLE public.device_push_routes"));
+    assert!(INITIAL_UP.contains("CREATE TABLE public.agent_action_requests"));
+    assert!(INITIAL_UP.contains("CREATE TABLE public.agent_action_rejections"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS device_push_routes CASCADE"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS actor_private_events CASCADE"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS read_cursor_winners CASCADE"));
     assert!(!INITIAL_UP.contains("canonical_account_data_source_id"));
@@ -298,11 +302,12 @@ fn recovery_policy_uses_the_protocol_acceptance_basis_name_at_creation() {
 }
 
 #[test]
-fn actor_private_blocklist_shares_the_account_data_source_guard() {
+fn actor_private_ledger_admits_only_the_six_actor_private_kinds() {
     assert!(INITIAL_UP.contains(
-        "kind IN ('ak.account_data.set', 'ak.account.blocklist', 'ak.read_cursor.advance')"
+        "kind IN ('ak.account_data.set', 'ak.agent.action_reject', 'ak.agent.action_request',\n            'ak.agent.draft.propose', 'ak.device.push_route', 'ak.read_cursor.advance')"
     ));
-    assert!(INITIAL_UP.contains("e.kind IN ('ak.account_data.set','ak.account.blocklist')"));
+    assert!(!INITIAL_UP.contains("'ak.account.blocklist'"));
+    assert!(INITIAL_UP.contains("WHERE e.kind='ak.account_data.set'"));
     // A ledger source is immutable, so no withdrawal can invalidate it.
     assert!(!INITIAL_UP.contains("invalidate_account_global_event"));
     assert!(INITIAL_UP.contains("CREATE TRIGGER immutable_actor_private_events"));

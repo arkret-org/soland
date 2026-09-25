@@ -89,17 +89,6 @@ pub struct InviteClaimProofContext {
     pub invite_digest: String,
 }
 
-/// A private Agent request's claim that one controller confirmation approved
-/// an Operation. It is an index into durable state, never authority by itself.
-#[derive(Clone, Debug)]
-pub struct ProjectedAgentActionApproval {
-    /// The `ak.agent.action_approve` Event that resolved the request.
-    pub approval_event_id: arkret_wire::EventId,
-    pub controller_account_id: arkret_wire::AccountId,
-    pub request_id: String,
-    pub approval: soland_domain::reducer::AgentActionApprovalProjection,
-}
-
 #[derive(Clone, Debug)]
 pub enum MlsProjectionEffect {
     KeyPackagePublished {
@@ -405,59 +394,18 @@ impl ProjectionService {
         }))
     }
 
-    /// Locate the controller confirmation this private Agent request claims
-    /// authorizes exactly this Operation.
-    ///
-    /// `agent_action_requests` is the Agent's private draft/request state; it
-    /// derives from the confirmation, it is not the confirmation. A match here
-    /// only names the `ak.agent.action_approve` Event to read: the caller MUST
-    /// then prove that exact Event is committed in the target Realm with the
-    /// same nonce, approved Event, agent, action and target
-    /// (`constraint-schema.md` §9.2.6, `conformance-profiles.md` Agent draft
-    /// approval). Returning success from this projection alone would let a
-    /// private approval stand in for the exact consumed confirmation.
-    pub async fn validate_agent_action_approval(
+    /// The committed `ak.agent.action_approve` Event indexed for one complete
+    /// approved Event id. The caller MUST re-read and verify that exact
+    /// committed confirmation; the index is never authority by itself.
+    pub fn agent_action_confirmation(
         &self,
-        operation: &Operation,
-        agent_id: &str,
-        request_id: &str,
-        approval_nonce: &str,
-        action: &str,
-    ) -> Result<ProjectedAgentActionApproval, &'static str> {
-        let state = self.state.lock();
-        let request = state
-            .agent_action_requests
-            .get(request_id)
-            .ok_or("dependency_missing")?;
-        if request.status != soland_domain::reducer::AgentActionRequestStatus::Approved {
-            return Err("dependency_missing");
-        }
-        let approval = request.approval.as_ref().ok_or("dependency_missing")?;
-        if approval.approval_nonce != approval_nonce
-            || approval.approved_event_id != operation.context.event_id
-        {
-            return Err("dependency_missing");
-        }
-        if request.agent_id != agent_id {
-            return Err("agent_act_on_behalf_approval_agent_mismatch");
-        }
-        if approval.proposed_action != action {
-            return Err("agent_act_on_behalf_approval_action_mismatch");
-        }
-        if !agent_action_target_matches(&approval.target, operation) {
-            return Err("agent_act_on_behalf_approval_target_mismatch");
-        }
-        let approval_event_id = request
-            .resolution_event_id
-            .as_deref()
-            .and_then(|event_id| arkret_wire::EventId::new(event_id).ok())
-            .ok_or("dependency_missing")?;
-        Ok(ProjectedAgentActionApproval {
-            approval_event_id,
-            controller_account_id: request.controller_account_id.clone(),
-            request_id: request.request_id.clone(),
-            approval: approval.clone(),
-        })
+        approved_event_id: &arkret_wire::EventId,
+    ) -> Option<arkret_wire::EventId> {
+        self.state
+            .lock()
+            .agent_action_confirmations
+            .get(approved_event_id.as_str())
+            .cloned()
     }
 
     pub fn stage_realm_bootstrap(
@@ -1326,37 +1274,6 @@ fn actor_participates_in_mls_scope(
                     .and_then(|realm| realm.owner.as_deref())
                     == Some(actor_id)
         }
-    }
-}
-
-fn agent_action_target_matches(target: &Value, operation: &Operation) -> bool {
-    match target.get("kind").and_then(Value::as_str) {
-        Some("realm") => target
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .is_some_and(|realm_id| realm_id == operation.realm_id.as_str()),
-        Some("strand") => {
-            let Some(target_ref) = target.get("object_ref").and_then(Value::as_str) else {
-                return false;
-            };
-            operation
-                .payload
-                .get("strand_id")
-                .and_then(Value::as_str)
-                .is_some_and(|strand_id| strand_id == target_ref)
-        }
-        Some("message") | Some("object") => {
-            let Some(target_ref) = target.get("object_ref").and_then(Value::as_str) else {
-                return false;
-            };
-            operation.object_id.as_deref() == Some(target_ref)
-                || operation
-                    .payload
-                    .get("message_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|message_id| message_id == target_ref)
-        }
-        _ => false,
     }
 }
 

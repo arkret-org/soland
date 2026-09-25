@@ -1,5 +1,6 @@
 use salvo::prelude::*;
 
+mod actor_private_events;
 pub(super) mod directory;
 mod read_cursor;
 pub(super) mod space;
@@ -26,6 +27,11 @@ pub fn protocol_router() -> Router {
             Router::with_path("read-cursors")
                 .post(read_cursor::set_read_cursor)
                 .get(read_cursor::get_read_cursors),
+        )
+        // `ak.self.actor_private_events.command.submit.v1`.
+        .push(
+            Router::with_path("actor-private-events")
+                .post(actor_private_events::submit_actor_private_event),
         )
 }
 

@@ -146,13 +146,18 @@ CREATE TABLE public.actor_private_events (
     CONSTRAINT actor_private_events_id_length CHECK (octet_length(id) = 33),
     CONSTRAINT actor_private_events_digest_length CHECK (octet_length(canonical_event_digest) = 32),
     CONSTRAINT actor_private_events_kind_check CHECK (
-        kind IN ('ak.account_data.set', 'ak.account.blocklist', 'ak.read_cursor.advance')
+        kind IN ('ak.account_data.set', 'ak.agent.action_reject', 'ak.agent.action_request',
+            'ak.agent.draft.propose', 'ak.device.push_route', 'ak.read_cursor.advance')
     ),
     CONSTRAINT actor_private_events_envelope_check CHECK (
         envelope->>'event_id' = event_id AND envelope->>'kind' = kind
     ),
     CONSTRAINT actor_private_events_outcome_check CHECK (
-        (kind = 'ak.read_cursor.advance') = (outcome IS NOT NULL)
+        (kind <> 'ak.account_data.set') = (outcome IS NOT NULL)
+    ),
+    CONSTRAINT actor_private_events_submit_outcome_check CHECK (
+        kind IN ('ak.account_data.set', 'ak.read_cursor.advance')
+        OR (outcome->>'event_kind' = kind AND outcome->>'accepted_event_id' = event_id)
     )
 );
 
@@ -167,6 +172,75 @@ $$;
 CREATE TRIGGER immutable_actor_private_events
     BEFORE UPDATE OR DELETE ON public.actor_private_events
     FOR EACH ROW EXECUTE FUNCTION public.reject_actor_private_event_mutation();
+
+-- ak.private.device.push_route.v1 (actor-private-effects.md section 3.3): one
+-- whole value per (AccountId, device_id, push_route). `revision` is the
+-- server_revision_cas high-water; a revoked tombstone keeps it and carries no
+-- target, gateway, key, capabilities or expiry.
+CREATE TABLE public.device_push_routes (
+    account_key text NOT NULL,
+    device_id text NOT NULL,
+    push_route text NOT NULL,
+    route_value jsonb NOT NULL,
+    revoked boolean NOT NULL,
+    revision bigint NOT NULL,
+    accepted_event_id text NOT NULL,
+    CONSTRAINT device_push_routes_pk PRIMARY KEY (account_key, device_id, push_route),
+    CONSTRAINT device_push_routes_event_key UNIQUE (accepted_event_id),
+    CONSTRAINT device_push_routes_revision_check CHECK (revision >= 1),
+    CONSTRAINT device_push_routes_value_check CHECK (
+        jsonb_typeof(route_value) = 'object'
+        AND route_value->>'device_id' = device_id
+        AND route_value->>'push_route' = push_route
+        AND (route_value->>'expected_server_revision')::bigint + 1 = revision
+        AND revoked = (route_value ? 'revoked')
+        AND (NOT revoked OR NOT (route_value ?| ARRAY['push_target_id', 'push_gateway_id',
+            'encryption_key', 'capabilities', 'expires_at']))
+    )
+);
+
+-- ak.private.agent.action_request.v1 (actor-private-effects.md section 3.2):
+-- one controller-private pending request per (controller AccountId, agent_id,
+-- request_id). `draft_id` inside `request` is only a link. `rejected` is
+-- terminal and never returns to `requested`.
+CREATE TABLE public.agent_action_requests (
+    controller_account_key text NOT NULL,
+    agent_id text NOT NULL,
+    request_id text NOT NULL,
+    request jsonb NOT NULL,
+    workflow_state text NOT NULL,
+    accepted_event_id text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    rejection_id text,
+    CONSTRAINT agent_action_requests_pk PRIMARY KEY (controller_account_key, agent_id, request_id),
+    CONSTRAINT agent_action_requests_event_key UNIQUE (accepted_event_id),
+    CONSTRAINT agent_action_requests_state_check CHECK (workflow_state IN ('requested', 'rejected')),
+    CONSTRAINT agent_action_requests_rejection_check CHECK (
+        (workflow_state = 'rejected') = (rejection_id IS NOT NULL)
+    ),
+    CONSTRAINT agent_action_requests_request_check CHECK (
+        request->>'request_id' = request_id AND request->>'agent_id' = agent_id
+    )
+);
+
+-- ak.private.agent.rejection.v1: one controller rejection per (controller
+-- AccountId, agent_id, rejection_id), written in the transaction that turns
+-- its one target request `rejected`.
+CREATE TABLE public.agent_action_rejections (
+    controller_account_key text NOT NULL,
+    agent_id text NOT NULL,
+    rejection_id text NOT NULL,
+    rejection jsonb NOT NULL,
+    request_id text NOT NULL,
+    accepted_event_id text NOT NULL,
+    CONSTRAINT agent_action_rejections_pk PRIMARY KEY (controller_account_key, agent_id, rejection_id),
+    CONSTRAINT agent_action_rejections_event_key UNIQUE (accepted_event_id),
+    CONSTRAINT agent_action_rejections_target_key UNIQUE (controller_account_key, agent_id, request_id),
+    CONSTRAINT agent_action_rejections_rejection_check CHECK (
+        rejection->>'rejection_id' = rejection_id AND rejection->>'agent_id' = agent_id
+        AND rejection->>'request_id' = request_id AND NOT rejection ? 'draft_id'
+    )
+);
 
 CREATE TABLE public.account_data_changes (
     position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -4147,7 +4221,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM account_global_versions v WHERE actor_key=a AND channel='account_data_events'
         AND item_key='event:'||k AND valid_until IS NULL AND (payload->>'source'='invalidated'
         OR NOT EXISTS(SELECT 1 FROM actor_private_events e
-            WHERE e.kind IN ('ak.account_data.set','ak.account.blocklist')
+            WHERE e.kind='ak.account_data.set'
             AND e.event_id=v.payload->'value'->>'event_id'))) THEN
         RAISE EXCEPTION 'account data current source is unavailable';
     END IF;

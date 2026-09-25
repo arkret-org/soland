@@ -15,6 +15,7 @@ pub struct PgPersistenceStore {
     authority_commits: PgAuthorityCommitStore,
     account_device_signer_evidence: PgAccountDeviceSignerEvidenceArchive,
     read_cursors: PgReadCursorStore,
+    actor_private_events: PgActorPrivateEventStore,
     event_commits: PgEventCommitUnitOfWork,
     agent_membership_cascades: PgAgentMembershipCascadeStore,
     agent_draft_pending_intents: PgAgentDraftPendingIntentStore,
@@ -99,6 +100,7 @@ impl PgPersistenceStore {
             authority_commits: PgAuthorityCommitStore { pool: pool.clone() },
             account_device_signer_evidence: PgAccountDeviceSignerEvidenceArchive::new(pool.clone()),
             read_cursors: PgReadCursorStore::new(pool.clone()),
+            actor_private_events: PgActorPrivateEventStore::new(pool.clone()),
             event_commits: PgEventCommitUnitOfWork::new(pool.clone()),
             agent_membership_cascades: PgAgentMembershipCascadeStore { pool: pool.clone() },
             agent_draft_pending_intents: PgAgentDraftPendingIntentStore { pool: pool.clone() },
@@ -505,5 +507,9 @@ impl PersistenceStore for PgPersistenceStore {
 
     fn read_cursors(&self) -> &dyn ReadCursorStore {
         &self.read_cursors
+    }
+
+    fn actor_private_events(&self) -> &dyn ActorPrivateEventStore {
+        &self.actor_private_events
     }
 }

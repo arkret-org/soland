@@ -351,7 +351,6 @@ pub fn next_request_for_actor(
         event: record,
         parent_membership_admission: None,
         contact_projection: None,
-        agent_draft_pending_intent: None,
         consent_projection: None,
         device_revocation_transition: None,
         device_revocation_gate: None,
