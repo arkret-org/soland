@@ -987,19 +987,12 @@ async fn deliver_invite_credential(
         })
         .transpose()?
         .unwrap_or_else(|| created_at + Duration::days(7));
-    let invite_token = crate::routing::generate_invite_token(
-        invite_id.as_str(),
-        realm_id,
-        &account_id.to_string(),
-    );
-
     let received_at = now();
     let new_entry = InviteDeliveryEntry {
         invite_id,
         realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("invite realm id is invalid: {error}")))?,
         inviter_account_id: inviter_account_id.clone(),
-        invite_token,
         authority_locator_hints: authority_locator_hints.to_vec(),
         received_at,
         expires_at,
@@ -2997,7 +2990,6 @@ mod invite_locator_security_tests {
                 DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
                 DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
             ),
-            invite_token: "opaque-token".to_owned(),
             authority_locator_hints: vec![fixture_locator_hint()],
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
@@ -3023,38 +3015,36 @@ mod invite_locator_security_tests {
         let at = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let entry = |invite_token: &str, expires_at: &str| InviteDeliveryEntry {
-            invite_id: arkret_identifiers::InviteId::new(
-                "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K".to_owned(),
-            )
-            .unwrap(),
-            realm_id: arkret_identifiers::RealmId::new(
-                "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
-            )
-            .unwrap(),
-            inviter_account_id: arkret_wire::AccountId::new(
-                DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
-                DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
-            ),
-            invite_token: invite_token.to_owned(),
-            authority_locator_hints: vec![fixture_locator_hint()],
-            received_at: at,
-            expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-        };
+        let entry =
+            |received_at: chrono::DateTime<chrono::Utc>, expires_at: &str| InviteDeliveryEntry {
+                invite_id: arkret_identifiers::InviteId::new(
+                    "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K".to_owned(),
+                )
+                .unwrap(),
+                realm_id: arkret_identifiers::RealmId::new(
+                    "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
+                )
+                .unwrap(),
+                inviter_account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+                    DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+                ),
+                authority_locator_hints: vec![fixture_locator_hint()],
+                received_at,
+                expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            };
 
         // A redelivery of the same invite replaces the previous entry instead
         // of taking a second slot, and an expired prior entry is purged.
-        let prior = InviteDelivery::new(at, vec![entry("stale-token", "2026-07-05T10:00:00.000Z")]);
-        let merged = merge_invite_delivery_cell(
-            Some(prior),
-            entry("fresh-token", "2026-08-05T10:00:00.000Z"),
-            at,
-        )
-        .expect("merge into a cell holding only a stale entry");
+        let earlier = at - chrono::Duration::days(1);
+        let prior = InviteDelivery::new(at, vec![entry(earlier, "2026-07-05T10:00:00.000Z")]);
+        let merged =
+            merge_invite_delivery_cell(Some(prior), entry(at, "2026-08-05T10:00:00.000Z"), at)
+                .expect("merge into a cell holding only a stale entry");
         assert_eq!(merged.delivery_entries.len(), 1);
-        assert_eq!(merged.delivery_entries[0].invite_token, "fresh-token");
+        assert_eq!(merged.delivery_entries[0].received_at, at);
         assert_eq!(merged.updated_at, at);
         assert_eq!(merged.schema, InviteDelivery::SCHEMA);
         merged.validate().expect("merged cell validates");
@@ -3070,13 +3060,13 @@ mod invite_locator_security_tests {
             at,
             (0..InviteDelivery::MAX_ENTRIES)
                 .map(|index| {
-                    let mut held = entry("held-token", "2026-08-05T10:00:00.000Z");
+                    let mut held = entry(earlier, "2026-08-05T10:00:00.000Z");
                     held.invite_id = invite_id_for(index as u8);
                     held
                 })
                 .collect(),
         );
-        let mut new_entry = entry("fresh-token", "2026-08-05T10:00:00.000Z");
+        let mut new_entry = entry(at, "2026-08-05T10:00:00.000Z");
         new_entry.invite_id = invite_id_for(u8::MAX);
         let merged =
             merge_invite_delivery_cell(Some(full), new_entry, at).expect("merge into a full cell");
@@ -3085,8 +3075,8 @@ mod invite_locator_security_tests {
             merged
                 .delivery_entries
                 .last()
-                .map(|entry| entry.invite_token.as_str()),
-            Some("fresh-token")
+                .map(|entry| entry.invite_id.clone()),
+            Some(invite_id_for(u8::MAX))
         );
     }
 

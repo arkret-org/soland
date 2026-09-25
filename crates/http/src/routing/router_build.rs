@@ -642,15 +642,7 @@ mod tests {
         ),
         (
             "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::PeerRealmJoinReadApplicationStatusV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
             arkret_wire::ServiceOperationId::PeerRealmJoinReadPreviewV1,
-        ),
-        (
-            "ak.operation_bundle.station.http_core_current.v1",
-            arkret_wire::ServiceOperationId::SelfRealmJoinReadApplicationStatusV1,
         ),
         (
             "ak.operation_bundle.station.http_core_current.v1",

@@ -293,7 +293,6 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
                 invite_id: invite_id.clone(),
                 realm_id: RealmId::new(realm_id.clone()).unwrap(),
                 inviter_account_id: fixture_account_id(&state, alice_did),
-                invite_token: projected.invite_token,
                 authority_locator_hints: vec![
                     arkret_models_collaboration::governance::realm_join_intake::RealmJoinCandidate {
                         service_kind: arkret_models_collaboration::governance::realm_join_intake::RealmJoinCandidateServiceKind::Station,
