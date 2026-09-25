@@ -11,12 +11,14 @@
 //! a Realm whose sole established stream is the Realm stream: every object of
 //! such a Realm lives in the Realm-wide scope that each joined member may
 //! read. A Realm with any Circle or Sidecar stream fails closed as unresolved
-//! until scope visibility is provable, and no answer is ever inferred from a
-//! missing row.
+//! until scope visibility is provable, and no `never_written` answer is ever
+//! inferred from a missing row.
 
 use arkret_models_collaboration::exact_current_results::{
     ExactCurrentResultEntry, ExactCurrentResultSelector, ExactCurrentResultsReadOutcome,
-    ExactCurrentResultsReadRequestBody, RelationExactCurrentResult,
+    ExactCurrentResultsReadRequestBody, ModerationStateCurrentValue,
+    ModerationStateExactCurrentResult, ModerationStateExactCurrentSelector,
+    RelationExactCurrentResult,
 };
 use arkret_models_collaboration::objects::relation::Relation;
 use arkret_models_collaboration::strand_watch_operations::{
@@ -59,8 +61,9 @@ struct HeadRow {
     stream_position: i64,
 }
 
+/// One typed current row with the stream of its covering RealmCommit.
 #[derive(QueryableByName)]
-struct RelationRow {
+struct CurrentRow {
     #[diesel(sql_type = Text)]
     current_commit_id: String,
     #[diesel(sql_type = BigInt)]
@@ -309,10 +312,9 @@ pub(crate) async fn exact_current_result_for_account(
         };
         let selector = match &request.selector {
             ExactCurrentResultSelector::Relation(selector) => selector,
-            ExactCurrentResultSelector::ModerationState(_) => {
-                return Ok(SelfExactCurrentRead::Unresolved(
-                    "no durable moderation_state current result is materialized",
-                ));
+            ExactCurrentResultSelector::ModerationState(selector) => {
+                return moderation_state_read(conn, &request.realm_id, generation, head, selector)
+                    .await;
             }
         };
         let domain_key = arkret_canonical::canonical_json_string(&selector.primary_conflict_domain)
@@ -330,7 +332,7 @@ pub(crate) async fn exact_current_result_for_account(
         )
         .bind::<Text, _>(request.realm_id.as_str())
         .bind::<Text, _>(&domain_key)
-        .get_result::<RelationRow>(&mut *conn)
+        .get_result::<CurrentRow>(&mut *conn)
         .await
         .optional()?
         else {
@@ -376,6 +378,71 @@ pub(crate) async fn exact_current_result_for_account(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+/// A `moderation_state` selector on the provable cut: the durable row keyed
+/// by the moderated target. A target no decision ever named has nothing a
+/// lift could consume, so it is the same `not_found` as an unknown target;
+/// `never_written` is structurally Relation-only.
+async fn moderation_state_read(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    generation: u64,
+    head: CommitStreamHead,
+    selector: &ModerationStateExactCurrentSelector,
+) -> Result<SelfExactCurrentRead<ExactCurrentResultsReadOutcome>, PgTransactionError> {
+    let Some(row) = sql_query(
+        "SELECT s.current_commit_id, s.current_stream_position, s.value, c.stream_ref \
+         FROM moderation_state_current_results s \
+         JOIN realm_commits c ON c.commit_id = s.current_commit_id \
+         WHERE s.realm_id=$1 AND s.target_ref=$2 AND c.realm_id=s.realm_id \
+           AND c.stream_position=s.current_stream_position",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(selector.target_ref.as_str())
+    .get_result::<CurrentRow>(&mut *conn)
+    .await
+    .optional()?
+    else {
+        return Ok(SelfExactCurrentRead::NotFound);
+    };
+    let value =
+        serde_json::from_value::<ModerationStateCurrentValue>(row.value).map_err(|error| {
+            corrupt(format!(
+                "stored moderation_state current value is invalid: {error}"
+            ))
+        })?;
+    let source_stream_ref = serde_json::from_value::<CommitStreamRef>(row.stream_ref)
+        .map_err(|error| corrupt(format!("stored RealmCommit stream is invalid: {error}")))?;
+    if source_stream_ref != head.stream_ref {
+        return Ok(SelfExactCurrentRead::Unresolved(
+            "the moderated target's scope visibility is not proved at this cut",
+        ));
+    }
+    let revision = CurrentRevision {
+        commit_id: row.current_commit_id.parse().map_err(|error| {
+            corrupt(format!(
+                "stored moderation_state Commit id is invalid: {error}"
+            ))
+        })?,
+        stream_position: to_u64(
+            row.current_stream_position,
+            "moderation_state stream position",
+        )?,
+    };
+    Ok(SelfExactCurrentRead::Answer(
+        ExactCurrentResultsReadOutcome::Present {
+            realm_id: realm_id.clone(),
+            governance_generation: generation,
+            effective_stream_head: head,
+            entry: ExactCurrentResultEntry::ModerationState(ModerationStateExactCurrentResult {
+                selector: selector.clone(),
+                source_stream_ref,
+                revision,
+                value,
+            }),
+        },
+    ))
 }
 
 pub(crate) async fn strand_watch_current_for_account(

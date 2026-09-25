@@ -3465,9 +3465,11 @@ async fn self_current_reads_answer_only_the_provable_cut() {
             "selector": {"kind":"moderation_state","target_ref": relation_id},
         }))
         .unwrap();
+    // No decision ever named the target: nothing a lift could consume, and
+    // never_written is Relation-only.
     assert!(matches!(
         exact(moderation, creator.clone(), station.clone()).await,
-        SelfExactCurrentRead::Unresolved(_)
+        SelfExactCurrentRead::NotFound
     ));
 
     // Strand watch: only the watcher itself, only a known Strand.
