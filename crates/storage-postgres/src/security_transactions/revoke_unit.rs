@@ -53,7 +53,6 @@ fn authorizer_status_code(lifecycle: PcrDeviceLifecycle) -> ConflictCode {
         PcrDeviceLifecycle::Revoked => ConflictCode::DeviceRevoked,
         PcrDeviceLifecycle::RevocationPending => ConflictCode::DeviceRevocationPending,
         PcrDeviceLifecycle::Active
-        | PcrDeviceLifecycle::Conflicted
         | PcrDeviceLifecycle::GenerationFenced
         | PcrDeviceLifecycle::Expired
         | PcrDeviceLifecycle::NotYetEffective => ConflictCode::FailedPrecondition,
@@ -321,9 +320,7 @@ pub(super) async fn commit_revoke_proposal_in_connection(
             "rotation authorizing device has no authorization",
         )
     })?;
-    if status.authority.realm_id != event.realm_id
-        || status.lifecycle != PcrDeviceLifecycle::Active
-        || status.generation_conflicted
+    if status.authority.realm_id != event.realm_id || status.lifecycle != PcrDeviceLifecycle::Active
     {
         return Err(rejected(
             authorizer_status_code(status.lifecycle),
@@ -403,8 +400,6 @@ pub(super) async fn commit_revoke_proposal_in_connection(
         conn, event, commit,
     )
     .await?;
-    crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(conn, commit)
-        .await?;
     let proposal = serde_json::to_value(resource.revoke_proposal.as_ref().expect("validated"))
         .map_err(PersistenceError::database)?;
     let affected = sql_query(

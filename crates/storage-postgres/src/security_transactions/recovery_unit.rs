@@ -74,11 +74,6 @@ pub(super) async fn commit_recovery_unit_in_connection(
             None,
         )
         .await?;
-        crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(
-            conn,
-            &commit.commit,
-        )
-        .await?;
     }
     accept_step_in_transaction(
         conn,

@@ -187,10 +187,6 @@ pub(super) async fn check_private_current_device(
         .map_err(|error| {
             AppError::internal(format!("current device generation is unavailable: {error}"))
         })?
-        .filter(|generation| {
-            generation.status
-                == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-        })
         .map(|generation| generation.current_ref);
 
     // A handoff/session DPoP proves possession of the short-lived holder key,

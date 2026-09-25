@@ -211,8 +211,8 @@ pub(crate) fn verification_method_device(
 /// source checkpoint is an accepted Commit of this PCR at or after the
 /// generation and authorization it relies on, both the record signature and
 /// the Event producer proof verify against the accepted device key, and the
-/// pointer version advances by exactly one. The Event, Commit, typed pointer
-/// and PCR conflict-index marker become visible together or not at all.
+/// pointer version advances by exactly one. The Event, Commit and typed
+/// pointer become visible together or not at all.
 pub(crate) async fn commit_key_backup_pointer_unit_in_connection(
     conn: &mut AsyncPgConnection,
     write: &soland_storage::KeyBackupActiveSeriesCommitWrite,
@@ -314,7 +314,6 @@ pub(crate) async fn commit_key_backup_pointer_unit_in_connection(
     .await?
     .ok_or_else(|| pointer_rejected("KeyBackup pointer device has no confirmed PCR cut"))?;
     if status.authority.realm_id != event.realm_id
-        || status.generation_conflicted
         || status.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
     {
         return Err(pointer_rejected(
@@ -428,8 +427,6 @@ pub(crate) async fn commit_key_backup_pointer_unit_in_connection(
         }
     }
     commit_key_backup_pointer_in_connection(conn, event, commit).await?;
-    crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(conn, commit)
-        .await?;
     Ok(Outcome::Committed(commit.clone()))
 }
 
@@ -477,9 +474,7 @@ pub(crate) async fn confirmed_key_backup_pointer_for_active_device_in_connection
     )
     .await?
     .ok_or_else(|| invalid("KeyBackup device has no confirmed PCR status"))?;
-    if cut.generation_conflicted
-        || cut.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active
-    {
+    if cut.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active {
         return Err(invalid("KeyBackup device is not active at the PCR cut").into());
     }
     let pointer = confirmed_key_backup_pointer_in_connection(conn, account_id)

@@ -9,8 +9,8 @@
 //! generation, the target device has no authorization yet, the target
 //! possession signature binds the Event's complete account, and the Event
 //! producer proof verifies against the approving device's accepted key. The
-//! Event, its Commit, the typed device authorization, the conflict-index
-//! marker and the local device mirror become visible together or not at all.
+//! Event, its Commit, the typed device authorization and the local device
+//! mirror become visible together or not at all.
 
 use arkret_models_collaboration::events_payloads::{
     DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceOrPrincipalRef,
@@ -52,9 +52,7 @@ fn approver_status_code(lifecycle: PcrDeviceLifecycle) -> ConflictCode {
     match lifecycle {
         PcrDeviceLifecycle::Revoked => ConflictCode::DeviceRevoked,
         PcrDeviceLifecycle::RevocationPending => ConflictCode::DeviceRevocationPending,
-        PcrDeviceLifecycle::GenerationFenced | PcrDeviceLifecycle::Conflicted => {
-            ConflictCode::DeviceGenerationFenced
-        }
+        PcrDeviceLifecycle::GenerationFenced => ConflictCode::DeviceGenerationFenced,
         PcrDeviceLifecycle::Active
         | PcrDeviceLifecycle::Expired
         | PcrDeviceLifecycle::NotYetEffective => ConflictCode::DeviceUnauthorized,
@@ -227,14 +225,9 @@ pub(crate) async fn admit_accepted_device_unit_in_connection(
             "accepted-device Event is outside the approver's PCR",
         ));
     }
-    if status.lifecycle != PcrDeviceLifecycle::Active || status.generation_conflicted {
-        let code = if status.lifecycle == PcrDeviceLifecycle::Active {
-            ConflictCode::DeviceGenerationFenced
-        } else {
-            approver_status_code(status.lifecycle)
-        };
+    if status.lifecycle != PcrDeviceLifecycle::Active {
         return Err(rejected(
-            code,
+            approver_status_code(status.lifecycle),
             "approving device is not active in the current generation",
         ));
     }
@@ -350,8 +343,6 @@ pub(crate) async fn admit_accepted_device_unit_in_connection(
         conn, event, commit, None,
     )
     .await?;
-    crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(conn, commit)
-        .await?;
     mirror_accepted_device_in_connection(conn, account, &payload, event, commit).await?;
     Ok(AcceptedDeviceAuthorizationOutcome::Committed(
         commit.clone(),

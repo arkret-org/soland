@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{BlobRef, Hash};
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::blob::BlobVisibility;
-use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
+use arkret_models_crypto::RecoveryIdentityModel;
 use arkret_wire::{
     ActorId, CommitStreamHead, DidCoreId, EventId, FreshnessState, PlaintextDataClassKind,
     RealmCommitAuthorityRef, RealmId,
@@ -190,7 +190,6 @@ pub struct RecoverySessionRecord {
     pub policy_version: u32,
     pub identity_model: RecoveryIdentityModel,
     pub current_device_generation_ref: u64,
-    pub device_generation_status: DeviceGenerationStatus,
     pub accepted_stream_head: CommitStreamHead,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).

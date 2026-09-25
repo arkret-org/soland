@@ -1016,45 +1016,6 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         queued_at: at,
     };
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query(
-        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=1 WHERE realm_id=$1",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    assert!(
-        backups
-            .confirmed_active_series_for_device(&account, &authorizer, at)
-            .await
-            .is_err()
-    );
-    assert!(
-        backups
-            .confirmed_list_page_for_device(&account, &authorizer, at, &list_query)
-            .await
-            .is_err()
-    );
-    assert!(
-        transactions
-            .commit_revoke_proposal(write.clone())
-            .await
-            .is_err()
-    );
-    let committed =
-        diesel::sql_query("SELECT COUNT(*) AS count FROM realm_commits WHERE commit_id=$1")
-            .bind::<Text, _>(covering.commit_id.as_str())
-            .get_result::<CountRow>(&mut *conn)
-            .await
-            .unwrap();
-    assert_eq!(committed.count, 0);
-    diesel::sql_query(
-        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=0 WHERE realm_id=$1",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .execute(&mut *conn)
-    .await
-    .unwrap();
     let mut bad_authorizer = write.clone();
     bad_authorizer.transaction.resource.authorizing_device_id = Some(target.clone());
     assert_eq!(
@@ -1699,30 +1660,6 @@ async fn key_backup_active_series_pointer_unit_commits_only_at_the_active_device
             .commit_active_series_pointer(write(tampered, tampered_commit))
             .await,
     ));
-    // An incomplete conflict-index cut cannot prove the device is active.
-    let mut conn = pool.get().await.unwrap();
-    diesel::sql_query(
-        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=1 WHERE realm_id=$1",
-    )
-    .bind::<Text, _>(author.realm_id.as_str())
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    let marker_event = author.event(valid.clone(), 32);
-    let marker_commit = station_successor(&head, &marker_event, &station_did, 1);
-    rejected.push((
-        "incomplete conflict marker",
-        backups
-            .commit_active_series_pointer(write(marker_event, marker_commit))
-            .await,
-    ));
-    diesel::sql_query(
-        "UPDATE pcr_device_conflict_index_cuts SET conflict_revision=0 WHERE realm_id=$1",
-    )
-    .bind::<Text, _>(author.realm_id.as_str())
-    .execute(&mut *conn)
-    .await
-    .unwrap();
     let expected_reasons = [
         ("stale generation", "backup_revision_stale"),
         (
@@ -1754,7 +1691,6 @@ async fn key_backup_active_series_pointer_unit_commits_only_at_the_active_device
             "tampered producer proof",
             "producer proof does not match the device key",
         ),
-        ("incomplete conflict marker", "status inputs are incomplete"),
     ];
     assert_eq!(rejected.len(), expected_reasons.len());
     for ((label, outcome), (expected_label, reason)) in rejected.iter().zip(expected_reasons) {
@@ -2111,7 +2047,6 @@ async fn accepted_device_unit_admits_only_a_current_active_approver() {
             .unwrap(),
         Some(soland_storage::PcrDeviceGeneration {
             current_device_generation_ref: 1,
-            conflicted: false,
         })
     );
     let before = accepted_device_footprint(&pool, &realm_id, &account).await;

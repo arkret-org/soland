@@ -3372,7 +3372,6 @@ CREATE TABLE public.recovery_sessions (
     policy_version integer NOT NULL,
     identity_model text NOT NULL,
     current_device_generation_ref bigint NOT NULL,
-    device_generation_status text NOT NULL,
     accepted_stream_head jsonb NOT NULL,
     policy_payload jsonb NOT NULL,
     authority_context jsonb NOT NULL,
@@ -3389,7 +3388,7 @@ CREATE TABLE public.recovery_sessions (
     CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = 'pcr_policy'::text)),
     CONSTRAINT recovery_sessions_create_intent_digest_check CHECK ((create_intent_digest ~ '^sha256:[0-9a-f]{64}$')),
     CONSTRAINT recovery_sessions_grant_cnf_jkt_check CHECK ((session_grant_cnf_jkt ~ '^[A-Za-z0-9_-]{43}$')),
-    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref > 0) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text]))),
+    CONSTRAINT recovery_sessions_generation_shape_check CHECK ((current_device_generation_ref > 0)),
     CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
     CONSTRAINT recovery_sessions_trust_domain_check CHECK ((trust_domain ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
     CONSTRAINT recovery_sessions_session_grant_id_key UNIQUE (session_grant_id),
@@ -4526,55 +4525,6 @@ CREATE TABLE pcr_device_revocation_proposals (
 );
 CREATE INDEX pcr_device_revocation_proposals_commit
  ON pcr_device_revocation_proposals(commit_id);
-
--- The station-local evidence ledger stores the two original signed objects.
--- affected_device_ids and affects_generation are derived only after both
--- branches and their common predecessor authority have been verified.
-CREATE TABLE pcr_verified_fork_records (
- realm_id TEXT NOT NULL,
- first_commit_id TEXT NOT NULL,
- second_commit_id TEXT NOT NULL,
- stream_position BIGINT NOT NULL CHECK(stream_position BETWEEN 0 AND 9007199254740991),
- previous_commit_id TEXT,
- first_commit JSONB NOT NULL CHECK(jsonb_typeof(first_commit)='object'),
- first_event JSONB NOT NULL CHECK(jsonb_typeof(first_event)='object'),
- first_accepted_binding JSONB NOT NULL CHECK(jsonb_typeof(first_accepted_binding)='object'),
- second_commit JSONB NOT NULL CHECK(jsonb_typeof(second_commit)='object'),
- second_event JSONB NOT NULL CHECK(jsonb_typeof(second_event)='object'),
- second_accepted_binding JSONB NOT NULL CHECK(jsonb_typeof(second_accepted_binding)='object'),
- affected_device_ids TEXT[] NOT NULL,
- affects_generation BOOLEAN NOT NULL,
- verified_at TIMESTAMPTZ NOT NULL,
- PRIMARY KEY(realm_id,first_commit_id,second_commit_id),
- CHECK(first_commit_id < second_commit_id),
- CHECK(first_commit ?& ARRAY['commit_id','realm_id','stream_ref','stream_position','previous_commit_ref','event_ref']),
- CHECK(second_commit ?& ARRAY['commit_id','realm_id','stream_ref','stream_position','previous_commit_ref','event_ref']),
- CHECK(first_event ? 'event_id' AND second_event ? 'event_id'),
- CHECK(first_commit->>'commit_id'=first_commit_id),
- CHECK(second_commit->>'commit_id'=second_commit_id),
- CHECK(first_commit->>'realm_id'=realm_id AND second_commit->>'realm_id'=realm_id),
- CHECK(first_commit->'stream_ref'=jsonb_build_object('kind','realm','realm_id',realm_id)),
- CHECK(second_commit->'stream_ref'=jsonb_build_object('kind','realm','realm_id',realm_id)),
- CHECK((first_commit->>'stream_position')::bigint=stream_position),
- CHECK((second_commit->>'stream_position')::bigint=stream_position),
- CHECK(first_commit->>'previous_commit_ref' IS NOT DISTINCT FROM previous_commit_id),
- CHECK(second_commit->>'previous_commit_ref' IS NOT DISTINCT FROM previous_commit_id),
- CHECK(first_commit->>'event_ref'=first_event->>'event_id'),
- CHECK(second_commit->>'event_ref'=second_event->>'event_id'),
- CHECK(cardinality(affected_device_ids) > 0),
- CHECK(array_position(affected_device_ids,NULL) IS NULL)
-);
-CREATE INDEX pcr_verified_fork_records_devices
- ON pcr_verified_fork_records USING gin(affected_device_ids);
-
--- A marker is complete only for the accepted PCR head and every locally
--- ingested verified fork. conflict_revision is the immutable record count.
-CREATE TABLE pcr_device_conflict_index_cuts (
- realm_id TEXT PRIMARY KEY,
- pcr_head_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
- conflict_revision BIGINT NOT NULL CHECK(conflict_revision BETWEEN 0 AND 9007199254740991),
- updated_at TIMESTAMPTZ NOT NULL
-);
 
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.

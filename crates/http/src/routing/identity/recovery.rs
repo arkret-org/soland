@@ -18,8 +18,8 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{Hash, PolicyId, RealmId, RecoverySessionId, TrustDomainId};
 use arkret_models_crypto::{
     AuthoritySetAuthorizationIssuer, AuthoritySetAuthorizationRule, AuthoritySetIssuerRole,
-    AuthoritySetPolicy, DeviceGenerationStatus, DidRootRecoveryTranscript,
-    GenericRecoveryTranscript, PublicationAuthorityContext, RecoveryIdentityModel, RecoveryPolicy,
+    AuthoritySetPolicy, DidRootRecoveryTranscript, GenericRecoveryTranscript,
+    PublicationAuthorityContext, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest,
     RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind,
     RecoverySession as RecoverySessionState, RecoverySessionCreateRequestBody,

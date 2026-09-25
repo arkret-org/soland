@@ -332,14 +332,6 @@ pub(super) fn typed_recovery_session_state(
         policy_version: transcript.policy_version,
         identity_model: transcript.identity_model,
         current_device_generation_ref: transcript.model_generation_ref,
-        device_generation_status: match record.device_generation_status {
-            DeviceGenerationStatus::Active => {
-                arkret_models_crypto::RecoveryDeviceGenerationStatus::Active
-            }
-            DeviceGenerationStatus::Conflicted => {
-                arkret_models_crypto::RecoveryDeviceGenerationStatus::Conflicted
-            }
-        },
         realm_stream_head: record.accepted_stream_head.clone(),
         publication_authority_context: record.publication_authority_context.clone(),
         publication_authority_context_digest: record.publication_authority_context_digest.clone(),
@@ -1015,13 +1007,9 @@ pub(super) async fn recovery_session_create(
             .await
             .map_err(recovery_store_error)?;
     let realm_id = authority_record.pcr_realm_id;
-    let (
-        identity_model,
-        current_device_generation_ref,
-        device_generation_status,
-        accepted_stream_head,
-    ) = if let Some(generation) = device_generation {
-        let accepted_stream_head =
+    let (identity_model, current_device_generation_ref, accepted_stream_head) =
+        if let Some(generation) = device_generation {
+            let accepted_stream_head =
             crate::routing::identity::device_generation::accepted_device_generation_commit_head(
                 state, &principal, &realm_id,
             )
@@ -1031,25 +1019,17 @@ pub(super) async fn recovery_session_create(
                 AppError::conflict("recovery requires a non-empty accepted RealmCommit stream")
                     .with_internal_reason("device_reanchor_frontier_mismatch")
             })?;
-        (
-            RecoveryIdentityModel::PcrPolicy,
-            generation.current_ref,
-            match generation.status {
-                crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
-                    DeviceGenerationStatus::Active
-                }
-                crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
-                    DeviceGenerationStatus::Conflicted
-                }
-            },
-            accepted_stream_head,
-        )
-    } else {
-        return Err(
-            AppError::conflict("recovery requires an accepted device generation")
-                .with_internal_reason("device_generation_missing"),
-        );
-    };
+            (
+                RecoveryIdentityModel::PcrPolicy,
+                generation.current_ref,
+                accepted_stream_head,
+            )
+        } else {
+            return Err(
+                AppError::conflict("recovery requires an accepted device generation")
+                    .with_internal_reason("device_generation_missing"),
+            );
+        };
 
     let publication_authority_context =
         pcr_policy_recovery_publication_authority_context(state, &active, &realm_id).await?;
@@ -1092,7 +1072,6 @@ pub(super) async fn recovery_session_create(
         policy_version: active.version,
         identity_model,
         current_device_generation_ref,
-        device_generation_status,
         accepted_stream_head,
         policy_payload: active.raw_payload.clone(),
         authority_context,

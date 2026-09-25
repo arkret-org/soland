@@ -8,10 +8,9 @@
 //! founding device, a successor names the current policy and advances its
 //! version, every `device_quorum` member is an active device of the same cut,
 //! and both the policy signature and the Event producer proof verify against
-//! the signer's accepted device key. The Event, its Commit, the accepted
-//! policy row and the PCR conflict-index marker become visible together or
-//! not at all. Quorum-authorized successors have no admission path yet and
-//! are refused.
+//! the signer's accepted device key. The Event, its Commit and the accepted
+//! policy row become visible together or not at all. An update authorized by
+//! the prior policy's device quorum has no registered carrier and is refused.
 
 use arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind;
 use arkret_models_crypto::{
@@ -54,9 +53,7 @@ fn signer_status_code(lifecycle: PcrDeviceLifecycle) -> ConflictCode {
     match lifecycle {
         PcrDeviceLifecycle::Revoked => ConflictCode::DeviceRevoked,
         PcrDeviceLifecycle::RevocationPending => ConflictCode::DeviceRevocationPending,
-        PcrDeviceLifecycle::GenerationFenced | PcrDeviceLifecycle::Conflicted => {
-            ConflictCode::DeviceGenerationFenced
-        }
+        PcrDeviceLifecycle::GenerationFenced => ConflictCode::DeviceGenerationFenced,
         PcrDeviceLifecycle::Active
         | PcrDeviceLifecycle::Expired
         | PcrDeviceLifecycle::NotYetEffective => ConflictCode::DeviceUnauthorized,
@@ -274,14 +271,9 @@ pub(crate) async fn commit_recovery_policy_unit_in_connection(
             "recovery policy Event is outside the account's PCR",
         ));
     }
-    if status.lifecycle != PcrDeviceLifecycle::Active || status.generation_conflicted {
-        let code = if status.lifecycle == PcrDeviceLifecycle::Active {
-            ConflictCode::DeviceGenerationFenced
-        } else {
-            signer_status_code(status.lifecycle)
-        };
+    if status.lifecycle != PcrDeviceLifecycle::Active {
         return Err(rejected(
-            code,
+            signer_status_code(status.lifecycle),
             "recovery policy signer is not active in the current generation",
         ));
     }
@@ -411,8 +403,6 @@ pub(crate) async fn commit_recovery_policy_unit_in_connection(
         verification_method: policy.auth_data.verification_method.as_str().to_owned(),
     };
     insert_accepted_policy_in_connection(conn, &record, policy.revokes_recovery()).await?;
-    crate::pcr_device_status_index::advance_pcr_conflict_index_cut_in_connection(conn, commit)
-        .await?;
     Ok(RecoveryPolicyPublicationOutcome::Committed(record))
 }
 
@@ -499,7 +489,7 @@ async fn check_quorum_members_active(
                         "quorum members and signer were read at different PCR heads",
                     ));
                 }
-                if status.lifecycle == PcrDeviceLifecycle::Active && !status.generation_conflicted {
+                if status.lifecycle == PcrDeviceLifecycle::Active {
                     active += 1;
                 }
             }

@@ -201,11 +201,7 @@ pub(crate) async fn try_resolve_device_signing_directory_facet(
         crate::routing::identity::device_generation::current_device_generation(state, principal_id)
             .await?;
     let generation_usable = match generation {
-        Some(generation) => {
-            generation.status
-                == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-                && payload.authorized_generation_ref == Some(generation.current_ref)
-        }
+        Some(generation) => payload.authorized_generation_ref == Some(generation.current_ref),
         None => payload.authorized_generation_ref.is_none(),
     };
     if !generation_usable {

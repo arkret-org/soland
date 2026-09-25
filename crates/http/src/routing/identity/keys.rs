@@ -355,8 +355,6 @@ fn attested_row_is_current(
 ) -> bool {
     let attested = &record.device_projection_attestation.attestation;
     attested.device_status == DeviceStatus::Active
-        && generation.generation_state.device_generation_status
-            == arkret_models_crypto::keys::DeviceGenerationStatus::Active
         && attested.authorized_generation_ref
             == generation.generation_state.current_device_generation_ref
 }
@@ -463,20 +461,14 @@ async fn keys_query(
             )
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-            .map(|generation| arkret_models_crypto::AccountDeviceGenerationEntry {
-                account_id: account_id.clone(),
-                generation_state: arkret_models_crypto::keys::DeviceGenerationState {
-                    current_device_generation_ref: generation.current_ref,
-                    device_generation_status: match generation.status {
-                        crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
-                            arkret_models_crypto::keys::DeviceGenerationStatus::Active
-                        }
-                        crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
-                            arkret_models_crypto::keys::DeviceGenerationStatus::Conflicted
-                        }
+            .map(
+                |generation| arkret_models_crypto::AccountDeviceGenerationEntry {
+                    account_id: account_id.clone(),
+                    generation_state: arkret_models_crypto::keys::DeviceGenerationState {
+                        current_device_generation_ref: generation.current_ref,
                     },
                 },
-            });
+            );
         if let Some(entry) = generation_entry.clone() {
             device_generations.push(entry);
         }
@@ -521,7 +513,7 @@ async fn keys_query(
                 )
                 .await;
             // `device-lifecycle.md` §8.2: a row is complete and attested or it
-            // is not returned. A revoked, unverified, fenced or conflicted
+            // is not returned. A revoked, unverified or fenced
             // device is omitted entirely rather than degraded into a partial
             // row, so its prekey bundle is never surfaced, no signing key
             // leaks, and a caller can never mistake an incomplete row for a
@@ -846,10 +838,6 @@ async fn peer_keys_query(
                 account_id: selector.account_id.clone(),
                 generation_state: arkret_models_crypto::keys::DeviceGenerationState {
                     current_device_generation_ref: generation.current_ref,
-                    device_generation_status: match generation.status {
-                        crate::routing::identity::device_generation::DeviceGenerationStatus::Active => arkret_models_crypto::keys::DeviceGenerationStatus::Active,
-                        crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => arkret_models_crypto::keys::DeviceGenerationStatus::Conflicted,
-                    },
                 },
             });
         }

@@ -244,7 +244,6 @@ impl Fixture {
             policy_version: typed_policy.version,
             identity_model: crypto::RecoveryIdentityModel::PcrPolicy,
             current_device_generation_ref: 1,
-            device_generation_status: crypto::RecoveryDeviceGenerationStatus::Active,
             realm_stream_head: wire::CommitStreamHead {
                 stream_ref: stream_ref.clone(),
                 stream_position: 0,

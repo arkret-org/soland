@@ -190,7 +190,7 @@ pub enum ConflictCode {
     CasConflict,
     /// An exact source needed for a current reducer result is unavailable.
     DependencyMissing,
-    /// The exact device generation is no longer current or is conflicted.
+    /// The exact device generation is no longer current.
     DeviceGenerationFenced,
     /// The exact device generation has an unresolved revoke proposal.
     DeviceRevocationPending,

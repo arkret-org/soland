@@ -1,6 +1,6 @@
 //! Read-side PCR device lifecycle fold. The caller must supply a complete,
 //! verified same-snapshot input set; this module never reads an empty cache as
-//! evidence of no revocation or conflict.
+//! evidence of no revocation.
 
 use arkret_models_collaboration::events_payloads::DeviceAuthorizePayload;
 use chrono::{DateTime, Utc};
@@ -15,7 +15,6 @@ pub(crate) enum RevokeCommandDecision {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PcrDeviceLifecycle {
     Revoked,
-    Conflicted,
     GenerationFenced,
     RevocationPending,
     Expired,
@@ -24,19 +23,15 @@ pub(crate) enum PcrDeviceLifecycle {
 }
 
 /// This folds already confirmed inputs only. SQL provenance, authoritative
-/// terminal binding and conflict-index completeness are verified before call.
+/// terminal binding and same-head completeness are verified before call.
 pub(crate) fn fold_confirmed_device_status(
     authorization: &DeviceAuthorizePayload,
     current_generation: u64,
     proposals: &[RevokeCommandDecision],
-    has_verified_device_conflict: bool,
     now: DateTime<Utc>,
 ) -> PcrDeviceLifecycle {
     if proposals.contains(&RevokeCommandDecision::Accepted) {
         return PcrDeviceLifecycle::Revoked;
-    }
-    if has_verified_device_conflict {
-        return PcrDeviceLifecycle::Conflicted;
     }
     if authorization.authorized_generation_ref != current_generation {
         return PcrDeviceLifecycle::GenerationFenced;
@@ -81,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_revoke_wins_even_with_other_pending_or_conflict() {
+    fn accepted_revoke_wins_even_with_another_pending_dot() {
         let now = "2026-09-24T00:00:00Z".parse().unwrap();
         assert_eq!(
             fold_confirmed_device_status(
@@ -92,7 +87,6 @@ mod tests {
                     RevokeCommandDecision::Pending,
                     RevokeCommandDecision::Accepted,
                 ],
-                true,
                 now,
             ),
             PcrDeviceLifecycle::Revoked
@@ -111,7 +105,6 @@ mod tests {
                     RevokeCommandDecision::Rejected,
                     RevokeCommandDecision::Pending,
                 ],
-                false,
                 now,
             ),
             PcrDeviceLifecycle::RevocationPending
@@ -121,7 +114,6 @@ mod tests {
                 &authorization,
                 1,
                 &[RevokeCommandDecision::Rejected],
-                false,
                 now,
             ),
             PcrDeviceLifecycle::Active

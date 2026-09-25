@@ -1868,7 +1868,6 @@ async fn put_account_device_placeholder(
 #[derive(Clone, Copy, Debug)]
 struct DeviceStatusFoldInputs {
     revoked: bool,
-    conflicted: bool,
     generation_fenced: bool,
     revocation_pending: bool,
     expired: bool,
@@ -1879,8 +1878,6 @@ struct DeviceStatusFoldInputs {
 fn fold_device_summary_status(inputs: DeviceStatusFoldInputs) -> DeviceSummaryStatus {
     if inputs.revoked {
         DeviceSummaryStatus::Revoked
-    } else if inputs.conflicted {
-        DeviceSummaryStatus::Conflicted
     } else if inputs.generation_fenced {
         DeviceSummaryStatus::GenerationFenced
     } else if inputs.revocation_pending {
@@ -1969,12 +1966,10 @@ async fn account_device_summary(
         .and_then(Value::as_str)
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|value| value.with_timezone(&chrono::Utc) <= now());
-    // Soland retains no device-scoped conflict evidence and no
-    // `device_revocation_proposals` keyed set yet, so those two inputs are
-    // false rather than derived from re-anchor candidates or gate rows.
+    // Soland does not read the `device_revocation_proposals` keyed set here
+    // yet, so that input is false rather than derived from gate rows.
     let status = fold_device_summary_status(DeviceStatusFoldInputs {
         revoked: device.revoked_at.is_some(),
-        conflicted: false,
         generation_fenced,
         revocation_pending: false,
         expired,
@@ -2041,17 +2036,15 @@ mod tests {
 
     #[test]
     fn device_status_fold_takes_the_first_condition_in_registered_precedence() {
-        for mask in 0u8..32 {
+        for mask in 0u8..16 {
             let inputs = DeviceStatusFoldInputs {
                 revoked: mask & 1 != 0,
-                conflicted: mask & 2 != 0,
-                generation_fenced: mask & 4 != 0,
-                revocation_pending: mask & 8 != 0,
-                expired: mask & 16 != 0,
+                generation_fenced: mask & 2 != 0,
+                revocation_pending: mask & 4 != 0,
+                expired: mask & 8 != 0,
             };
             let expected = [
                 (inputs.revoked, DeviceSummaryStatus::Revoked),
-                (inputs.conflicted, DeviceSummaryStatus::Conflicted),
                 (
                     inputs.generation_fenced,
                     DeviceSummaryStatus::GenerationFenced,
@@ -2073,7 +2066,6 @@ mod tests {
     fn generation_fence_outranks_expiry() {
         let status = fold_device_summary_status(DeviceStatusFoldInputs {
             revoked: false,
-            conflicted: false,
             generation_fenced: true,
             revocation_pending: false,
             expired: true,

@@ -4,7 +4,6 @@ use std::hash::{Hash as _, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use arkret_identifiers::{DeviceId, EventId, RealmId};
-pub use arkret_models_crypto::keys::DeviceGenerationStatus;
 pub(crate) use confirmed::{ConfirmedDeviceHistory, load_confirmed_device_history};
 use serde_json::Value;
 use soland_services::ServiceError;
@@ -30,12 +29,11 @@ pub fn device_generation_admission_lock(scope_id: &str) -> Arc<tokio::sync::Mute
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceGenerationView {
     pub current_ref: u64,
-    pub status: DeviceGenerationStatus,
 }
 
 /// The accepted PCR `device_generation` typed current of this Station's
-/// Account (device-lifecycle.md §5.5.4) and its read-side status, from one
-/// confirmed cut. `None` when this Station holds no PCR for the Account.
+/// Account (device-lifecycle.md §5.5.4), read at one confirmed cut. `None` when this Station holds
+/// no PCR for the Account.
 pub async fn current_device_generation(
     state: &AppState,
     principal_id: &str,
@@ -53,11 +51,6 @@ pub async fn current_device_generation(
         .await?
         .map(|generation| DeviceGenerationView {
             current_ref: generation.current_device_generation_ref,
-            status: if generation.conflicted {
-                DeviceGenerationStatus::Conflicted
-            } else {
-                DeviceGenerationStatus::Active
-            },
         }))
 }
 
@@ -110,7 +103,6 @@ pub async fn active_device_revocation_gate_selector(
         .map_err(|error| ServiceError::SchemaViolation(format!("device id is invalid: {error}")))?;
     let generation = current_device_generation(state, principal_id.as_str())
         .await?
-        .filter(|generation| generation.status == DeviceGenerationStatus::Active)
         .ok_or_else(|| generation_fenced("device generation is not active"))?;
     let device = state
         .identities()
@@ -152,7 +144,7 @@ pub async fn active_device_revocation_gate_selector(
         ));
     }
     // The confirmed history names the authorization instance; whether that
-    // device is still usable (not pending, revoked, fenced or conflicted) is
+    // device is still usable (not pending, revoked or fenced) is
     // the same-cut PCR device status, and nothing else.
     let admission = state
         .persistence()

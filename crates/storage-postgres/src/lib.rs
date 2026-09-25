@@ -42,10 +42,6 @@ mod contacts;
 #[cfg(test)]
 #[path = "../../test-support/src/device_authorization_history.rs"]
 mod device_authorization_history;
-#[cfg(test)]
-#[path = "../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
-mod pcr_genesis;
 mod device_revocations;
 mod devices;
 mod event_notifications;
@@ -71,16 +67,20 @@ mod pcr_accepted_device_unit;
 mod pcr_device_current_results;
 mod pcr_device_revocation_proposals;
 mod pcr_device_status_fold;
-mod pcr_device_status_index;
 mod pcr_device_status_reader;
+#[cfg(test)]
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 mod pcr_recovery_policy_unit;
-mod pcr_verified_fork_records;
 mod policy;
 mod principal_resolution;
 mod projection;
 mod publication_evidence;
 mod push;
 mod push_handoff;
+#[cfg(test)]
+mod read_capacity_tests;
 mod read_cursors;
 mod realm_bootstrap_current_results;
 mod realm_default_strand_current_results;
@@ -102,8 +102,6 @@ mod strand_current_results;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_database;
-#[cfg(test)]
-mod read_capacity_tests;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;

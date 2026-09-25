@@ -575,8 +575,8 @@ pub trait AuthorityCommitStore: Send + Sync {
     /// payload must name that generation, the target device must have no
     /// authorization history, and the target possession signature and the
     /// approver's producer proof must verify. The Event, Commit, typed device
-    /// authorization, conflict-index marker and device mirror are written in
-    /// one transaction; any refusal writes nothing.
+    /// authorization and device mirror are written in one transaction; any
+    /// refusal writes nothing.
     async fn admit_accepted_device_authorization(
         &self,
         transaction: &AuthorityCommitTransaction,

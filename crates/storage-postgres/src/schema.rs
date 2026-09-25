@@ -1339,7 +1339,6 @@ diesel::table! {
         policy_version -> Int4,
         identity_model -> Text,
         current_device_generation_ref -> Int8,
-        device_generation_status -> Text,
         accepted_stream_head -> Jsonb,
         policy_payload -> Jsonb,
         authority_context -> Jsonb,

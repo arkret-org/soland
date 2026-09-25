@@ -358,10 +358,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::capability_denied("recovery generation missing"))?;
-            if generation.current_ref != record.current_device_generation_ref
-                || generation.status
-                    != crate::routing::identity::device_generation::DeviceGenerationStatus::Active
-            {
+            if generation.current_ref != record.current_device_generation_ref {
                 return Err(AppError::capability_denied("recovery generation changed"));
             }
             let key = &record.requesting_device_public_key_did;

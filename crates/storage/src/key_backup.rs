@@ -141,8 +141,8 @@ pub trait KeyBackupStore: Send + Sync {
             "same-cut KeyBackup listing is unavailable".to_owned(),
         ))
     }
-    /// Accept one active-series pointer Event, its PCR RealmCommit, the typed
-    /// current pointer and the PCR conflict-index marker atomically.
+    /// Accept one active-series pointer Event, its PCR RealmCommit and the
+    /// typed current pointer atomically.
     async fn commit_active_series_pointer(
         &self,
         _write: KeyBackupActiveSeriesCommitWrite,

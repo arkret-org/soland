@@ -198,7 +198,7 @@ async fn active_authorizer_cut(
             "rotation signing device belongs to another PCR",
         ));
     }
-    if cut.generation_conflicted || cut.lifecycle != PcrDeviceLifecycle::Active {
+    if cut.lifecycle != PcrDeviceLifecycle::Active {
         let code = match cut.lifecycle {
             PcrDeviceLifecycle::Revoked => ConflictCode::DeviceRevoked,
             PcrDeviceLifecycle::RevocationPending => ConflictCode::DeviceRevocationPending,

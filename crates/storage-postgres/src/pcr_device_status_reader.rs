@@ -1,5 +1,5 @@
 //! One repeatable-read PCR cut for the device lifecycle inputs. No caller may
-//! infer `active` from an empty fork table or an absent transaction result.
+//! infer `active` from an absent transaction result.
 
 use arkret_models_crypto::{SecurityRotationRevokeCommandResult, SecurityTransactionStep};
 use arkret_wire::{AccountId, DeviceId};
@@ -20,16 +20,6 @@ use crate::{
 
 #[derive(QueryableByName)]
 struct StatusInputsRow {
-    #[diesel(sql_type = Text)]
-    pcr_head_commit_id: String,
-    #[diesel(sql_type = BigInt)]
-    conflict_revision: i64,
-    #[diesel(sql_type = BigInt)]
-    conflict_record_count: i64,
-    #[diesel(sql_type = BigInt)]
-    device_conflict_count: i64,
-    #[diesel(sql_type = BigInt)]
-    generation_conflict_count: i64,
     #[diesel(sql_type = BigInt)]
     proposal_count: i64,
     #[diesel(sql_type = BigInt)]
@@ -41,26 +31,19 @@ struct StatusInputsRow {
 pub(crate) struct ConfirmedPcrDeviceStatusCut {
     pub authority: ConfirmedPcrDeviceCut,
     pub lifecycle: PcrDeviceLifecycle,
-    pub generation_conflicted: bool,
 }
 
 impl ConfirmedPcrDeviceStatusCut {
     /// Fold this cut into the current-device admission decision shared by
-    /// every human-device producer gate; a conflicted generation fences an
-    /// otherwise active device, and an instant outside the accepted
+    /// every human-device producer gate; an instant outside the accepted
     /// authorization window has no complete current authorization.
     pub(crate) fn admission(&self) -> arkret_wire::DeviceRevocationAdmissionDecision {
         use arkret_wire::DeviceRevocationAdmissionDecision as Decision;
         match self.lifecycle {
-            PcrDeviceLifecycle::Active if self.generation_conflicted => {
-                Decision::GenerationMismatch
-            }
             PcrDeviceLifecycle::Active => Decision::Allow,
             PcrDeviceLifecycle::Revoked => Decision::Revoked,
             PcrDeviceLifecycle::RevocationPending => Decision::RevocationPending,
-            PcrDeviceLifecycle::GenerationFenced | PcrDeviceLifecycle::Conflicted => {
-                Decision::GenerationMismatch
-            }
+            PcrDeviceLifecycle::GenerationFenced => Decision::GenerationMismatch,
             PcrDeviceLifecycle::Expired | PcrDeviceLifecycle::NotYetEffective => {
                 Decision::AuthorityMismatch
             }
@@ -105,10 +88,7 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
         return Ok(None);
     };
     let row = sql_query(
-            "SELECT m.pcr_head_commit_id,m.conflict_revision, \
-               (SELECT count(*) FROM pcr_verified_fork_records f WHERE f.realm_id=$1) AS conflict_record_count, \
-               (SELECT count(*) FROM pcr_verified_fork_records f WHERE f.realm_id=$1 AND $2=ANY(f.affected_device_ids)) AS device_conflict_count, \
-               (SELECT count(*) FROM pcr_verified_fork_records f WHERE f.realm_id=$1 AND f.affects_generation) AS generation_conflict_count, \
+            "SELECT \
                (SELECT count(*) FROM pcr_device_revocation_proposals r WHERE r.realm_id=$1 AND r.device_id=$2) AS proposal_count, \
                (SELECT count(*) FROM pcr_device_revocation_proposals r JOIN security_transactions t \
                   ON t.revoke_proposal->>'proposal_event_id'=r.event_id \
@@ -127,20 +107,15 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
                    AND t.revoke_proposal->>'covering_commit_id'=r.commit_id \
                    AND t.kind='security_rotation' AND t.principal_id=$3 AND t.station_id=$4 \
                    AND t.prepared_plan->'revoke_unit'->'request'->'events'->0->>'event_id'=r.event_id \
-                 WHERE r.realm_id=$1 AND r.device_id=$2) AS transaction_rows \
-             FROM pcr_device_conflict_index_cuts m WHERE m.realm_id=$1",
+                 WHERE r.realm_id=$1 AND r.device_id=$2) AS transaction_rows",
         )
         .bind::<Text, _>(authority.realm_id.as_str())
         .bind::<Text, _>(device_id.as_str())
         .bind::<Text, _>(account.principal_id.as_str())
         .bind::<Text, _>(account.station_id.as_str())
         .get_result::<StatusInputsRow>(&mut *conn)
-        .await
-        .optional()?
-        .ok_or_else(|| incomplete("PCR conflict index cut is missing"))?;
-    if row.pcr_head_commit_id != authority.authority_commit_id.as_str()
-        || row.conflict_revision != row.conflict_record_count
-        || row.proposal_count != authority.proposals.len() as i64
+        .await?;
+    if row.proposal_count != authority.proposals.len() as i64
         || row.bound_transaction_count != row.proposal_count
     {
         return Err(incomplete("PCR device status inputs are incomplete").into());
@@ -230,24 +205,16 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
     let generation = authority
         .current_generation
         .ok_or_else(|| incomplete("PCR device has no current generation"))?;
-    let lifecycle = fold_confirmed_device_status(
-        &authorization.payload,
-        generation,
-        &decisions,
-        row.device_conflict_count > 0,
-        now,
-    );
+    let lifecycle =
+        fold_confirmed_device_status(&authorization.payload, generation, &decisions, now);
     Ok(Some(ConfirmedPcrDeviceStatusCut {
         authority,
         lifecycle,
-        generation_conflicted: row.generation_conflict_count > 0,
     }))
 }
 
 #[derive(QueryableByName)]
 struct GenerationCutRow {
-    #[diesel(sql_type = Text)]
-    head_commit_id: String,
     #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
     generation_commit_id: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
@@ -256,20 +223,12 @@ struct GenerationCutRow {
     latest_generation_commit_id: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
     expected_generation_value: Option<Value>,
-    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
-    marker_head_commit_id: Option<String>,
-    #[diesel(sql_type = diesel::sql_types::Nullable<BigInt>)]
-    conflict_revision: Option<i64>,
-    #[diesel(sql_type = BigInt)]
-    conflict_record_count: i64,
-    #[diesel(sql_type = BigInt)]
-    generation_conflict_count: i64,
 }
 
-/// The PCR `device_generation` typed current and its read-side status from
-/// one REPEATABLE READ snapshot. The projection must equal what its latest
-/// accepted writer (the registration anchor or a reanchor) derives, and the
-/// conflict-index marker must cover the PCR head, or the read fails closed.
+/// The PCR `device_generation` typed current from one REPEATABLE READ
+/// snapshot of an accepted PCR head. The projection must equal what its latest
+/// accepted writer (the registration anchor or a reanchor) derives, or the
+/// read fails closed.
 pub(crate) async fn confirmed_pcr_generation(
     pool: &PgPool,
     account: &AccountId,
@@ -280,7 +239,7 @@ pub(crate) async fn confirmed_pcr_generation(
             .execute(&mut *conn)
             .await?;
         let row = sql_query(
-            "SELECT h.commit_id AS head_commit_id, \
+            "SELECT \
                g.current_commit_id AS generation_commit_id, g.value AS generation_value, \
                (SELECT c.commit_id FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
                 WHERE c.realm_id=p.pcr_realm_id AND \
@@ -297,19 +256,13 @@ pub(crate) async fn confirmed_pcr_generation(
                   (e.kind='ak.device.reanchor' OR \
                    (e.kind='ak.device.authorize' AND \
                     e.envelope->'payload'->>'authorization_binding_kind'='registration_anchor')) \
-                ORDER BY c.stream_position DESC LIMIT 1) AS expected_generation_value, \
-               m.pcr_head_commit_id AS marker_head_commit_id, m.conflict_revision, \
-               (SELECT count(*) FROM pcr_verified_fork_records f WHERE f.realm_id=p.pcr_realm_id) \
-                 AS conflict_record_count, \
-               (SELECT count(*) FROM pcr_verified_fork_records f \
-                 WHERE f.realm_id=p.pcr_realm_id AND f.affects_generation) AS generation_conflict_count \
+                ORDER BY c.stream_position DESC LIMIT 1) AS expected_generation_value \
              FROM principal_resolutions p \
              JOIN LATERAL (SELECT commit_id FROM realm_commits \
                            WHERE realm_id=p.pcr_realm_id \
                              AND stream_ref=jsonb_build_object('kind','realm','realm_id',p.pcr_realm_id) \
                            ORDER BY stream_position DESC LIMIT 1) h ON TRUE \
              LEFT JOIN pcr_device_generation_current_results g ON g.realm_id=p.pcr_realm_id \
-             LEFT JOIN pcr_device_conflict_index_cuts m ON m.realm_id=p.pcr_realm_id \
              WHERE p.principal_id=$1 AND p.station_id=$2",
         )
         .bind::<Text, _>(account.principal_id.as_str())
@@ -324,11 +277,6 @@ pub(crate) async fn confirmed_pcr_generation(
         {
             return Err(incomplete("PCR device generation projection is behind accepted Commit").into());
         }
-        if row.marker_head_commit_id.as_deref() != Some(row.head_commit_id.as_str())
-            || row.conflict_revision != Some(row.conflict_record_count)
-        {
-            return Err(incomplete("PCR conflict index cut does not cover the head").into());
-        }
         let value = row.generation_value.expect("checked above");
         let object = value
             .as_object()
@@ -340,7 +288,6 @@ pub(crate) async fn confirmed_pcr_generation(
             .ok_or_else(|| incomplete("PCR generation value is invalid"))?;
         Ok(Some(soland_storage::PcrDeviceGeneration {
             current_device_generation_ref: current,
-            conflicted: row.generation_conflict_count > 0,
         }))
     })
     .await

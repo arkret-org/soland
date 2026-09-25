@@ -189,8 +189,6 @@ struct RecoverySessionRow {
     identity_model: String,
     #[diesel(sql_type = sql_types::BigInt)]
     current_device_generation_ref: i64,
-    #[diesel(sql_type = Text)]
-    device_generation_status: String,
     #[diesel(sql_type = Jsonb)]
     accepted_stream_head: Value,
     #[diesel(sql_type = Jsonb)]
@@ -242,15 +240,6 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                     row.recovery_session_id
                 ))
             })?;
-        let device_generation_status = serde_json::from_value(Value::String(
-            row.device_generation_status,
-        ))
-        .map_err(|error| {
-            PersistenceError::Internal(format!(
-                "recovery session `{}` has invalid device_generation_status: {error}",
-                row.recovery_session_id
-            ))
-        })?;
         let accepted_stream_head =
             serde_json::from_value(row.accepted_stream_head).map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -319,7 +308,6 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             policy_version,
             identity_model,
             current_device_generation_ref,
-            device_generation_status,
             accepted_stream_head,
             policy_payload: row.policy_payload,
             authority_context,
@@ -339,12 +327,12 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 }
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, \
      trust_domain, policy_id, policy_version, identity_model, \
-     current_device_generation_ref, device_generation_status, accepted_stream_head, \
+     current_device_generation_ref, accepted_stream_head, \
      policy_payload, authority_context, publication_authority_context, publication_authority_context_digest, \
      challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
 
 /// Snake_case wire name of the canonical SDK `SessionState`, matching the
-/// `identity_model` / `device_generation_status` text-column encoding above.
+/// `identity_model` text-column encoding above.
 fn session_state_label(state: RecoverySessionLifecycle) -> &'static str {
     match state {
         RecoverySessionLifecycle::Pending => "pending",
@@ -422,10 +410,6 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let device_generation_status = match record.device_generation_status {
-            arkret_models_crypto::DeviceGenerationStatus::Active => "active",
-            arkret_models_crypto::DeviceGenerationStatus::Conflicted => "conflicted",
-        };
         conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
         crate::key_backup_unlock::validate_recovery_unlock_policy(conn, &recovery_policy_session_value(&record), chrono::Utc::now()).await?;
         #[derive(QueryableByName)]
@@ -440,10 +424,10 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             "INSERT INTO recovery_sessions \
              (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, requesting_device_public_key_did, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
-              device_generation_status, accepted_stream_head, policy_payload, \
+              accepted_stream_head, policy_payload, \
               authority_context, publication_authority_context, publication_authority_context_digest, challenge, \
               state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -471,7 +455,6 @@ impl RecoverySessionStore for PgRecoverySessionStore {
                     .to_owned(),
             )
         })?))
-        .bind::<Nullable<Text>, _>(Some(device_generation_status))
         .bind::<Nullable<Jsonb>, _>(Some(
             serde_json::to_value(&record.accepted_stream_head).map_err(|error| {
                 PersistenceError::Internal(format!(
