@@ -239,6 +239,8 @@ pub enum ConflictCode {
     RecoveryPolicyVersionNotMonotonic,
     /// A recovery policy does not supersede the active policy exactly.
     RecoveryPolicySupersedesInvalid,
+    /// The first accepted recovery policy of an account is not version 1.
+    RecoveryPolicyGenesisNotV1,
     /// A recovery session with the requested id already exists.
     RecoverySessionAlreadyExists,
     /// A registered reducer could not produce the required typed result.
@@ -266,7 +268,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::BackupRevisionStale,
@@ -294,6 +296,7 @@ impl ConflictCode {
         Self::RecoveryPolicyConflict,
         Self::RecoveryPolicyVersionNotMonotonic,
         Self::RecoveryPolicySupersedesInvalid,
+        Self::RecoveryPolicyGenesisNotV1,
         Self::RecoverySessionAlreadyExists,
         Self::ReducerProjectionFailed,
         Self::OrganizationRegistrationChallengeInvalid,
@@ -339,6 +342,7 @@ impl ConflictCode {
             Self::RecoveryPolicyConflict => "recovery_policy_conflict",
             Self::RecoveryPolicyVersionNotMonotonic => "recovery_policy_version_not_monotonic",
             Self::RecoveryPolicySupersedesInvalid => "recovery_policy_supersedes_invalid",
+            Self::RecoveryPolicyGenesisNotV1 => "recovery_policy_genesis_not_v1",
             Self::RecoverySessionAlreadyExists => "recovery_session_already_exists",
             Self::ReducerProjectionFailed => "reducer_projection_failed",
             Self::OrganizationRegistrationChallengeInvalid => {

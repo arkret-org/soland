@@ -93,32 +93,6 @@ fn recovery_policy_publish_outcome(
     })
 }
 
-pub(super) async fn recovery_policy_acceptance_basis(
-    state: &AppState,
-    realm_id: &RealmId,
-    event_id: &arkret_wire::EventId,
-) -> Result<arkret_wire::RealmCommitId, AppError> {
-    let committed = state
-        .authority_commits()
-        .committed_event(event_id)
-        .await
-        .map_err(|error| AppError::internal(format!("recovery policy Commit lookup: {error}")))?
-        .ok_or_else(|| AppError::conflict("accepted recovery policy Event has no RealmCommit"))?;
-    if committed.event.event_id != *event_id
-        || committed.commit.event_ref != *event_id
-        || committed.commit.realm_id != *realm_id
-        || committed.commit.stream_ref
-            != (arkret_wire::CommitStreamRef::Realm {
-                realm_id: realm_id.clone(),
-            })
-    {
-        return Err(AppError::conflict(
-            "recovery policy acceptance basis is not the exact PCR RealmCommit",
-        ));
-    }
-    Ok(committed.commit.commit_id)
-}
-
 #[salvo::oapi::endpoint(
     operation_id = "ak.root.identity.recovery_policy.resource.get",
     tags("identity")
@@ -194,7 +168,6 @@ pub(super) async fn recovery_policy_put(
     aa: AuthArgs,
     body: JsonBody<RecoveryPolicyPublishRequest>,
     depot: &mut Depot,
-    res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<RecoveryPolicyPublishOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -209,10 +182,10 @@ pub(super) async fn recovery_policy_put(
     let payload = serde_json::to_value(&typed_payload.value)
         .map_err(|error| AppError::internal(format!("recovery policy serialize: {error}")))?;
 
-    let validated = validate_recovery_policy(&payload)?;
+    let policy_account = validate_recovery_policy(&payload)?;
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
-    if validated.account_id
+    if policy_account
         != *session_actor.as_account_id().ok_or_else(|| {
             crate::app_error!(
                 CapabilityDenied,
@@ -227,36 +200,68 @@ pub(super) async fn recovery_policy_put(
         )
         .with_reason_code("recovery_principal_isolation"));
     }
-    let realm_id = request.event().realm_id.clone();
-    if !state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string())
-        || request.event().scope_ref
-            != (arkret_wire::ScopeRef::Realm {
-                realm_id: realm_id.clone(),
-            })
-    {
-        return Err(crate::app_error!(
-            CapabilityDenied,
-            "recovery policy Event must target the principal's Principal Control Realm",
-        )
-        .with_internal_reason("recovery_principal_control_realm_mismatch"));
+    if request.submission().approval_signatures.is_some() {
+        return Err(AppError::param_invalid(
+            "a device-signed recovery policy publication carries no approval signatures",
+        ));
     }
-    let existing = state
-        .recovery_policies()
-        .active_policy(&validated.account_id)
+    let event = request.event();
+    let committed_at = chrono::Utc::now();
+    let method = DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    // Signer device, generation, version ratchet, quorum membership and both
+    // signatures are decided by the registered PCR unit at the locked cut.
+    let transaction = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
         .await
-        .map_err(recovery_service_error)?;
+        .map_err(recovery_policy_publication_error)?;
+    let outcome = state
+        .recovery_policies()
+        .commit_publication(soland_storage::RecoveryPolicyPublicationWrite {
+            commit: transaction,
+            queued_at: committed_at,
+        })
+        .await
+        .map_err(recovery_policy_publication_error)?;
+    let record = match outcome {
+        soland_storage::RecoveryPolicyPublicationOutcome::Committed(record)
+        | soland_storage::RecoveryPolicyPublicationOutcome::Duplicate(record) => record,
+    };
+    json_ok(recovery_policy_publish_outcome(&record)?)
+}
 
-    verify_recovery_policy_auth_signature(state, &payload, &validated, &session, existing.as_ref())
-        .await?;
-
-    // Publication must use the formal EventAdmissionSubmission ingress. The
-    // legacy initial-submission path cannot commit this signed Event; refuse
-    // before any Event or policy projection is written until that ingress lands.
-    Err(crate::app_error!(
-        TemporarilyUnavailable,
-        "recovery policy publication awaits EventAdmissionSubmission ingress",
-    ))
+fn recovery_policy_publication_error(error: soland_services::ServiceError) -> AppError {
+    use soland_storage::ConflictCode;
+    let registered = match error.conflict_code() {
+        // §8.1: the signer is not an active current-generation device of
+        // this account; the operation has no device-specific code.
+        Some(
+            ConflictCode::DeviceRevoked
+            | ConflictCode::DeviceRevocationPending
+            | ConflictCode::DeviceGenerationFenced
+            | ConflictCode::DeviceUnauthorized,
+        ) => Some(ErrorCode::CapabilityDenied),
+        Some(ConflictCode::SignatureInvalid) => Some(ErrorCode::SignatureInvalid),
+        Some(ConflictCode::SchemaViolation | ConflictCode::EventIdDigestMismatch) => {
+            Some(ErrorCode::SchemaViolation)
+        }
+        Some(ConflictCode::FailedPrecondition) => Some(ErrorCode::FailedPrecondition),
+        Some(ConflictCode::UnsupportedFeature) => Some(ErrorCode::UnsupportedFeature),
+        _ => None,
+    };
+    match registered {
+        Some(code) => AppError::new(code, error.detail()),
+        None => recovery_policy_service_error(error),
+    }
 }

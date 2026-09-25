@@ -3764,3 +3764,318 @@ async fn commit_at_position(
     .unwrap();
     serde_json::from_value(row.commit_json).unwrap()
 }
+
+#[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+struct PolicyFootprint {
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    commits: i64,
+    #[diesel(sql_type = BigInt)]
+    policies: i64,
+}
+
+async fn policy_footprint(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &arkret_wire::AccountId,
+) -> PolicyFootprint {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
+                (SELECT COUNT(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
+                (SELECT COUNT(*) FROM recovery_policies WHERE principal_id=$2 AND station_id=$3) \
+                  AS policies",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(account.principal_id.as_str())
+    .bind::<Text, _>(account.station_id.as_str())
+    .get_result::<PolicyFootprint>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+/// One `ak.policy.set` recovery policy Event whose policy and producer proof
+/// are both signed with `seed` under `method`.
+#[allow(clippy::too_many_arguments)]
+fn recovery_policy_event(
+    account: &arkret_wire::AccountId,
+    realm_id: &RealmId,
+    method: &DidUrl,
+    seed: [u8; 32],
+    policy_id: &str,
+    version: u64,
+    supersedes: Option<&str>,
+    quorum: &[&DeviceId],
+) -> arkret_wire::Event {
+    let mut policy: arkret_models_crypto::RecoveryPolicy =
+        serde_json::from_value(serde_json::json!({
+            "schema": "ak.schema.recovery_policy.v1",
+            "policy_id": policy_id,
+            "account_id": account,
+            "version": version,
+            "supersedes_id": supersedes,
+            "trust_domain": "ak:trust_domain:station.example",
+            "issued_at": "2026-09-25T00:00:00.000Z",
+            "auth_data": {
+                "verification_method": method,
+                "signature_algorithm": "Ed25519",
+                "signature": "AA"
+            },
+            "methods": [{"kind": "device_quorum", "k": 2, "member_ids": quorum}]
+        }))
+        .unwrap();
+    let transcript =
+        arkret_models_crypto::recovery_policy_signature_transcript_bytes(&policy).unwrap();
+    policy.auth_data.signature =
+        arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            SigningKey::from_bytes(&seed).sign(&transcript).to_bytes(),
+        ))
+        .unwrap();
+    let payload = serde_json::json!({"policy_id": policy_id, "value": policy});
+    device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::PolicySet.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            payload,
+        )
+        .unwrap(),
+        method.clone(),
+        seed,
+    )
+}
+
+#[tokio::test]
+async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
+    use soland_storage::{
+        RecoveryPolicyPublicationOutcome, RecoveryPolicyPublicationWrite, RecoveryPolicyStore,
+    };
+
+    let (pool, station) = contract_store().await;
+    let fixture = fixture(&station);
+    let account = fixture.account.clone();
+    let realm_id = RealmId::new(fixture.events[0].realm_id.to_string()).unwrap();
+    let did = fixture.did.clone();
+    let station_did = fixture.station_did.clone();
+    let device_a = fixture.founding_device_id.clone();
+    let method_a = fixture.device_verification_method.clone();
+    let seed_a = fixture.founding_device_signing_seed;
+    let genesis = assemble(station.clone(), fixture);
+    let at = genesis.transactions[1].commit.committed_at;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store.admit_pcr_genesis_unit(&genesis, at).await.unwrap();
+    let authority = genesis.transactions[1].expected_authority.clone();
+    let tx =
+        |event: arkret_wire::Event, commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+            expected_authority: authority.clone(),
+            event,
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        };
+    // A second device D, accepted by the founding device.
+    let seed_d = [51; 32];
+    let (device_d, approve_d) = accepted_device_event(
+        &account, &account, &realm_id, &device_a, &method_a, seed_a, seed_d, at, 1,
+    );
+    let head = station_successor(&genesis.transactions[1].commit, &approve_d, &station_did, 1);
+    store
+        .admit_accepted_device_authorization(&tx(approve_d, head.clone()), at)
+        .await
+        .unwrap();
+    let method_d = DidUrl::new(format!("{did}#{device_d}")).unwrap();
+    let policies = soland_storage_postgres::PgRecoveryPolicyStore { pool: pool.clone() };
+    let publish = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        policies
+            .commit_publication(RecoveryPolicyPublicationWrite {
+                commit: tx(event.clone(), commit),
+                queued_at: at,
+            })
+            .await
+    };
+    let before = policy_footprint(&pool, &realm_id, &account).await;
+    let refusal = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        let error = publish(event, commit).await.unwrap_err();
+        assert_eq!(
+            policy_footprint(&pool, &realm_id, &account).await,
+            before,
+            "a refused recovery policy publication must write nothing"
+        );
+        error.conflict_code()
+    };
+    let genesis_id = format!("ak:policy:{}", uuid::Uuid::now_v7());
+    let members = [&device_a, &device_d];
+
+    // Only the founding device may sign the genesis policy.
+    let by_d = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_d,
+        seed_d,
+        &genesis_id,
+        1,
+        None,
+        &members,
+    );
+    assert_eq!(
+        refusal(&by_d, station_successor(&head, &by_d, &station_did, 1)).await,
+        Some(ConflictCode::DeviceUnauthorized)
+    );
+    // The first policy of an account is version 1.
+    let late = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_a,
+        seed_a,
+        &genesis_id,
+        2,
+        Some(&format!("ak:policy:{}", uuid::Uuid::now_v7())),
+        &members,
+    );
+    assert_eq!(
+        refusal(&late, station_successor(&head, &late, &station_did, 1)).await,
+        Some(ConflictCode::RecoveryPolicyGenesisNotV1)
+    );
+    // A quorum member that is not an active device leaves k unreachable.
+    let unknown = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let unreachable = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_a,
+        seed_a,
+        &genesis_id,
+        1,
+        None,
+        &[&device_a, &unknown],
+    );
+    assert_eq!(
+        refusal(
+            &unreachable,
+            station_successor(&head, &unreachable, &station_did, 1)
+        )
+        .await,
+        Some(ConflictCode::FailedPrecondition)
+    );
+    // A's method, but the policy and proof are signed with another key.
+    let forged = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_a,
+        [0x77; 32],
+        &genesis_id,
+        1,
+        None,
+        &members,
+    );
+    assert_eq!(
+        refusal(&forged, station_successor(&head, &forged, &station_did, 1)).await,
+        Some(ConflictCode::SignatureInvalid)
+    );
+    // The generic Event path cannot commit recovery policy control state.
+    let v1 = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_a,
+        seed_a,
+        &genesis_id,
+        1,
+        None,
+        &members,
+    );
+    let commit_v1 = station_successor(&head, &v1, &station_did, 1);
+    assert!(
+        store
+            .admit_event_transaction(&tx(v1.clone(), commit_v1.clone()), at)
+            .await
+            .is_err()
+    );
+    assert_eq!(policy_footprint(&pool, &realm_id, &account).await, before);
+
+    // The founding device publishes v1: Event, Commit and policy together.
+    let RecoveryPolicyPublicationOutcome::Committed(accepted) =
+        publish(&v1, commit_v1.clone()).await.unwrap()
+    else {
+        panic!("the first publication commits");
+    };
+    assert_eq!(accepted.acceptance_basis, commit_v1.commit_id);
+    assert_eq!(accepted.version, 1);
+    let after_v1 = policy_footprint(&pool, &realm_id, &account).await;
+    assert_eq!(
+        after_v1,
+        PolicyFootprint {
+            events: before.events + 1,
+            commits: before.commits + 1,
+            policies: before.policies + 1,
+        }
+    );
+    // An exact retry returns the accepted policy without a second write.
+    let RecoveryPolicyPublicationOutcome::Duplicate(replayed) =
+        publish(&v1, station_successor(&commit_v1, &v1, &station_did, 3))
+            .await
+            .unwrap()
+    else {
+        panic!("an exact retry is a duplicate");
+    };
+    assert_eq!(replayed.acceptance_basis, commit_v1.commit_id);
+    assert_eq!(policy_footprint(&pool, &realm_id, &account).await, after_v1);
+
+    // A successor must name v1 and advance its version.
+    let v2_id = format!("ak:policy:{}", uuid::Uuid::now_v7());
+    let stale = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_d,
+        seed_d,
+        &v2_id,
+        2,
+        Some(&format!("ak:policy:{}", uuid::Uuid::now_v7())),
+        &members,
+    );
+    let error = publish(
+        &stale,
+        station_successor(&commit_v1, &stale, &station_did, 1),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.conflict_code(),
+        Some(ConflictCode::RecoveryPolicySupersedesInvalid)
+    );
+    // A current-generation device other than the founder may rotate it.
+    let v2 = recovery_policy_event(
+        &account,
+        &realm_id,
+        &method_d,
+        seed_d,
+        &v2_id,
+        2,
+        Some(&genesis_id),
+        &members,
+    );
+    let commit_v2 = station_successor(&commit_v1, &v2, &station_did, 1);
+    assert!(matches!(
+        publish(&v2, commit_v2.clone()).await.unwrap(),
+        RecoveryPolicyPublicationOutcome::Committed(_)
+    ));
+    let active = policies
+        .get_active_for_account(&account)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.policy_id, v2_id);
+    assert_eq!(active.acceptance_basis, commit_v2.commit_id);
+    // The PCR conflict-index marker followed both Commits: device status is
+    // still readable at the new head.
+    assert!(
+        PgDeviceRevocationStore { pool: pool.clone() }
+            .pcr_device_admission(&account, &device_a, commit_v2.committed_at)
+            .await
+            .unwrap()
+            == arkret_wire::DeviceRevocationAdmissionDecision::Allow
+    );
+}

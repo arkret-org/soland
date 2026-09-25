@@ -1359,12 +1359,11 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
             .await?)
     }
 
-    async fn insert_policy(
+    async fn commit_publication(
         &self,
-        policy: crate::identity::RecoveryPolicyState,
-    ) -> crate::ServiceResult<()> {
-        self.0.recovery_policies().insert(policy).await?;
-        Ok(())
+        write: soland_storage::RecoveryPolicyPublicationWrite,
+    ) -> crate::ServiceResult<soland_storage::RecoveryPolicyPublicationOutcome> {
+        Ok(self.0.recovery_policies().commit_publication(write).await?)
     }
 }
 

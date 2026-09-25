@@ -1,5 +1,4 @@
 use diesel_async::AsyncConnection;
-use soland_storage::ConflictCode;
 
 use super::{
     Integer, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
@@ -13,7 +12,7 @@ pub struct PgRecoveryPolicyStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
-struct RecoveryPolicyRow {
+pub(crate) struct RecoveryPolicyRow {
     #[diesel(sql_type = sql_types::Uuid)]
     policy_id: Uuid,
     #[diesel(sql_type = Text)]
@@ -69,30 +68,6 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
             accepted_at: row.accepted_at,
             verification_method: row.verification_method,
         })
-    }
-}
-impl PgRecoveryPolicyStore {
-    async fn get_by_account_version(
-        &self,
-        account_id: &arkret_wire::AccountId,
-        version: u32,
-    ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
-                    expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 AND version = $3",
-        )
-        .bind::<Text, _>(&account_id.principal_id)
-        .bind::<Text, _>(&account_id.station_id)
-        .bind::<Integer, _>(version as i32)
-        .get_result::<RecoveryPolicyRow>(&mut *conn)
-        .await
-        .optional().map_err(PersistenceError::database)?
-        .map(RecoveryPolicyRecord::try_from)
-        .transpose()
     }
 }
 #[async_trait]
@@ -161,123 +136,24 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .collect()
     }
 
-    async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()> {
-        if self
-            .get_by_policy_id(&record.policy_id)
-            .await
-            .map_err(PersistenceError::database)?
-            .is_some()
-        {
-            return Err(PersistenceError::Conflict(format!(
-                "{}: recovery policy_id `{}` already exists",
-                ConflictCode::RecoveryPolicyConflict,
-                record.policy_id
-            )));
-        }
-        if self
-            .get_by_account_version(&record.account_id, record.version)
-            .await
-            .map_err(PersistenceError::database)?
-            .is_some()
-        {
-            return Err(PersistenceError::Conflict(format!(
-                "{}: recovery policy account/version ({}, {}) already exists",
-                ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                record.account_id,
-                record.version
-            )));
-        }
-        if let Some(active) = self
-            .get_active_for_account(&record.account_id)
-            .await
-            .map_err(PersistenceError::database)?
-        {
-            if record.version <= active.version {
-                return Err(PersistenceError::Conflict(format!(
-                    "{}: recovery policy version {} is not greater than active {}",
-                    ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                    record.version,
-                    active.version
-                )));
-            }
-            if record.supersedes.as_deref() != Some(active.policy_id.as_str()) {
-                return Err(PersistenceError::Conflict(format!(
-                    "{}: recovery policy supersedes {:?} does not match active `{}`",
-                    ConflictCode::RecoveryPolicySupersedesInvalid,
-                    record.supersedes,
-                    active.policy_id
-                )));
-            }
-        } else if record.version != 1 {
-            return Err(PersistenceError::Conflict(format!(
-                "{}: recovery genesis policy for `{}` must have version=1",
-                ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                record.account_id
-            )));
-        }
-
+    async fn commit_publication(
+        &self,
+        write: soland_storage::RecoveryPolicyPublicationWrite,
+    ) -> PersistenceResult<soland_storage::RecoveryPolicyPublicationOutcome> {
+        write.commit.validate().map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "invalid recovery policy authority transaction: {error}"
+            ))
+        })?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
-        let canonical_account = arkret_canonical::canonical_json_string(&record.account_id).map_err(PersistenceError::database)?;
-        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-            .bind::<Text,_>(format!("recovery-policy:{canonical_account}"))
-            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-        #[derive(QueryableByName)]
-        struct PolicyHead { #[diesel(sql_type=Integer)] version:i32, #[diesel(sql_type=sql_types::Uuid)] id:Uuid }
-        let head=sql_query("SELECT version,id FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 ORDER BY version DESC LIMIT 1 FOR SHARE")
-            .bind::<Text,_>(&record.account_id.principal_id).bind::<Text,_>(&record.account_id.station_id)
-            .get_result::<PolicyHead>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
-        if let Some(head)=head {
-            if i64::from(record.version)<=i64::from(head.version)
-                || record.supersedes.as_deref()!=Some(ids::format_typed_uuid("policy",&head.id).as_str()) {
-                return Err(PersistenceError::Conflict("recovery policy publication raced".to_owned()).into());
-            }
-        } else if record.version!=1 {
-            return Err(PersistenceError::Conflict("recovery policy genesis version invalid".to_owned()).into());
-        }
-        let revoked = record.raw_payload.get("methods").and_then(Value::as_array)
-            .ok_or_else(||PersistenceError::Conflict("recovery policy methods missing".to_owned()))?.is_empty();
-        sql_query(
-            "INSERT INTO recovery_policies \
-             (id, principal_id, station_id, version, trust_domain, supersedes, \
-              acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
-        )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
-        .bind::<Text, _>(&record.account_id.principal_id)
-        .bind::<Text, _>(&record.account_id.station_id)
-        .bind::<Integer, _>(record.version as i32)
-        .bind::<Text, _>(&record.trust_domain)
-        .bind::<Nullable<sql_types::Uuid>, _>(
-            record
-                .supersedes
-                .as_deref()
-                .map(ids::typed_uuid_part_expect_internal),
-        )
-        .bind::<Jsonb, _>(
-            serde_json::to_value(&record.acceptance_basis).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "recovery policy acceptance_basis encode failed: {error}"
-                ))
-            })?,
-        )
-        .bind::<Nullable<Timestamptz>, _>(record.expires_at)
-        .bind::<Timestamptz, _>(record.issued_at)
-        .bind::<Text, _>(&record.verification_method)
-        .bind::<Jsonb, _>(&record.raw_payload)
-        .bind::<Timestamptz, _>(record.accepted_at)
-        .execute(&mut *conn)
-        .await.map_err(PersistenceError::database)?;
-        if revoked {
-            sql_query("UPDATE recovery_sessions SET state='rejected',updated_at=$3 WHERE principal_id=$1 AND station_id=$2 AND policy_version<$4 AND state IN ('pending','verified')")
-                .bind::<Text,_>(&record.account_id.principal_id).bind::<Text,_>(&record.account_id.station_id)
-                .bind::<Timestamptz,_>(chrono::Utc::now()).bind::<Integer,_>(record.version as i32)
-                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-        }
-        Ok(())
-        }).await.map_err(crate::PgTransactionError::into_persistence)
+            crate::pcr_recovery_policy_unit::commit_recovery_policy_unit_in_connection(conn, &write)
+                .await
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
     }
 }
 pub struct PgRecoverySessionStore {

@@ -1050,6 +1050,21 @@ pub(crate) async fn commit_verified_key_backup_pointer_in_connection(
     .await
 }
 
+/// Only the recovery policy publication unit may call this after rechecking
+/// the signing device, the version ratchet and the policy signature under the
+/// PCR authority lock; the same transaction then records the accepted policy.
+pub(crate) async fn commit_verified_recovery_policy_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::RecoveryPolicy,
+    )
+    .await
+}
+
 /// The registered PCR unit whose same-cut checks already ran on this
 /// connection. Generic admission is `None` and cannot write these kinds.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1058,6 +1073,17 @@ enum VerifiedPcrUnit {
     Device,
     RevokeProposal,
     KeyBackupPointer,
+    RecoveryPolicy,
+}
+
+fn is_recovery_policy_set(event: &arkret_wire::Event) -> bool {
+    event.kind == arkret_wire::EventKind::PolicySet
+        && event
+            .payload
+            .get("value")
+            .and_then(|value| value.get("schema"))
+            .and_then(serde_json::Value::as_str)
+            == Some(arkret_wire::SchemaId::RECOVERY_POLICY_V1)
 }
 
 async fn commit_transaction_in_connection_with_device_guard(
@@ -1076,6 +1102,16 @@ async fn commit_transaction_in_connection_with_device_guard(
     {
         return Err(PersistenceError::Conflict(
             "key_backup_active_series_current_device_authority_unavailable".to_owned(),
+        )
+        .into());
+    }
+    // A recovery policy is PCR control state; only its publication unit, which
+    // records the accepted policy in the same transaction, may commit it.
+    if is_recovery_policy_set(&transaction.event)
+        && verified_unit != VerifiedPcrUnit::RecoveryPolicy
+    {
+        return Err(PersistenceError::Conflict(
+            "recovery_policy_publication_unit_required".to_owned(),
         )
         .into());
     }

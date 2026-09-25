@@ -1516,28 +1516,6 @@ pub struct AgentPairingService {
 
 pub use soland_storage::RecoveryPolicyRecord as RecoveryPolicyState;
 
-#[derive(Clone, Debug)]
-pub struct PublishRecoveryPolicyCommand {
-    pub policy: RecoveryPolicyState,
-}
-
-#[derive(Clone, Debug)]
-pub enum PublishRecoveryPolicyResult {
-    // Boxed: the accepted policy is the only large payload here.
-    Accepted(Box<RecoveryPolicyState>),
-    GenesisVersionInvalid {
-        actual: u32,
-    },
-    VersionNotMonotonic {
-        actual: u32,
-        current: u32,
-    },
-    SupersedesInvalid {
-        actual: Option<String>,
-        current_policy_id: String,
-    },
-}
-
 #[async_trait]
 pub trait RecoveryPolicyPort: Send + Sync {
     async fn active_policy(
@@ -1548,7 +1526,10 @@ pub trait RecoveryPolicyPort: Send + Sync {
         &self,
         account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Vec<RecoveryPolicyState>>;
-    async fn insert_policy(&self, policy: RecoveryPolicyState) -> ServiceResult<()>;
+    async fn commit_publication(
+        &self,
+        write: soland_storage::RecoveryPolicyPublicationWrite,
+    ) -> ServiceResult<soland_storage::RecoveryPolicyPublicationOutcome>;
 }
 
 #[derive(Clone)]
@@ -1575,32 +1556,13 @@ impl RecoveryPolicyService {
         self.policies.policy_history(account_id).await
     }
 
-    pub async fn publish_policy(
+    /// Admit one device-signed recovery policy publication through the
+    /// registered PCR unit (key-management.md §8.1).
+    pub async fn commit_publication(
         &self,
-        command: PublishRecoveryPolicyCommand,
-    ) -> ServiceResult<PublishRecoveryPolicyResult> {
-        let policy = command.policy;
-        let existing = self.policies.active_policy(&policy.account_id).await?;
-        if let Some(existing) = existing {
-            if policy.version <= existing.version {
-                return Ok(PublishRecoveryPolicyResult::VersionNotMonotonic {
-                    actual: policy.version,
-                    current: existing.version,
-                });
-            }
-            if policy.supersedes.as_deref() != Some(existing.policy_id.as_str()) {
-                return Ok(PublishRecoveryPolicyResult::SupersedesInvalid {
-                    actual: policy.supersedes,
-                    current_policy_id: existing.policy_id,
-                });
-            }
-        } else if policy.version != 1 {
-            return Ok(PublishRecoveryPolicyResult::GenesisVersionInvalid {
-                actual: policy.version,
-            });
-        }
-        self.policies.insert_policy(policy.clone()).await?;
-        Ok(PublishRecoveryPolicyResult::Accepted(Box::new(policy)))
+        write: soland_storage::RecoveryPolicyPublicationWrite,
+    ) -> ServiceResult<soland_storage::RecoveryPolicyPublicationOutcome> {
+        self.policies.commit_publication(write).await
     }
 }
 
@@ -3395,10 +3357,6 @@ mod tests {
         );
     }
 
-    fn recovery_policy_basis() -> arkret_wire::RealmCommitId {
-        arkret_wire::RealmCommitId::from_digest([11; 32])
-    }
-
     struct StaticAccount;
 
     struct NoDevices;
@@ -3461,8 +3419,6 @@ mod tests {
             Err("DID resolver is unused in this test".to_owned())
         }
     }
-
-    struct CurrentRecoveryPolicy;
 
     fn pinned_history_fixture() -> (Did, arkret_identity::VerifiedDidWebvhLog, Hash) {
         let did = Did::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
@@ -3849,40 +3805,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl RecoveryPolicyPort for CurrentRecoveryPolicy {
-        async fn active_policy(
-            &self,
-            account_id: &arkret_wire::AccountId,
-        ) -> ServiceResult<Option<RecoveryPolicyState>> {
-            Ok(Some(RecoveryPolicyState {
-                policy_id: "ak:policy:current".to_owned(),
-                account_id: account_id.clone(),
-                version: 2,
-                acceptance_basis: recovery_policy_basis(),
-                trust_domain: "ak:trust_domain:personal".to_owned(),
-
-                supersedes: Some("ak:policy:genesis".to_owned()),
-                expires_at: None,
-                issued_at: Utc::now(),
-                raw_payload: Value::Null,
-                accepted_at: Utc::now(),
-                verification_method: "did:web:alice.example#key-1".to_owned(),
-            }))
-        }
-
-        async fn policy_history(
-            &self,
-            _account_id: &arkret_wire::AccountId,
-        ) -> ServiceResult<Vec<RecoveryPolicyState>> {
-            Ok(Vec::new())
-        }
-
-        async fn insert_policy(&self, _policy: RecoveryPolicyState) -> ServiceResult<()> {
-            panic!("a non-monotonic policy must not reach persistence")
-        }
-    }
-
     #[tokio::test]
     async fn account_lookup_returns_application_owned_result() {
         let service = IdentityService::new(
@@ -3972,42 +3894,6 @@ mod tests {
             "the rejected DID must leave no durable document row"
         );
         assert!(service.log_events(did.as_str()).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn recovery_policy_monotonicity_is_enforced_in_application() {
-        let service = RecoveryPolicyService::new(Arc::new(CurrentRecoveryPolicy));
-        let result = service
-            .publish_policy(PublishRecoveryPolicyCommand {
-                policy: RecoveryPolicyState {
-                    policy_id: "ak:policy:stale".to_owned(),
-                    account_id: arkret_wire::AccountId::new(
-                        arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example")
-                            .unwrap(),
-                        arkret_identifiers::DidCoreId::new("ak:did_core:web:principal.example")
-                            .unwrap(),
-                    ),
-                    version: 2,
-                    acceptance_basis: recovery_policy_basis(),
-                    trust_domain: "ak:trust_domain:personal".to_owned(),
-
-                    supersedes: Some("ak:policy:current".to_owned()),
-                    expires_at: None,
-                    issued_at: Utc::now(),
-                    raw_payload: Value::Null,
-                    accepted_at: Utc::now(),
-                    verification_method: "did:web:alice.example#key-1".to_owned(),
-                },
-            })
-            .await
-            .expect("evaluate policy");
-        assert!(matches!(
-            result,
-            PublishRecoveryPolicyResult::VersionNotMonotonic {
-                actual: 2,
-                current: 2
-            }
-        ));
     }
 }
 

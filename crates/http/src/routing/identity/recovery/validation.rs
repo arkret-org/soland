@@ -1,20 +1,9 @@
 use super::*;
 
-pub(super) struct ValidatedRecoveryPolicy {
-    pub policy_id: String,
-    pub account_id: arkret_wire::AccountId,
-    pub version: u32,
-    pub trust_domain: TrustDomainId,
-    pub supersedes_id: Option<String>,
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub raw_payload: Value,
-    pub verification_method: String,
-}
-
+/// Validate the published policy document and return the account it binds.
 pub(super) fn validate_recovery_policy(
     payload: &Value,
-) -> Result<ValidatedRecoveryPolicy, AppError> {
+) -> Result<arkret_wire::AccountId, AppError> {
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
         AppError::schema_violation(format!("recovery policy violates SDK shape: {error}"))
     })?;
@@ -29,7 +18,6 @@ pub(super) fn validate_recovery_policy(
     require_policy_id_pattern(&policy_id)?;
     let account_id = typed.account_id.clone();
     let version = require_u32_min(payload, "version", 1)?;
-    let trust_domain = typed.trust_domain.clone();
     let supersedes_id = match payload.get("supersedes_id") {
         Some(Value::Null) | None => None,
         Some(Value::String(s)) => {
@@ -77,7 +65,7 @@ pub(super) fn validate_recovery_policy(
         .get("auth_data")
         .and_then(Value::as_object)
         .ok_or_else(|| AppError::param_invalid("auth_data is required"))?;
-    let verification_method = auth_data
+    auth_data
         .get("verification_method")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::param_invalid("auth_data.verification_method is required"))?;
@@ -94,17 +82,7 @@ pub(super) fn validate_recovery_policy(
         .get("signature")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::param_invalid("auth_data.signature is required"))?;
-    Ok(ValidatedRecoveryPolicy {
-        policy_id,
-        account_id,
-        version,
-        trust_domain,
-        supersedes_id,
-        expires_at,
-        issued_at,
-        verification_method: verification_method.to_owned(),
-        raw_payload: payload.clone(),
-    })
+    Ok(account_id)
 }
 
 /// key-management.md §8.1 — publish / rotate MUST reject a policy the receiving

@@ -73,6 +73,7 @@ mod pcr_device_revocation_proposals;
 mod pcr_device_status_fold;
 mod pcr_device_status_index;
 mod pcr_device_status_reader;
+mod pcr_recovery_policy_unit;
 mod pcr_verified_fork_records;
 mod policy;
 mod principal_resolution;

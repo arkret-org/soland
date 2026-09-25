@@ -54,6 +54,9 @@ pub(super) fn recovery_policy_store_error(error: PersistenceError) -> AppError {
         Some(soland_storage::ConflictCode::RecoveryPolicySupersedesInvalid) => {
             rejection.with_reason_code("recovery_policy_supersedes_invalid")
         }
+        Some(soland_storage::ConflictCode::RecoveryPolicyGenesisNotV1) => {
+            rejection.with_reason_code("recovery_policy_genesis_not_v1")
+        }
         _ => rejection,
     }
 }

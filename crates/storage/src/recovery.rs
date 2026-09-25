@@ -446,8 +446,32 @@ pub trait RecoveryPolicyStore: Send + Sync {
         &self,
         account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>>;
-    async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()>;
+    /// Admit one device-signed `ak.policy.set` recovery policy publication
+    /// (key-management.md §8, §8.1). The Event, its RealmCommit and the
+    /// accepted policy row are written in one transaction; any refusal writes
+    /// nothing.
+    async fn commit_publication(
+        &self,
+        write: RecoveryPolicyPublicationWrite,
+    ) -> PersistenceResult<RecoveryPolicyPublicationOutcome>;
 }
+
+/// One `ak.policy.set` recovery policy Event and the Station-signed PCR Commit
+/// prepared at the head it was read against.
+#[derive(Clone, Debug)]
+pub struct RecoveryPolicyPublicationWrite {
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub enum RecoveryPolicyPublicationOutcome {
+    /// This call accepted the policy together with its Event and Commit.
+    Committed(RecoveryPolicyRecord),
+    /// The exact Event was already accepted; this is the policy it produced.
+    Duplicate(RecoveryPolicyRecord),
+}
+
 /// Durable recovery session lifecycle store.
 ///
 /// A verified session is consumed only by atomically binding it to a recovery

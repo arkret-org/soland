@@ -1141,9 +1141,8 @@ async fn project_account(
         // A device becomes `verified` only through an accepted and projected
         // `ak.device.authorize` carrying its possession proof. Minting a
         // `verified`-without-key row here would carry no
-        // `device_public_key`, so recovery genesis
-        // (`resolve_session_device_key_for_genesis_policy`) and every
-        // projected-device-set verifier could not resolve a signing key for it.
+        // `device_public_key`, so no projected-device-set verifier could
+        // resolve a signing key for it.
         // Create an `unverified`, key-less placeholder so the session / device
         // list works until the real enrollment event lands (mirrors the
         // OAuth-introspection lazy-create path in `auth::ensure_oauth_device`).
