@@ -1,10 +1,10 @@
 use diesel::sql_types::{Bool, SmallInt};
 use serde::de::DeserializeOwned;
 use soland_storage::{
-    AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,
-    CurrentRealmAuthority, OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
-    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, QueuedEventRecord, QueuedEventStatus,
-    SelfProducerCommitGuard,
+    AcceptedDeviceAuthorizationOutcome, AuthorityCommitStore, AuthorityCommitTransaction,
+    AuthorityCommitWriteOutcome, CurrentRealmAuthority, OrdinaryRealmBootstrapCommitOutcome,
+    OrdinaryRealmBootstrapCommitUnit, PcrGenesisCommitOutcome, PcrGenesisCommitUnit,
+    QueuedEventRecord, QueuedEventStatus, SelfProducerCommitGuard,
 };
 
 use super::{
@@ -992,8 +992,8 @@ pub(crate) async fn commit_transaction_in_connection(
         .await
 }
 
-/// Only registered PCR genesis and recovery UoWs may call this after they
-/// validate the complete ordered Event/Commit pair and its authority proof.
+/// Only the registered PCR genesis, recovery and accepted-device UoWs may
+/// call this after they validate the Event/Commit and its authority proof.
 pub(crate) async fn commit_verified_pcr_device_transaction_in_connection(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
@@ -1661,6 +1661,25 @@ impl PgAuthorityCommitStore {
 
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
+    async fn admit_accepted_device_authorization(
+        &self,
+        transaction: &AuthorityCommitTransaction,
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<AcceptedDeviceAuthorizationOutcome> {
+        transaction.validate().map_err(invalid)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::pcr_accepted_device_unit::admit_accepted_device_unit_in_connection(
+                conn,
+                transaction,
+                queued_at,
+            )
+            .await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn pcr_genesis_replay(
         &self,
         submission: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,

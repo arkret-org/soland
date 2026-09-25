@@ -46,6 +46,24 @@ pub(super) async fn admit_event(
     let verification_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
+    if submission.event.kind == arkret_wire::EventKind::DeviceAuthorize {
+        let outcome = accepted_device_outcome(
+            state
+                .authority_commits()
+                .admit_accepted_device_authorization(
+                    &submission.event,
+                    &state.service_core_id(),
+                    verification_method,
+                    state.notary_signing_key().as_ref(),
+                    chrono::Utc::now(),
+                )
+                .await,
+        );
+        outcome
+            .validate_for_request(&AuthoritySubmitRequest::Event(submission))
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        return json_ok(outcome);
+    }
     let admission = state
         .authority_commits()
         .admit_event(
@@ -108,9 +126,115 @@ pub(super) async fn admit_event(
     json_ok(outcome)
 }
 
+/// The Account Authority abandons a frozen pairing admission only on a
+/// terminal `rejected` outcome, so every refusal the accepted-device unit
+/// decides from durable PCR state or from the Event itself is terminal and
+/// carries its registered reason; a lost head race or an unavailable store is
+/// retryable and leaves the reservation in place.
+fn accepted_device_outcome(
+    admission: soland_services::ServiceResult<AuthorityEventAdmissionOutcome>,
+) -> AuthoritySubmitOutcome {
+    use soland_storage::ConflictCode;
+
+    let rejected = |reason_code: &str| AuthoritySubmitOutcome::Rejected {
+        status: AuthorityRejectionStatus::Rejected,
+        reason_code: reason_code.to_owned(),
+    };
+    let retryable = || AuthoritySubmitOutcome::Rejected {
+        status: AuthorityRejectionStatus::RetryableUnavailable,
+        reason_code: "authority_transaction_unavailable".to_owned(),
+    };
+    match admission {
+        Ok(AuthorityEventAdmissionOutcome::Committed(commit)) => AuthoritySubmitOutcome::Accepted {
+            status: AuthorityCommitStatus::Committed,
+            commit,
+        },
+        Ok(AuthorityEventAdmissionOutcome::Duplicate(commit)) => AuthoritySubmitOutcome::Accepted {
+            status: AuthorityCommitStatus::Duplicate,
+            commit,
+        },
+        Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority) => rejected("authority_mismatch"),
+        Err(error) => match error.kind() {
+            ServiceErrorKind::SchemaViolation => rejected(ConflictCode::SchemaViolation.as_str()),
+            ServiceErrorKind::Conflict => match error.conflict_code() {
+                Some(
+                    code @ (ConflictCode::DeviceRevoked
+                    | ConflictCode::DeviceRevocationPending
+                    | ConflictCode::DeviceGenerationFenced
+                    | ConflictCode::DeviceUnauthorized
+                    | ConflictCode::SignatureInvalid
+                    | ConflictCode::SchemaViolation
+                    | ConflictCode::EventIdDigestMismatch
+                    | ConflictCode::DuplicateConflict
+                    | ConflictCode::FailedPrecondition),
+                ) => rejected(code.as_str()),
+                _ => {
+                    tracing::warn!(error = %error, "accepted-device admission lost its PCR cut");
+                    retryable()
+                }
+            },
+            ServiceErrorKind::UnsupportedEventKind
+            | ServiceErrorKind::NotFound
+            | ServiceErrorKind::Database
+            | ServiceErrorKind::Internal => {
+                tracing::warn!(error = %error, "accepted-device admission unavailable");
+                retryable()
+            }
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use soland_storage::ConflictCode;
+
     use super::*;
+
+    fn conflict(
+        code: ConflictCode,
+    ) -> soland_services::ServiceResult<AuthorityEventAdmissionOutcome> {
+        Err(soland_services::ServiceError::Conflict(format!(
+            "{code}: diagnostic"
+        )))
+    }
+
+    #[test]
+    fn accepted_device_refusals_are_terminal_and_races_are_retryable() {
+        for code in [
+            ConflictCode::DeviceRevoked,
+            ConflictCode::DeviceRevocationPending,
+            ConflictCode::DeviceGenerationFenced,
+            ConflictCode::SignatureInvalid,
+            ConflictCode::DuplicateConflict,
+        ] {
+            assert_eq!(
+                accepted_device_outcome(conflict(code)),
+                AuthoritySubmitOutcome::Rejected {
+                    status: AuthorityRejectionStatus::Rejected,
+                    reason_code: code.as_str().to_owned(),
+                }
+            );
+        }
+        for retryable in [
+            conflict(ConflictCode::CasConflict),
+            Err(soland_services::ServiceError::Database("down".to_owned())),
+        ] {
+            assert!(matches!(
+                accepted_device_outcome(retryable),
+                AuthoritySubmitOutcome::Rejected {
+                    status: AuthorityRejectionStatus::RetryableUnavailable,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            accepted_device_outcome(Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority)),
+            AuthoritySubmitOutcome::Rejected {
+                status: AuthorityRejectionStatus::Rejected,
+                reason_code: "authority_mismatch".to_owned(),
+            }
+        );
+    }
 
     #[test]
     fn private_adapter_is_not_a_protocol_operation() {
@@ -121,6 +245,7 @@ mod tests {
         assert!(!source.contains("oapi::endpoint"));
         assert!(!source.contains("Arkret-Operation"));
         assert!(source.contains(".authority_commits()") && source.contains(".admit_event("));
+        assert!(source.contains(".admit_accepted_device_authorization("));
         assert!(source.contains("authority_transaction_unavailable"));
     }
 }

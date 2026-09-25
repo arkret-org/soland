@@ -464,6 +464,15 @@ pub enum AuthorityCommitWriteOutcome {
     StaleAuthority(CurrentRealmAuthority),
 }
 
+/// Outcome of the registered `accepted_device` authorization unit.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AcceptedDeviceAuthorizationOutcome {
+    /// This call committed the Event, its RealmCommit and the device current.
+    Committed(arkret_wire::RealmCommit),
+    /// The exact Event was already accepted; this is its stored Commit.
+    Duplicate(arkret_wire::RealmCommit),
+}
+
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
     async fn install_genesis_authority(
@@ -541,6 +550,20 @@ pub trait AuthorityCommitStore: Send + Sync {
         unit: &PcrGenesisCommitUnit,
         queued_at: DateTime<Utc>,
     ) -> PersistenceResult<PcrGenesisCommitOutcome>;
+
+    /// Admit one `accepted_device` `ak.device.authorize` relayed by the
+    /// Account Authority (device-lifecycle.md §5.4, §5.5.2). At the locked PCR
+    /// cut the approving device must be active in the current generation, the
+    /// payload must name that generation, the target device must have no
+    /// authorization history, and the target possession signature and the
+    /// approver's producer proof must verify. The Event, Commit, typed device
+    /// authorization, conflict-index marker and device mirror are written in
+    /// one transaction; any refusal writes nothing.
+    async fn admit_accepted_device_authorization(
+        &self,
+        transaction: &AuthorityCommitTransaction,
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<AcceptedDeviceAuthorizationOutcome>;
 
     /// Read the first durable PCR genesis receipt before freshness checks on an
     /// exact retry. Reusing either the Realm or idempotency key with different

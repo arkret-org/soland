@@ -828,6 +828,63 @@ impl AuthorityCommitApplication {
         Ok(transaction)
     }
 
+    /// Admit one `accepted_device` authorization relayed by this Station's
+    /// Account Authority through the registered accepted-device unit.
+    ///
+    /// An exact retry of an accepted Event returns its stored Commit before
+    /// any authority read; the unit itself rechecks the approving device,
+    /// generation, target history and every signature at the locked PCR cut.
+    pub async fn admit_accepted_device_authorization(
+        &self,
+        event: &Event,
+        local_service_id: &DidCoreId,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+    ) -> ServiceResult<AuthorityEventAdmissionOutcome> {
+        event.validate_for_submit_structural().map_err(|error| {
+            ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
+        })?;
+        if let Some(record) = self.store().committed_event(&event.event_id).await? {
+            if record.event != *event {
+                return Err(ServiceError::Conflict(format!(
+                    "{}: event_id is already committed with different canonical content",
+                    soland_storage::ConflictCode::DuplicateConflict
+                )));
+            }
+            return Ok(AuthorityEventAdmissionOutcome::Duplicate(record.commit));
+        }
+        let Some(authority) = self.store().current_authority(&event.realm_id).await? else {
+            return Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority);
+        };
+        if &authority.service_id != local_service_id {
+            return Ok(AuthorityEventAdmissionOutcome::NotCurrentAuthority);
+        }
+        let transaction = self
+            .prepare_self_event_transaction(
+                event,
+                local_service_id,
+                verification_method,
+                signing_key,
+                committed_at,
+            )
+            .await?;
+        Ok(
+            match self
+                .store()
+                .admit_accepted_device_authorization(&transaction, committed_at)
+                .await?
+            {
+                soland_storage::AcceptedDeviceAuthorizationOutcome::Committed(commit) => {
+                    AuthorityEventAdmissionOutcome::Committed(commit)
+                }
+                soland_storage::AcceptedDeviceAuthorizationOutcome::Duplicate(commit) => {
+                    AuthorityEventAdmissionOutcome::Duplicate(commit)
+                }
+            },
+        )
+    }
+
     async fn admit_event_with_guard(
         &self,
         event: &Event,

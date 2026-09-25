@@ -28,9 +28,10 @@ use diesel::sql_types::{BigInt, Jsonb, Text, Uuid};
 use diesel_async::RunQueryDsl;
 use ed25519_dalek::{Signer, SigningKey};
 use soland_storage::{
-    AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, DeviceRevocationStore,
-    KeyBackupListPosition, KeyBackupListQuery, KeyBackupStore, PcrGenesisCommitOutcome,
-    PcrGenesisCommitUnit, PersistenceError, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
+    AcceptedDeviceAuthorizationOutcome, AuthorityCommitStore, AuthorityCommitTransaction,
+    ConflictCode, CurrentRealmAuthority, DeviceRevocationStore, KeyBackupListPosition,
+    KeyBackupListQuery, KeyBackupStore, PcrGenesisCommitOutcome, PcrGenesisCommitUnit,
+    PersistenceError, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
     SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
 };
 use soland_storage_postgres::{
@@ -1992,89 +1993,266 @@ fn author_with_method(author: &PointerAuthor, method: DidUrl) -> PointerAuthor {
     }
 }
 
-/// Install one accepted `accepted_device` authorization as durable PCR state.
-///
-/// FIXTURE ONLY: Soland has no registered accepted-device admission unit yet
-/// (it needs the Account Authority pairing ledger of device-lifecycle.md
-/// §2.1/§5.2.2), and the generic authority path refuses the kind. This writes
-/// exactly the rows that unit must produce -- the committed Event, its
-/// Station-signed Commit, the typed authorization current value and the
-/// advanced conflict-index marker -- so the same-cut status reader can be
-/// exercised with a second device. It proves nothing about pairing admission.
-async fn install_accepted_device_fixture(
+#[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+struct AcceptedDeviceFootprint {
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    commits: i64,
+    #[diesel(sql_type = BigInt)]
+    authorizations: i64,
+    #[diesel(sql_type = BigInt)]
+    devices: i64,
+}
+
+async fn accepted_device_footprint(
     pool: &PgPool,
-    event: &arkret_wire::Event,
-    commit: &arkret_wire::RealmCommit,
-) {
+    realm_id: &RealmId,
+    account: &arkret_wire::AccountId,
+) -> AcceptedDeviceFootprint {
     let mut conn = pool.get().await.unwrap();
-    let token = soland_storage::ids::parse_event_id(event.event_id.as_str()).unwrap();
-    let canonical =
-        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     diesel::sql_query(
-        "INSERT INTO canonical_events \
-         (id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,received_at,committed_at) \
-         VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,'committed',$9,$9)",
+        "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
+                (SELECT COUNT(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
+                (SELECT COUNT(*) FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
+                  AS authorizations, \
+                (SELECT COUNT(*) FROM devices WHERE actor_id=$2 AND verification_state='verified') \
+                  AS devices",
     )
-    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
-    .bind::<diesel::sql_types::Binary, _>(token[1..].to_vec())
-    .bind::<Text, _>(event.actor_id.to_string())
-    .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<Jsonb, _>(serde_json::to_value(&event.scope_ref).unwrap())
-    .bind::<Text, _>(event.kind.as_str())
-    .bind::<diesel::sql_types::Binary, _>(canonical)
-    .bind::<Jsonb, _>(serde_json::to_value(event).unwrap())
-    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
-    .execute(&mut *conn)
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(account.principal_id.as_str())
+    .get_result::<AcceptedDeviceFootprint>(&mut *conn)
     .await
-    .unwrap();
-    diesel::sql_query(
-        "INSERT INTO realm_commits \
-         (commit_id,realm_id,stream_key,stream_ref,stream_position,previous_commit_ref,event_pk,governance_generation,commit_json,committed_at) \
-         SELECT $1,$2,$3,$4,$5,$6,pk,0,$7,$8 FROM canonical_events WHERE id=$9",
-    )
-    .bind::<Text, _>(commit.commit_id.as_str())
-    .bind::<Text, _>(commit.realm_id.as_str())
-    .bind::<Text, _>(arkret_canonical::canonical_json_string(&commit.stream_ref).unwrap())
-    .bind::<Jsonb, _>(serde_json::to_value(&commit.stream_ref).unwrap())
-    .bind::<BigInt, _>(commit.stream_position as i64)
-    .bind::<diesel::sql_types::Nullable<Text>, _>(
-        commit.previous_commit_ref.as_ref().map(|id| id.as_str()),
-    )
-    .bind::<Jsonb, _>(serde_json::to_value(commit).unwrap())
-    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
-    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    let mut value = serde_json::to_value(&event.payload).unwrap();
-    let device_id = value.as_object_mut().unwrap().remove("device_id").unwrap();
-    value["device_authorize_event_id"] = serde_json::to_value(&event.event_id).unwrap();
-    diesel::sql_query(
-        "INSERT INTO pcr_device_authorization_current_results \
-         (realm_id,device_id,current_commit_id,current_stream_position,value,updated_at) \
-         VALUES($1,$2,$3,$4,$5,$6)",
-    )
-    .bind::<Text, _>(commit.realm_id.as_str())
-    .bind::<Text, _>(device_id.as_str().unwrap())
-    .bind::<Text, _>(commit.commit_id.as_str())
-    .bind::<BigInt, _>(commit.stream_position as i64)
-    .bind::<Jsonb, _>(value)
-    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    let advanced = diesel::sql_query(
-        "UPDATE pcr_device_conflict_index_cuts SET pcr_head_commit_id=$2,updated_at=$4 \
-         WHERE realm_id=$1 AND pcr_head_commit_id=$3",
-    )
-    .bind::<Text, _>(commit.realm_id.as_str())
-    .bind::<Text, _>(commit.commit_id.as_str())
-    .bind::<Text, _>(commit.previous_commit_ref.as_ref().unwrap().as_str())
-    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    assert_eq!(advanced, 1);
+    .unwrap()
+}
+
+/// One `accepted_device` authorization of a fresh device, approved by
+/// `approver` and signed with `producer_seed` under `method`. The target's
+/// possession signature binds `possession_account`.
+#[allow(clippy::too_many_arguments)]
+fn accepted_device_event(
+    account: &arkret_wire::AccountId,
+    possession_account: &arkret_wire::AccountId,
+    realm_id: &RealmId,
+    approver: &DeviceId,
+    method: &DidUrl,
+    producer_seed: [u8; 32],
+    device_seed: [u8; 32],
+    not_before: chrono::DateTime<chrono::Utc>,
+    generation: u64,
+) -> (DeviceId, arkret_wire::Event) {
+    use arkret_models_collaboration::events_payloads::{
+        DeviceAuthorizationBindingKind, DeviceOrPrincipalRef,
+    };
+
+    let device = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let payload = device_history_fixture::possession_with(
+        possession_account,
+        device_history_fixture::DeviceAuthorizationSpec {
+            device_id: device.clone(),
+            signing_seed: device_seed,
+            hpke_seed: [device_seed[0].wrapping_add(1); 32],
+            authorized_by: DeviceOrPrincipalRef::DeviceId(approver.clone()),
+            not_before,
+            expires_at: None,
+            binding: DeviceAuthorizationBindingKind::AcceptedDevice,
+            authorized_generation_ref: generation,
+            applet_id: None,
+        },
+    );
+    let event = device_history_fixture::sign_event(
+        arkret_wire::test_support::raw_event(
+            EventKind::DeviceAuthorize.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            account.principal_id.clone(),
+            account.station_id.clone(),
+            serde_json::to_value(&payload).unwrap(),
+        )
+        .unwrap(),
+        method.clone(),
+        producer_seed,
+    );
+    (device, event)
+}
+
+#[tokio::test]
+async fn accepted_device_unit_admits_only_a_current_active_approver() {
+    let (pool, station) = contract_store().await;
+    let fixture = fixture(&station);
+    let account = fixture.account.clone();
+    let realm_id = RealmId::new(fixture.events[0].realm_id.to_string()).unwrap();
+    let did = fixture.did.clone();
+    let station_did = fixture.station_did.clone();
+    let device_a = fixture.founding_device_id.clone();
+    let method_a = fixture.device_verification_method.clone();
+    let seed_a = fixture.founding_device_signing_seed;
+    let genesis = assemble(station.clone(), fixture);
+    let at = genesis.transactions[1].commit.committed_at;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store.admit_pcr_genesis_unit(&genesis, at).await.unwrap();
+    let head = genesis.transactions[1].commit.clone();
+    let authority = genesis.transactions[1].expected_authority.clone();
+    let tx =
+        |event: arkret_wire::Event, commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+            expected_authority: authority.clone(),
+            event,
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        };
+    let before = accepted_device_footprint(&pool, &realm_id, &account).await;
+    let refusal = async |event: &arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        let error = store
+            .admit_accepted_device_authorization(&tx(event.clone(), commit), at)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            accepted_device_footprint(&pool, &realm_id, &account).await,
+            before,
+            "a refused accepted-device admission must write nothing"
+        );
+        error.conflict_code()
+    };
+
+    // The payload names a generation other than the current one.
+    let (_, stale) = accepted_device_event(
+        &account, &account, &realm_id, &device_a, &method_a, seed_a, [41; 32], at, 2,
+    );
+    assert_eq!(
+        refusal(&stale, station_successor(&head, &stale, &station_did, 1)).await,
+        Some(ConflictCode::DeviceGenerationFenced)
+    );
+    // A's method, but the producer proof is made with another key.
+    let (_, forged) = accepted_device_event(
+        &account, &account, &realm_id, &device_a, &method_a, [0x66; 32], [42; 32], at, 1,
+    );
+    assert_eq!(
+        refusal(&forged, station_successor(&head, &forged, &station_did, 1)).await,
+        Some(ConflictCode::SignatureInvalid)
+    );
+    // Signed by A's key under a method that names another device.
+    let other_method = DidUrl::new(format!("{did}#ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let (_, misnamed) = accepted_device_event(
+        &account,
+        &account,
+        &realm_id,
+        &device_a,
+        &other_method,
+        seed_a,
+        [43; 32],
+        at,
+        1,
+    );
+    assert_eq!(
+        refusal(
+            &misnamed,
+            station_successor(&head, &misnamed, &station_did, 1)
+        )
+        .await,
+        Some(ConflictCode::SignatureInvalid)
+    );
+    // The target possession signature commits to another account.
+    let mallory = arkret_wire::AccountId::new(
+        DidCoreId::new("ak:did_core:web:mallory.example").unwrap(),
+        account.station_id.clone(),
+    );
+    let (_, foreign) = accepted_device_event(
+        &account, &mallory, &realm_id, &device_a, &method_a, seed_a, [44; 32], at, 1,
+    );
+    assert_eq!(
+        refusal(
+            &foreign,
+            station_successor(&head, &foreign, &station_did, 1)
+        )
+        .await,
+        Some(ConflictCode::SignatureInvalid)
+    );
+    // A Commit that does not extend the confirmed PCR head.
+    let (_, detached) = accepted_device_event(
+        &account, &account, &realm_id, &device_a, &method_a, seed_a, [45; 32], at, 1,
+    );
+    assert_eq!(
+        refusal(
+            &detached,
+            station_successor(&genesis.transactions[0].commit, &detached, &station_did, 1)
+        )
+        .await,
+        Some(ConflictCode::CasConflict)
+    );
+
+    // A approves D at the current head: Event, Commit, typed authorization
+    // and mirror are written together.
+    let (device_d, approve_d) = accepted_device_event(
+        &account, &account, &realm_id, &device_a, &method_a, seed_a, [46; 32], at, 1,
+    );
+    let commit_d = station_successor(&head, &approve_d, &station_did, 1);
+    assert_eq!(
+        store
+            .admit_accepted_device_authorization(&tx(approve_d.clone(), commit_d.clone()), at)
+            .await
+            .unwrap(),
+        AcceptedDeviceAuthorizationOutcome::Committed(commit_d.clone())
+    );
+    let accepted = accepted_device_footprint(&pool, &realm_id, &account).await;
+    assert_eq!(
+        accepted,
+        AcceptedDeviceFootprint {
+            events: before.events + 1,
+            commits: before.commits + 1,
+            authorizations: before.authorizations + 1,
+            devices: before.devices + 1,
+        }
+    );
+    // An exact retry reads the stored Commit, whatever Commit it presents.
+    assert_eq!(
+        store
+            .admit_accepted_device_authorization(
+                &tx(
+                    approve_d.clone(),
+                    station_successor(&commit_d, &approve_d, &station_did, 5)
+                ),
+                at
+            )
+            .await
+            .unwrap(),
+        AcceptedDeviceAuthorizationOutcome::Duplicate(commit_d.clone())
+    );
+    // A second authorization of the same device is a duplicate conflict.
+    let mut again = approve_d.clone();
+    again.created_at += chrono::TimeDelta::milliseconds(1);
+    let again = device_history_fixture::sign_event(again, method_a.clone(), seed_a);
+    let error = store
+        .admit_accepted_device_authorization(
+            &tx(
+                again.clone(),
+                station_successor(&commit_d, &again, &station_did, 1),
+            ),
+            at,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.conflict_code(), Some(ConflictCode::DuplicateConflict));
+    assert_eq!(
+        accepted_device_footprint(&pool, &realm_id, &account).await,
+        accepted
+    );
+
+    // D is active at the cut, including after a fresh pool rebuilds it.
+    let restarted = Db::connect(Some(&support::contract_database_url()), Default::default())
+        .await
+        .unwrap()
+        .pool
+        .unwrap();
+    assert!(
+        PgDeviceRevocationStore { pool: restarted }
+            .pcr_device_admission(&account, &device_d, commit_d.committed_at)
+            .await
+            .unwrap()
+            == arkret_wire::DeviceRevocationAdmissionDecision::Allow
+    );
 }
 
 #[tokio::test]
@@ -2163,7 +2341,13 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
             .is_err(),
         "generic admission must not authorize an accepted device"
     );
-    install_accepted_device_fixture(&pool, &authorize_b, &commit_b).await;
+    assert_eq!(
+        PgAuthorityCommitStore { pool: pool.clone() }
+            .admit_accepted_device_authorization(&tx(authorize_b.clone(), commit_b.clone()), at)
+            .await
+            .unwrap(),
+        AcceptedDeviceAuthorizationOutcome::Committed(commit_b.clone())
+    );
     let now = commit_b.committed_at;
     assert!(
         status
@@ -2370,6 +2554,32 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         .unwrap_err()
         .to_string();
     assert!(refused.contains("not active at the PCR cut"), "{refused}");
+    // Nor may the pending device approve another device.
+    let (_, pending_approval) = accepted_device_event(
+        &account,
+        &account,
+        &realm_id,
+        &device_b,
+        &author_b.method,
+        seed_b,
+        [51; 32],
+        pending_at,
+        1,
+    );
+    let pending_error = PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_accepted_device_authorization(
+            &tx(
+                pending_approval.clone(),
+                station_successor(&covering, &pending_approval, &station_did, 1),
+            ),
+            pending_at,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        pending_error.conflict_code(),
+        Some(ConflictCode::DeviceRevocationPending)
+    );
 
     // The accepted terminal result revokes B; it never touches A.
     let mut accepted = transactions
@@ -2425,6 +2635,33 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
             .confirmed_active_series_for_device(&account, &device_b, decided_at)
             .await
             .is_err()
+    );
+
+    // A revoked device can no longer approve a new device.
+    let (_, revoked_approval) = accepted_device_event(
+        &account,
+        &account,
+        &realm_id,
+        &device_b,
+        &author_b.method,
+        seed_b,
+        [52; 32],
+        decided_at,
+        1,
+    );
+    let revoked_error = PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_accepted_device_authorization(
+            &tx(
+                revoked_approval.clone(),
+                station_successor(&covering, &revoked_approval, &station_did, 2),
+            ),
+            decided_at,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        revoked_error.conflict_code(),
+        Some(ConflictCode::DeviceRevoked)
     );
 
     // The rotation reserved its own pointer Event: the self path cannot
@@ -2688,7 +2925,13 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
             author_a.seed,
         );
         let commit = station_successor(&head, &event, &station_did, 1);
-        install_accepted_device_fixture(&pool, &event, &commit).await;
+        assert_eq!(
+            PgAuthorityCommitStore { pool: pool.clone() }
+                .admit_accepted_device_authorization(&tx(event.clone(), commit.clone()), at)
+                .await
+                .unwrap(),
+            AcceptedDeviceAuthorizationOutcome::Committed(commit.clone())
+        );
         head = commit;
         device
     };
