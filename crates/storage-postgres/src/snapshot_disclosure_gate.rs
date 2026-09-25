@@ -86,6 +86,10 @@ const AUDITED_FAMILIES: &[&str] = &[
     "key_backup_active_series_current_results",
     "pcr_device_generation_current_results",
     "pcr_device_authorization_current_results",
+    // PCR-stream Actor Profile and accountability state: no row of an
+    // ordinary collaboration Realm, so any row refuses the cut below.
+    "actor_profile_current_results",
+    "identity_accountability_current_results",
 ];
 
 /// A committed kind of the Realm outside [`DISCLOSED_EVENT_KINDS`].
@@ -278,6 +282,8 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM agent_key_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM key_backup_active_series_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_generation_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM actor_profile_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM identity_accountability_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
