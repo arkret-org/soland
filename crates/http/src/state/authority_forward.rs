@@ -110,6 +110,9 @@ pub(crate) async fn admit_forwarded_event(
             "cross-Station Agent or Service producer resolution is not connected",
         ));
     };
+    if let Some(outcome) = super::authority_port::refuse_unrouted_event(state, event).await? {
+        return Ok(outcome);
+    }
     super::authority_port::require_guarded_unit_event(&request.event_submission)?;
     super::authority_self_event_unit::commit_event_unit(
         state,

@@ -486,6 +486,73 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Sign the four consecutive genesis-stream Commits of a caller-authored
+    /// Direct Conversation founding unit without publishing them. The caller
+    /// has authenticated the founder's session and verified every producer.
+    pub fn prepare_direct_conversation_founding_unit(
+        &self,
+        submission: DirectConversationFoundingUnitSubmission,
+        authority: &CurrentRealmAuthority,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+    ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitUnit> {
+        let mut previous_head: Option<CommitStreamHead> = None;
+        let mut transactions = Vec::with_capacity(4);
+        for submitted in &submission.events {
+            let commit = build_signed_event_commit(
+                &submitted.event,
+                authority,
+                previous_head.as_ref(),
+                verification_method.clone(),
+                signing_key,
+                committed_at,
+            )?;
+            previous_head = Some(CommitStreamHead {
+                stream_ref: commit.stream_ref.clone(),
+                stream_position: commit.stream_position,
+                commit_id: commit.commit_id.clone(),
+            });
+            transactions.push(AuthorityCommitTransaction {
+                expected_authority: authority.clone(),
+                event: submitted.event.clone(),
+                commit,
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: self.recipient_queue_capacity,
+            });
+        }
+        let transactions: [AuthorityCommitTransaction; 4] = transactions
+            .try_into()
+            .map_err(|_| ServiceError::Internal("four founding Commits expected".to_owned()))?;
+        Ok(soland_storage::DirectConversationFoundingCommitUnit {
+            submission,
+            transactions,
+        })
+    }
+
+    /// Admit a prepared Direct Conversation founding unit in one transaction.
+    pub async fn admit_self_direct_conversation_founding_unit(
+        &self,
+        unit: &soland_storage::DirectConversationFoundingCommitUnit,
+        producer_guards: &[SelfProducerCommitGuard; 4],
+        queued_at: DateTime<Utc>,
+    ) -> ServiceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
+        Ok(self
+            .store()
+            .admit_self_direct_conversation_founding_unit(unit, producer_guards, queued_at)
+            .await?)
+    }
+
+    /// The Direct Conversation admission table's verdict for `event` at one
+    /// read-only cut of its Realm.
+    pub async fn direct_conversation_admission(
+        &self,
+        event: &Event,
+    ) -> ServiceResult<soland_storage::DirectConversationAdmissionCut> {
+        Ok(self.store().direct_conversation_admission(event).await?)
+    }
+
     /// Atomically publish both PCR genesis Events and Commits, the identity
     /// resolution current result and the founding device current result.
     pub async fn admit_pcr_genesis_unit(

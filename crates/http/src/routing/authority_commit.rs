@@ -189,8 +189,22 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     None,
                 );
             }
+            // contact-and-direct-conversation.md section 5.5: another unit
+            // already closed the founder's slot; carried under `conflict`.
+            Some(soland_storage::ConflictCode::DirectConversationSlotAlreadyCommitted) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    detail,
+                    soland_storage::ConflictCode::DirectConversationSlotAlreadyCommitted.as_str(),
+                    None,
+                );
+            }
             Some(
-                code @ (soland_storage::ConflictCode::EpochUpdateRequired
+                code @ (soland_storage::ConflictCode::DirectConversationFoundingUnitInvalid
+                | soland_storage::ConflictCode::DirectConversationSpaceForbidden
+                | soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired
                 | soland_storage::ConflictCode::JoinRulePolicyMismatch
                 | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid

@@ -216,11 +216,6 @@ async fn validate_one_operation_policy(
     agent_membership_cascade: bool,
 ) -> Result<(), &'static str> {
     {
-        // The registry fixes a wire-visible precedence across all seven Direct
-        // Conversation admission producers.  Run their single closed gate
-        // before unrelated Realm policy so an incidental validator order can
-        // never select a different reason.
-        validate_direct_conversation_admission(state, operation).await?;
         validate_realm_lifecycle_write_gate(state, operation, operations)?;
         let cleanup_transition = agent_membership_cascade_cleanup_transition(operation);
         if cleanup_transition && !agent_membership_cascade {

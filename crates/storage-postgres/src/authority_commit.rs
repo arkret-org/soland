@@ -2125,6 +2125,56 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .await
     }
 
+    async fn admit_self_direct_conversation_founding_unit(
+        &self,
+        unit: &soland_storage::DirectConversationFoundingCommitUnit,
+        producer_guards: &[SelfProducerCommitGuard; 4],
+        queued_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::DirectConversationFoundingCommitOutcome> {
+        crate::direct_conversation_founding::admit_self_direct_conversation_founding_unit(
+            &self.pool,
+            unit,
+            producer_guards,
+            queued_at,
+        )
+        .await
+    }
+
+    async fn direct_conversation_admission(
+        &self,
+        event: &arkret_wire::Event,
+    ) -> PersistenceResult<soland_storage::DirectConversationAdmissionCut> {
+        let mut conn = pg_conn(&self.pool).await?;
+        // One snapshot, not read-only: the table share-locks the rows it
+        // reads, exactly as inside the accepting transaction.
+        conn.transaction::<_, PgTransactionError, _>(async |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                .execute(&mut *conn)
+                .await?;
+            if crate::direct_conversation_admission::direct_conversation_realm_in_connection(
+                conn,
+                &event.realm_id,
+            )
+            .await?
+            .is_none()
+            {
+                return Ok(soland_storage::DirectConversationAdmissionCut::NotDirectConversation);
+            }
+            Ok(
+                match crate::direct_conversation_admission::admission_refusal_in_connection(
+                    conn, event,
+                )
+                .await?
+                {
+                    Some(code) => soland_storage::DirectConversationAdmissionCut::Refused(code),
+                    None => soland_storage::DirectConversationAdmissionCut::Passed,
+                },
+            )
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn admit_self_ordinary_realm_bootstrap_unit(
         &self,
         unit: &OrdinaryRealmBootstrapCommitUnit,

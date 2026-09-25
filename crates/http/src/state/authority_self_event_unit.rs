@@ -118,12 +118,29 @@ pub(super) async fn commit_event_unit(
         arkret_canonical::DigestSuite::Sha256,
     )
     .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    crate::routing::events::operations::validate_operation_semantics(
-        state,
-        std::slice::from_ref(&operation),
-    )
-    .map_err(|reason| ServiceError::SchemaViolation(reason.to_owned()))?;
-    let decided_at_cut = decided_at_commit_cut(&event.kind);
+    // contact-and-direct-conversation.md section 8.4: a Direct Conversation
+    // Realm's profile table precedes every other authority, so its Events
+    // skip the reducer preflight; the accepting transaction evaluates the
+    // table again at its own cut.
+    let direct_conversation = match state
+        .authority_commits()
+        .direct_conversation_admission(event)
+        .await?
+    {
+        soland_storage::DirectConversationAdmissionCut::Refused(code) => {
+            return super::authority_direct_conversation::direct_conversation_refusal(code);
+        }
+        soland_storage::DirectConversationAdmissionCut::Passed => true,
+        soland_storage::DirectConversationAdmissionCut::NotDirectConversation => false,
+    };
+    if !direct_conversation {
+        crate::routing::events::operations::validate_operation_semantics(
+            state,
+            std::slice::from_ref(&operation),
+        )
+        .map_err(|reason| ServiceError::SchemaViolation(reason.to_owned()))?;
+    }
+    let decided_at_cut = direct_conversation || decided_at_commit_cut(&event.kind);
     if !decided_at_cut {
         crate::routing::events::operations::validate_operation_policy(
             state,
@@ -233,7 +250,7 @@ pub(super) async fn commit_event_unit(
         if let Some(outcome) = exact_replay(state, event).await? {
             return Ok(outcome);
         }
-        return Err(error);
+        return super::authority_direct_conversation::relay_direct_conversation_refusal(error);
     }
     if decided_at_cut {
         return Ok(AuthoritySubmitOutcome::Accepted {

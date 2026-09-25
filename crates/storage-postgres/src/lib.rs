@@ -47,6 +47,8 @@ mod contacts;
 mod device_authorization_history;
 mod device_revocations;
 mod devices;
+mod direct_conversation_admission;
+mod direct_conversation_founding;
 mod event_notifications;
 mod events;
 mod federation;

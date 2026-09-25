@@ -265,6 +265,280 @@ pub enum OrdinaryRealmBootstrapCommitOutcome {
     Duplicate(Vec<RealmCommit>),
 }
 
+/// The caller-authored four-Event Direct Conversation founding unit with the
+/// four consecutive Commits the founder's current Station prepared for it
+/// (contact-and-direct-conversation.md sections 5.5 and 6.1). Every
+/// coordinate is recomputed from the Event bytes by [`Self::facts`]; nothing
+/// the request asserts beside the Events is trusted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DirectConversationFoundingCommitUnit {
+    pub submission:
+        arkret_models_collaboration::authority_commit::DirectConversationFoundingUnitSubmission,
+    pub transactions: [AuthorityCommitTransaction; 4],
+}
+
+/// Coordinates derived from the exact unit bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectConversationFoundingFacts {
+    pub founder_id: arkret_wire::ActorId,
+    pub peer_id: arkret_wire::ActorId,
+    pub trust_domain_id: arkret_wire::TrustDomainId,
+    /// The genesis `governance_station_id`, which must be the founder's
+    /// current Station admitting the unit.
+    pub governance_station_id: arkret_wire::DidCoreId,
+    pub pair_key: arkret_wire::Hash,
+    pub realm_id: arkret_wire::RealmId,
+    pub main_strand_id: arkret_wire::StrandId,
+    pub founding_unit_digest: arkret_wire::Hash,
+    /// The branch-selecting critical ref of the genesis Event.
+    pub authority_ref: DirectConversationFoundingAuthorityRef,
+}
+
+/// The exact-XOR critical ref role that selects the genesis admission variant
+/// (contact-and-direct-conversation.md section 5.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirectConversationFoundingAuthorityRef {
+    /// `direct_conversation_contact_round`: the pair's current Contact round.
+    ContactRound(arkret_wire::Hash),
+    /// `direct_conversation_agent_provision`: the accepted provision Event.
+    AgentProvision(arkret_wire::EventId),
+}
+
+/// The Direct Conversation admission table's verdict at one cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectConversationAdmissionCut {
+    /// The Event's Realm is not a Direct Conversation.
+    NotDirectConversation,
+    /// No stage of the table refuses the Event.
+    Passed,
+    /// The first matching stage in registered precedence.
+    Refused(crate::ConflictCode),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DirectConversationFoundingCommitOutcome {
+    Committed([RealmCommit; 4]),
+    Duplicate([RealmCommit; 4]),
+}
+
+fn founding_unit_invalid(detail: impl std::fmt::Display) -> arkret_wire::WireError {
+    arkret_wire::WireError::Protocol(detail.to_string())
+}
+
+impl DirectConversationFoundingCommitUnit {
+    /// Recompute every founding coordinate from the four Events and refuse any
+    /// unit that is not the closed caller-authored shape of section 6.1 and
+    /// the fixed section 6.2 baseline. An error here is always
+    /// `direct_conversation_founding_unit_invalid`.
+    pub fn facts(&self) -> arkret_wire::Result<DirectConversationFoundingFacts> {
+        use arkret_models_collaboration::governance::membership_invite::MembershipPayload;
+        use arkret_models_collaboration::objects::direct_conversation::{
+            DirectConversationPairKeyParticipant, direct_conversation_pair_key,
+        };
+
+        self.submission.validate().map_err(founding_unit_invalid)?;
+        let events = self.submission.events.each_ref().map(|item| &item.event);
+        let plan =
+            arkret_models_collaboration::direct_conversation::DirectConversationFoundingPlan::from_events(
+                events,
+            )
+            .map_err(founding_unit_invalid)?;
+        let realm_scope = arkret_wire::ScopeRef::Realm {
+            realm_id: plan.realm_id.clone(),
+        };
+        if events[0].scope_ref != arkret_wire::ScopeRef::RealmGenesis
+            || events[1..]
+                .iter()
+                .any(|event| event.scope_ref != realm_scope)
+        {
+            return Err(founding_unit_invalid(
+                "the genesis opens the Realm and the other three Events target its stream",
+            ));
+        }
+        if self.submission.events.iter().any(|item| {
+            item.approval_signatures.is_some()
+                || item.event.executed_by.is_some()
+                || item.event.authorization_ref.is_some()
+                || item.event.applet_id.is_some()
+        }) {
+            return Err(founding_unit_invalid(
+                "the founder authors every founding Event directly",
+            ));
+        }
+        let unit_event_ids = events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if events[1..].iter().any(|event| {
+            event.semantic_refs.iter().any(|reference| {
+                unit_event_ids.contains(reference.id.as_str())
+                    || matches!(
+                        reference.role.as_str(),
+                        "direct_conversation_contact_round" | "direct_conversation_agent_provision"
+                    )
+            })
+        }) {
+            return Err(founding_unit_invalid(
+                "only the genesis carries the founding authority ref and no Event names another",
+            ));
+        }
+        let genesis = arkret_event_draft::EventPayloadExt::as_realm_create(events[0])
+            .map_err(founding_unit_invalid)?
+            .object;
+        if genesis.initial_join_rule != arkret_wire::JoinRule::Closed
+            || genesis.initial_history_access != arkret_wire::HistoryAccess::SinceJoin
+            || matches!(
+                genesis.initial_discoverability,
+                arkret_wire::Discoverability::Public | arkret_wire::Discoverability::Listed
+            )
+        {
+            return Err(founding_unit_invalid(
+                "the genesis must pin the closed, since_join, non-discoverable baseline",
+            ));
+        }
+        let membership = |event: &Event| {
+            serde_json::to_value(&event.payload)
+                .and_then(serde_json::from_value::<MembershipPayload>)
+                .map_err(founding_unit_invalid)
+        };
+        let founder = membership(events[1])?;
+        let peer = membership(events[2])?;
+        if [&founder, &peer].into_iter().any(|join| {
+            join.strand_id.is_some()
+                || !join.gate_proofs.is_empty()
+                || join.invite_ref.is_some()
+                || join.membership_cause.is_some()
+        }) || founder.agent_controller_binding.is_some()
+        {
+            return Err(founding_unit_invalid(
+                "the founding joins are neither invites nor gated entries",
+            ));
+        }
+        let strand = arkret_event_draft::EventPayloadExt::as_strand_create(events[3])
+            .map_err(founding_unit_invalid)?
+            .object;
+        let discussion = strand
+            .tracks
+            .get(arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION);
+        if strand.scope_circle_id.is_some()
+            || discussion
+                .is_none_or(|track| track.is_primary != Some(true) || track.enabled == Some(false))
+        {
+            return Err(founding_unit_invalid(
+                "the main Strand is Realm-default with a primary discussion track",
+            ));
+        }
+        let trust_domain_id = genesis.trust_domain.clone();
+        let pair_key = direct_conversation_pair_key(
+            trust_domain_id.clone(),
+            DirectConversationPairKeyParticipant::unmapped(founder.member_id.clone()),
+            DirectConversationPairKeyParticipant::unmapped(peer.member_id.clone()),
+        )
+        .map_err(founding_unit_invalid)?;
+        let mut roles = events[0].semantic_refs.iter().filter(|reference| {
+            matches!(
+                reference.role.as_str(),
+                "direct_conversation_contact_round" | "direct_conversation_agent_provision"
+            )
+        });
+        let authority_ref = match (roles.next(), roles.next()) {
+            (Some(reference), None) if reference.critical => match reference.role.as_str() {
+                "direct_conversation_contact_round" => {
+                    DirectConversationFoundingAuthorityRef::ContactRound(
+                        arkret_wire::Hash::new(reference.id.clone())
+                            .map_err(founding_unit_invalid)?,
+                    )
+                }
+                _ => DirectConversationFoundingAuthorityRef::AgentProvision(
+                    arkret_wire::EventId::new(reference.id.clone())
+                        .map_err(founding_unit_invalid)?,
+                ),
+            },
+            _ => {
+                return Err(founding_unit_invalid(
+                    "the genesis must carry exactly one critical founding authority ref",
+                ));
+            }
+        };
+        if matches!(
+            authority_ref,
+            DirectConversationFoundingAuthorityRef::ContactRound(_)
+        ) && peer.agent_controller_binding.is_some()
+        {
+            return Err(founding_unit_invalid(
+                "a Contact-round founding carries no Agent controller binding",
+            ));
+        }
+        Ok(DirectConversationFoundingFacts {
+            founder_id: founder.member_id,
+            peer_id: peer.member_id,
+            trust_domain_id,
+            governance_station_id: genesis.governance_station_id,
+            pair_key,
+            realm_id: plan.realm_id,
+            main_strand_id: plan.main_strand_id,
+            founding_unit_digest: plan.founding_unit_digest,
+            authority_ref,
+        })
+    }
+
+    pub fn validate(&self) -> arkret_wire::Result<()> {
+        let facts = self.facts()?;
+        let first = &self.transactions[0];
+        let authority = &first.expected_authority;
+        if authority.realm_id != facts.realm_id
+            || authority.generation != 0
+            || authority.last_handoff_ref.is_some()
+            || authority.authority_ref
+                != arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    first.event.event_id.clone(),
+                )
+        {
+            return Err(founding_unit_invalid(
+                "the founding unit must install its exact genesis authority",
+            ));
+        }
+        for (submitted, transaction) in self.submission.events.iter().zip(&self.transactions) {
+            transaction.validate()?;
+            if submitted.event != transaction.event
+                || transaction.expected_authority != *authority
+                || transaction.mls_state.is_some()
+                || !transaction.welcomes.is_empty()
+            {
+                return Err(founding_unit_invalid(
+                    "a founding transaction diverges from its submitted Event or authority",
+                ));
+            }
+        }
+        arkret_models_collaboration::authority_commit::DirectConversationFoundingAcceptanceOutcome {
+            unit_kind: self.submission.unit_kind,
+            status:
+                arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus::Committed,
+            commits: self.commits(),
+        }
+        .validate()?;
+        if self.transactions[0].commit.stream_position != 0
+            || self.transactions[0].commit.previous_commit_ref.is_some()
+            || self
+                .transactions
+                .iter()
+                .any(|transaction| transaction.commit.committed_at != first.commit.committed_at)
+        {
+            return Err(founding_unit_invalid(
+                "the four founding Commits must open the Realm stream at one instant",
+            ));
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn commits(&self) -> [RealmCommit; 4] {
+        self.transactions
+            .each_ref()
+            .map(|transaction| transaction.commit.clone())
+    }
+}
+
 /// Complete PCR genesis admission prepared by the governance Station after
 /// authenticating the Account Authority relay and both producer proofs.
 #[derive(Clone, Debug, PartialEq)]
@@ -618,6 +892,31 @@ pub trait AuthorityCommitStore: Send + Sync {
         producer_guards: &[SelfProducerCommitGuard],
         queued_at: DateTime<Utc>,
     ) -> PersistenceResult<OrdinaryRealmBootstrapCommitOutcome>;
+
+    /// Admit the caller-authored Direct Conversation founding unit in one
+    /// transaction (contact-and-direct-conversation.md sections 5.5 and 6.1):
+    /// an exact retry of the same idempotency key and unit returns the stored
+    /// Commits first; otherwise the founder's unique slot is claimed, the
+    /// founding authority is read from this Station's current state, and the
+    /// four Events, their consecutive Commits and current results are written.
+    /// Every refusal writes nothing.
+    async fn admit_self_direct_conversation_founding_unit(
+        &self,
+        unit: &DirectConversationFoundingCommitUnit,
+        producer_guards: &[SelfProducerCommitGuard; 4],
+        queued_at: DateTime<Utc>,
+    ) -> PersistenceResult<DirectConversationFoundingCommitOutcome>;
+
+    /// Evaluate the Direct Conversation admission table
+    /// (contact-and-direct-conversation.md section 8.4) for `event` at one
+    /// read-only cut of its Realm. The accepting transaction evaluates the
+    /// same table again at its own cut; this read lets a caller refuse an
+    /// Event it has no admission unit for, and skip reducer preflight for a
+    /// Direct Conversation Realm, whose table precedes every other authority.
+    async fn direct_conversation_admission(
+        &self,
+        event: &Event,
+    ) -> PersistenceResult<DirectConversationAdmissionCut>;
 
     /// Install the complete PCR genesis, founding device current, and exact
     /// idempotency receipt in one durable transaction.

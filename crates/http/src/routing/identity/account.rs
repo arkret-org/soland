@@ -166,9 +166,6 @@ use crate::{JsonResult, json_ok};
 
 mod current_principal;
 mod social;
-pub(crate) use social::direct::{
-    validate_direct_message_bootstrap, validate_direct_message_participant,
-};
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, contact_detached_jws,

@@ -297,11 +297,32 @@ pub enum ConflictCode {
     AuthorityExpiryWidening,
     /// `ak.capability.relinquish` by an actor other than the grant subject.
     GrantRelinquishNotSubject,
+    /// A Direct Conversation founding unit is not the closed caller-authored
+    /// four-Event unit (contact-and-direct-conversation.md section 6.1).
+    DirectConversationFoundingUnitInvalid,
+    /// The founder's local founding slot is already closed by another unit.
+    DirectConversationSlotAlreadyCommitted,
+    /// Binding integrity stage of the Direct Conversation admission table.
+    DirectConversationBindingInvalid,
+    /// Terminal guard stage of the Direct Conversation admission table.
+    DirectConversationTerminalForbidden,
+    /// Exact-two stage of the Direct Conversation admission table.
+    DirectConversationMemberCountInvalid,
+    /// Third-party member stage of the Direct Conversation admission table.
+    DirectConversationThirdPartyMemberForbidden,
+    /// Active-profile invite stage of the Direct Conversation admission table.
+    DirectConversationInviteForbidden,
+    /// Technical root phase-mask stage of the Direct Conversation admission table.
+    DirectConversationRootMaskViolation,
+    /// The closed participant evaluator denied an allowlisted action.
+    DirectConversationParticipantAuthorityDenied,
+    /// `ak.space.*` targets a Direct Conversation Realm.
+    DirectConversationSpaceForbidden,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 60] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
@@ -352,6 +373,16 @@ impl ConflictCode {
         Self::AuthorityCycle,
         Self::AuthorityExpiryWidening,
         Self::GrantRelinquishNotSubject,
+        Self::DirectConversationFoundingUnitInvalid,
+        Self::DirectConversationSlotAlreadyCommitted,
+        Self::DirectConversationBindingInvalid,
+        Self::DirectConversationTerminalForbidden,
+        Self::DirectConversationMemberCountInvalid,
+        Self::DirectConversationThirdPartyMemberForbidden,
+        Self::DirectConversationInviteForbidden,
+        Self::DirectConversationRootMaskViolation,
+        Self::DirectConversationParticipantAuthorityDenied,
+        Self::DirectConversationSpaceForbidden,
     ];
 
     #[must_use]
@@ -419,6 +450,54 @@ impl ConflictCode {
             Self::GrantRelinquishNotSubject => {
                 arkret_wire::ReasonCode::GRANT_RELINQUISH_NOT_SUBJECT
             }
+            Self::DirectConversationFoundingUnitInvalid => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_FOUNDING_UNIT_INVALID
+            }
+            Self::DirectConversationSlotAlreadyCommitted => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_SLOT_ALREADY_COMMITTED
+            }
+            Self::DirectConversationBindingInvalid => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_BINDING_INVALID
+            }
+            Self::DirectConversationTerminalForbidden => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN
+            }
+            Self::DirectConversationMemberCountInvalid => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID
+            }
+            Self::DirectConversationThirdPartyMemberForbidden => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_THIRD_PARTY_MEMBER_FORBIDDEN
+            }
+            Self::DirectConversationInviteForbidden => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN
+            }
+            Self::DirectConversationRootMaskViolation => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION
+            }
+            Self::DirectConversationParticipantAuthorityDenied => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED
+            }
+            Self::DirectConversationSpaceForbidden => {
+                arkret_wire::ReasonCode::DIRECT_CONVERSATION_SPACE_FORBIDDEN
+            }
+        }
+    }
+
+    /// The Direct Conversation admission-table reason this code carries, if
+    /// any. These refusals are the closed `{status="rejected",reason_code}`
+    /// Event submit outcome, never a problem response
+    /// (contact-and-direct-conversation.md section 8.4).
+    #[must_use]
+    pub const fn direct_conversation_admission_reason(self) -> Option<&'static str> {
+        match self {
+            Self::DirectConversationBindingInvalid
+            | Self::DirectConversationTerminalForbidden
+            | Self::DirectConversationMemberCountInvalid
+            | Self::DirectConversationThirdPartyMemberForbidden
+            | Self::DirectConversationInviteForbidden
+            | Self::DirectConversationRootMaskViolation
+            | Self::DirectConversationParticipantAuthorityDenied => Some(self.as_str()),
+            _ => None,
         }
     }
 

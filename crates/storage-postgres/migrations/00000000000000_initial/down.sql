@@ -237,7 +237,6 @@ DROP TABLE IF EXISTS principal_resolutions CASCADE;
 DROP TABLE IF EXISTS service_identity CASCADE;
 DROP TABLE IF EXISTS webvh_documents CASCADE;
 DROP TABLE IF EXISTS webvh_log_events CASCADE;
-DROP TABLE IF EXISTS public.direct_conversation_founding_equivocations;
 DROP TABLE IF EXISTS public.direct_conversation_founding_slots;
 DROP TABLE IF EXISTS public.realm_meta CASCADE;
 DROP TABLE IF EXISTS public.messages CASCADE;

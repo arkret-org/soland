@@ -8,7 +8,8 @@
 //! authorization at the authority transaction cut.
 
 use arkret_models_collaboration::authority_commit::{
-    AggregateAcceptanceStatus, OrdinaryRealmBootstrapAcceptanceOutcome,
+    AggregateAcceptanceStatus, DirectConversationFoundingAcceptanceOutcome,
+    DirectConversationFoundingUnitSubmission, OrdinaryRealmBootstrapAcceptanceOutcome,
     OrdinaryRealmBootstrapUnitSubmission, PeerAuthorityForwardEventRequest,
     PeerAuthorityForwardMlsRequest,
 };
@@ -84,6 +85,25 @@ pub(super) fn refuse_actor_private_event(kind: &arkret_wire::EventKind) -> Servi
         )));
     }
     Ok(())
+}
+
+/// A shared Event of a kind this Station admits through no unit: the
+/// Direct Conversation profile table still answers first for its Realm
+/// (contact-and-direct-conversation.md section 8.4), otherwise the refusal
+/// stays the universal `unsupported_event_kind`. `None` for a routed kind.
+pub(super) async fn refuse_unrouted_event(
+    state: &AppState,
+    event: &arkret_wire::Event,
+) -> ServiceResult<Option<AuthoritySubmitOutcome>> {
+    match self_event_route(&event.kind) {
+        Ok(_) => Ok(None),
+        Err(unsupported @ ServiceError::UnsupportedEventKind(_)) => {
+            super::authority_direct_conversation::refuse_unadmitted_event(state, event, unsupported)
+                .await
+                .map(Some)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Preconditions shared by every Event admitted through the guarded unit,
@@ -262,6 +282,17 @@ impl AuthorityProtocolPort for AppState {
         Ok(outcome)
     }
 
+    async fn submit_self_direct_conversation_founding(
+        &self,
+        session: &SessionIdentityState,
+        request: DirectConversationFoundingUnitSubmission,
+    ) -> ServiceResult<DirectConversationFoundingAcceptanceOutcome> {
+        super::authority_direct_conversation::submit_self_direct_conversation_founding(
+            self, session, request,
+        )
+        .await
+    }
+
     async fn submit_self_event(
         &self,
         session: &SessionIdentityState,
@@ -277,6 +308,9 @@ impl AuthorityProtocolPort for AppState {
                 .await?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
             return super::authority_forward::forward_self_event(self, &governance, request).await;
+        }
+        if let Some(outcome) = refuse_unrouted_event(self, event).await? {
+            return Ok(outcome);
         }
         match self_event_route(&event.kind)? {
             SelfEventRoute::KeyBackupPointer => {

@@ -5,11 +5,12 @@ use arkret_wire::ActorId;
 use diesel::sql_types::{BigInt, Binary};
 
 use super::{
-    Array, ConsentGrantKey, ConsentGrantRecord, ConsentGrantStore, ContactRecord, ContactStore,
-    ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore, InviteReceivePolicyStore, Jsonb,
-    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
-    Value, async_trait, decode_consent_grants, ids, pg_conn, sql_query,
+    Array, AsyncPgConnection, ConsentGrantKey, ConsentGrantRecord, ConsentGrantStore,
+    ContactRecord, ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
+    InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
+    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
+    RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_consent_grants, ids, pg_conn,
+    sql_query,
 };
 /// Encode a contact's Event reference for storage.
 ///
@@ -266,6 +267,28 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
     })
 }
 const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, pending_incoming_admitted, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_host_id, peer_service_resolution, created_at, updated_at";
+/// Both directional Contact rows of an exact pair, share-locked so a
+/// concurrent Contact change cannot commit inside the reading transaction.
+pub(crate) async fn pair_contacts_in_connection(
+    conn: &mut AsyncPgConnection,
+    left: &ActorId,
+    right: &ActorId,
+) -> PersistenceResult<Vec<ContactRecord>> {
+    sql_query(format!(
+        "SELECT {CONTACT_COLUMNS} FROM contacts \
+         WHERE (requester_id = $1 AND target_id = $2) OR (requester_id = $2 AND target_id = $1) \
+         ORDER BY updated_at ASC, requester_id ASC FOR SHARE"
+    ))
+    .bind::<Text, _>(left.to_string())
+    .bind::<Text, _>(right.to_string())
+    .load::<ContactRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .into_iter()
+    .map(contact_record_from_row)
+    .collect()
+}
+
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn completion_for_request(

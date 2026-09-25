@@ -3809,31 +3809,30 @@ CREATE TABLE public.identity_anchor_account_slots (
     UNIQUE (principal_id, station_id)
 );
 
+-- The founder's current Station closes exactly one founding slot per
+-- (founder_id, trust_domain_id, pair_key) in the transaction that commits the
+-- caller-authored four-Event unit (contact-and-direct-conversation.md 5.5).
+-- The four source Commits are kept byte-exact for an idempotent retry; no
+-- founding receipt exists. founder_id and peer_id are canonical ActorId JSON.
 CREATE TABLE public.direct_conversation_founding_slots (
     founder_id text NOT NULL,
     trust_domain_id text NOT NULL,
     pair_key text NOT NULL,
+    peer_id text NOT NULL,
     founding_unit_digest text NOT NULL,
     realm_id text NOT NULL,
     main_strand_id text NOT NULL,
     event_ids jsonb NOT NULL,
+    commits_json jsonb NOT NULL,
     idempotency_key text NOT NULL,
     accepted_at timestamptz NOT NULL,
     CONSTRAINT direct_conversation_founding_slots_trust_domain_check CHECK ((trust_domain_id ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$')),
+    CONSTRAINT direct_conversation_founding_slots_distinct_pair_check CHECK (founder_id <> peer_id),
+    CONSTRAINT direct_conversation_founding_slots_event_ids_check CHECK (jsonb_typeof(event_ids) = 'array' AND jsonb_array_length(event_ids) = 4),
+    CONSTRAINT direct_conversation_founding_slots_commits_check CHECK (jsonb_typeof(commits_json) = 'array' AND jsonb_array_length(commits_json) = 4),
     PRIMARY KEY (founder_id, trust_domain_id, pair_key),
-    UNIQUE (founder_id, idempotency_key)
-);
-
-CREATE TABLE public.direct_conversation_founding_equivocations (
-    id bigserial PRIMARY KEY,
-    founder_id text NOT NULL,
-    trust_domain_id text NOT NULL,
-    pair_key text NOT NULL,
-    committed_unit_digest text NOT NULL,
-    conflicting_unit_digest text NOT NULL,
-    idempotency_key text NOT NULL,
-    observed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT direct_conversation_founding_equivocations_trust_domain_check CHECK ((trust_domain_id ~ '^ak:trust_domain:[a-z0-9][-a-z0-9._:]{0,127}$'))
+    UNIQUE (founder_id, idempotency_key),
+    UNIQUE (realm_id)
 );
 
 -- Durable Realm metadata projection: owner, lifecycle, visibility and the

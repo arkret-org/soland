@@ -2296,6 +2296,12 @@ async fn commit_one_in_connection(
         .await?;
     }
 
+    // contact-and-direct-conversation.md section 8.4: the profile table of a
+    // Direct Conversation Realm precedes every action authority and writer.
+    crate::direct_conversation_admission::admit_direct_conversation_event_in_connection(
+        conn, event,
+    )
+    .await?;
     prepare_parent_membership_transaction(conn, &request).await?;
     crate::member_state_admission::admit_member_state_in_connection(
         conn,
