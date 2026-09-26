@@ -1379,6 +1379,13 @@ impl FederationDispatcher {
                         .capture_keypackage_claim_outcome(&row, &body_text)
                         .await
                 {
+                    tracing::warn!(
+                        worker = "federation_outbox",
+                        outbox_id = %row.delivery.id,
+                        peer_id = %row.delivery.peer_id,
+                        %error,
+                        "relayed KeyPackage claim outcome could not be stored; retrying"
+                    );
                     self.transport_retry(
                         &row,
                         &lease_token,

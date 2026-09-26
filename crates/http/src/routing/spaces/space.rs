@@ -678,16 +678,30 @@ async fn realm_active_member_at_read_time(
     }
 }
 
+/// Whether the Realm's current `plaintext_visible_services` declaration in
+/// this Station's accepted typed current -- governing or held as an anchored
+/// replica -- lists this Station for `data_class`, unexpired. The
+/// machine-checkable `data_classes[]` alone authorizes plaintext.
 pub async fn realm_allows_plaintext_service_for_data_class_id(
     state: &AppState,
     realm_id: &str,
     data_class: PlaintextDataClassKind,
 ) -> bool {
-    state
-        .realms()
-        .realm_metadata(realm_id)
+    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
+        return false;
+    };
+    let Ok(Some(declared)) = state
+        .authority_commits()
+        .accepted_plaintext_visible_services(&realm_id)
         .await
-        .ok()
-        .flatten()
-        .is_some_and(|record| record.allows_plaintext_data_class(state.service_id(), data_class))
+    else {
+        return false;
+    };
+    let now = now();
+    let station = state.service_core_id();
+    declared.services.iter().any(|service| {
+        service.service_id == station
+            && service.data_classes.contains(&data_class)
+            && service.expires_at.is_none_or(|expires_at| expires_at > now)
+    })
 }

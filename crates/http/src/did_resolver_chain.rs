@@ -88,6 +88,10 @@ pub struct SolandDidResolver {
     external: Option<Arc<HttpDidResolver>>,
     allowed_methods: Vec<String>,
     development_mode: bool,
+    /// In development mode, the scheme a loopback did:webvh authority is
+    /// fetched with: the one this Station itself is published under, as its
+    /// loopback peers are served alike.
+    loopback_webvh_scheme: Option<String>,
     local_snapshot: RwLock<BTreeMap<Did, CachedDidDocument>>,
 }
 
@@ -131,6 +135,11 @@ impl SolandDidResolver {
             external,
             allowed_methods: config.did_resolver_allow_methods.clone(),
             development_mode: config.development_mode,
+            loopback_webvh_scheme: config
+                .development_mode
+                .then(|| reqwest::Url::parse(&config.public_base_url).ok())
+                .flatten()
+                .map(|url| url.scheme().to_owned()),
             local_snapshot: RwLock::new(BTreeMap::new()),
         }
     }
@@ -293,13 +302,13 @@ impl SolandDidResolver {
     fn webvh_url_for_environment(&self, raw_url: String) -> Result<String, String> {
         let mut url = reqwest::Url::parse(&raw_url)
             .map_err(|error| format!("did:webvh history URL is invalid: {error}"))?;
-        if self.development_mode
+        if let Some(scheme) = self.loopback_webvh_scheme.as_deref()
             && url
                 .host_str()
                 .and_then(|host| host.parse::<std::net::IpAddr>().ok())
                 .is_some_and(|address| address.is_loopback())
         {
-            url.set_scheme("http")
+            url.set_scheme(scheme)
                 .map_err(|()| "did:webvh loopback history URL scheme is invalid".to_owned())?;
         }
         Ok(url.into())
@@ -658,6 +667,43 @@ mod tests {
 
     fn sample_web_did() -> Did {
         Did::new("did:web:alice.example").expect("valid did:web")
+    }
+
+    /// A development deployment fetches a loopback did:webvh history with
+    /// the scheme it is itself published under; a public host and a
+    /// production deployment keep the method's HTTPS URL.
+    #[test]
+    fn loopback_webvh_history_follows_the_station_scheme_in_development() {
+        let loopback = "https://127.0.0.1:55400/webvh/service/did.jsonl".to_owned();
+        let public = "https://webvh.example/users/alice/did.jsonl".to_owned();
+        let resolver = |public_base_url: &str, development_mode: bool| {
+            SolandDidResolver::new(&AppConfig {
+                public_base_url: public_base_url.to_owned(),
+                development_mode,
+                ..base_config()
+            })
+        };
+        let tls = resolver("https://127.0.0.1:55401/", true);
+        assert_eq!(
+            tls.webvh_url_for_environment(loopback.clone()).unwrap(),
+            loopback
+        );
+        let plain = resolver("http://127.0.0.1:55401/", true);
+        assert_eq!(
+            plain.webvh_url_for_environment(loopback.clone()).unwrap(),
+            "http://127.0.0.1:55400/webvh/service/did.jsonl"
+        );
+        assert_eq!(
+            plain.webvh_url_for_environment(public.clone()).unwrap(),
+            public
+        );
+        let production = resolver("http://127.0.0.1:55401/", false);
+        assert_eq!(
+            production
+                .webvh_url_for_environment(loopback.clone())
+                .unwrap(),
+            loopback
+        );
     }
 
     #[test]

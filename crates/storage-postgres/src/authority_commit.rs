@@ -2396,6 +2396,42 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .present)
     }
 
+    async fn accepted_plaintext_visible_services(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<
+        Option<
+            arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload,
+        >,
+    >{
+        #[derive(QueryableByName)]
+        struct ValueRow {
+            #[diesel(sql_type = Jsonb)]
+            value: Value,
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT b.value FROM realm_bootstrap_current_results b \
+             WHERE b.realm_id = $1 AND b.result_family = 'realm_plaintext_visible_services' \
+               AND (EXISTS (SELECT 1 FROM realm_commits c \
+                            WHERE c.commit_id = b.current_commit_id \
+                              AND c.realm_id = b.realm_id \
+                              AND c.stream_position = b.current_stream_position \
+                              AND c.stream_ref->>'kind' = 'realm' \
+                              AND c.stream_ref->>'realm_id' = b.realm_id) \
+                    OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
+                               WHERE a.realm_id = b.realm_id \
+                                 AND a.anchor_stream_position >= b.current_stream_position))",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<ValueRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| decode_json(row.value, "Realm plaintext-visible services"))
+        .transpose()
+    }
+
     async fn queue_event(
         &self,
         event: &arkret_wire::Event,

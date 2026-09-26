@@ -1187,6 +1187,19 @@ pub trait AuthorityCommitStore: Send + Sync {
         actor: &arkret_wire::ActorId,
     ) -> PersistenceResult<bool>;
 
+    /// The Realm's current `realm_plaintext_visible_services` declaration in
+    /// this Station's accepted state, backed like
+    /// [`Self::accepted_current_member_joined`]: by its held Realm-stream
+    /// Commit, or on a member Station by the anchored bootstrap snapshot.
+    async fn accepted_plaintext_visible_services(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<
+        Option<
+            arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload,
+        >,
+    >;
+
     async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> PersistenceResult<()>;
 
     async fn queued_event(

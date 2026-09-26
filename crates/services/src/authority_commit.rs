@@ -442,6 +442,22 @@ impl AuthorityCommitApplication {
         Ok(self.store().accepted_realm_reader(realm_id, actor).await?)
     }
 
+    /// The Realm's current plaintext-visible service declaration in this
+    /// service's accepted state.
+    pub async fn accepted_plaintext_visible_services(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<
+        Option<
+            arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload,
+        >,
+    >{
+        Ok(self
+            .store()
+            .accepted_plaintext_visible_services(realm_id)
+            .await?)
+    }
+
     pub async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> ServiceResult<()> {
         event.validate_for_submit_structural().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
