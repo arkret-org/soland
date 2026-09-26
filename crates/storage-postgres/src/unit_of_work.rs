@@ -1775,6 +1775,82 @@ async fn commit_actor_private_account_data(
     }
 }
 
+/// Read the controller's current join generation and its exact active Agent
+/// membership set under the Realm-wide batch admission lock. The typed current
+/// value contains only `membership`; the bound generation is recovered from
+/// each covering accepted join Event.
+async fn cascade_membership_prestate(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    controller: &arkret_wire::AccountId,
+) -> PersistenceResult<(
+    arkret_wire::EventId,
+    std::collections::BTreeSet<arkret_wire::ActorId>,
+)> {
+    #[derive(diesel::QueryableByName)]
+    struct JoinedEventRow {
+        #[diesel(sql_type = Jsonb)]
+        envelope: serde_json::Value,
+    }
+
+    let rows = sql_query(
+        "SELECT e.envelope FROM member_state_current_results m \
+         JOIN realm_commits c ON c.commit_id = m.current_commit_id \
+         JOIN canonical_events e ON e.pk = c.event_pk \
+         WHERE m.realm_id = $1 AND m.membership = 'join' \
+           AND c.realm_id = m.realm_id \
+           AND c.stream_position = m.current_stream_position \
+           AND c.stream_ref->>'kind' = 'realm' \
+           AND c.stream_ref->>'realm_id' = m.realm_id \
+         FOR SHARE OF m",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<JoinedEventRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let controller_actor = arkret_wire::ActorId::account(controller.clone());
+    let mut controller_generation = None;
+    let mut agent_joins = Vec::new();
+    for row in rows {
+        let event: arkret_wire::Event = serde_json::from_value(row.envelope).map_err(|error| {
+            PersistenceError::Internal(format!("current membership Event is invalid: {error}"))
+        })?;
+        if event.actor_id == controller_actor {
+            controller_generation = Some(event.event_id.clone());
+            continue;
+        }
+        if event.kind != arkret_wire::EventKind::MemberState {
+            continue;
+        }
+        let payload: arkret_models_collaboration::governance::membership_invite::MembershipPayload =
+            serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "current membership payload is invalid: {error}"
+                ))
+            })?)
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "current membership payload is invalid: {error}"
+                ))
+            })?;
+        if let Some(binding) = payload.agent_controller_binding
+            && binding.controller_account_id == *controller
+        {
+            agent_joins.push((event.actor_id, binding.controller_membership_generation_ref));
+        }
+    }
+    let generation = controller_generation.ok_or_else(|| {
+        PersistenceError::Conflict(
+            "failed_precondition: controller current membership is not join".to_owned(),
+        )
+    })?;
+    let agents = agent_joins
+        .into_iter()
+        .filter_map(|(agent, bound_generation)| (bound_generation == generation).then_some(agent))
+        .collect();
+    Ok((generation, agents))
+}
+
 /// Freeze or complete an Agent membership cascade intent.
 ///
 /// The cascade is a batch-level product effect: the controller transition and
@@ -1846,6 +1922,30 @@ async fn stage_agent_membership_cascade(
                     "duplicate_conflict: atomic Agent cascade actor set mismatch",
                 ));
             }
+            let controller_event = events
+                .iter()
+                .find(|request| request.event.event_id == controller_transition_event_id.as_str())
+                .expect("validated cascade contains the controller Event");
+            let controller: arkret_wire::Event = serde_json::from_value(
+                controller_event.event.envelope.clone(),
+            )
+            .map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "controller cascade Event is invalid: {error}"
+                ))
+            })?;
+            let controller_account = controller.actor_id.as_account_id().ok_or_else(|| {
+                PersistenceError::SchemaViolation(
+                    "controller cascade actor is not an account".to_owned(),
+                )
+            })?;
+            let (_, active_agents) =
+                cascade_membership_prestate(conn, &controller.realm_id, controller_account).await?;
+            if active_agents != expected_agent_ids {
+                return Err(conflict(
+                    "failed_precondition: atomic Agent cascade differs from the current exact set",
+                ));
+            }
         }
         AgentMembershipCascadeCommit::EmergencyTerminal { record } => {
             record.validate().map_err(|error| {
@@ -1877,6 +1977,21 @@ async fn stage_agent_membership_cascade(
             {
                 return Err(conflict(
                     "duplicate_conflict: emergency terminal Event does not bind cleanup intent",
+                ));
+            }
+            let (generation, active_agents) =
+                cascade_membership_prestate(conn, &record.realm_id, &record.controller_account_id)
+                    .await?;
+            if generation != record.controller_membership_generation_ref
+                || active_agents
+                    != record
+                        .expected_agent_ids
+                        .iter()
+                        .cloned()
+                        .collect::<std::collections::BTreeSet<_>>()
+            {
+                return Err(conflict(
+                    "failed_precondition: emergency Agent cleanup intent differs from the current exact set",
                 ));
             }
             let existing = sql_query(
