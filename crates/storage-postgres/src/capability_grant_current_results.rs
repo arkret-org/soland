@@ -3,11 +3,11 @@ use std::str::FromStr;
 
 use arkret_models_collaboration::governance::grant_constraint::{
     AuthorityRootRef, CapabilityGrant, CapabilityGrantStatus, CapabilitySubject,
-    GrantConstraintKind, IssuerAuthorityRef,
+    GrantConstraintEffect, GrantConstraintKind, IssuerAuthorityRef,
 };
 use arkret_wire::{
-    ActorId, CommitStreamRef, CommittedEventRef, CurrentRevision, EventId, GrantId, RealmCommitId,
-    RealmId, WireResourceSelector,
+    ActorId, ActorKind, CommitStreamRef, CommittedEventRef, CurrentRevision, EventId, GrantId,
+    RealmCommitId, RealmId, ResourceSelectorKind, WireResourceSelector,
 };
 use soland_storage::{ActorRealmAuthorization, resource_selector_covers};
 
@@ -576,6 +576,78 @@ fn revision_matches(
     current.revision == *expected
 }
 
+#[derive(QueryableByName)]
+struct SubjectProfileRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+/// Actor kind is create-locked in an accepted profile current result. A
+/// missing or conflicting profile cannot establish that an Account subject is
+/// Human, so a high-risk grant must fail closed at this authority cut.
+async fn accountable_grant_subject(
+    conn: &mut AsyncPgConnection,
+    subject: &CapabilitySubject,
+) -> PersistenceResult<bool> {
+    let CapabilitySubject::Actor(actor) = subject else {
+        return Err(conflict(
+            "high-risk condition subject has no exact actor kind",
+        ));
+    };
+    let ActorId::Account { account_id } = actor else {
+        return Ok(true);
+    };
+    let profiles = sql_query(
+        "SELECT value FROM actor_profile_current_results \
+         WHERE value->>'principal_id'=$1 ORDER BY realm_id FOR SHARE",
+    )
+    .bind::<Text, _>(account_id.principal_id.as_str())
+    .load::<SubjectProfileRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut kind = None;
+    for row in profiles {
+        let profile: arkret_models_identity::ActorProfile =
+            serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+        if profile.principal_id != account_id.principal_id
+            || kind.is_some_and(|known| known != profile.actor_kind)
+        {
+            return Err(conflict("grant subject actor kind is inconsistent"));
+        }
+        kind = Some(profile.actor_kind);
+    }
+    let kind = kind.ok_or_else(|| conflict("grant subject actor kind is unavailable"))?;
+    Ok(matches!(
+        kind,
+        ActorKind::Agent | ActorKind::Service | ActorKind::Bot | ActorKind::Integration
+    ))
+}
+
+fn finite_global_expiry(
+    constraints: &[arkret_models_collaboration::governance::grant_constraint::GrantConstraint],
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    constraints
+        .iter()
+        .filter(|constraint| {
+            constraint.constraint_kind == GrantConstraintKind::Temporal
+                && constraint.effect == GrantConstraintEffect::Allow
+                && constraint.applies_to_actions.is_empty()
+                && constraint.recurrence.is_none()
+        })
+        .filter_map(|constraint| constraint.expires_at)
+        .min()
+}
+
+fn resource_selectors_narrowed(resources: &[WireResourceSelector], realm_id: &RealmId) -> bool {
+    !resources.is_empty()
+        && resources.iter().all(|resource| {
+            resource.kind != ResourceSelectorKind::All
+                && (resource.realm_id.as_ref() == Some(realm_id)
+                    || (resource.kind == ResourceSelectorKind::Actor
+                        && resource.actor_id.is_some()))
+        })
+}
+
 async fn materialize_capability_grant(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -588,14 +660,33 @@ async fn materialize_capability_grant(
             "Capability Grant authority refs are empty",
         ));
     }
-    let child_expiry = body
-        .constraints
-        .iter()
-        .filter(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
-        .filter_map(|constraint| constraint.expires_at)
-        .min();
+    let child_expiry = finite_global_expiry(&body.constraints);
     if child_expiry.is_some_and(|expires_at| expires_at <= commit.committed_at) {
         return Err(conflict("grant_exceeds_issuer_authority"));
+    }
+    let mut high_risk = false;
+    let mut registry_expiry_required = false;
+    for action in &body.actions {
+        let descriptor = arkret_schema::capability_action(action)
+            .ok_or_else(|| schema_violation(format!("unregistered grant action {action}")))?;
+        high_risk |= descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High;
+        registry_expiry_required |= descriptor.required_constraints.contains(&"expires_at");
+    }
+    let accountable_subject = if high_risk {
+        accountable_grant_subject(conn, &body.subject).await?
+    } else {
+        false
+    };
+    if (registry_expiry_required || (accountable_subject && high_risk)) && child_expiry.is_none() {
+        return Err(conflict("grant requires a finite global expiry"));
+    }
+    if accountable_subject
+        && high_risk
+        && !resource_selectors_narrowed(&body.resources, &event.realm_id)
+    {
+        return Err(conflict(
+            "high-risk grant requires narrowed resource selectors",
+        ));
     }
 
     // The Realm authority row already serializes commits, while this ordered
@@ -705,6 +796,14 @@ async fn materialize_capability_grant(
     let authority_root_refs = sorted_unique_roots(roots)?;
     if authority_root_refs.is_empty() {
         return Err(conflict("grant_exceeds_issuer_authority"));
+    }
+
+    // The registered approval signatures live on EventAdmissionSubmission,
+    // but the guarded Event route currently refuses that carrier and the
+    // commit transaction cannot persist it. Do not claim that the issuer ref
+    // and signed Event alone satisfy the accountable approval/audit evidence.
+    if accountable_subject && high_risk {
+        return Err(conflict("high-risk grant approval evidence is unavailable"));
     }
 
     let mut ref_contributed = vec![false; body.issuer_authority_refs.len()];

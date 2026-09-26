@@ -217,7 +217,7 @@ fn transaction(
 }
 
 #[tokio::test]
-async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
+async fn authority_transaction_materializes_grant_and_rejects_unapproved_service_risk() {
     let pool = test_pool().await;
     let realm_seed = format!("capability-current:{}", uuid::Uuid::now_v7());
     let realm_event_id = arkret_wire::EventId::from_digest(
@@ -475,4 +475,99 @@ async fn authority_transaction_materializes_grant_and_rolls_back_stale_cas() {
         arkret_models_collaboration::governance::grant_constraint::CapabilityGrantStatus::Revoked
     );
     assert_eq!(revoked.value.revoked_by.as_ref(), Some(&revoke.actor_id));
+
+    // An exact service ActorId is the formal non-Human subject branch. Each
+    // refusal happens before the Event, Commit, and typed result can be
+    // written, even though the Realm controller is otherwise authorized.
+    let base = serde_json::json!({
+        "schema": "ak.schema.capability.v1",
+        "realm_id": realm_id,
+        "issuer_id": actor,
+        "subject": arkret_wire::ActorId::service(station_id.clone()),
+        "actions": ["ak.realm.admin"],
+        "resources": [{"kind":"realm", "realm_id":realm_id}],
+        "issuer_authority_refs": [{
+            "kind":"realm_root",
+            "realm_id":realm_id,
+            "authority_event_ref":realm_event_id,
+            "authority_generation":0
+        }],
+        "issued_at": "2026-09-21T00:00:00.000Z"
+    });
+    let cases = [
+        ("missing_expiry", base.clone()),
+        ("wildcard_resource", {
+            let mut body = base.clone();
+            body["resources"] = serde_json::json!([{"kind":"*"}]);
+            body["constraints"] = serde_json::json!([{
+                "constraint_kind":"temporal",
+                "effect":"allow",
+                "expires_at":"2026-09-22T00:00:00.000Z"
+            }]);
+            body
+        }),
+        ("missing_approval", {
+            let mut body = base;
+            body["constraints"] = serde_json::json!([{
+                "constraint_kind":"temporal",
+                "effect":"allow",
+                "expires_at":"2026-09-22T00:00:00.000Z"
+            }]);
+            body
+        }),
+    ];
+    for (name, grant) in cases {
+        let candidate = producer_event(
+            arkret_wire::EventKind::CapabilityGrant,
+            &realm_id,
+            &actor_id,
+            &station_id,
+            serde_json::json!({"grant": grant}),
+            now + chrono::TimeDelta::seconds(3),
+        );
+        let candidate_tx = transaction(
+            &authority,
+            &candidate,
+            2,
+            Some(revoke_tx.commit.commit_id.clone()),
+            now + chrono::TimeDelta::seconds(3),
+        );
+        let error = authority_store
+            .admit_event_transaction(&candidate_tx, now)
+            .await
+            .expect_err(name);
+        assert!(
+            matches!(&error, PersistenceError::Conflict(detail) if detail.starts_with("failed_precondition")),
+            "{name}: {error:?}"
+        );
+        assert!(
+            authority_store
+                .queued_event(&candidate.event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "{name} wrote an Event before refusal"
+        );
+        assert!(
+            current_store
+                .get(
+                    &realm_id,
+                    &arkret_wire::GrantId::from_event_id(&candidate.event_id)
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "{name} wrote a grant current result"
+        );
+        assert_eq!(
+            authority_store
+                .stream_head(&candidate_tx.commit.stream_ref)
+                .await
+                .unwrap()
+                .expect("the earlier revoke remains the stream head")
+                .commit_id,
+            revoke_tx.commit.commit_id,
+            "{name} advanced the Realm stream"
+        );
+    }
 }
