@@ -250,7 +250,7 @@ async fn resolve_service_identity(
     .await?;
 
     let stored = ensure_service_endpoint(persistence, config, key_store, stored).await?;
-    ensure_identity_bundle(persistence, config, key_store, bundle_backend, &stored).await?;
+    ensure_identity_bundle(persistence, bundle_backend, &stored).await?;
 
     if stored.identity.registration_key != configured_key {
         return Ok(DidCoreIdentityState::RegistrationKeyDrift {
@@ -750,8 +750,6 @@ fn provider_unavailable(error: &arkret_http_client::Error) -> bool {
 
 async fn ensure_identity_bundle(
     persistence: &PersistenceHandle,
-    config: &AppConfig,
-    key_store: Option<&dyn KeyStore>,
     backend: Option<&dyn IdentityBundleBackend>,
     stored: &StoredDidCoreIdentity,
 ) -> anyhow::Result<()> {
@@ -765,13 +763,17 @@ async fn ensure_identity_bundle(
         .webvh_history(stored.identity.did.as_str())
         .await
         .map_err(|error| anyhow::anyhow!("reading service WebVH history failed: {error}"))?;
-    let prior_receipts = backend
+    let prior_bundle = backend
         .load(&stored.identity.registration_key)
-        .map_err(|error| anyhow::anyhow!("loading prior service identity bundle failed: {error}"))?
+        .map_err(|error| {
+            anyhow::anyhow!("loading prior service identity bundle failed: {error}")
+        })?;
+    if let Some(bundle) = &prior_bundle {
+        validate_bundle_receipt_signatures(bundle)?;
+    }
+    let prior_receipts = prior_bundle
         .map(|bundle| bundle.receipt_chains)
         .unwrap_or_default();
-    let signing_seed =
-        load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let mut receipts = Vec::with_capacity(history.len());
     for entry in &history {
@@ -780,42 +782,20 @@ async fn ensure_identity_bundle(
             .get("versionId")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("service WebVH entry has no versionId"))?;
-        if let Some(receipt) = prior_receipts
-            .iter()
-            .find(|receipt| receipt.version_id == version_id)
-        {
-            receipts.push(receipt.clone());
-            continue;
-        }
         if stored.registration_receipt.version_id == version_id {
             receipts.push(stored.registration_receipt.clone());
             continue;
         }
-        let update_key = entry
-            .operation
-            .pointer("/parameters/updateKeys/0")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("service WebVH entry has no active update key"))?;
-        let mut historical = stored.clone();
-        historical.identity.did = arkret_wire::Did::new(
-            entry
-                .operation
-                .pointer("/state/id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("bundle entry omits DID"))?,
-        )?;
-        historical.registration_receipt.did = historical.identity.did.clone();
-        historical.registration_receipt.proof.verification_method =
-            arkret_wire::DidUrl::new(format!("{}#notary-key", historical.identity.did))
-                .map_err(anyhow::Error::msg)?;
-        receipts.push(reissue_registration_receipt(
-            &historical,
-            version_id,
-            &entry.event_digest,
-            update_key,
-            &signing_seed,
-            now,
-        )?);
+        // A historical receipt was signed by the assertion key authorized at
+        // that entry. Re-signing it with the current key would invent evidence
+        // for a past version, especially after assertion signer rotation.
+        let receipt = prior_receipts
+            .iter()
+            .find(|receipt| receipt.version_id == version_id)
+            .ok_or_else(|| anyhow::anyhow!(
+                "service_identity_historical_receipt_missing: no retained receipt for WebVH version {version_id}"
+            ))?;
+        receipts.push(receipt.clone());
     }
     let bundle = DidCoreIdentityBundle {
         schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
@@ -3060,6 +3040,50 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+
+        let valid_bundle = bundle_backend
+            .load(&registration_key(&config).unwrap())
+            .unwrap()
+            .unwrap();
+        let mut forged_bundle = valid_bundle.clone();
+        let signature = &mut forged_bundle.receipt_chains[0].proof.jws;
+        let replacement = if signature.ends_with('1') { '2' } else { '1' };
+        signature.pop();
+        signature.push(replacement);
+        bundle_backend.store(&forged_bundle).unwrap();
+        let forged_history = resolve_service_identity(
+            &persistence,
+            &config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect_err("a forged historical receipt cannot be retained");
+        assert!(
+            forged_history.to_string().contains("receipt signature"),
+            "{forged_history}"
+        );
+        bundle_backend.store(&valid_bundle).unwrap();
+
+        bundle_backend
+            .delete(&registration_key(&config).unwrap())
+            .unwrap();
+        let missing_history = resolve_service_identity(
+            &persistence,
+            &config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect_err("a missing historical receipt cannot be minted with the current signer");
+        assert!(
+            missing_history
+                .to_string()
+                .contains("service_identity_historical_receipt_missing"),
+            "{missing_history}"
         );
         std::fs::remove_dir_all(bundle_dir).unwrap();
     }
