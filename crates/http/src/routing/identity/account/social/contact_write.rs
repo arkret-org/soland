@@ -1564,7 +1564,8 @@ async fn plan_contact_commit(
                             state,
                             evidence,
                             previous_terminal_contact_round_id.as_ref(),
-                        )?,
+                        )
+                        .await?,
                         None,
                         event.created_at,
                         Vec::new(),
@@ -1613,22 +1614,18 @@ async fn plan_contact_commit(
                     history.push(terminal);
                     history.extend(existing.contact_round_evidence_history.iter().cloned());
                     if history.len() > 64 {
-                        history = continuity_evidence
-                            .as_ref()
-                            .map(|evidence| {
-                                imported_contact_continuity_history(
-                                    state,
-                                    evidence,
-                                    previous_terminal_contact_round_id.as_ref(),
-                                )
-                            })
-                            .transpose()?
-                            .ok_or_else(|| {
-                                crate::app_error!(
-                                    ContinuityEvidenceUnavailable,
-                                    "Contact continuity checkpoint is required",
-                                )
-                            })?;
+                        let evidence = continuity_evidence.as_ref().ok_or_else(|| {
+                            crate::app_error!(
+                                ContinuityEvidenceUnavailable,
+                                "Contact continuity checkpoint is required",
+                            )
+                        })?;
+                        history = imported_contact_continuity_history(
+                            state,
+                            evidence,
+                            previous_terminal_contact_round_id.as_ref(),
+                        )
+                        .await?;
                     }
                     (
                         history,
@@ -1969,7 +1966,7 @@ async fn plan_contact_commit(
     })
 }
 
-fn imported_contact_continuity_history(
+async fn imported_contact_continuity_history(
     state: &AppState,
     evidence: &ContactContinuityEvidence,
     previous_terminal_contact_round_id: Option<&Hash>,
@@ -1982,6 +1979,34 @@ fn imported_contact_continuity_history(
             "portable Contact continuity tail is unavailable",
         ));
     }
+    let mut signatures = evidence
+        .checkpoint
+        .signatures
+        .iter()
+        .map(|part| &part.signature)
+        .collect::<Vec<_>>();
+    for bundle in std::iter::once(evidence.checkpoint.core.root_basis.as_ref())
+        .chain(evidence.uncompressed_tail_entries.iter())
+    {
+        signatures.extend(
+            bundle
+                .request_receipts
+                .iter()
+                .map(|receipt| &receipt.signature),
+        );
+        if let Some(receipt) = &bundle.normal_response_receipt {
+            signatures.push(&receipt.request_receipt.signature);
+            signatures.push(&receipt.signature);
+        }
+        signatures.extend(bundle.current_proofs.iter().map(|proof| &proof.signature));
+        if let Some(attestations) = &bundle.glare_concurrency_attestations {
+            signatures.extend(attestations.iter().map(|part| &part.signature));
+        }
+    }
+    crate::routing::identity::contact_federation::cache_contact_assertion_signatures(
+        state, signatures,
+    )
+    .await?;
     evidence.checkpoint.validate_contact_shape().map_err(|_| {
         crate::app_error!(ContinuityInvalid, "portable Contact continuity is invalid",)
     })?;
@@ -2431,7 +2456,7 @@ pub(super) async fn request(
                             "Contact continuity tail is unavailable"
                         )
                     })?;
-                imported_contact_continuity_history(state, evidence, Some(&predecessor))?;
+                imported_contact_continuity_history(state, evidence, Some(&predecessor)).await?;
                 let expected_pair = [session_actor_id.clone(), body.peer.contact_actor_id()];
                 let checkpoint_pair = evidence
                     .checkpoint
