@@ -250,21 +250,25 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
         return false;
     };
-    if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
-        return false;
-    }
-    let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
+    let (Ok(realm_id), Ok(invite_id)) = (
+        arkret_wire::RealmId::new(realm_id.to_owned()),
+        arkret_wire::InviteId::new(invite_id.to_owned()),
+    ) else {
         return false;
     };
-    if invite.realm_id != realm_id {
+    let Ok(invites) = state.persistence().invites_in_realm(Some(&realm_id)).await else {
         return false;
-    }
-    let actor_is_invitee = invite
-        .invitee_id
-        .as_deref()
-        .is_some_and(|invitee| invite_account_matches(invitee, account));
-    let is_pending_third_party = invite.status == "pending" && invite.third_party_invite.is_some();
-    let is_duplicate_claim_by_invitee = invite.status == "claimed" && actor_is_invitee;
+    };
+    let Some(invite) = invites.into_iter().find(|invite| invite.invite_id == invite_id) else {
+        return false;
+    };
+    let is_pending_third_party = invite.state == arkret_wire::InviteState::Pending
+        && invite.third_party_invite.is_some();
+    let is_duplicate_claim_by_invitee = invite.state == arkret_wire::InviteState::Claimed
+        && invite
+            .accepted_claim
+            .as_ref()
+            .is_some_and(|claim| claim.subject_account_id == *account);
     if !is_pending_third_party && !is_duplicate_claim_by_invitee {
         return false;
     }
@@ -273,9 +277,9 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     // Do not short-circuit expired pending invites at the membership gate; let
     // the invite reducer observe the claim and produce `expired_invite_token`.
     invite
-        .invitee_id
-        .as_deref()
-        .is_none_or(|invitee_id| invite_account_matches(invitee_id, account))
+        .invitee_account_id
+        .as_ref()
+        .is_none_or(|invitee_id| invitee_id == account)
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used
@@ -606,8 +610,8 @@ mod tests {
             }
         }
 
-        // A claimed 3PID invite uses the schema's typed subject_account_id;
-        // both a different Station and the retired scalar field fail closed.
+        // A legacy claimed 3PID row likewise cannot authorize a claim; even
+        // a well-formed subject must match committed create/claim evidence.
         let mut claim = json!({
             "kind": "ak.invite.claim",
             "actor_id": actor,
@@ -617,7 +621,7 @@ mod tests {
         .unwrap()
         .clone();
         assert!(
-            invite_claim_actor_claims_pending_third_party_invite(&state, &claim, &actor, realm_id)
+            !invite_claim_actor_claims_pending_third_party_invite(&state, &claim, &actor, realm_id)
                 .await
         );
         claim.get_mut("payload").unwrap()["subject_account_id"] = json!(other.as_account_id());

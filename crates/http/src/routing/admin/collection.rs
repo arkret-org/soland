@@ -29,9 +29,7 @@ use soland_contracts::admin::{
 use soland_domain::reducer::SpaceContainerLifecycleState;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::events::{
-    RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
-};
+use soland_services::events::RealmMetadata as RealmMetaRecord;
 use soland_services::operation_semantics as kinds;
 
 use super::{
@@ -456,8 +454,8 @@ pub(super) async fn admin_invite_items(
     state: &AppState,
 ) -> Vec<soland_contracts::admin::invite_tokens::AdminInviteTokenItem> {
     state
-        .realm_invites()
-        .snapshot_all()
+        .persistence()
+        .invites_in_realm(None)
         .await
         .unwrap_or_default()
         .iter()
@@ -466,27 +464,31 @@ pub(super) async fn admin_invite_items(
 }
 
 pub(super) fn admin_invite_item(
-    invite: &RealmInviteRecord,
+    invite: &soland_storage::InviteCurrent,
 ) -> soland_contracts::admin::invite_tokens::AdminInviteTokenItem {
+    let inviter = invite.inviter.signing_principal_id().clone();
+    let invitee = invite
+        .invitee_account_id
+        .as_ref()
+        .or_else(|| invite.accepted_claim.as_ref().map(|claim| &claim.subject_account_id))
+        .map(|account| account.principal_id.clone());
     soland_contracts::admin::invite_tokens::AdminInviteTokenItem {
         kind: "invite_token".to_owned(),
-        id: invite.invite_id.clone(),
-        invite_id: invite.invite_id.clone(),
-        realm_id: invite.realm_id.clone(),
-        inviter_id: DidCoreId::new(invite.inviter_id.clone())
-            .expect("RealmInviteRecord inviter_id must be a validated DID core id"),
-        created_by: DidCoreId::new(invite.inviter_id.clone())
-            .expect("RealmInviteRecord inviter_id must be a validated DID core id"),
-        invitee_id: invite.invitee_id.clone().map(|invitee_id| {
-            DidCoreId::new(invitee_id)
-                .expect("RealmInviteRecord invitee_id must be a validated DID core id")
-        }),
-        introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
-        status: invite.status.clone(),
+        id: invite.invite_id.to_string(),
+        invite_id: invite.invite_id.to_string(),
+        realm_id: invite.realm_id.to_string(),
+        inviter_id: inviter.clone(),
+        created_by: inviter,
+        invitee_id: invitee,
+        introduction_evidence_digest: invite
+            .introduction_evidence_digest
+            .as_ref()
+            .map(ToString::to_string),
+        status: invite.state.as_str().to_owned(),
         uses_allowed: 1,
-        uses_completed: if invite.status == "accepted" { 1 } else { 0 },
-        uses_pending: if invite.status == "pending" { 1 } else { 0 },
-        expires_at: invite.expires_at,
+        uses_completed: u64::from(invite.state == arkret_wire::InviteState::Accepted),
+        uses_pending: u64::from(invite.state == arkret_wire::InviteState::Pending),
+        expires_at: Some(invite.expires_at),
         created_at: invite.created_at,
     }
 }
