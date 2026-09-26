@@ -138,10 +138,9 @@ because deleting them would be trading coverage for a green build:
    `current_result_heads`, `current_data_*` (4), `current_selector_origins`,
    `agent_approval_publications`, `device_history_projections`,
    `mls_public_genesis_states` and `mls_public_commit_states` have no writer
-   left. They cannot simply be dropped from `up.sql` and `schema.rs`: three live
+   left. They cannot simply be dropped from `up.sql` and `schema.rs`: two live
    sites still name them — `sync_cursor/retention.rs:185` sweeps
-   `current_result_versions`, `server/tests/http_api/identity.rs:306` deletes
-   from `current_result_heads`, and
+   `current_result_versions`, and
    `test-support/tests/account_device_control_storage.rs:180,315` still asserts
    `device_history_projections` reaches 1. That last assertion is the one that
    matters: it asserts a product behaviour, so it has to be re-pointed at
@@ -621,8 +620,8 @@ zero-hit across the entire SDK, `generated/` included:
 
 53 references, almost all in
 `crates/http/src/routing/identity/agents/evidence.rs` (1501 lines), with the
-rest in `agents/pairing.rs`, `agents/common.rs`, `agents/tests.rs`,
-`identity/current_signer_evidence.rs` and `server/tests/http_api/events.rs`.
+rest in `agents/pairing.rs`, `agents/common.rs`, `agents/tests.rs` and
+`identity/current_signer_evidence.rs`.
 
 **This is not dead code.** `identity/mod.rs:7` declares `mod agents`,
 `agents.rs:77` declares `mod evidence` — the whole chain is in the compile

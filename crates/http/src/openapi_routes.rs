@@ -305,7 +305,7 @@ pub struct WaitForSyncToken(pub String);
 /// specifically [`pattern_matches_path`] and the supporting helpers.
 /// Salvo wiring (the actual HTTP shape returned by the catch-all router)
 /// is covered by the integration test
-/// `framework_errors_use_arkret_error_envelope` in `tests/http_api/auth.rs`.
+/// `framework_errors_use_problem_details` in `tests/http_api/openapi.rs`.
 #[cfg(test)]
 #[path = "openapi_routes_tests.rs"]
 mod framework_error_routing_tests;

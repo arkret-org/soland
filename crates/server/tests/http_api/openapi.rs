@@ -204,3 +204,30 @@ async fn artifact_only_path_is_not_treated_as_a_registered_route_body() {
         "https://arkret.org/problems/unrecognized_endpoint"
     );
 }
+
+/// Framework-level 404 and 405 responses carry the Arkret problem envelope.
+#[test]
+fn framework_errors_use_problem_details() {
+    run_on_deep_stack(
+        "framework_errors_use_problem_details",
+        framework_errors_use_problem_details_body,
+    );
+}
+
+async fn framework_errors_use_problem_details_body() {
+    let not_found: Value = TestClient::get("http://server/_arkret/self/missing")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(problem_code(&not_found), "unrecognized_endpoint");
+
+    let method_not_allowed: Value = TestClient::post("http://server/_arkret/describe")
+        .send(&app())
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(problem_code(&method_not_allowed), "method_not_allowed");
+}
