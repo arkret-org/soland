@@ -615,6 +615,20 @@ impl RealmAuthorizationCut {
             circle_id: payload_id("circle_id"),
             ..OperationFacts::default()
         };
+        if event.kind == EventKind::RsvpSet {
+            facts.object_kind = Some("strand".to_owned());
+            facts.strand_id = payload_id("event_ref");
+            if let Some(strand_id) = facts
+                .strand_id
+                .as_deref()
+                .and_then(|value| value.parse::<StrandId>().ok())
+            {
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), strand_id),
+                    facts,
+                );
+            }
+        }
         if event.kind == EventKind::MessageCreate {
             facts.track = Some(DISCUSSION_TRACK.to_owned());
             if let Some(strand_id) = facts

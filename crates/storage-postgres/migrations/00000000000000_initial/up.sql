@@ -4446,6 +4446,27 @@ CREATE TABLE strand_current_results (
 );
 CREATE INDEX strand_current_results_realm ON strand_current_results(realm_id,strand_id);
 
+-- The whole accepted RSVP entry per exact Calendar Strand, occurrence and
+-- accountable Actor. JSONB scalars preserve an explicit null series key and
+-- JSONB ActorId preserves the complete signed identity in the subject.
+CREATE TABLE rsvp_current_results (
+ realm_id TEXT NOT NULL,
+ event_ref TEXT NOT NULL,
+ occurrence JSONB NOT NULL,
+ responder_actor_id JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ source_stream_ref JSONB NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,event_ref,occurrence,responder_actor_id),
+ CHECK(jsonb_typeof(occurrence) IN ('null','string')),
+ CHECK(jsonb_typeof(responder_actor_id)='object'),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(source_stream_ref->>'kind' IN ('realm','circle'))
+);
+CREATE INDEX rsvp_current_results_realm ON rsvp_current_results(realm_id,event_ref);
+
 -- Realm singleton pointer to a confirmed non-tombstoned Strand.
 CREATE TABLE realm_set_default_strand_current_results (
  realm_id TEXT NOT NULL PRIMARY KEY,

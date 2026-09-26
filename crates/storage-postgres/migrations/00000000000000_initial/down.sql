@@ -204,6 +204,7 @@ DROP TABLE IF EXISTS projection_events CASCADE;
 DROP TABLE IF EXISTS projection_strand_watches CASCADE;
 DROP TABLE IF EXISTS projection_strands CASCADE;
 DROP TABLE IF EXISTS strand_current_results CASCADE;
+DROP TABLE IF EXISTS rsvp_current_results CASCADE;
 DROP TABLE IF EXISTS mls_group_current_results CASCADE;
 DROP TABLE IF EXISTS message_revision_current_results CASCADE;
 DROP TABLE IF EXISTS object_redaction_current_results CASCADE;
