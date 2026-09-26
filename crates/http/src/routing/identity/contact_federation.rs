@@ -36,7 +36,7 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
-use arkret_wire::{AccountId, DidUrl, Event, IdempotencyKey, ProtocolSignature};
+use arkret_wire::{AccountId, Did, DidUrl, Event, IdempotencyKey, ProtocolSignature};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -219,6 +219,7 @@ async fn peer_contacts_submit(
             super::super::events::peer::schema_violation("source-service-id header is required")
         })?
         .to_owned();
+    cache_contact_assertion_history(state, &delivery).await?;
     if let Some(outcome) = handle_contact_control_request(state, &delivery, &source_id).await? {
         return json_ok(outcome);
     }
@@ -635,6 +636,128 @@ async fn peer_contacts_submit(
         persist_contact_event_outcome(state, &subject_core_id, &issuer_core_id, &response).await?;
     }
     json_ok(response)
+}
+
+/// Resolve every service assertion in this closed carrier at its own signed
+/// evidence time before the existing exact-issuer and transcript checks. This
+/// supplies historical keys for signatures whose method was rotated after
+/// the source fact was accepted.
+async fn cache_contact_assertion_history(
+    state: &AppState,
+    delivery: &PeerContactSubmitRequestBody,
+) -> Result<(), AppError> {
+    let mut signatures = Vec::new();
+    match delivery {
+        PeerContactSubmitRequestBody::Request {
+            request_receipt,
+            current_proof,
+            ..
+        } => {
+            signatures.push(&request_receipt.signature);
+            signatures.extend(current_proof.iter().map(|proof| &proof.signature));
+        }
+        PeerContactSubmitRequestBody::Response {
+            response_receipt,
+            current_proof,
+            ..
+        } => {
+            signatures.push(&response_receipt.request_receipt.signature);
+            signatures.push(&response_receipt.signature);
+            signatures.extend(current_proof.iter().map(|proof| &proof.signature));
+        }
+        PeerContactSubmitRequestBody::Reject { reject_receipt, .. } => {
+            signatures.push(&reject_receipt.request_receipt.signature);
+            signatures.push(&reject_receipt.signature);
+        }
+        PeerContactSubmitRequestBody::ScopeUpdate {
+            lineage,
+            current_proof,
+            ..
+        }
+        | PeerContactSubmitRequestBody::Tombstone {
+            lineage,
+            current_proof,
+            ..
+        } => {
+            signatures.push(&lineage.signature);
+            signatures.push(&current_proof.signature);
+        }
+        PeerContactSubmitRequestBody::ProofRefresh {
+            prior_mirror_receipt,
+            current_proof,
+            ..
+        } => {
+            signatures.push(&prior_mirror_receipt.signature);
+            signatures.push(&current_proof.signature);
+        }
+        PeerContactSubmitRequestBody::GlareFinalize {
+            request_receipts,
+            remote_mirror_receipt,
+            glare_concurrency_attestation,
+            ..
+        } => {
+            signatures.extend(request_receipts.iter().map(|receipt| &receipt.signature));
+            signatures.push(&remote_mirror_receipt.signature);
+            signatures.push(&glare_concurrency_attestation.signature);
+        }
+        PeerContactSubmitRequestBody::ContinuityCheckpoint { proposal, .. } => {
+            signatures.push(&proposal.proposer_signature.signature);
+        }
+    }
+    for signature in signatures {
+        let method = signature.verification_method.as_str();
+        let did = method
+            .rsplit_once('#')
+            .and_then(|(did, fragment)| (!fragment.is_empty()).then_some(did))
+            .and_then(|did| Did::new(did.to_owned()).ok())
+            .ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "Contact assertion verification method is not a DID URL",
+                )
+            })?;
+        let pinned = state
+            .dids()
+            .resolve_webvh_state_at(&did, signature.created_at)
+            .await
+            .map_err(|error| {
+                crate::app_error!(
+                    TemporarilyUnavailable,
+                    format!("Contact historical assertion state unavailable: {error}")
+                )
+            })?;
+        let document: arkret_models_identity::service_identity::ServiceDidDocument =
+            serde_json::from_value(pinned.document).map_err(|error| {
+                super::super::events::peer::schema_violation(format!(
+                    "Contact historical service DID is invalid: {error}"
+                ))
+            })?;
+        let selected = document
+            .verification_method
+            .iter()
+            .find(|candidate| {
+                candidate.id == method
+                    && candidate.controller == did
+                    && document.assertion_method.contains(&candidate.id)
+            })
+            .ok_or_else(|| {
+                super::super::events::peer::schema_violation(
+                    "Contact method was not an assertionMethod at evidence time",
+                )
+            })?;
+        let bytes = arkret_canonical::decode_ed25519_multibase(&selected.public_key_multibase)
+            .map_err(|error| {
+                super::super::events::peer::schema_violation(format!(
+                    "Contact assertion key is invalid: {error}"
+                ))
+            })?;
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|error| {
+            super::super::events::peer::schema_violation(format!(
+                "Contact assertion key is invalid: {error}"
+            ))
+        })?;
+        state.install_federation_peer_verification_method_key(None, method, key);
+    }
+    Ok(())
 }
 
 fn contact_event_issuer_core_id(

@@ -176,20 +176,17 @@ pub(crate) fn verify_contact_service_signature_bytes(
             ),
         ));
     }
-    let verifying_key = if expected_service_id == state.service_id() {
-        state.notary_verifying_key()
-    } else {
-        state
-            .federation_peer_verification_method_key(signature.verification_method.as_str())
-            .ok_or_else(|| {
-                crate::app_error!(
-                    FailedPrecondition,
-                    format!(
-                        "{evidence_field}.signature historical verification key is unavailable"
-                    ),
-                )
-            })?
-    };
+    let verifying_key = state
+        .federation_peer_verification_method_key(signature.verification_method.as_str())
+        .or_else(|| {
+            (expected_service_id == state.service_id()).then(|| state.notary_verifying_key())
+        })
+        .ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                format!("{evidence_field}.signature historical verification key is unavailable"),
+            )
+        })?;
     // ProtocolSignature.jws is the SDK compact detached JWS over the exact
     // canonical transcript; a bare base64url signature is not accepted.
     arkret_signatures::Ed25519DetachedJwsVerifier::new()
