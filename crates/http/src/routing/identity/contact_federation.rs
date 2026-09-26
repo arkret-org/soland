@@ -2714,14 +2714,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
 
             let local_holder = request_receipts
                 .iter()
-                .find(|receipt| {
-                    receipt
-                        .core
-                        .holder
-                        .contact_actor_id()
-                        .signing_principal_id()
-                        == &local_attestation.issuer_id
-                })
+                .find(|receipt| receipt.core.issuer_id == local_attestation.issuer_id)
                 .map(|receipt| receipt.core.holder.contact_actor_id())
                 .ok_or_else(|| {
                     super::super::events::peer::schema_violation(
@@ -2730,14 +2723,7 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 })?;
             let remote_holder = request_receipts
                 .iter()
-                .find(|receipt| {
-                    receipt
-                        .core
-                        .holder
-                        .contact_actor_id()
-                        .signing_principal_id()
-                        == &remote_attestation.issuer_id
-                })
+                .find(|receipt| receipt.core.issuer_id == remote_attestation.issuer_id)
                 .map(|receipt| receipt.core.holder.contact_actor_id())
                 .ok_or_else(|| {
                     super::super::events::peer::schema_violation(
