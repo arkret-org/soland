@@ -85,7 +85,7 @@ use arkret_models_collaboration::authority_commit::{
     DirectConversationFoundingFederationSubmission, PeerAuthoritySubmitRequest,
     PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitRequest, RegisteredAtomicUnitBranch,
 };
-use arkret_models_collaboration::contact_operations::ContactRound;
+use arkret_models_collaboration::contact_operations::{ContactRound, GlareConcurrencyAttestation};
 use arkret_models_collaboration::objects::direct_conversation::{
     DirectConversationAuthorizationBasis, DirectConversationFoundingAuthorityEvidence,
 };
@@ -566,6 +566,59 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
     .map_err(PgTransactionError::into_persistence)
 }
 
+fn sort_distinct_glare_attestations(attestations: &mut [GlareConcurrencyAttestation; 2]) -> bool {
+    if attestations[0].issuer_id == attestations[1].issuer_id {
+        return false;
+    }
+    attestations.sort_by(|left, right| left.issuer_id.as_str().cmp(right.issuer_id.as_str()));
+    true
+}
+
+fn same_distinct_glare_attestations(
+    local: &mut [GlareConcurrencyAttestation; 2],
+    source: &mut [GlareConcurrencyAttestation; 2],
+) -> bool {
+    sort_distinct_glare_attestations(local)
+        && sort_distinct_glare_attestations(source)
+        && local == source
+}
+
+/// The two Stations can store their own attestation first. The Contact round's
+/// request array has a mandatory wire order; the two independently signed
+/// attestations have no prescribed order. Keep every signed byte and all
+/// other founding material exact while comparing this pair by unique issuer.
+fn same_peer_founding_evidence(
+    local: &DirectConversationFoundingAuthorityEvidence,
+    source: &DirectConversationFoundingAuthorityEvidence,
+) -> bool {
+    let mut local = local.clone();
+    let mut source = source.clone();
+    if let (
+        DirectConversationFoundingAuthorityEvidence::Human {
+            contact_round_evidence: local_round,
+            ..
+        },
+        DirectConversationFoundingAuthorityEvidence::Human {
+            contact_round_evidence: source_round,
+            ..
+        },
+    ) = (&mut local, &mut source)
+        && matches!(local_round.contact_round, ContactRound::Glare { .. })
+        && matches!(source_round.contact_round, ContactRound::Glare { .. })
+    {
+        let (Some(local_attestations), Some(source_attestations)) = (
+            &mut local_round.glare_concurrency_attestations,
+            &mut source_round.glare_concurrency_attestations,
+        ) else {
+            return false;
+        };
+        if !same_distinct_glare_attestations(local_attestations, source_attestations) {
+            return false;
+        }
+    }
+    local == source
+}
+
 /// The peer materialization cut. The source has already signed all four
 /// Commits; the peer locks its local Contact evidence and installs exactly
 /// those rows with a complete anchored replica stream in one transaction.
@@ -649,7 +702,7 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
                 .into());
             }
         };
-        if &local_evidence != evidence {
+        if !same_peer_founding_evidence(&local_evidence, evidence) {
             return Err(conflict(
                 ConflictCode::FailedPrecondition,
                 "the source founding evidence does not match the peer's current Contact round",
@@ -687,4 +740,73 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_models_collaboration::contact_operations::GlareConcurrencyAttestation;
+    use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, EventId, Hash, ProtocolSignature};
+
+    use super::same_distinct_glare_attestations;
+
+    fn attestation(
+        issuer: DidCoreId,
+        subject: ActorId,
+        peer: ActorId,
+    ) -> GlareConcurrencyAttestation {
+        let observed_at = chrono::Utc::now();
+        let hash = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        GlareConcurrencyAttestation {
+            subject_id: subject,
+            issuer_id: issuer,
+            peer_id: peer,
+            request_receipt_digests: [hash.clone(), hash.clone()],
+            observed_commit_event_ids: vec![EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [3; 32],
+            )],
+            complete_through: 1,
+            unconsumed_slot_checkpoint: hash,
+            observed_at,
+            signature: ProtocolSignature {
+                verification_method: DidUrl::new("did:web:station.example#key".to_owned()).unwrap(),
+                created_at: observed_at,
+                jws: "signed-exact-attestation".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn glare_attestations_match_by_unique_issuer_without_ignoring_signed_bytes() {
+        let first_station: DidCoreId = "ak:did_core:web:first.example".parse().unwrap();
+        let second_station: DidCoreId = "ak:did_core:web:second.example".parse().unwrap();
+        let first = ActorId::account(AccountId::new(
+            "ak:did_core:web:first-account.example".parse().unwrap(),
+            first_station.clone(),
+        ));
+        let second = ActorId::account(AccountId::new(
+            "ak:did_core:web:second-account.example".parse().unwrap(),
+            second_station.clone(),
+        ));
+        let first_attestation = attestation(first_station, first.clone(), second.clone());
+        let second_attestation = attestation(second_station, second, first);
+
+        let mut local = [first_attestation.clone(), second_attestation.clone()];
+        let mut source = [second_attestation.clone(), first_attestation.clone()];
+        assert!(same_distinct_glare_attestations(&mut local, &mut source));
+
+        let mut altered = [second_attestation.clone(), first_attestation.clone()];
+        altered[0].signature.jws.push('x');
+        assert!(!same_distinct_glare_attestations(
+            &mut [first_attestation.clone(), second_attestation.clone()],
+            &mut altered,
+        ));
+
+        let mut duplicate_issuer = [first_attestation.clone(), second_attestation];
+        duplicate_issuer[1].issuer_id = duplicate_issuer[0].issuer_id.clone();
+        assert!(!same_distinct_glare_attestations(
+            &mut [first_attestation.clone(), first_attestation],
+            &mut duplicate_issuer,
+        ));
+    }
 }
