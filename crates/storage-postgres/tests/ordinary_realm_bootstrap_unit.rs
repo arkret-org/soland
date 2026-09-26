@@ -89,6 +89,32 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         .execute(&mut conn)
         .await
         .unwrap();
+    // An installed but empty Circle family must not disable unrelated Realm
+    // snapshots. Once a Circle row exists, its private disclosure still
+    // refuses the whole cut until the Circle snapshot rules are implemented.
+    let circle_id = arkret_wire::CircleId::from_event_id(&unit.transactions[0].event.event_id);
+    diesel::sql_query(
+        "INSERT INTO circle_current_results \
+         (realm_id,circle_id,create_event_id,current_commit_id,current_stream_position,source_stream_ref,short_name_folded,value,updated_at) \
+         VALUES ($1,$2,$3,$4,0,$5,'private',$6,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(unit.transactions[0].event.event_id.as_str())
+    .bind::<Text, _>(unit.transactions[0].commit.commit_id.as_str())
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"kind":"realm","realm_id":realm_id}))
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"id":circle_id,"realm_id":realm_id}))
+    .execute(&mut conn).await.unwrap();
+    assert!(
+        account_snapshot_material(&pool, &realm_id, &creator)
+            .await
+            .is_err()
+    );
+    diesel::sql_query("DELETE FROM circle_current_results WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
     drop(conn);
 
     // Every accepted cut is disclosed, not a closed chain of fixed length:
