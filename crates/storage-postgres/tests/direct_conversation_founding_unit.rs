@@ -38,7 +38,8 @@ use soland_storage::{
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, PgAuthorityCommitStore, PgContactStore, PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
+    Db, FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore,
+    PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
 };
 
 #[derive(diesel::QueryableByName)]
@@ -849,6 +850,46 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
         ConflictCode::DependencyMissing
     );
     assert_eq!(footprint(&peer_pool, &realm_id).await, [0; 5]);
+
+    // Install the same accepted Contact evidence on the peer after the
+    // dependency refusal. The peer must now materialize exact source facts
+    // while the founder's seven-stage profile admission is armed to fail.
+    let source_contact = PgContactStore {
+        pool: source_pool.clone(),
+    }
+    .get(&pair.peer_actor(), &pair.founder_actor())
+    .await
+    .unwrap()
+    .expect("source accepted Contact");
+    PgContactStore {
+        pool: peer_pool.clone(),
+    }
+    .put(&source_contact)
+    .await
+    .unwrap();
+    let profile_spy = FoundingProfileAdmissionSpy::watch(&realm_id);
+    assert_eq!(
+        refuse().await.unwrap(),
+        arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus::Committed,
+    );
+    assert_eq!(
+        profile_spy.hits(),
+        0,
+        "peer materialization invoked founder profile admission"
+    );
+    assert_eq!(footprint(&peer_pool, &realm_id).await, [1, 4, 4, 1, 2]);
+
+    // A control call to the founder path with the same Realm proves that the
+    // tripwire was active during peer materialization.
+    let self_attempt = peer_store
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await;
+    assert!(
+        matches!(self_attempt, Err(PersistenceError::Internal(ref detail))
+        if detail == "test-only founder profile admission spy tripped")
+    );
+    assert_eq!(profile_spy.hits(), 1);
+    assert_eq!(footprint(&peer_pool, &realm_id).await, [1, 4, 4, 1, 2]);
 }
 
 #[tokio::test]

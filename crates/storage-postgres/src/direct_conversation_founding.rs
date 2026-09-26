@@ -20,6 +20,66 @@
 
 use std::collections::BTreeSet;
 
+#[cfg(feature = "test-support")]
+mod profile_admission_spy {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    use arkret_wire::RealmId;
+    use soland_storage::{PersistenceError, PersistenceResult};
+
+    static WATCHED_REALMS: LazyLock<Mutex<HashMap<String, u64>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    /// Test-only tripwire keyed by a unique Realm, so parallel PG tests cannot
+    /// affect one another. A call to the founder's profile admission fails.
+    pub struct FoundingProfileAdmissionSpy {
+        realm_id: String,
+    }
+
+    impl FoundingProfileAdmissionSpy {
+        pub fn watch(realm_id: &RealmId) -> Self {
+            let realm_id = realm_id.as_str().to_owned();
+            WATCHED_REALMS
+                .lock()
+                .expect("profile spy lock")
+                .insert(realm_id.clone(), 0);
+            Self { realm_id }
+        }
+
+        pub fn hits(&self) -> u64 {
+            *WATCHED_REALMS
+                .lock()
+                .expect("profile spy lock")
+                .get(&self.realm_id)
+                .expect("profile spy remains registered")
+        }
+    }
+
+    impl Drop for FoundingProfileAdmissionSpy {
+        fn drop(&mut self) {
+            WATCHED_REALMS
+                .lock()
+                .expect("profile spy lock")
+                .remove(&self.realm_id);
+        }
+    }
+
+    pub(super) fn trip_if_watched(realm_id: &RealmId) -> PersistenceResult<()> {
+        let mut watched = WATCHED_REALMS.lock().expect("profile spy lock");
+        if let Some(hits) = watched.get_mut(realm_id.as_str()) {
+            *hits += 1;
+            return Err(PersistenceError::Internal(
+                "test-only founder profile admission spy tripped".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "test-support")]
+pub use profile_admission_spy::FoundingProfileAdmissionSpy;
+
 use arkret_models_collaboration::authority_commit::{
     AggregateAcceptanceStatus, CommittedEventSubmission,
     DirectConversationFoundingFederationSubmission, PeerAuthoritySubmitRequest,
@@ -259,6 +319,8 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
     let facts = unit
         .facts()
         .map_err(|error| conflict(ConflictCode::DirectConversationFoundingUnitInvalid, error))?;
+    #[cfg(feature = "test-support")]
+    profile_admission_spy::trip_if_watched(&facts.realm_id)?;
     unit.validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     let authority = unit.transactions[0].expected_authority.clone();
