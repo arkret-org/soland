@@ -2368,14 +2368,22 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
+            // A row is backed by the Realm-stream Commit that installed it,
+            // held here, or -- on a member Station -- by the verified
+            // bootstrap snapshot the held replica is anchored on, whose rows
+            // name Commits below the replica's floor (decision 0116).
             "SELECT EXISTS (\
                 SELECT 1 FROM member_state_current_results m \
-                JOIN realm_commits c ON c.commit_id = m.current_commit_id \
                 WHERE m.realm_id = $1 AND m.member_id = $2 AND m.membership = 'join' \
-                  AND c.realm_id = m.realm_id \
-                  AND c.stream_position = m.current_stream_position \
-                  AND c.stream_ref->>'kind' = 'realm' \
-                  AND c.stream_ref->>'realm_id' = m.realm_id\
+                  AND (EXISTS (SELECT 1 FROM realm_commits c \
+                               WHERE c.commit_id = m.current_commit_id \
+                                 AND c.realm_id = m.realm_id \
+                                 AND c.stream_position = m.current_stream_position \
+                                 AND c.stream_ref->>'kind' = 'realm' \
+                                 AND c.stream_ref->>'realm_id' = m.realm_id) \
+                       OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
+                                  WHERE a.realm_id = m.realm_id \
+                                    AND a.anchor_stream_position >= m.current_stream_position))\
              ) AS present",
         )
         .bind::<Text, _>(realm_id.as_str())

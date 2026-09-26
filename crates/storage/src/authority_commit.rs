@@ -1165,7 +1165,9 @@ pub trait AuthorityCommitStore: Send + Sync {
     /// Whether `member` is a current joined member of `realm_id` in this
     /// service's accepted state: the typed `member_state` current row, backed
     /// by the Realm-stream RealmCommit that installed it, whether this service
-    /// governs the Realm or holds its verified committed replica.
+    /// governs the Realm or holds its verified committed replica -- or, on a
+    /// member Station, by the verified bootstrap snapshot its replica is
+    /// anchored on.
     async fn accepted_current_member_joined(
         &self,
         realm_id: &arkret_wire::RealmId,
