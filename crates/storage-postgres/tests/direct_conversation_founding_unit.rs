@@ -36,6 +36,7 @@ use soland_storage::{
     DirectConversationFoundingCommitUnit, EventCommitUnitOfWork, PersistenceError,
     SelfProducerCommitGuard,
 };
+use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
     Db, PgAuthorityCommitStore, PgContactStore, PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
 };
@@ -781,6 +782,73 @@ async fn cross_station_founding_commits_one_exact_peer_delivery_atomically() {
         assert_eq!(item.source_commit, commits[index]);
     }
     assert_eq!(footprint(&pool, &realm_of(&unit)).await, [1, 4, 4, 1, 2]);
+}
+
+#[tokio::test]
+async fn peer_founding_missing_contact_dependency_writes_nothing() {
+    let source_pool = contract_pool().await;
+    let mut pair = pair(&source_pool).await;
+    let peer_station = DidCoreId::new(format!(
+        "ak:did_core:web:dc-missing-peer-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    pair.peer = AccountId::new(pair.peer.principal_id.clone(), peer_station.clone());
+    pair.contact_round_id =
+        accept_contact(&source_pool, &pair.peer, &pair.founder, "accepted").await;
+    let at = now();
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    pair.store()
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await
+        .expect("source founding");
+    let mut conn = source_pool.get().await.unwrap();
+    let row = diesel::sql_query(
+        "SELECT peer_id,payload_json FROM federation_outbox WHERE idempotency_key=$1",
+    )
+    .bind::<Text, _>(format!(
+        "direct-conversation-founding:{}",
+        unit.facts().unwrap().founding_unit_digest
+    ))
+    .get_result::<DeliveryRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(row.peer_id, peer_station.as_str());
+    let submission: arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest =
+        serde_json::from_str(&row.payload_json).unwrap();
+    let arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest::RegisteredAtomicUnit(request) = submission else {
+        panic!("expected registered_atomic_unit");
+    };
+    let arkret_models_collaboration::authority_commit::PeerRegisteredAtomicUnit::DirectConversationFounding(delivered) = request.unit else {
+        panic!("expected direct_conversation_founding");
+    };
+
+    // A separate Station database has none of the Contact round required by
+    // this unit. Its refusal cannot persist one, two or three source Commits.
+    let peer_database = TestDatabase::lease().await;
+    let peer_pool = peer_database.pool();
+    let peer_store = PgAuthorityCommitStore {
+        pool: peer_pool.clone(),
+    };
+    let realm_id = realm_of(&unit);
+    let refuse = || {
+        peer_store.materialize_peer_direct_conversation_founding_unit(
+            &unit,
+            &delivered.founding_authority_evidence,
+            &peer_station,
+            at,
+        )
+    };
+    assert_eq!(
+        refusal_code(refuse().await),
+        ConflictCode::DependencyMissing
+    );
+    assert_eq!(footprint(&peer_pool, &realm_id).await, [0; 5]);
+    assert_eq!(
+        refusal_code(refuse().await),
+        ConflictCode::DependencyMissing
+    );
+    assert_eq!(footprint(&peer_pool, &realm_id).await, [0; 5]);
 }
 
 #[tokio::test]
