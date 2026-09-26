@@ -1580,6 +1580,186 @@ async fn circle_create_withholds_private_object_from_remote_realm_member() {
     }
 }
 
+/// A CircleCreate that cannot be pushed in full is recovered through the
+/// existing peer-scan withheld branch. Its Commit-only node keeps the held
+/// Realm chain contiguous so the next disclosed Event can replicate.
+#[tokio::test]
+async fn circle_create_withheld_gap_allows_next_realm_replica() {
+    use arkret_wire::StreamScanDirection::After;
+    use soland_storage::AccountStreamScan;
+
+    let governance_database = TestDatabase::lease().await;
+    let member_database = TestDatabase::lease().await;
+    let governance_pool = governance_database.pool();
+    let member_pool = member_database.pool();
+    let governance = PgAuthorityCommitStore {
+        pool: governance_pool.clone(),
+    };
+    let member = PgAuthorityCommitStore {
+        pool: member_pool.clone(),
+    };
+    let uow = PgEventCommitUnitOfWork::new(governance_pool.clone());
+    let unit = admit(&governance_pool, "circle-withheld-gap", "public").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let alice = remote_member("circle-gap-alice");
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        alice.clone(),
+        &alice,
+        "join",
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &join, true))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let material = governance
+        .member_station_bootstrap_material(
+            &realm_id,
+            alice.as_account_id().unwrap(),
+            &join.authority_commit.commit.commit_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    member
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: realm_id.clone(),
+            join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            snapshot_head: material.visible_stream_heads[0].clone(),
+            current_state_entries: material.current_state_entries,
+        })
+        .await
+        .unwrap();
+
+    let at = join.authority_commit.commit.committed_at;
+    let create = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::CircleCreate,
+        &founder(),
+        serde_json::json!({"object": {
+            "schema":"ak.schema.circle.v1",
+            "realm_id":realm_id,
+            "title":"Hidden Circle title",
+            "summary":"Hidden Circle summary",
+            "display":{"short_name":"Hidden","color_token":"slate","symbol":{"glyph":"lock"}},
+            "directory_visibility":"members",
+            "join_rule":"public",
+            "history_access":"since_join",
+            "state":"active",
+            "created_by":founder_actor(),
+            "created_at":at,
+        }}),
+        at,
+    ));
+    let accepted = uow.commit_event(create.clone()).await.unwrap();
+    assert_eq!(accepted.outbox_inserted, 0);
+    let next = sourced(next_request(
+        &create.authority_commit,
+        arkret_wire::EventKind::RealmProfile,
+        &founder(),
+        serde_json::json!({"name":"After Circle gap"}),
+        at,
+    ));
+    uow.commit_event(next.clone()).await.unwrap();
+
+    // The normal full replica cannot jump over CircleCreate. A failed receive
+    // leaves no next Event on the member Station.
+    assert_code(
+        &member
+            .install_committed_replica(&replica(&unit, &next, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    assert!(
+        member
+            .committed_event(&next.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let AccountStreamScan::Page(page) = peer_page(
+        &governance,
+        scan_request(
+            &realm_id,
+            After(Some(join.authority_commit.commit.stream_position)),
+            10,
+        ),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("the joined member Station must be served its Realm interval");
+    };
+    assert_eq!(
+        rows(&page),
+        vec![
+            (create.authority_commit.commit.stream_position, false),
+            (next.authority_commit.commit.stream_position, true),
+        ]
+    );
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("Hidden Circle title")
+    );
+
+    let arkret_wire::CommittedEventView::Withheld(withheld) = &page.committed_events[0] else {
+        panic!("CircleCreate must be Commit-only for the nonmember Station");
+    };
+    assert_eq!(withheld.commit, create.authority_commit.commit);
+    assert_eq!(
+        member
+            .install_committed_chain_node(&CommittedChainNode {
+                local_service_id: member_station(),
+                authority: governance_authority(&unit),
+                commit: withheld.commit.clone(),
+            })
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert!(
+        member
+            .committed_event(&create.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &next, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert_eq!(
+        member
+            .committed_event(&next.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .event,
+        next.authority_commit.event
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &member,
+                &create.authority_commit.event.event_id,
+                &alice,
+                &member_station(),
+            )
+            .await
+        ),
+        Some(false)
+    );
+}
+
 /// `ak.self.committed_event.resource.get.v1` for `caller` on `store`'s
 /// Station `issuer`.
 async fn member_read(
