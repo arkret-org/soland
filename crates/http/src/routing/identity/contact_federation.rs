@@ -937,7 +937,11 @@ pub(crate) async fn cache_contact_assertion_signatures(
                 "Contact assertion key is invalid: {error}"
             ))
         })?;
-        state.install_federation_peer_verification_method_key(None, method, key);
+        if !state.install_historical_contact_assertion_key(method, signature.created_at, key) {
+            return Err(super::super::events::peer::schema_violation(
+                "Contact assertion history changed at one signed evidence time",
+            ));
+        }
     }
     Ok(())
 }

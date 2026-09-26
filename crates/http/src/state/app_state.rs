@@ -184,6 +184,11 @@ pub struct AppState {
     /// validates the document's Station endpoint binding before
     /// publishing a key.
     federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
+    /// Contact assertions can reuse one method URL across service-key
+    /// rotations. Keys resolved from verified DID history therefore bind to
+    /// the signature's evidence time as well as its exact method.
+    historical_contact_assertion_keys:
+        Arc<Mutex<BTreeMap<(String, chrono::DateTime<chrono::Utc>), VerifyingKey>>>,
     /// Live event notification bus for `ak.self.committed_event.stream.subscribe.v1`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
@@ -984,6 +989,34 @@ impl AppState {
             .copied()
     }
 
+    pub(crate) fn install_historical_contact_assertion_key(
+        &self,
+        verification_method: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+        verifying_key: VerifyingKey,
+    ) -> bool {
+        let mut keys = self.historical_contact_assertion_keys.lock();
+        let coordinate = (verification_method.to_owned(), created_at);
+        match keys.get(&coordinate) {
+            Some(existing) => *existing == verifying_key,
+            None => {
+                keys.insert(coordinate, verifying_key);
+                true
+            }
+        }
+    }
+
+    pub(crate) fn historical_contact_assertion_key(
+        &self,
+        verification_method: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<VerifyingKey> {
+        self.historical_contact_assertion_keys
+            .lock()
+            .get(&(verification_method.to_owned(), created_at))
+            .copied()
+    }
+
     /// Origin tag for diagnostics (`Configured` / `Ephemeral` / `Rotated`).
     pub fn notary_signing_key_origin(&self) -> NotarySigningKeyOrigin {
         *self.notary_signing_key_origin.lock()
@@ -1173,6 +1206,7 @@ impl AppState {
             runtime_guards: RuntimeGuardService::default(),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             federation_peer_verifying_keys: Arc::new(ArcSwap::from_pointee(BTreeMap::new())),
+            historical_contact_assertion_keys: Arc::new(Mutex::new(BTreeMap::new())),
             event_broadcast,
             connection_drain: Arc::new(tokio::sync::watch::Sender::new(None)),
             control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),

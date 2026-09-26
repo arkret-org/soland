@@ -177,7 +177,10 @@ pub(crate) fn verify_contact_service_signature_bytes(
         ));
     }
     let verifying_key = state
-        .federation_peer_verification_method_key(signature.verification_method.as_str())
+        .historical_contact_assertion_key(
+            signature.verification_method.as_str(),
+            signature.created_at,
+        )
         .or_else(|| {
             (expected_service_id == state.service_id()).then(|| state.notary_verifying_key())
         })
@@ -3028,6 +3031,95 @@ mod device_authorization_account_tests {
 
     fn hash(marker: char) -> Hash {
         Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap()
+    }
+
+    #[test]
+    fn historical_contact_assertions_keep_two_keys_for_one_rotated_method() {
+        use arkret_wire::{DidUrl, ProtocolSignature};
+        use chrono::TimeZone as _;
+
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let source = "ak:did_core:web:contact-peer.example";
+        let method = DidUrl::new("did:web:contact-peer.example#notary-key".to_owned()).unwrap();
+        let old_at = chrono::Utc.with_ymd_and_hms(2026, 9, 10, 0, 0, 0).unwrap();
+        let new_at = chrono::Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
+        let old_key = ed25519_dalek::SigningKey::from_bytes(&[23; 32]);
+        let new_key = ed25519_dalek::SigningKey::from_bytes(&[24; 32]);
+        let transcript = b"exact Contact assertion transcript";
+        let signed = |key: &ed25519_dalek::SigningKey, created_at| ProtocolSignature {
+            verification_method: method.clone(),
+            created_at,
+            jws: arkret_signatures::jws::sign_jws_ed25519(transcript, key).unwrap(),
+        };
+        let old_signature = signed(&old_key, old_at);
+        let new_signature = signed(&new_key, new_at);
+        assert!(state.install_historical_contact_assertion_key(
+            method.as_str(),
+            old_at,
+            old_key.verifying_key(),
+        ));
+        assert!(state.install_historical_contact_assertion_key(
+            method.as_str(),
+            new_at,
+            new_key.verifying_key(),
+        ));
+        state.install_federation_peer_verification_method_key(
+            None,
+            method.as_str(),
+            new_key.verifying_key(),
+        );
+        for signature in [&old_signature, &new_signature] {
+            super::verify_contact_service_signature_bytes(
+                &state,
+                source,
+                signature,
+                transcript,
+                "test.rotated_contact",
+            )
+            .unwrap();
+        }
+        let mut wrong_time = old_signature.clone();
+        wrong_time.created_at = new_at;
+        assert!(
+            super::verify_contact_service_signature_bytes(
+                &state,
+                source,
+                &wrong_time,
+                transcript,
+                "test.rotated_contact",
+            )
+            .is_err()
+        );
+        let mut missing_history = old_signature.clone();
+        missing_history.created_at += chrono::Duration::seconds(1);
+        assert!(
+            super::verify_contact_service_signature_bytes(
+                &state,
+                source,
+                &missing_history,
+                transcript,
+                "test.rotated_contact",
+            )
+            .is_err()
+        );
+        assert!(!state.install_historical_contact_assertion_key(
+            method.as_str(),
+            old_at,
+            new_key.verifying_key(),
+        ));
+        assert!(
+            super::verify_contact_service_signature_bytes(
+                &state,
+                source,
+                &old_signature,
+                b"altered transcript",
+                "test.rotated_contact",
+            )
+            .is_err()
+        );
     }
 
     #[test]
