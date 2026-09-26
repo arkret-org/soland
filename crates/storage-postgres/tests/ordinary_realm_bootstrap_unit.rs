@@ -5481,7 +5481,9 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
         arkret_wire::EventKind::MessageRevise,
         plain_revision(&authored_id, "member too late"),
     );
-    late_edit.authority_commit.commit.committed_at += chrono::TimeDelta::minutes(16);
+    // The window closes 15 minutes after creation plus the registered
+    // temporal tolerance (`constraint-schema.md` §16.1).
+    late_edit.authority_commit.commit.committed_at += chrono::TimeDelta::minutes(21);
     assert_message_write_refused(
         &uow,
         &store,
