@@ -704,6 +704,61 @@ async fn cache_contact_assertion_history(
             signatures.push(&proposal.proposer_signature.signature);
         }
     }
+    cache_contact_assertion_signatures(state, signatures).await
+}
+
+/// The receiver's signatures on a peer Contact outcome must use their own
+/// evidence-time assertion methods too. Outbox retries may consume the same
+/// durable response after the peer has rotated its service key.
+pub(crate) async fn cache_contact_outcome_assertion_history(
+    state: &AppState,
+    outcome: &PeerContactSubmitOutcome,
+) -> Result<(), AppError> {
+    let mut signatures = Vec::new();
+    match outcome {
+        PeerContactSubmitOutcome::Event(event) => {
+            signatures.push(&event.mirror_receipt.signature);
+            signatures.extend(event.current_proof.iter().map(|proof| &proof.signature));
+        }
+        PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::ProofRefresh {
+            control_receipt,
+            current_proof,
+            ..
+        }) => {
+            signatures.push(&control_receipt.signature);
+            signatures.push(&current_proof.signature);
+        }
+        PeerContactSubmitOutcome::Control(PeerContactControlSubmitOutcome::GlareFinalize {
+            control_receipt,
+            glare_concurrency_attestation,
+            current_proof,
+            ..
+        }) => {
+            signatures.push(&control_receipt.signature);
+            signatures.push(&glare_concurrency_attestation.signature);
+            signatures.extend(current_proof.iter().map(|proof| &proof.signature));
+        }
+        PeerContactSubmitOutcome::Control(
+            PeerContactControlSubmitOutcome::ContinuityCheckpoint {
+                control_receipt,
+                checkpoint,
+                ..
+            },
+        ) => {
+            signatures.push(&control_receipt.signature);
+            signatures.extend(checkpoint.signatures.iter().map(|part| &part.signature));
+        }
+        PeerContactSubmitOutcome::ControlDeferred(deferred) => {
+            signatures.push(&deferred.control_receipt.signature);
+        }
+    }
+    cache_contact_assertion_signatures(state, signatures).await
+}
+
+async fn cache_contact_assertion_signatures(
+    state: &AppState,
+    signatures: Vec<&ProtocolSignature>,
+) -> Result<(), AppError> {
     for signature in signatures {
         let method = signature.verification_method.as_str();
         let did = method

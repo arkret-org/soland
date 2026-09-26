@@ -1468,6 +1468,12 @@ impl FederationDispatcher {
         outcome
             .validate()
             .map_err(|error| format!("invalid Contact carrier outcome: {error}"))?;
+        crate::routing::identity::contact_federation::cache_contact_outcome_assertion_history(
+            &self.state,
+            &outcome,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         match (&request, &outcome) {
             (
                 arkret_models_collaboration::contact_operations::PeerContactSubmitRequestBody::Request {
