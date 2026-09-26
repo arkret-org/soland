@@ -2514,6 +2514,10 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::strand_current_results::commit_strand_update_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
             conn, event, commit,
         )
