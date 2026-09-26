@@ -36,6 +36,7 @@ DROP TABLE IF EXISTS capability_grant_current_results;
 DROP TABLE IF EXISTS member_state_current_results;
 DROP TABLE IF EXISTS circle_member_state_current_results;
 DROP TABLE IF EXISTS circle_current_results;
+DROP TABLE IF EXISTS sidecar_current_results;
 DROP TABLE IF EXISTS realm_bootstrap_current_results;
 DROP TABLE IF EXISTS agent_key_current_results;
 DROP TABLE IF EXISTS agent_status_current_results;

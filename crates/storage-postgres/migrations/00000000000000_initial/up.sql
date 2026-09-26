@@ -4390,6 +4390,27 @@ CREATE TABLE circle_member_state_current_results (
 CREATE INDEX circle_member_state_current_result_membership
  ON circle_member_state_current_results(circle_id,membership,member_id);
 
+-- Native Sidecar genesis is a Realm-stream Event. This accepted current is
+-- separate from the service-local agent_sidecars projection and permanently
+-- reserves one (Realm, complete controller AccountId) singleton.
+CREATE TABLE sidecar_current_results (
+ realm_id TEXT NOT NULL,
+ sidecar_id TEXT NOT NULL PRIMARY KEY,
+ controller_account_id JSONB NOT NULL,
+ create_event_id TEXT NOT NULL UNIQUE,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ source_stream_ref JSONB NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ UNIQUE(realm_id,controller_account_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(source_stream_ref->>'kind'='realm'),
+ CHECK(value->>'id'=sidecar_id),
+ CHECK(value->>'realm_id'=realm_id),
+ CHECK(value->'controller_account_id'=controller_account_id)
+);
+
 -- Event-derived Strand identity and its complete registered current value.
 CREATE TABLE strand_current_results (
  realm_id TEXT NOT NULL,
