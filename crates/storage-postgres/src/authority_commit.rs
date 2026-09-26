@@ -2261,12 +2261,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        Ok(row.map(|row| soland_storage::DirectConversationPendingPeerClaimQuery {
-            peer_id: row.peer_id,
-            original_request_body: row.original_request_body,
-            claim_request_id: row.claim_request_id,
-            request_digest: row.request_digest,
-        }))
+        Ok(row.map(
+            |row| soland_storage::DirectConversationPendingPeerClaimQuery {
+                peer_id: row.peer_id,
+                original_request_body: row.original_request_body,
+                claim_request_id: row.claim_request_id,
+                request_digest: row.request_digest,
+            },
+        ))
     }
 
     async fn admit_self_ordinary_realm_bootstrap_unit(
@@ -2517,8 +2519,8 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
         let controller_actor = arkret_wire::ActorId::account(controller.clone());
-        let controller_value = serde_json::to_value(controller)
-            .map_err(PersistenceError::database)?;
+        let controller_value =
+            serde_json::to_value(controller).map_err(PersistenceError::database)?;
         let row = sql_query(
             "SELECT EXISTS (\
                SELECT 1 FROM member_state_current_results agent_member \
