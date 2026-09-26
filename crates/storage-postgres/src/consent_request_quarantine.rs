@@ -5,16 +5,16 @@ use arkret_models_collaboration::governance::holder_quarantine::{
     HolderQuarantine, HolderQuarantineEntry, HolderQuarantineSurface,
 };
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
-use arkret_wire::{
-    AccountDataKey, AccountId, ActorId, ConsentRequestScope, Hash, NewSourceQuotaConstraints,
-};
+use arkret_wire::{AccountDataKey, ActorId, Hash};
 use chrono::{DateTime, Duration, Utc};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension as _, sql_query};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::{Value, json};
 use soland_storage::{
-    AccountDataCasResult, AccountDataRecord, PersistenceError, PersistenceResult,
+    AccountDataCasResult, AccountDataRecord, ConsentRequestQuarantineInput,
+    ConsentRequestQuarantineOutcome, ConsentRequestQuarantineStore, PersistenceError,
+    PersistenceResult,
 };
 
 use crate::accounts::compare_account_data_in_transaction;
@@ -22,24 +22,6 @@ use crate::{PgPool, PgTransactionError, pg_conn};
 
 const MAX_ENTRIES: usize = 200;
 const ENTRY_TTL_DAYS: i64 = 7;
-
-/// The keyed source digest is produced by the Station's existing private HMAC
-/// helper. This store never persists a plaintext list of stranger principals.
-pub struct ConsentRequestQuarantineInput {
-    pub holder: AccountId,
-    pub requester: AccountId,
-    pub consent_scope: ConsentRequestScope,
-    pub source_digest: String,
-    pub received_at: DateTime<Utc>,
-    pub quota_constraints: NewSourceQuotaConstraints,
-}
-
-#[derive(Debug)]
-pub enum ConsentRequestQuarantineOutcome {
-    Queued(AccountDataRecord),
-    AlreadyPending,
-    Dropped,
-}
 
 pub struct PgConsentRequestQuarantineStore {
     pub pool: PgPool,
@@ -93,8 +75,9 @@ fn invalid(detail: &str) -> PersistenceError {
     PersistenceError::SchemaViolation(detail.to_owned())
 }
 
-impl PgConsentRequestQuarantineStore {
-    pub async fn admit(
+#[async_trait::async_trait]
+impl ConsentRequestQuarantineStore for PgConsentRequestQuarantineStore {
+    async fn admit(
         &self,
         input: ConsentRequestQuarantineInput,
     ) -> PersistenceResult<ConsentRequestQuarantineOutcome> {

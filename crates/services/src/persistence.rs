@@ -1224,6 +1224,18 @@ impl PersistenceHandle {
         self.persistence.invite_new_source_ledger()
     }
 
+    /// Charge the shared first-contact quota and CAS one holder-private
+    /// Consent request entry in the same durable transaction.
+    pub async fn admit_consent_request_quarantine(
+        &self,
+        input: soland_storage::ConsentRequestQuarantineInput,
+    ) -> PersistenceResult<soland_storage::ConsentRequestQuarantineOutcome> {
+        self.persistence
+            .consent_request_quarantine()
+            .admit(input)
+            .await
+    }
+
     pub fn event_services(&self) -> PersistenceEventServices {
         build_persistence_event_services(self.persistence.clone())
     }

@@ -1434,7 +1434,7 @@ fn effective_new_source_quota(
 /// readable list of every stranger who has contacted a holder. The holder is
 /// bound into the transcript as well, so one holder's rows cannot be correlated
 /// with another's.
-fn new_source_ledger_digest(
+pub(crate) fn new_source_ledger_digest(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
     inviter_id: &str,

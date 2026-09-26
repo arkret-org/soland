@@ -30,6 +30,7 @@ pub struct PgPersistenceStore {
     invite_receive_policies: PgInviteReceivePolicyStore,
     invite_locators: PgInviteLocatorStore,
     invite_new_source_ledger: PgInviteNewSourceLedgerStore,
+    consent_request_quarantine: PgConsentRequestQuarantineStore,
     consent_grants: PgConsentGrantStore,
     mimi_consent_correlations: PgMimiConsentCorrelationStore,
     realm_meta: PgRealmMetaStore,
@@ -115,6 +116,7 @@ impl PgPersistenceStore {
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
             invite_new_source_ledger: PgInviteNewSourceLedgerStore { pool: pool.clone() },
+            consent_request_quarantine: PgConsentRequestQuarantineStore { pool: pool.clone() },
             consent_grants: PgConsentGrantStore { pool: pool.clone() },
             mimi_consent_correlations: PgMimiConsentCorrelationStore { pool: pool.clone() },
             realm_meta: PgRealmMetaStore { pool: pool.clone() },
@@ -249,6 +251,10 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore {
         &self.invite_new_source_ledger
+    }
+
+    fn consent_request_quarantine(&self) -> &dyn ConsentRequestQuarantineStore {
+        &self.consent_request_quarantine
     }
 
     fn consent_grants(&self) -> &dyn ConsentGrantStore {

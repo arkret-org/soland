@@ -9,13 +9,18 @@ use arkret_models_collaboration::consent_operations::{
     ConsentGrantRequestBody, ConsentList, ConsentRequestOutcome, ConsentRequestRequestBody,
     ConsentRevokeRequestBody, ConsentView,
 };
-use arkret_wire::{Event, EventKind};
+use arkret_wire::{AccountDataKey, Event, EventKind};
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use soland_services::events::CommitConsentProjection;
+use soland_storage::{ConsentRequestQuarantineInput, ConsentRequestQuarantineOutcome};
 
 use super::AuthArgs;
+use super::device_messages::{
+    ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
+    fanout_actor_private_update, station_device_message_sender,
+};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -101,12 +106,70 @@ async fn request_consent(
     body: JsonBody<ConsentRequestRequestBody>,
 ) -> JsonResult<ConsentRequestOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    body.into_inner()
-        .validate()
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    body.validate()
         .map_err(|error| AppError::param_invalid(format!("consent request: {error}")))?;
-    // Without the shared anti-abuse/holder-private queue transaction, drop
-    // every request identically. The requester learns nothing about the holder.
+    let requester =
+        super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
+    let actor = super::session_actor::validated_session_actor(state, &session).await?;
+    if actor.as_account_id() != Some(&requester) {
+        return Err(AppError::unauthenticated(
+            "Consent requester differs from its authenticated Account",
+        ));
+    }
+    // The self route is Station-local. Remote or unknown holders receive the
+    // same opaque result as quota, policy and successful queue admission.
+    if body.holder_account_id.station_id != state.service_core_id() {
+        return json_ok(ConsentRequestOutcome::accepted());
+    }
+    let quota_constraints = state
+        .config()
+        .receive_policy_constraints
+        .as_ref()
+        .and_then(|constraints| constraints.new_source_quota.clone())
+        .unwrap_or_default();
+    let received_at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
+    let source_digest = crate::routing::invites::new_source_ledger_digest(
+        state,
+        &body.holder_account_id,
+        requester.principal_id.as_str(),
+    );
+    let admitted = state
+        .persistence()
+        .admit_consent_request_quarantine(ConsentRequestQuarantineInput {
+            holder: body.holder_account_id.clone(),
+            requester,
+            consent_scope: body.consent_scope,
+            source_digest,
+            received_at,
+            quota_constraints,
+        })
+        .await;
+    if let Ok(ConsentRequestQuarantineOutcome::Queued(record)) = admitted {
+        // Only the committed CAS winner is delivered, and its complete row is
+        // the content every active holder device can read independently.
+        fanout_actor_private_update(
+            state,
+            body.holder_account_id.principal_id.as_str(),
+            ActorPrivateDeviceUpdate::AccountData {
+                sender: station_device_message_sender(state),
+                content: ActorPrivateAccountDataUpdate {
+                    operation: ActorPrivateAccountDataOperation::Put,
+                    account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
+                    revision: record.revision,
+                    content: Some(record.payload),
+                    updated_at: record.updated_at,
+                },
+                created_at: record.updated_at,
+            },
+        )
+        .await;
+    } else if let Err(error) = admitted {
+        // A storage refusal must not reveal holder presence or policy through
+        // the requester's response. The transaction has already rolled back.
+        tracing::warn!(%error, "Consent request quarantine admission failed closed");
+    }
     json_ok(ConsentRequestOutcome::accepted())
 }
 

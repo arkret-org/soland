@@ -388,6 +388,9 @@ impl soland_storage::IdentityStoreRegistry for FaultInjectingStore {
     fn invite_new_source_ledger(&self) -> &dyn soland_storage::InviteNewSourceLedgerStore {
         self.inner.invite_new_source_ledger()
     }
+    fn consent_request_quarantine(&self) -> &dyn soland_storage::ConsentRequestQuarantineStore {
+        self.inner.consent_request_quarantine()
+    }
     fn consent_grants(&self) -> &dyn soland_storage::ConsentGrantStore {
         self.inner.consent_grants()
     }

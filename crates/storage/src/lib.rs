@@ -40,6 +40,7 @@ mod authority_commit;
 mod backup_series_erase;
 mod blobs;
 mod contacts;
+mod consent_request_quarantine;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod contract_tests;
@@ -100,6 +101,7 @@ pub use grant_evaluation::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use invite_new_source_ledger::*;
+pub use consent_request_quarantine::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
@@ -572,6 +574,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
     fn invite_locators(&self) -> &dyn InviteLocatorStore;
     fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore;
+    fn consent_request_quarantine(&self) -> &dyn ConsentRequestQuarantineStore;
     fn consent_grants(&self) -> &dyn ConsentGrantStore;
     fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;

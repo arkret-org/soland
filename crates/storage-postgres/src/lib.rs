@@ -47,9 +47,7 @@ mod capability_quota;
 mod committed_disclosure;
 mod consent_request_quarantine;
 mod contacts;
-pub use consent_request_quarantine::{
-    ConsentRequestQuarantineInput, ConsentRequestQuarantineOutcome, PgConsentRequestQuarantineStore,
-};
+pub use consent_request_quarantine::PgConsentRequestQuarantineStore;
 #[cfg(test)]
 #[path = "../../test-support/src/device_authorization_history.rs"]
 mod device_authorization_history;
