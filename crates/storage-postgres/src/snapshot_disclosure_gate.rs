@@ -113,6 +113,9 @@ const AUDITED_FAMILIES: &[&str] = &[
     // ordinary collaboration Realm, so any row refuses the cut below.
     "actor_profile_current_results",
     "identity_accountability_current_results",
+    // Direct Conversation binding endorsements: `ak.direct_conversation.bound`
+    // has no disclosure rule yet, so any row refuses the cut below.
+    "direct_conversation_binding_current_results",
 ];
 
 /// A committed kind of the Realm outside [`DISCLOSED_EVENT_KINDS`].
@@ -361,6 +364,7 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM identity_accountability_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM direct_conversation_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
