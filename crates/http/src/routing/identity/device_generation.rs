@@ -101,6 +101,15 @@ pub async fn active_device_revocation_gate_selector(
         .map_err(|error| ServiceError::Internal(format!("local Station id is invalid: {error}")))?;
     let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned())
         .map_err(|error| ServiceError::SchemaViolation(format!("device id is invalid: {error}")))?;
+    let account = arkret_wire::AccountId::new(principal_id.clone(), station_id.clone());
+    // Every PCR read below selects the account's PCR through the replaceable
+    // principal resolution index. Reading it through the store first rebuilds
+    // an evicted row from the account's immutable creation anchor, so eviction
+    // never turns into a device refusal.
+    state
+        .persistence()
+        .principal_resolution_by_account_id(&account)
+        .await?;
     let generation = current_device_generation(state, principal_id.as_str())
         .await?
         .ok_or_else(|| generation_fenced("device generation is not active"))?;
@@ -119,7 +128,6 @@ pub async fn active_device_revocation_gate_selector(
             "device authorization is not active".to_owned(),
         ));
     };
-    let account = arkret_wire::AccountId::new(principal_id.clone(), station_id.clone());
     let history = load_confirmed_device_history(state, &account)
         .await
         .map_err(|error| {

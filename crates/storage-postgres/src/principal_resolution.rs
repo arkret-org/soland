@@ -42,6 +42,47 @@ struct EventRow {
     event_json: serde_json::Value,
 }
 
+#[derive(QueryableByName)]
+struct GenesisAnchorRow {
+    #[diesel(sql_type = Text)]
+    principal_id: DidCoreId,
+    #[diesel(sql_type = Text)]
+    station_id: DidCoreId,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    result_json: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct EnvelopeRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+/// Which immutable creation anchor to rebuild the index row from.
+enum GenesisAnchor<'a> {
+    Account(&'a AccountId),
+    Realm(&'a RealmId),
+}
+
+/// Outcome of rebuilding one missing index row from durable PCR lineage.
+enum IndexRebuild {
+    /// The account has no accepted human PCR genesis on this Station.
+    NoAnchor,
+    /// The row is present again.
+    Present,
+    /// An accepted `ak.identity.resolution.update` succeeds the genesis, so
+    /// the initial resolution is not the current one and cannot stand in for it.
+    CurrentUndecided,
+}
+
 impl TryFrom<CurrentRow> for PrincipalResolutionRecord {
     type Error = PersistenceError;
 
@@ -127,32 +168,167 @@ impl PgPrincipalResolutionStore {
     }
 }
 
+impl PgPrincipalResolutionStore {
+    /// Rebuild the replaceable index row of one human PCR from its immutable
+    /// creation anchor: the accepted genesis unit, its committed
+    /// `ak.realm.create` and the initial resolution it committed in the same
+    /// transaction (`identity-did.md` §4.2.3, derived cache recovery). An
+    /// accepted resolution successor leaves the row missing: its current
+    /// projection needs the method-verified successor, never the genesis.
+    async fn rebuild_from_genesis_anchor(
+        &self,
+        anchor: GenesisAnchor<'_>,
+    ) -> PersistenceResult<IndexRebuild> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let query = match anchor {
+            GenesisAnchor::Account(account_id) => sql_query(
+                "SELECT principal_id, station_id, realm_id, result_json FROM pcr_genesis_units \
+                 WHERE principal_id = $1 AND station_id = $2 AND result_json <> '{}'::jsonb",
+            )
+            .into_boxed()
+            .bind::<Text, _>(account_id.principal_id.as_str())
+            .bind::<Text, _>(account_id.station_id.as_str()),
+            GenesisAnchor::Realm(realm_id) => sql_query(
+                "SELECT principal_id, station_id, realm_id, result_json FROM pcr_genesis_units \
+                 WHERE realm_id = $1 AND result_json <> '{}'::jsonb",
+            )
+            .into_boxed()
+            .bind::<Text, _>(realm_id.as_str()),
+        };
+        let Some(row) = query
+            .get_result::<GenesisAnchorRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+        else {
+            return Ok(IndexRebuild::NoAnchor);
+        };
+        let result = serde_json::from_value::<
+            arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult,
+        >(row.result_json)
+        .map_err(|error| {
+            PersistenceError::Internal(format!("stored PCR genesis result is invalid: {error}"))
+        })?;
+        let pcr_realm_id = RealmId::new(row.realm_id)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        let successors = sql_query(
+            "SELECT count(*) AS count FROM canonical_events e \
+             JOIN realm_commits c ON c.event_pk = e.pk \
+             WHERE e.realm_id = $1 AND e.kind = $2 AND e.state = 'committed'",
+        )
+        .bind::<Text, _>(pcr_realm_id.as_str())
+        .bind::<Text, _>(arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .count;
+        if successors > 0 {
+            return Ok(IndexRebuild::CurrentUndecided);
+        }
+        let genesis_event_id = &result.commits[0].event_ref;
+        let token = crate::ids::parse_event_id(genesis_event_id.as_str()).ok_or_else(|| {
+            PersistenceError::Internal("stored PCR genesis Event id is not canonical".to_owned())
+        })?;
+        let envelope = sql_query(
+            "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk = e.pk \
+             WHERE e.id = $1 AND e.realm_id = $2 AND e.state = 'committed'",
+        )
+        .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+        .bind::<Text, _>(pcr_realm_id.as_str())
+        .get_result::<EnvelopeRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(|| {
+            PersistenceError::Internal("accepted PCR genesis has no committed Event".to_owned())
+        })?
+        .envelope;
+        let genesis_event = serde_json::from_value::<Event>(envelope)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        drop(conn);
+        let record = PrincipalResolutionRecord {
+            account_id: AccountId::new(row.principal_id, row.station_id),
+            pcr_realm_id,
+            current_event: genesis_event.clone(),
+            genesis_event,
+            projection: result.resolution,
+        };
+        match self.compare_and_set(None, record).await? {
+            PrincipalResolutionCasResult::Applied(_) => Ok(IndexRebuild::Present),
+            PrincipalResolutionCasResult::Conflict(Some(_)) => Ok(IndexRebuild::Present),
+            PrincipalResolutionCasResult::Conflict(None) => Err(PersistenceError::Conflict(
+                "principal resolution index rebuild lost its genesis row".to_owned(),
+            )),
+        }
+    }
+
+    /// The index row for `account_id`, rebuilt from the account's immutable
+    /// creation anchor when it was evicted.
+    async fn indexed_by_account_id(
+        &self,
+        account_id: &AccountId,
+    ) -> PersistenceResult<Result<Option<PrincipalResolutionRecord>, IndexRebuild>> {
+        if let Some(record) = self.load_by_account_id(account_id).await? {
+            return Ok(Ok(Some(record)));
+        }
+        match self
+            .rebuild_from_genesis_anchor(GenesisAnchor::Account(account_id))
+            .await?
+        {
+            IndexRebuild::Present => Ok(Ok(self.load_by_account_id(account_id).await?)),
+            IndexRebuild::NoAnchor => Ok(Ok(None)),
+            undecided @ IndexRebuild::CurrentUndecided => Ok(Err(undecided)),
+        }
+    }
+}
+
+fn current_undecided() -> PersistenceError {
+    PersistenceError::Internal(
+        "the PCR identity resolution current is not available from its creation anchor".to_owned(),
+    )
+}
+
 #[async_trait]
 impl PrincipalResolutionStore for PgPrincipalResolutionStore {
     async fn current_principal(
         &self,
         account_id: &AccountId,
     ) -> PersistenceResult<soland_storage::CurrentPrincipalRead> {
-        Ok(match self.load_by_account_id(account_id).await? {
-            Some(record) => soland_storage::CurrentPrincipalRead::Ready {
+        Ok(match self.indexed_by_account_id(account_id).await? {
+            Ok(Some(record)) => soland_storage::CurrentPrincipalRead::Ready {
                 pcr_realm_id: record.pcr_realm_id,
                 projection: record.projection,
             },
-            None => soland_storage::CurrentPrincipalRead::Missing,
+            Ok(None) => soland_storage::CurrentPrincipalRead::Missing,
+            Err(_) => soland_storage::CurrentPrincipalRead::Unavailable,
         })
     }
     async fn by_account_id(
         &self,
         account_id: &AccountId,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>> {
-        self.load_by_account_id(account_id).await
+        self.indexed_by_account_id(account_id)
+            .await?
+            .map_err(|_| current_undecided())
     }
 
     async fn for_realm(
         &self,
         pcr_realm_id: &RealmId,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>> {
-        self.load_for_realm(pcr_realm_id).await
+        if let Some(record) = self.load_for_realm(pcr_realm_id).await? {
+            return Ok(Some(record));
+        }
+        match self
+            .rebuild_from_genesis_anchor(GenesisAnchor::Realm(pcr_realm_id))
+            .await?
+        {
+            IndexRebuild::Present => self.load_for_realm(pcr_realm_id).await,
+            IndexRebuild::NoAnchor => Ok(None),
+            IndexRebuild::CurrentUndecided => Err(current_undecided()),
+        }
     }
 
     async fn compare_and_set(

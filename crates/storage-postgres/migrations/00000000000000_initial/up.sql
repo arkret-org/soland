@@ -4563,8 +4563,14 @@ CREATE TABLE ordinary_realm_bootstrap_units (
  CHECK(octet_length(exact_request_body) > 0),
  CHECK(jsonb_typeof(commits_json)='array')
 );
+-- The accepted human PCR genesis unit is the immutable creation anchor of its
+-- complete AccountId: it selects the one PCR lineage and carries the initial
+-- identity resolution the replaceable principal_resolutions index rebuilds
+-- from (identity-did.md 4.2).
 CREATE TABLE pcr_genesis_units (
  realm_id TEXT PRIMARY KEY,
+ principal_id TEXT NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+ station_id TEXT NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
  idempotency_key TEXT NOT NULL UNIQUE,
  exact_request_body BYTEA NOT NULL,
  commits_json JSONB NOT NULL,
@@ -4572,7 +4578,8 @@ CREATE TABLE pcr_genesis_units (
  committed_at TIMESTAMPTZ NOT NULL,
  CHECK(octet_length(exact_request_body) > 0),
  CHECK(jsonb_typeof(commits_json)='array'),
- CHECK(jsonb_typeof(result_json)='object')
+ CHECK(jsonb_typeof(result_json)='object'),
+ UNIQUE(principal_id,station_id)
 );
 CREATE INDEX agent_status_current_result_agent
  ON agent_status_current_results(realm_id,agent_id);

@@ -743,6 +743,75 @@ async fn reused_genesis_realm_or_idempotency_key_is_a_zero_write_duplicate_confl
 }
 
 #[tokio::test]
+async fn evicted_principal_resolution_index_is_rebuilt_from_the_genesis_anchor() {
+    use soland_storage::{CurrentPrincipalRead, PrincipalResolutionStore};
+
+    let (pool, station) = contract_store().await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let accepted = unit(station.clone());
+    let at = accepted.transactions[0].commit.committed_at;
+    let PcrGenesisCommitOutcome::Committed(result) =
+        store.admit_pcr_genesis_unit(&accepted, at).await.unwrap()
+    else {
+        panic!("PCR genesis must commit");
+    };
+    let account = arkret_wire::AccountId::new(
+        accepted.submission.principal_id.clone(),
+        accepted.submission.account_authority_id.clone(),
+    );
+    let resolutions = soland_storage_postgres::PgPrincipalResolutionStore { pool: pool.clone() };
+    let initial = resolutions.current_principal(&account).await.unwrap();
+    assert_eq!(
+        initial,
+        CurrentPrincipalRead::Ready {
+            pcr_realm_id: result.pcr_realm_id.clone(),
+            projection: result.resolution.clone(),
+        }
+    );
+
+    let mut conn = pool.get().await.unwrap();
+    let evicted = diesel::sql_query(
+        "DELETE FROM principal_resolutions WHERE principal_id=$1 AND station_id=$2",
+    )
+    .bind::<Text, _>(account.principal_id.as_str())
+    .bind::<Text, _>(account.station_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(evicted, 1);
+    drop(conn);
+
+    // The current read rebuilds the evicted row from the immutable genesis
+    // anchor and answers exactly what it answered before eviction.
+    assert_eq!(
+        resolutions.current_principal(&account).await.unwrap(),
+        initial
+    );
+    assert_eq!(unit_footprint(&pool, &accepted).await, ACCEPTED_FOOTPRINT);
+    let record = resolutions
+        .for_realm(&result.pcr_realm_id)
+        .await
+        .unwrap()
+        .expect("the rebuilt row is found by its PCR");
+    assert_eq!(record.account_id, account);
+    assert_eq!(
+        record.genesis_event.event_id,
+        accepted.transactions[0].event.event_id
+    );
+    assert_eq!(record.current_event.event_id, record.genesis_event.event_id);
+
+    // An account without an accepted genesis anchor stays missing.
+    let stranger = arkret_wire::AccountId::new(
+        DidCoreId::new("ak:did_core:web:no-genesis.example").unwrap(),
+        station,
+    );
+    assert_eq!(
+        resolutions.current_principal(&stranger).await.unwrap(),
+        CurrentPrincipalRead::Missing
+    );
+}
+
+#[tokio::test]
 async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     use arkret_models_collaboration::events_payloads::DeviceRevokePayload;
     use arkret_wire::RealmCommit;

@@ -1948,10 +1948,13 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let inserted = sql_query(
                 "INSERT INTO pcr_genesis_units \
-                 (realm_id,idempotency_key,exact_request_body,commits_json,result_json,committed_at) \
-                 VALUES ($1,$2,$3,'[]'::jsonb,'{}'::jsonb,$4) ON CONFLICT DO NOTHING",
+                 (realm_id,principal_id,station_id,idempotency_key,exact_request_body,commits_json,\
+                  result_json,committed_at) \
+                 VALUES ($1,$2,$3,$4,$5,'[]'::jsonb,'{}'::jsonb,$6) ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(realm_id)
+            .bind::<Text, _>(submission.principal_id.as_str())
+            .bind::<Text, _>(submission.account_authority_id.as_str())
             .bind::<Text, _>(&key)
             .bind::<Binary, _>(&unit.exact_request_body)
             .bind::<Timestamptz, _>(queued_at)
