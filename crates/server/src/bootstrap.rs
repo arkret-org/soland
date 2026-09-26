@@ -1831,26 +1831,39 @@ async fn ensure_service_assertion_signer(
             anyhow::anyhow!("staging the next service assertion key failed: {error}")
         })?;
     let mut state = serde_json::to_value(&stored.did_document)?;
-    let method_id = format!("{}#notary-key", stored.identity.did);
-    let methods = state
-        .get_mut("verificationMethod")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| anyhow::anyhow!("service DID document omits verificationMethod"))?;
-    let method = methods
-        .iter_mut()
-        .find(|method| method["id"] == method_id)
-        .ok_or_else(|| anyhow::anyhow!("service DID document omits its notary method"))?;
-    method["publicKeyMultibase"] =
-        Value::String(arkret_canonical::ed25519_pubkey_to_did_key_multibase(
-            SigningKey::from_bytes(&desired_seed)
-                .verifying_key()
-                .as_bytes(),
-        ));
-    if !state["assertionMethod"]
-        .as_array()
-        .is_some_and(|methods| methods.contains(&json!(method_id)))
-    {
-        anyhow::bail!("service DID document does not authorize its notary assertion method");
+    let old_public = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        SigningKey::from_bytes(&current_seed)
+            .verifying_key()
+            .as_bytes(),
+    );
+    let new_public = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        SigningKey::from_bytes(&desired_seed)
+            .verifying_key()
+            .as_bytes(),
+    );
+    // The runtime uses one seed for both service receipts and federation
+    // fanout. Both published assertion methods must move in this successor.
+    for fragment in ["notary-key", "federation-fanout-key"] {
+        let method_id = format!("{}#{fragment}", stored.identity.did);
+        if !state["assertionMethod"]
+            .as_array()
+            .is_some_and(|methods| methods.contains(&json!(method_id)))
+        {
+            anyhow::bail!(
+                "service DID document does not authorize its {fragment} assertion method"
+            );
+        }
+        let method = state
+            .get_mut("verificationMethod")
+            .and_then(Value::as_array_mut)
+            .and_then(|methods| methods.iter_mut().find(|method| method["id"] == method_id))
+            .ok_or_else(|| anyhow::anyhow!("service DID document omits its {fragment} method"))?;
+        if method["publicKeyMultibase"] != old_public {
+            anyhow::bail!(
+                "service DID {fragment} method does not match the retained active signing key"
+            );
+        }
+        method["publicKeyMultibase"] = Value::String(new_public.clone());
     }
     publish_service_document_successor(
         persistence,
@@ -2872,6 +2885,28 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        for fragment in ["notary-key", "federation-fanout-key"] {
+            let method_id = format!("{}#{fragment}", after.identity.did);
+            let published = after
+                .did_document
+                .verification_method
+                .iter()
+                .find(|method| method.id == method_id)
+                .expect("both service assertion methods remain published");
+            let old = before
+                .did_document
+                .verification_method
+                .iter()
+                .find(|method| method.id == method_id)
+                .unwrap();
+            assert_ne!(published.public_key_multibase, old.public_key_multibase);
+            assert_eq!(
+                published.public_key_multibase,
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    SigningKey::from_bytes(&new_seed).verifying_key().as_bytes(),
+                )
+            );
+        }
         assert_ne!(after.identity.active_signing_key_ref, old_ref);
         assert!(after.identity.signing_key_refs.contains(&old_ref));
         assert_eq!(
