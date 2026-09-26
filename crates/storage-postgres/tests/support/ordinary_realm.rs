@@ -95,10 +95,17 @@ pub fn signature(
     at: chrono::DateTime<chrono::Utc>,
 ) -> arkret_wire::DetachedObjectSignature {
     let did = station.as_str().replace("ak:did_core:", "did:");
+    signature_for_did(&arkret_wire::Did::new(did).unwrap(), at)
+}
+
+pub fn signature_for_did(
+    station_did: &arkret_wire::Did,
+    at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::DetachedObjectSignature {
     arkret_wire::DetachedObjectSignature {
         context: arkret_wire::DetachedSignatureContext::RealmCommit,
         signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
-        verification_method: arkret_wire::DidUrl::new(format!("{did}#authority")).unwrap(),
+        verification_method: arkret_wire::DidUrl::new(format!("{station_did}#authority")).unwrap(),
         signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap(),
         created_at: at,
         sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
@@ -115,10 +122,34 @@ pub fn bootstrap_unit(seed: &str) -> OrdinaryRealmBootstrapCommitUnit {
     bootstrap_unit_with_join_rule(seed, "invite")
 }
 
+/// Build the same accepted-state fixture for a test Station whose service DID
+/// was generated from its current `did:webvh` registration identity.
+pub fn bootstrap_unit_for_station(
+    seed: &str,
+    governing_station: &arkret_wire::DidCoreId,
+    governing_did: &arkret_wire::Did,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    bootstrap_unit_with_join_rule_for_station(
+        seed,
+        "invite",
+        governing_station,
+        Some(governing_did),
+    )
+}
+
 /// [`bootstrap_unit`] whose initial and typed join rule is `join_rule`.
 pub fn bootstrap_unit_with_join_rule(
     seed: &str,
     join_rule: &str,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    bootstrap_unit_with_join_rule_for_station(seed, join_rule, &station(), None)
+}
+
+fn bootstrap_unit_with_join_rule_for_station(
+    seed: &str,
+    join_rule: &str,
+    governing_station: &arkret_wire::DidCoreId,
+    governing_did: Option<&arkret_wire::Did>,
 ) -> OrdinaryRealmBootstrapCommitUnit {
     use arkret_models_collaboration::authority_commit::{
         OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
@@ -129,7 +160,7 @@ pub fn bootstrap_unit_with_join_rule(
     let at =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
     let actor = founder();
-    let station = station();
+    let station = governing_station.clone();
     let genesis_salt = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(arkret_canonical::sha256_bytes(seed.as_bytes()));
     let genesis = event(
@@ -227,7 +258,8 @@ pub fn bootstrap_unit_with_join_rule(
                     governance_generation: 0,
                     authority_ref: authority.authority_ref.clone(),
                     committed_at: at,
-                    signature: signature(&station, at),
+                    signature: governing_did
+                        .map_or_else(|| signature(&station, at), |did| signature_for_did(did, at)),
                 },
                 mls_state: None,
                 welcomes: Vec::new(),
