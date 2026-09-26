@@ -261,45 +261,6 @@ pub(crate) async fn sync_token_for_events_query(
     cursor.encode().expect("SDK cursor encoding cannot fail")
 }
 
-pub(crate) async fn sync_barrier_token_for_event(
-    state: &AppState,
-    session: &SessionIdentityState,
-    event_id: &str,
-) -> String {
-    let issued_at = chrono::Utc::now();
-    let target = json!({ "event_id": event_id });
-    let (account_id, _) = cursor_account_device(state, Some(session));
-    let account_id = account_id.expect("authenticated barrier cursor has an account");
-    let binding_subject = cursor_binding_subject(Some(&account_id));
-    let binding =
-        barrier_cursor_handle_binding(&account_id, &session.require_human_device_id(), &target);
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
-    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
-        .expect("one-hour barrier cursor is valid")
-        .with_barrier()
-        .with_stateful_handle(handle.clone());
-    let issued_at_ms = cursor.issued_at.timestamp_millis();
-    let expires_at_ms = cursor.expires_at.timestamp_millis();
-    upsert_sync_cursor_record(
-        state,
-        CursorState {
-            handle,
-            binding_subject: Some(binding_subject),
-            device_id: Some(session.require_human_device_id().clone()),
-            service_id: DidCoreId::new(state.service_id().clone())
-                .expect("AppState service_id must be a validated DID core id"),
-            filter_digest: None,
-            purpose: BARRIER_CURSOR_PURPOSE.to_owned(),
-            positions: None,
-            target: Some(target),
-            issued_at_ms,
-            expires_at_ms,
-        },
-    )
-    .await;
-    cursor.encode().expect("SDK cursor encoding cannot fail")
-}
-
 pub(crate) async fn sync_token_for_state(state: &AppState) -> String {
     sync_token_for_state_positions(state, BTreeMap::new()).await
 }
@@ -401,21 +362,6 @@ pub(crate) fn events_query_cursor_handle_binding(
         "device_id": device_id,
         "filter_digest": filter_digest,
         "purpose": STREAM_CURSOR_PURPOSE,
-        "target": target,
-    });
-    arkret_canonical::canonical_json_bytes(&binding)
-        .unwrap_or_else(|_| binding.to_string().into_bytes())
-}
-
-fn barrier_cursor_handle_binding(
-    account_id: &arkret_wire::AccountId,
-    device_id: &str,
-    target: &Value,
-) -> Vec<u8> {
-    let binding = json!({
-        "account_id": account_id,
-        "device_id": device_id,
-        "purpose": BARRIER_CURSOR_PURPOSE,
         "target": target,
     });
     arkret_canonical::canonical_json_bytes(&binding)

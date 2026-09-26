@@ -375,6 +375,48 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
                 .map_err(invalid_application_output)?;
             Ok(outcome)
         });
+    if let Ok(
+        arkret_models_collaboration::authority_commit::SelfAuthoritySubmitOutcome::Ordinary(
+            arkret_wire::AuthoritySubmitOutcome::Accepted {
+                status: arkret_wire::AuthorityCommitStatus::Committed,
+                ..
+            },
+        ),
+    ) = &result
+    {
+        let event_id = match &request {
+            SelfAuthoritySubmitRequest::Event(submission) => {
+                Some(submission.event.event_id.as_str())
+            }
+            SelfAuthoritySubmitRequest::MlsCommit(submission) => {
+                Some(submission.commit_event.event_id.as_str())
+            }
+            _ => None,
+        };
+        if let Some(event_id) = event_id {
+            // The guarded unit stored the projected Event in the same
+            // transaction as its Commit. Broadcast only the durable row: the
+            // payload is also consumed by the committed-event live rail.
+            match app_state.event_queries().projected_event(event_id).await {
+                Ok(Some(projected)) => {
+                    let _ = app_state.publish_event_notification(
+                        crate::state::EventNotification::event(
+                            projected.realm_id.clone(),
+                            projected.event_id.clone(),
+                            crate::routing::events::projection::projection_event_json(&projected),
+                        ),
+                    );
+                }
+                Ok(None) => tracing::warn!(
+                    event_id,
+                    "committed Event projection is not readable for live wakeup"
+                ),
+                Err(error) => {
+                    tracing::warn!(event_id, %error, "committed Event projection lookup failed for live wakeup")
+                }
+            }
+        }
+    }
     render_result(res, result);
 }
 
