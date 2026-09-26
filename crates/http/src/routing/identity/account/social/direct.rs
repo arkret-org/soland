@@ -31,8 +31,15 @@ pub(crate) async fn fresh_direct_contact_evidence(
         } else {
             return Ok(None);
         };
+        let glare_request_head = head.is_none()
+            && proof.complete_through == 1
+            && bundle.glare_concurrency_attestations.is_some()
+            && bundle.request_receipts.iter().any(|receipt| {
+                receipt.core.holder.contact_actor_id() == *holder
+                    && receipt.core.request_event_ref == proof.head_event_ref
+            });
         if proof.terminal
-            || head != Some(&proof.head_event_ref)
+            || (head != Some(&proof.head_event_ref) && !glare_request_head)
             || proof.contact_round_id != bundle.contact_round_id
         {
             return Ok(None);
