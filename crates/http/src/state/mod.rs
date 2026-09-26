@@ -40,7 +40,9 @@ pub(crate) use authority_contact::{
 };
 #[cfg(feature = "test-support")]
 pub(crate) use authority_forward::{admit_forwarded_event, fresh_producer_device_evidence};
-pub(crate) use authority_producer_validation::verify_self_event_producer;
+pub(crate) use authority_producer_validation::{
+    verify_account_device_payload_proof, verify_account_device_producer, verify_self_event_producer,
+};
 pub(crate) use authority_self_event_unit::submit_self_moderation_report;
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,

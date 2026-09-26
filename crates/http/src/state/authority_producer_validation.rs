@@ -197,6 +197,65 @@ pub(crate) async fn verify_self_event_producer_key(
     Ok((guard, key))
 }
 
+/// Verify that one device of `account`, active at its PCR cut and at its
+/// revocation gate, signed `event`'s producer proof: the executing
+/// controller of a delegated Agent Event is judged by the same single rule
+/// as any human-device producer (device-lifecycle §8.2.2).
+pub(crate) async fn verify_account_device_producer(
+    state: &AppState,
+    account: &AccountId,
+    event: &Event,
+) -> ServiceResult<()> {
+    let proof = event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| ServiceError::SchemaViolation("Event has no producer proof".into()))?;
+    let (key, _) = account_device_producer_key(state, account, &proof.verification_method).await?;
+    let digest_suite =
+        arkret_canonical::canonical::digest_suite(event.event_id.digest_suite_code().as_str())
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    event
+        .verify_event_id_matches_content_with_digest_suite(digest_suite)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &bytes,
+        &event.actor_id,
+        &key,
+        digest_suite,
+    )
+    .map_err(|error| {
+        ServiceError::protocol(
+            arkret_wire::ErrorCode::SignatureInvalid,
+            format!("Event producer proof invalid: {error}"),
+        )
+    })
+}
+
+/// Verify a detached-JWS payload proof by one device of `account`, active at
+/// its PCR cut and at its revocation gate: a controller's own proof over a
+/// private object it authorizes (device-lifecycle §8.2.2), never a key read
+/// from its DID Document, which lists no device keys.
+pub(crate) async fn verify_account_device_payload_proof(
+    state: &AppState,
+    account: &AccountId,
+    proof: &arkret_wire::PayloadProof,
+    binding: &[u8],
+) -> ServiceResult<()> {
+    let (key, _) = account_device_producer_key(state, account, &proof.verification_method).await?;
+    arkret_signatures::verify_ed25519_detached_jws_payload_proof(proof, binding, &key).map_err(
+        |error| {
+            ServiceError::protocol(
+                arkret_wire::ErrorCode::SignatureInvalid,
+                format!("device payload proof invalid: {error}"),
+            )
+        },
+    )
+}
+
 /// Resolve the human device that actually signed the Event.
 ///
 /// Decision 0107: self submit requires only that the signer is a device of the
@@ -218,8 +277,21 @@ async fn human_producer_key(
         .as_ref()
         .and_then(|grant| grant.device_binding.as_ref())
         .ok_or_else(|| rejected("human grant has no accepted device binding"))?;
-    let device_id = method_device_id(&proof.verification_method, &account.principal_id)
-        .ok_or_else(|| {
+    account_device_producer_key(state, account, &proof.verification_method).await
+}
+
+/// The accepted key of the device of `account` named by `proof`, after its
+/// PCR-cut and revocation-gate admission.
+async fn account_device_producer_key(
+    state: &AppState,
+    account: &AccountId,
+    verification_method: &arkret_wire::DidUrl,
+) -> ServiceResult<(
+    arkret_signatures::PublicKeyMaterial,
+    SelfProducerCommitGuard,
+)> {
+    let device_id =
+        method_device_id(verification_method, &account.principal_id).ok_or_else(|| {
             ServiceError::protocol(
                 arkret_wire::ErrorCode::SignatureInvalid,
                 "Event proof method is not a device of the authenticated account",

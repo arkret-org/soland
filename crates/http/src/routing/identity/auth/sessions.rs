@@ -422,6 +422,10 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
 /// Agent sessions have no DeviceId. Until every legacy handler is migrated to
 /// the Agent authorization triple, only the formally registered recipient
 /// queue read and ACK operations may receive one.
+/// The endpoints whose handlers authorize an Agent runtime by its typed
+/// holder binding, each with the one operation its grant scope must admit:
+/// the recipient queue (read and ACK), the Agent sender queue, and the
+/// actor-private Events an Agent authors for its controller.
 fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
     use arkret_wire::ServiceOperationId;
     match (method, path) {
@@ -430,6 +434,12 @@ fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
         }
         ("POST", "/_arkret/self/device_messages/ack") => {
             Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1)
+        }
+        ("POST", "/_arkret/self/device_messages") => {
+            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_SEND_V1)
+        }
+        ("POST", "/_arkret/self/actor-private-events") => {
+            Some(ServiceOperationId::SELF_ACTOR_PRIVATE_EVENTS_COMMAND_SUBMIT_V1)
         }
         _ => None,
     }
@@ -845,18 +855,33 @@ mod tests {
     }
 
     #[test]
-    fn agent_endpoint_gate_admits_only_registered_queue_read_and_ack() {
+    fn agent_endpoint_gate_admits_only_agent_aware_endpoints() {
         use arkret_wire::ServiceOperationId;
-        assert_eq!(
-            agent_recipient_operation("GET", "/_arkret/self/device_messages"),
-            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1),
-        );
-        assert_eq!(
-            agent_recipient_operation("POST", "/_arkret/self/device_messages/ack"),
-            Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1),
-        );
+        for (method, path, operation) in [
+            (
+                "GET",
+                "/_arkret/self/device_messages",
+                ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/device_messages/ack",
+                ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/device_messages",
+                ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_SEND_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/actor-private-events",
+                ServiceOperationId::SELF_ACTOR_PRIVATE_EVENTS_COMMAND_SUBMIT_V1,
+            ),
+        ] {
+            assert_eq!(agent_recipient_operation(method, path), Some(operation));
+        }
         for (method, path) in [
-            ("POST", "/_arkret/self/device_messages"),
             ("GET", "/_arkret/self/account/stream"),
             ("POST", "/_arkret/self/events"),
             ("GET", "/_arkret/self/keys/backups"),

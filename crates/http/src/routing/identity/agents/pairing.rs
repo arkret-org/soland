@@ -1101,39 +1101,24 @@ pub(super) async fn agent_key_pair(
         chrono::Utc::now(),
     )
     .await?;
-    // Invalid signatures must not reserve the exact command receipt or consume a raw key.
+    // Invalid signatures must not reserve the exact command receipt or consume
+    // a raw key: the executing controller's active device must have signed it.
     let event = &body.authorize_event.event;
-    let expected_digest = event.event_id.event_digest();
-    let mut producer_count = 0;
-    if let Some(proof) = event.producer_proof.as_ref() {
-        if proof.event_digest != expected_digest {
-            return Err(AppError::param_invalid(
-                "authorize Event proof digest mismatch",
-            ));
-        }
-        let transcript = proof
-            .canonical_binding_bytes(&event.actor_id)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        crate::jws_verify::verify_did_controlled_jws_async(
-            &transcript,
-            &proof.jws,
-            proof.verification_method.as_str(),
-            &agent_record.controller_principal_id,
-            state,
-        )
+    let controller_account = event
+        .executed_by
+        .as_ref()
+        .and_then(arkret_wire::ActorId::as_account_id)
+        .filter(|account| account.principal_id.as_str() == agent_record.controller_principal_id)
+        .ok_or_else(|| {
+            AppError::capability_denied("authorize Event is not executed by the Agent's controller")
+        })?;
+    crate::state::verify_account_device_producer(state, controller_account, event)
         .await
         .map_err(|error| {
             AppError::param_invalid(format!(
                 "authorize Event controller signature invalid: {error}"
             ))
         })?;
-        producer_count += 1;
-    }
-    if producer_count == 0 {
-        return Err(AppError::param_invalid(
-            "authorize Event requires a controller producer proof",
-        ));
-    }
     let commit_intent = soland_services::identity::RecordAgentPairingCommitIntentCommand {
         agent_id: agent_id.to_owned(),
         approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
@@ -1360,17 +1345,16 @@ async fn validate_requested_scope_disclosure(
             "requested_scope_disclosure does not match the provisioned Agent ceiling",
         ));
     }
+    // The controller's current proof is by one of its active devices at its
+    // PCR cut; a DID Document lists no device keys.
+    let controller_account = arkret_wire::AccountId::new(
+        disclosure.controller_principal_id.clone(),
+        state.service_core_id(),
+    );
     let mut proof_errors = Vec::new();
     for proof in &disclosure.proofs {
         if proof.created_at < disclosure.issued_at || proof.created_at > disclosure.expires_at {
             proof_errors.push("proof created_at is outside the disclosure window".to_owned());
-            continue;
-        }
-        if let Err(error) = crate::jws_verify::validate_verification_method_controller(
-            disclosure.controller_principal_id.as_str(),
-            &proof.verification_method,
-        ) {
-            proof_errors.push(error);
             continue;
         }
         let binding_bytes = match disclosure.canonical_proof_binding_bytes(proof) {
@@ -1380,18 +1364,17 @@ async fn validate_requested_scope_disclosure(
                 continue;
             }
         };
-        let verification = crate::jws_verify::verify_did_controlled_jws_async(
-            &binding_bytes,
-            &proof.jws,
-            &proof.verification_method,
-            disclosure.controller_principal_id.as_str(),
+        match crate::state::verify_account_device_payload_proof(
             state,
+            &controller_account,
+            proof,
+            &binding_bytes,
         )
-        .await;
-        if verification.is_ok() {
-            return Ok(());
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) => proof_errors.push(error.to_string()),
         }
-        proof_errors.push(verification.unwrap_err());
     }
     Err(AppError::param_invalid(format!(
         "requested_scope_disclosure has no valid controller proof: {}",

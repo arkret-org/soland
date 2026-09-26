@@ -47,67 +47,30 @@ pub(super) async fn require_controller_principal_control_realm(
             )
             .with_internal_reason("account_id_mismatch")
         })?;
-    let realm_id = record.pcr_realm_id.to_string();
-    if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "controller Principal Control Realm must be initialized before provisioning an Agent",
-        )
-        .with_internal_reason("principal_control_realm_missing"));
-    }
-
-    // The Realm directory index and reducer projection are separate caches.
-    // Repair the reducer-side owner from the durable Realm metadata before
-    // issuing the accountability event so this aggregate stays correct even when a
-    // running process has an indexed self Realm but a stale projection cache.
-    // Startup hydration normally provides the same state, but correctness of
-    // provisioning must not depend on a restart having rebuilt every cache.
-    let meta = state
-        .realms()
-        .realm_metadata(&realm_id)
+    // The pair's one PCR lineage is its durable principal resolution, and
+    // this Station must govern that PCR to accept a provision into it.
+    let authority = state
+        .authority_commits()
+        .current_authority(&record.pcr_realm_id)
         .await
-        .map_err(|err| AppError::internal(format!("self Realm metadata lookup failed: {err}")))?
+        .map_err(|error| {
+            AppError::internal(format!("controller PCR authority lookup failed: {error}"))
+        })?
         .ok_or_else(|| {
             crate::app_error!(
                 FailedPrecondition,
-                "self Realm is indexed without durable metadata",
+                "controller Principal Control Realm must be initialized before provisioning an Agent",
             )
-            .with_internal_reason("self_realm_metadata_missing")
+            .with_internal_reason("principal_control_realm_missing")
         })?;
-    reconcile_self_realm_owner_projection(state, &realm_id, authority, &meta)?;
-    Ok(realm_id)
-}
-
-fn reconcile_self_realm_owner_projection(
-    state: &AppState,
-    realm_id: &str,
-    controller_account: &arkret_wire::AccountId,
-    meta: &soland_services::events::RealmMetadata,
-) -> Result<(), AppError> {
-    let controller_actor = arkret_wire::ActorId::account(controller_account.clone());
-    let controller_key = controller_actor.to_string();
-    if meta.owner != controller_key {
+    if authority.service_id != state.service_core_id() {
         return Err(crate::app_error!(
             FailedPrecondition,
-            "self Realm owner does not match the authenticated controller",
+            "controller Principal Control Realm is governed by another Station",
         )
-        .with_internal_reason("self_realm_owner_mismatch"));
+        .with_internal_reason("principal_control_realm_missing"));
     }
-
-    if !state.projections().reconcile_realm_owner(
-        realm_id,
-        &controller_key,
-        meta.deleted,
-        meta.created_at,
-        meta.updated_at,
-    ) {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "self Realm projection owner does not match durable metadata",
-        )
-        .with_internal_reason("self_realm_owner_mismatch"));
-    }
-    Ok(())
+    Ok(record.pcr_realm_id.to_string())
 }
 
 /// `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST be
@@ -384,153 +347,9 @@ pub(super) async fn submit_durable_agent_lifecycle(
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::{CapabilityActionId, ServiceOperationId};
-    use soland_http::error::ErrorCode;
-    use soland_storage_postgres::Db;
+    use arkret_wire::ServiceOperationId;
 
     use super::*;
-
-    fn realm_meta(owner: &str) -> soland_services::events::RealmMetadata {
-        let now = chrono::Utc::now();
-        soland_services::events::RealmMetadata {
-            owner: owner.to_owned(),
-            deleted: false,
-            discoverability: "invite_only".to_owned(),
-            history_access: "all_history_for_current_members".to_owned(),
-            preview_policy: None,
-            preview_policy_digest: None,
-            asset_privacy_policy: None,
-            asset_privacy_policy_digest: None,
-            encryption_profile: None,
-            plaintext_visible_services: Default::default(),
-            plaintext_visible_service_classes: Default::default(),
-            minimal_metadata_realm: false,
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    #[test]
-    fn self_realm_owner_reconciles_without_implying_capability() {
-        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
-        let realm_id = "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF";
-        let controller_did =
-            arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
-                .unwrap();
-        let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
-        let controller_account =
-            arkret_wire::AccountId::new(controller_principal_id, state.service_core_id());
-        let controller_actor = arkret_wire::ActorId::account(controller_account.clone());
-        let controller_key = controller_actor.to_string();
-
-        reconcile_self_realm_owner_projection(
-            &state,
-            realm_id,
-            &controller_account,
-            &realm_meta(&controller_key),
-        )
-        .expect("durable owner should repair the missing projection");
-
-        let projection = state.projections().snapshot();
-        assert_eq!(
-            projection
-                .realm_states
-                .get(realm_id)
-                .and_then(|realm| realm.owner.as_deref()),
-            Some(controller_key.as_str())
-        );
-        assert!(!projection.issuer_has_projected_capability(
-            &controller_actor,
-            realm_id,
-            CapabilityActionId::MESSAGE_CREATE,
-            realm_id,
-            chrono::Utc::now(),
-        ));
-    }
-
-    #[test]
-    fn self_realm_owner_reconciliation_fails_closed_on_mismatch() {
-        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
-        let controller_did =
-            arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
-                .unwrap();
-        let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
-        let controller_account =
-            arkret_wire::AccountId::new(controller_principal_id, state.service_core_id());
-        let other_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkfixturebob").unwrap(),
-            state.service_core_id(),
-        ));
-        let error = reconcile_self_realm_owner_projection(
-            &state,
-            "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",
-            &controller_account,
-            &realm_meta(&other_actor.to_string()),
-        )
-        .expect_err("mismatched durable ownership must not be overwritten");
-
-        assert_eq!(error.code, ErrorCode::FailedPrecondition);
-        assert_eq!(
-            error.reason_detail.as_deref(),
-            Some("self_realm_owner_mismatch")
-        );
-    }
-
-    #[test]
-    fn self_realm_owner_reconciliation_never_borrows_another_station_account() {
-        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
-        let realm_id = "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF";
-        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
-        let controller_account =
-            arkret_wire::AccountId::new(principal.clone(), state.service_core_id());
-        let local_actor = arkret_wire::ActorId::account(controller_account.clone()).to_string();
-        let foreign_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal.clone(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        ))
-        .to_string();
-        for invalid_owner in [foreign_actor.as_str(), principal.as_str()] {
-            let error = reconcile_self_realm_owner_projection(
-                &state,
-                realm_id,
-                &controller_account,
-                &realm_meta(invalid_owner),
-            )
-            .expect_err("foreign or principal-only metadata cannot authorize this Account");
-            assert_eq!(
-                error.reason_detail.as_deref(),
-                Some("self_realm_owner_mismatch")
-            );
-            assert!(
-                !state
-                    .projections()
-                    .snapshot()
-                    .realm_states
-                    .contains_key(realm_id)
-            );
-        }
-        let meta = realm_meta(&local_actor);
-        assert!(state.projections().reconcile_realm_owner(
-            realm_id,
-            &foreign_actor,
-            meta.deleted,
-            meta.created_at,
-            meta.updated_at,
-        ));
-        let error =
-            reconcile_self_realm_owner_projection(&state, realm_id, &controller_account, &meta)
-                .expect_err("existing foreign Account ownership must not be overwritten");
-        assert_eq!(
-            error.reason_detail.as_deref(),
-            Some("self_realm_owner_mismatch")
-        );
-        assert_eq!(
-            state.projections().snapshot().realm_states[realm_id]
-                .owner
-                .as_deref(),
-            Some(foreign_actor.as_str()),
-        );
-    }
 
     #[test]
     fn runtime_agent_key_scope_service_actions_are_registered() {
