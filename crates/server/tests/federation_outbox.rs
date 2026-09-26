@@ -16,9 +16,14 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, LazyLock, mpsc};
 use std::time::Duration;
 
+use arkret_models_collaboration::authority_commit::{
+    CommittedEventSubmission, CommittedReplicationBranch, PeerAuthoritySubmitOutcome,
+    PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome,
+    PeerCommittedReplicationOutcomeRecord, PeerCommittedReplicationRequest,
+};
 use arkret_models_identity::ResolutionCommitment;
 use arkret_wire::{Did, DidCoreId, ServiceKind, TrustDomainId};
 use async_trait::async_trait;
@@ -43,7 +48,113 @@ const DENIED_PEER_SERVICE_DID: &str = "did:web:denied-peer.example";
 const DENIED_PEER_SERVICE_ID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
-const PAYLOAD_JSON: &str = r#"{"cbs_proof_bundles":[],"events":[{"event":{"actor_id":{"kind":"service","service_id":"ak:did_core:web:sender.example"},"actor_seq":0,"created_at":"2026-09-03T00:00:00.000Z","event_id":"ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ","kind":"ak.message.create","payload":{},"prev_refs":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","scope_ref":{"kind":"realm","realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV"}},"ingress_receipts":[]}],"service_binding_ref":{"destination_kind":"station","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
+/// The current `/_arkret/peer/events` carrier the Realm fanout planner
+/// queues: one committed Realm Event with its source RealmCommit, encoded as
+/// canonical JSON (`PeerAuthoritySubmitRequest::CommittedReplication`).
+static PAYLOAD_JSON: LazyLock<String> = LazyLock::new(committed_replication_payload);
+/// The peer's typed receive outcome for [`PAYLOAD_JSON`].
+static STORED_OUTCOME: LazyLock<String> =
+    LazyLock::new(|| replication_outcome(PeerCommittedReplicationOutcomeRecord::Stored {}));
+static DUPLICATE_OUTCOME: LazyLock<String> =
+    LazyLock::new(|| replication_outcome(PeerCommittedReplicationOutcomeRecord::Duplicate {}));
+
+fn committed_replication_payload() -> String {
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-09-03T00:00:00.000Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let genesis = arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"federation-outbox-realm-genesis"),
+    );
+    let realm_id = arkret_wire::RealmId::from_event_id(&genesis);
+    let author = DidCoreId::new("ak:did_core:web:author.outbox.internal").unwrap();
+    let station = DidCoreId::new("ak:did_core:web:sender.outbox.internal").unwrap();
+    let mut event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::MessageCreate.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        author,
+        station,
+        serde_json::json!({
+            "strand_id": arkret_wire::StrandId::from_event_id(&genesis),
+            "track_name": "discussion",
+            "content": {"kind": "ak.content.text", "body": "outbox", "format": "plain"}
+        }),
+        created_at,
+    )
+    .unwrap();
+    let event_digest = arkret_wire::Hash::new(
+        event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
+    // Delivery is the unit under test, not producer verification, so the
+    // Event carries the structural-only detached JWS bound to its bytes.
+    event.producer_proof = Some(arkret_wire::ProducerEventProof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        verification_method: arkret_wire::DidUrl::new("did:web:author.outbox.internal#device")
+            .unwrap(),
+        event_digest: event_digest.clone(),
+        created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
+    });
+    let source_commit = arkret_wire::RealmCommit {
+        commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            b"federation-outbox-commit-1",
+        )),
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        stream_position: 1,
+        previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest(
+            arkret_canonical::sha256_bytes(b"federation-outbox-commit-0"),
+        )),
+        event_ref: event.event_id.clone(),
+        governance_generation: 0,
+        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(genesis),
+        committed_at: created_at,
+        signature: arkret_wire::DetachedObjectSignature {
+            context: arkret_wire::DetachedSignatureContext::RealmCommit,
+            signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:sender.outbox.internal#authority",
+            )
+            .unwrap(),
+            signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap(),
+            created_at,
+            sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+        },
+    };
+    let request =
+        PeerAuthoritySubmitRequest::CommittedReplication(PeerCommittedReplicationRequest {
+            branch: CommittedReplicationBranch::CommittedReplication,
+            replications: vec![CommittedEventSubmission {
+                event_submission: arkret_wire::EventAdmissionSubmission::new(event),
+                source_commit,
+                welcomes: None,
+            }],
+        });
+    request
+        .validate()
+        .expect("fixture is a current committed replication carrier");
+    String::from_utf8(arkret_canonical::canonical_json_bytes(&request).unwrap()).unwrap()
+}
+
+fn replication_outcome(record: PeerCommittedReplicationOutcomeRecord) -> String {
+    serde_json::to_string(&PeerAuthoritySubmitOutcome::CommittedReplication(
+        PeerCommittedReplicationOutcome {
+            branch: CommittedReplicationBranch::CommittedReplication,
+            replication_outcomes: vec![record],
+        },
+    ))
+    .unwrap()
+}
 
 #[derive(Clone)]
 struct VerifiedPeerRoute {
@@ -135,12 +246,16 @@ fn verified_peer_route(
     }
 }
 
+/// Peer trust domains stay outside the reserved test-material registry
+/// (`example`, `invalid`, `localhost`, `test` top labels): a formal route
+/// resolution refuses those with `test_signing_material_denied` before any
+/// delivery is attempted.
 fn standard_peer_route(base_url: &str) -> VerifiedPeerRoute {
     verified_peer_route(
         PEER_SERVICE_DID,
         PEER_SERVICE_ID,
         base_url,
-        "ak:trust_domain:peer.example",
+        "ak:trust_domain:peer.outbox.internal",
     )
 }
 
@@ -149,7 +264,7 @@ fn denied_peer_route() -> VerifiedPeerRoute {
         DENIED_PEER_SERVICE_DID,
         DENIED_PEER_SERVICE_ID,
         "https://169.254.169.254",
-        "ak:trust_domain:denied-peer.example",
+        "ak:trust_domain:denied-peer.outbox.internal",
     )
 }
 
@@ -157,7 +272,12 @@ fn unique_peer_route(prefix: &str, base_url: &str) -> VerifiedPeerRoute {
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let did = format!("did:web:{prefix}-{suffix}.example");
     let core_id = format!("ak:did_core:web:{prefix}-{suffix}.example");
-    verified_peer_route(&did, &core_id, base_url, "ak:trust_domain:peer.example")
+    verified_peer_route(
+        &did,
+        &core_id,
+        base_url,
+        "ak:trust_domain:peer.outbox.internal",
+    )
 }
 
 fn install_verified_routes(state: &AppState, routes: &[VerifiedPeerRoute]) {
@@ -206,11 +326,27 @@ impl MockResponse {
     }
 }
 
+/// The mock peer's leaf chains only to the checked-in loopback test CA, and
+/// the egress client trusts exactly the operator store named by
+/// `SSL_CERT_FILE`. Without it every TLS handshake fails and each case would
+/// surface as an opaque mock-peer timeout, so name the missing precondition.
+fn require_outbox_test_trust_store() {
+    let expected = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/outbox-test-ca.pem")
+        .canonicalize()
+        .expect("checked-in outbox test CA");
+    let configured = std::env::var_os("SSL_CERT_FILE")
+        .and_then(|path| std::path::Path::new(&path).canonicalize().ok());
+    assert_eq!(
+        configured.as_deref(),
+        Some(expected.as_path()),
+        "federation_outbox dials a TLS loopback peer; run it with SSL_CERT_FILE={}",
+        expected.display()
+    );
+}
+
 fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
-    spawn_mock_peer_with_status(
-        "200 OK",
-        br#"{"accepted":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0,"status":"accepted"}"#,
-    )
+    spawn_mock_peer_with_status("200 OK", STORED_OUTCOME.as_bytes())
 }
 
 fn spawn_mock_peer_with_status(
@@ -223,6 +359,7 @@ fn spawn_mock_peer_with_status(
 /// Serve one canned reply per entry, in order, then stop. Multi-response tests
 /// (retry, resubmission) need more than the single-shot peer.
 fn spawn_mock_peer_responses(responses: Vec<MockResponse>) -> (String, mpsc::Receiver<String>) {
+    require_outbox_test_trust_store();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("https://{}", listener.local_addr().unwrap());
     let certificate = rustls::pki_types::CertificateDer::from(
@@ -341,7 +478,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("destination-trust-domain: ak:trust_domain:peer.example"),
+        lower.contains("destination-trust-domain: ak:trust_domain:peer.outbox.internal"),
         "captured request missing Destination-Trust-Domain binding; got: {}",
         captured.captured
     );
@@ -375,7 +512,7 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        captured.captured.contains(PAYLOAD_JSON),
+        captured.captured.contains(PAYLOAD_JSON.as_str()),
         "captured request body should match enqueued payload; got: {}",
         captured.captured
     );
@@ -445,7 +582,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue must succeed");
@@ -521,7 +658,7 @@ async fn retryable_5xx_keeps_the_same_transport_identity_and_backs_off() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -542,7 +679,7 @@ async fn retryable_5xx_keeps_the_same_transport_identity_and_backs_off() {
     assert_eq!(updated.attempts, 1);
     assert_eq!(updated.semantic_attempts, 0);
     assert_eq!(updated.idempotency_key, IDEMPOTENCY_KEY);
-    assert_eq!(updated.payload_json, PAYLOAD_JSON);
+    assert_eq!(updated.payload_json, *PAYLOAD_JSON);
     assert_eq!(updated.last_http_status, Some(503));
     assert_eq!(
         updated.last_error_code.as_deref(),
@@ -574,7 +711,7 @@ async fn peer_retry_after_is_a_floor_the_dispatcher_never_undercuts() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -612,7 +749,7 @@ async fn dependency_missing_supersedes_the_attempt_with_a_fresh_key() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -658,7 +795,7 @@ async fn dependency_missing_supersedes_the_attempt_with_a_fresh_key() {
     );
     assert!(successor.idempotency_key.starts_with("ak:outbox:resubmit:"));
     assert_eq!(
-        successor.payload_json, PAYLOAD_JSON,
+        successor.payload_json, *PAYLOAD_JSON,
         "a whole-batch rejection resubmits the same events, only under a new key"
     );
     assert_eq!(successor.semantic_attempts, 1);
@@ -676,7 +813,7 @@ async fn egress_policy_denial_is_policy_suppressed_rather_than_delivered() {
         DENIED_PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -735,7 +872,7 @@ async fn persisted_peer_url_is_not_service_resolution_evidence() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -772,7 +909,7 @@ async fn a_stale_lease_holder_cannot_overwrite_the_new_holders_state() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -855,7 +992,7 @@ async fn operator_requeue_mints_a_new_intent_and_records_the_audit() {
         PEER_SERVICE_ID,
         "/_soland/peer/federation/operations",
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -896,7 +1033,7 @@ async fn operator_requeue_mints_a_new_intent_and_records_the_audit() {
     let replay = outbox_row(&state, &outcome.requeued_outbox_id).await;
     assert_eq!(replay.state, FederationOutboxState::Pending);
     assert_eq!(replay.attempts, 0);
-    assert_eq!(replay.payload_json, PAYLOAD_JSON);
+    assert_eq!(replay.payload_json, *PAYLOAD_JSON);
     assert_eq!(
         replay.supersedes_outbox_id.as_deref(),
         Some(row.id.as_str())
@@ -1011,7 +1148,7 @@ async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
         route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &key,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -1045,7 +1182,7 @@ async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
         route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &key,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -1084,10 +1221,8 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
     // Model a peer that accepted the abandoned first transport: the restarted
     // sender receives the formal duplicate outcome for the unchanged
     // Idempotency-Key (`federation.md` §8.5).
-    let (peer_url, request_rx) = spawn_mock_peer_with_status(
-        "200 OK",
-        br#"{"duplicate":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0,"status":"duplicate"}"#,
-    );
+    let (peer_url, request_rx) =
+        spawn_mock_peer_with_status("200 OK", DUPLICATE_OUTCOME.as_bytes());
     let route = unique_peer_route("restart-inflight", &peer_url);
     let key = unique_key("restart-inflight");
     let row = enqueue_outbound(
@@ -1096,7 +1231,7 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
         route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &key,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue");
@@ -1154,7 +1289,7 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
         peer_route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &dead_key,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue dead-letter candidate");
@@ -1166,7 +1301,7 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
         denied_route.service_id.as_str(),
         FEDERATION_ENDPOINT,
         &suppressed_key,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue policy-suppression candidate");
@@ -1244,7 +1379,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("first enqueue");
@@ -1254,7 +1389,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("second enqueue with same peer/key");
@@ -1307,7 +1442,7 @@ async fn capture_signed_request() -> CapturedSignedRequestBody {
         PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
-        PAYLOAD_JSON,
+        &PAYLOAD_JSON,
     )
     .await
     .expect("enqueue must succeed");
