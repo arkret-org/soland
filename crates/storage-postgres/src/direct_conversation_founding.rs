@@ -125,9 +125,37 @@ async fn verify_contact_round_founding_authority(
     if evidence.current_proofs.len() != 2 {
         return Err(stale("both directional current heads are required"));
     }
+    let glare_requests = match &evidence.contact_round {
+        ContactRound::Glare { requests, .. } => {
+            if !requests.iter().any(|request| {
+                contact.request_event_ref.as_ref() == Some(&request.request_event_ref)
+            }) {
+                return Err(stale(
+                    "the local Contact request is outside the glare round",
+                ));
+            }
+            Some(requests)
+        }
+        ContactRound::Normal { .. } => None,
+    };
     for proof in &evidence.current_proofs {
         let peer = proof.peer.contact_actor_id();
-        let head = if peer == contact.target_id {
+        let head = if let Some(requests) = glare_requests {
+            let matching = evidence
+                .request_receipts
+                .iter()
+                .filter(|receipt| {
+                    receipt.core.peer.contact_actor_id() == peer
+                        && requests.iter().any(|request| {
+                            request.request_event_ref == receipt.core.request_event_ref
+                        })
+                })
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                return Err(stale("a glare direction has no unique accepted request"));
+            }
+            Some(&matching[0].core.request_event_ref)
+        } else if peer == contact.target_id {
             contact.request_event_ref.as_ref()
         } else if peer == contact.requester_id {
             contact.response_event_ref.as_ref()
