@@ -23,6 +23,7 @@ use soland_test_support::pcr_genesis::PcrGenesisFixture;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const QUEUE_PATH: &str = "/_soland/admin/moderation/queue";
+const VIEWER_PATH: &str = "/_arkret/self/account/viewer";
 const INTROSPECTION_PATH: &str = "/_coauth/internal/session-grants/introspect";
 
 /// Serve every introspection request with the outcome currently in `slot`.
@@ -145,7 +146,10 @@ async fn grant_session(slug: &str, configure: impl FnOnce(&mut AppConfig)) -> Gr
             },
             "device_id": device_id,
             "audience_id": state.service_id(),
-            "scopes": [arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ],
+            "scopes": [
+                arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
+                "ak.self.account.read.viewer.v1",
+            ],
             "expires_at": arkret_canonical::format_timestamp_canonical(
                 chrono::Utc::now() + chrono::Duration::minutes(5),
             ),
@@ -191,6 +195,10 @@ impl GrantSession {
 
     async fn get(&self, path: &str, headers: Option<&(String, String)>) -> (StatusCode, Value) {
         let mut request = TestClient::get(format!("http://server{path}"));
+        if path.starts_with(VIEWER_PATH) {
+            request =
+                request.add_header("Arkret-Operation", "ak.self.account.read.viewer.v1", true);
+        }
         if let Some((authorization, dpop)) = headers {
             request = request
                 .add_header("authorization", authorization.clone(), true)
@@ -208,6 +216,63 @@ fn problem_code(body: &Value) -> &str {
         .as_str()
         .and_then(|problem_type| problem_type.rsplit('/').next())
         .unwrap_or_default()
+}
+
+/// Restores the retired auth HTTP cases on the canonical self operation and
+/// a committed founding-device fixture. Each negative uses a fresh proof so
+/// a replay rejection cannot hide an authentication-shape regression.
+#[tokio::test]
+async fn canonical_viewer_rejects_missing_dpop_and_query_credentials() {
+    let session = grant_session("viewer-auth-shape", |_| {}).await;
+
+    let valid = session.headers("GET", VIEWER_PATH);
+    let (status, body) = session.get(VIEWER_PATH, Some(&valid)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["principal_id"], session.principal_id.as_str());
+
+    let mut missing_proof = TestClient::get(format!("http://server{VIEWER_PATH}"))
+        .add_header("Arkret-Operation", "ak.self.account.read.viewer.v1", true)
+        .add_header("authorization", format!("DPoP {}", session.grant_jwt), true)
+        .send(&service(session.state.clone()))
+        .await;
+    assert_eq!(missing_proof.status_code, Some(StatusCode::UNAUTHORIZED));
+    let body: Value = missing_proof
+        .take_json()
+        .await
+        .expect("missing-proof problem");
+    assert_eq!(problem_code(&body), "unauthenticated", "{body}");
+
+    let (_, proof) = session.headers("GET", VIEWER_PATH);
+    let mut bearer_with_proof = TestClient::get(format!("http://server{VIEWER_PATH}"))
+        .add_header("Arkret-Operation", "ak.self.account.read.viewer.v1", true)
+        .add_header(
+            "authorization",
+            format!("Bearer {}", session.grant_jwt),
+            true,
+        )
+        .add_header("dpop", proof, true)
+        .send(&service(session.state.clone()))
+        .await;
+    assert_eq!(
+        bearer_with_proof.status_code,
+        Some(StatusCode::UNAUTHORIZED)
+    );
+    let body: Value = bearer_with_proof.take_json().await.expect("Bearer problem");
+    assert_eq!(problem_code(&body), "unauthenticated", "{body}");
+
+    for query in ["access_token=leaked", "sign%61ture=leaked"] {
+        let headers = session.headers("GET", VIEWER_PATH);
+        let path = format!("{VIEWER_PATH}?page=1&{query}");
+        let (status, body) = session.get(&path, Some(&headers)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{query}: {body}");
+        assert_eq!(problem_code(&body), "unauthenticated", "{query}: {body}");
+    }
+
+    let headers = session.headers("GET", VIEWER_PATH);
+    let (status, body) = session
+        .get(&format!("{VIEWER_PATH}?page=1"), Some(&headers))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
