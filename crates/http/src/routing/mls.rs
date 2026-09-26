@@ -3550,6 +3550,42 @@ async fn verify_agent_keypackage_batch(
     signature: &KeyOperationSignature,
     signing_input: &[u8],
 ) -> Result<(), String> {
+    let authorized_key =
+        current_agent_keypackage_authorized_key(state, principal, authorize_event_id).await?;
+    let verification_method = authorized_key.verification_method.as_str();
+    let expected_public_key_digest = authorized_key.public_key_digest.as_str();
+    let public_key: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(authorized_key.public_key.key.as_str())
+        .map_err(|_| "claim_generation_mismatch".to_owned())?
+        .as_slice()
+        .try_into()
+        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    // `from_event` already validates the four-field Agent key and computes
+    // its digest from these raw bytes. Its projection deliberately omits
+    // `kid`, so passing it back through the full wire-key parser fails.
+    if arkret_canonical::sha256_digest(public_key) != expected_public_key_digest
+        || signature.kid.as_str() != verification_method
+        || signature
+            .signature_algorithm
+            .as_ref()
+            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
+    {
+        return Err("claim_generation_mismatch".to_owned());
+    }
+    arkret_signatures::keypackages::verify_keypackage_signing_input(
+        &public_key,
+        verification_method,
+        signing_input,
+        signature,
+    )
+    .map_err(|_| "device_signature_invalid".to_owned())
+}
+
+async fn current_agent_keypackage_authorized_key(
+    state: &AppState,
+    principal: &arkret_wire::DidCoreId,
+    authorize_event_id: &str,
+) -> Result<arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey, String> {
     if !current_agent_key_authorization_matches(state, principal, authorize_event_id).await {
         return Err("claim_generation_mismatch".to_owned());
     }
@@ -3571,53 +3607,12 @@ async fn verify_agent_keypackage_batch(
             &event,
         )
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    let verification_method = authorized_key.verification_method.as_str();
-    let expected_public_key_digest = authorized_key.public_key_digest.as_str();
-    let agent = state
-        .agent_pairings()
-        .agent(principal.as_str())
-        .await
-        .map_err(|_| "claim_generation_mismatch".to_owned())?
-        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-    let binding = agent
-        .authorized_key_event
-        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-    let binding =
-        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
-            &binding,
-        )
-        .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    if binding.agent_key_authorize_event_id.as_str() != authorize_event_id
-        || binding.verification_method.as_str() != verification_method
-        || binding.public_key_digest.as_str() != expected_public_key_digest
+    if authorized_key.agent_key_authorize_event_id.as_str() != authorize_event_id
+        || authorized_key.agent_id != *principal
     {
         return Err("claim_generation_mismatch".to_owned());
     }
-    let public_key: [u8; 32] = URL_SAFE_NO_PAD
-        .decode(binding.public_key.key.as_str())
-        .map_err(|_| "claim_generation_mismatch".to_owned())?
-        .as_slice()
-        .try_into()
-        .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    let actual_public_key_digest =
-        arkret_signatures::agent::agent_runtime_public_key_digest(&binding.public_key)
-            .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    if actual_public_key_digest.as_str() != expected_public_key_digest
-        || signature.kid.as_str() != verification_method
-        || signature
-            .signature_algorithm
-            .as_ref()
-            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
-    {
-        return Err("claim_generation_mismatch".to_owned());
-    }
-    arkret_signatures::keypackages::verify_keypackage_signing_input(
-        &public_key,
-        verification_method,
-        signing_input,
-        signature,
-    )
-    .map_err(|_| "device_signature_invalid".to_owned())
+    Ok(authorized_key)
 }
 
 async fn validate_agent_keypackage_leaf(
@@ -3626,23 +3621,8 @@ async fn validate_agent_keypackage_leaf(
     authorize_event_id: &str,
     key_package_bytes: &[u8],
 ) -> Result<(), String> {
-    let agent = state
-        .agent_pairings()
-        .agent(principal.as_str())
-        .await
-        .map_err(|_| "claim_generation_mismatch".to_owned())?
-        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
-    let binding = agent
-        .authorized_key_event
-        .ok_or_else(|| "claim_generation_mismatch".to_owned())?;
     let binding =
-        arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey::from_event(
-            &binding,
-        )
-        .map_err(|_| "claim_generation_mismatch".to_owned())?;
-    if binding.agent_key_authorize_event_id.as_str() != authorize_event_id {
-        return Err("claim_generation_mismatch".to_owned());
-    }
+        current_agent_keypackage_authorized_key(state, principal, authorize_event_id).await?;
     let public_key = URL_SAFE_NO_PAD
         .decode(binding.public_key.key.as_str())
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
