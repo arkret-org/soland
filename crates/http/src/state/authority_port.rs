@@ -529,6 +529,7 @@ mod tests {
             EventKind::MlsGenesis,
             EventKind::MlsCommit,
             EventKind::StrandCreate,
+            EventKind::DirectConversationBound,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
             EventKind::MemberState,
