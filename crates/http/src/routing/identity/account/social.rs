@@ -401,6 +401,14 @@ async fn contact_list_rows(
             .then_with(|| left.contact_round_id.cmp(&right.contact_round_id))
     });
     for record in records {
+        let continuity_evidence = if include_continuity {
+            crate::routing::identity::contact_federation::committed_continuity_evidence(&record)
+        } else {
+            None
+        };
+        if continuity_evidence.is_some() {
+            contact_write::verify_stored_contact_evidence_for_read(state, &record, true).await?;
+        }
         let peer = if record.requester_id == *actor {
             record.target_id.clone()
         } else {
@@ -497,11 +505,7 @@ async fn contact_list_rows(
             .collect(),
             bidirectional_scopes: Vec::new(),
             effective_scopes: None,
-            continuity_evidence: if include_continuity {
-                crate::routing::identity::contact_federation::committed_continuity_evidence(&record)
-            } else {
-                None
-            },
+            continuity_evidence,
             direct_conversation: None,
             contact_agent_projections: Vec::new(),
         };

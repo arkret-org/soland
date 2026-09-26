@@ -245,6 +245,226 @@ pub(crate) fn validate_request_receipt_cryptography(
     )
 }
 
+/// Recheck durable Contact evidence when a cold reader uses it for a list,
+/// continuity export, or Direct Conversation authority. Ingress validation
+/// does not populate the in-memory historical-key cache after a restart.
+pub(crate) async fn verify_stored_contact_evidence_for_read(
+    state: &AppState,
+    record: &ContactRecord,
+    include_history: bool,
+) -> Result<(), AppError> {
+    for receipt in &record.request_receipts {
+        verify_stored_request_receipt(state, record, receipt).await?;
+    }
+    if let Some(bundle) = &record.contact_round_evidence {
+        verify_stored_contact_round_with_root(state, record, bundle).await?;
+    }
+    if include_history {
+        for bundle in &record.contact_round_evidence_history {
+            verify_stored_contact_round_with_root(state, record, bundle).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn verify_stored_contact_round_with_root(
+    state: &AppState,
+    record: &ContactRecord,
+    bundle: &ContactRoundEvidenceBundle,
+) -> Result<(), AppError> {
+    verify_stored_contact_round(state, record, bundle).await?;
+    if let Some(checkpoint) = &bundle.continuity_checkpoint {
+        let root = checkpoint.core.root_basis.as_ref();
+        if root.continuity_checkpoint.is_some() {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "stored Contact checkpoint root is nested",
+            ));
+        }
+        verify_stored_contact_round(state, record, root).await?;
+    }
+    Ok(())
+}
+
+async fn verify_stored_request_receipt(
+    state: &AppState,
+    record: &ContactRecord,
+    receipt: &RequestAcceptanceReceipt,
+) -> Result<(), AppError> {
+    let holder = receipt.core.holder.contact_actor_id();
+    let peer = receipt.core.peer.contact_actor_id();
+    if !((holder == record.requester_id && peer == record.target_id)
+        || (holder == record.target_id && peer == record.requester_id))
+        || receipt.core.issuer_id != *holder.route_service_id()
+    {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "stored Contact request receipt has wrong participant or source Station",
+        ));
+    }
+    crate::routing::identity::contact_federation::cache_contact_assertion_signatures(
+        state,
+        vec![&receipt.signature],
+    )
+    .await?;
+    validate_request_receipt_cryptography(state, receipt, "stored_contact.request_receipt")
+}
+
+async fn verify_stored_contact_round(
+    state: &AppState,
+    record: &ContactRecord,
+    bundle: &ContactRoundEvidenceBundle,
+) -> Result<(), AppError> {
+    arkret_models_collaboration::contact_operations::validate_contact_evidence_directions(bundle)
+        .map_err(|_| {
+        crate::app_error!(
+            FailedPrecondition,
+            "stored Contact round directions are invalid"
+        )
+    })?;
+    let mut signatures = bundle
+        .request_receipts
+        .iter()
+        .map(|receipt| &receipt.signature)
+        .collect::<Vec<_>>();
+    if let Some(response) = &bundle.normal_response_receipt {
+        signatures.push(&response.request_receipt.signature);
+        signatures.push(&response.signature);
+    }
+    signatures.extend(bundle.current_proofs.iter().map(|proof| &proof.signature));
+    if let Some(attestations) = &bundle.glare_concurrency_attestations {
+        signatures.extend(attestations.iter().map(|part| &part.signature));
+    }
+    if let Some(checkpoint) = &bundle.continuity_checkpoint {
+        signatures.extend(checkpoint.signatures.iter().map(|part| &part.signature));
+    }
+    crate::routing::identity::contact_federation::cache_contact_assertion_signatures(
+        state, signatures,
+    )
+    .await?;
+    for receipt in &bundle.request_receipts {
+        let holder = receipt.core.holder.contact_actor_id();
+        let peer = receipt.core.peer.contact_actor_id();
+        if !((holder == record.requester_id && peer == record.target_id)
+            || (holder == record.target_id && peer == record.requester_id))
+            || receipt.core.issuer_id != *holder.route_service_id()
+        {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "stored Contact round request has wrong participant or source Station",
+            ));
+        }
+        validate_request_receipt_cryptography(state, receipt, "stored_contact.round_request")?;
+    }
+    if let Some(response) = &bundle.normal_response_receipt {
+        if response.issuer_id
+            != *response
+                .request_receipt
+                .core
+                .peer
+                .contact_actor_id()
+                .route_service_id()
+            || !bundle.request_receipts.contains(&response.request_receipt)
+        {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "stored Contact response has wrong source Station or request",
+            ));
+        }
+        verify_contact_service_signature_bytes(
+            state,
+            response.issuer_id.as_str(),
+            &response.signature,
+            &response.canonical_signing_bytes().map_err(|_| {
+                crate::app_error!(
+                    FailedPrecondition,
+                    "stored Contact response transcript is invalid"
+                )
+            })?,
+            "stored_contact.response_receipt",
+        )?;
+    }
+    for proof in &bundle.current_proofs {
+        let peer = proof.peer.contact_actor_id();
+        let source = if peer == record.requester_id {
+            &record.target_id
+        } else if peer == record.target_id {
+            &record.requester_id
+        } else {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "stored Contact proof has wrong peer"
+            ));
+        };
+        if proof.issuer_id != *source.route_service_id() {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "stored Contact proof has wrong source Station"
+            ));
+        }
+        verify_contact_service_signature_bytes(
+            state,
+            proof.issuer_id.as_str(),
+            &proof.signature,
+            &proof.canonical_signing_bytes().map_err(|_| {
+                crate::app_error!(
+                    FailedPrecondition,
+                    "stored Contact proof transcript is invalid"
+                )
+            })?,
+            "stored_contact.current_proof",
+        )?;
+    }
+    if let Some(attestations) = &bundle.glare_concurrency_attestations {
+        for attestation in attestations {
+            if !((attestation.subject_id == record.requester_id
+                && attestation.peer_id == record.target_id)
+                || (attestation.subject_id == record.target_id
+                    && attestation.peer_id == record.requester_id))
+                || attestation.issuer_id != *attestation.subject_id.route_service_id()
+            {
+                return Err(crate::app_error!(
+                    FailedPrecondition,
+                    "stored Contact glare source is invalid"
+                ));
+            }
+            verify_contact_service_signature_bytes(
+                state,
+                attestation.issuer_id.as_str(),
+                &attestation.signature,
+                &attestation.canonical_signing_bytes().map_err(|_| {
+                    crate::app_error!(
+                        FailedPrecondition,
+                        "stored Contact glare transcript is invalid"
+                    )
+                })?,
+                "stored_contact.glare_attestation",
+            )?;
+        }
+    }
+    if let Some(checkpoint) = &bundle.continuity_checkpoint {
+        checkpoint.validate_contact_shape().map_err(|_| {
+            crate::app_error!(FailedPrecondition, "stored Contact checkpoint is invalid")
+        })?;
+        let bytes = checkpoint.signing_bytes().map_err(|_| {
+            crate::app_error!(
+                FailedPrecondition,
+                "stored Contact checkpoint transcript is invalid"
+            )
+        })?;
+        for part in &checkpoint.signatures {
+            verify_contact_service_signature_bytes(
+                state,
+                part.signer.station_id.as_str(),
+                &part.signature,
+                &bytes,
+                "stored_contact.checkpoint",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 async fn validate_request_acceptance_receipt(
     state: &AppState,
     record: &ContactRecord,

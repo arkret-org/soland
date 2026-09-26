@@ -21,6 +21,7 @@ pub(crate) async fn fresh_direct_contact_evidence(
     {
         return Ok(None);
     }
+    super::contact_write::verify_stored_contact_evidence_for_read(state, record, true).await?;
     let at = now();
     for proof in &mut bundle.current_proofs {
         let peer = proof.peer.contact_actor_id();
