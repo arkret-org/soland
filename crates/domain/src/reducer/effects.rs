@@ -194,27 +194,6 @@ pub enum ProjectionEffect {
         relationship: String,
         status: String,
     },
-    /// P1 — `ak.capability.grant` event was projected into the
-    /// `ak.component.capability.grant.v1` or_set cell (one cell per
-    /// `grant_id`). `revived_terminal=false` always; a re-grant of a
-    /// `grant_id` whose add was already observed-removed stays revoked
-    /// (capabilities.md §12.1 terminal rule).
-    CapabilityGrantProjected {
-        grant_id: String,
-        realm_id: String,
-    },
-    /// P1 — `ak.capability.revoke` event was projected as an or_set
-    /// observed-remove on the target grant cell (capabilities.md §12 /
-    /// §12.1). Terminal: the add dot stays removed under re-add.
-    CapabilityRevokeProjected {
-        grant_id: String,
-        realm_id: String,
-    },
-    /// `ak.capability.relinquish` removed the target subject's own grant.
-    CapabilityRelinquishProjected {
-        grant_id: String,
-        realm_id: String,
-    },
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — agent
     /// lifecycle transition transition projected. `agent_id` is the DID
     /// from the payload; `new_state` is the post-transition

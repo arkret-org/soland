@@ -13,9 +13,9 @@ use std::sync::Arc;
 // `arkret_policy::authz::authority`.
 //
 // Grant *authoring* (issuance, re-delegation, revoke cascade) is NOT mirrored
-// here: the accepted `ak.component.capability.grant.v1` cell projection in
-// `soland_domain::reducer::apply_capability` is the only place a grant comes
-// into existence, and this engine is strictly the read-side index over it.
+// here: a grant comes into existence only through the capability grant
+// current-result writer inside the accepting RealmCommit transaction, and
+// this engine is strictly a read-side index.
 pub use arkret_policy::authz::authority::{
     AppletAuthorityBindingError, Grant, GrantConstraint, GrantDecisionVerdict,
     authority_chain_intact, is_grant_expired, validate_applet_authority_binding,

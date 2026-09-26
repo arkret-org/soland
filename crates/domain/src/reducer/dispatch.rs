@@ -742,35 +742,6 @@ fn apply_realm_organization_dispatch(
     s.apply_realm_organization(op, op.created_at)
 }
 
-/// P1 — dispatch for `ak.capability.grant`. Projects the grant snapshot as
-/// an or_set add into the `ak.component.capability.grant.v1` cell keyed by
-/// the Event-derived GrantId.
-fn apply_capability_grant_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_capability_grant(op, op.created_at)
-}
-
-/// P1 — dispatch for `ak.capability.revoke`. Projects an observed-remove on
-/// the target grant cell (capabilities.md §12 / §12.1).
-fn apply_capability_revoke_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_capability_revoke(op, op.created_at)
-}
-
-fn apply_capability_relinquish_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_capability_relinquish(op, op.created_at)
-}
-
 fn apply_policy_set_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1147,20 +1118,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::RealmOrganization,
         apply_realm_organization_dispatch,
-    );
-    // Capability control-plane projection. Grant adds to the canonical grant
-    // cell; revoke and subject-only relinquish perform observed-remove.
-    m.insert(
-        arkret_wire::EventKind::CapabilityGrant,
-        apply_capability_grant_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CapabilityRevoke,
-        apply_capability_revoke_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CapabilityRelinquish,
-        apply_capability_relinquish_dispatch,
     );
     // Policy documents and approval configurations are two registered typed
     // current-result families. Policy-action keeps its policy-ref and

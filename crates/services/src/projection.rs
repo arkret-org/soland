@@ -118,9 +118,6 @@ pub enum ProjectionEffectView {
         organization_id: arkret_wire::DidCoreId,
         relationship: String,
     },
-    CapabilityProjected {
-        grant_id: String,
-    },
     CallStateProjected,
     Other,
 }
@@ -187,11 +184,6 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                 organization_id,
                 relationship,
             },
-            ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
-            | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
-            | ProjectionEffect::CapabilityRelinquishProjected { grant_id, .. } => {
-                Self::CapabilityProjected { grant_id }
-            }
             ProjectionEffect::CallStateProjected { .. } => Self::CallStateProjected,
             _ => Self::Other,
         }
@@ -840,17 +832,6 @@ impl ProjectionService {
         ids.iter()
             .filter_map(|id| self.mls_key_package_record(id))
             .collect()
-    }
-
-    pub fn preflight_capability_rejection(&self, operation: &Operation) -> Option<String> {
-        self.preflight_apply_rejection(
-            operation,
-            &[
-                arkret_wire::EventKind::CapabilityGrant,
-                arkret_wire::EventKind::CapabilityRevoke,
-                arkret_wire::EventKind::CapabilityRelinquish,
-            ],
-        )
     }
 
     /// Apply an ordered formal Event aggregate to a cloned projection and
