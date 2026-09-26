@@ -292,7 +292,7 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let groups = PgMlsGroupCurrentStore { pool: pool.clone() };
 
-    let genesis = with_installation(
+    let mut genesis = with_installation(
         ordinary_realm::next_request(
             &discussion.head.authority_commit,
             arkret_wire::EventKind::MlsGenesis,
@@ -303,7 +303,31 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
         None,
         0,
     );
+    // encryption-and-audit.md §5.1.2: a forwarded Genesis stores the two
+    // Blobs it carried with its Commit.
+    let carried = |seed: char| soland_storage::MlsGenesisBlob {
+        blob_ref: arkret_wire::BlobRef::new(blob(seed)).unwrap(),
+        sha256: seed.to_string().repeat(64),
+        size_bytes: 11,
+        storage_backend: "local".to_owned(),
+        storage_key: format!("sha256/{}", seed.to_string().repeat(64)),
+    };
+    genesis
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .genesis_blobs = vec![carried('3'), carried('4')];
     uow.commit_event(genesis.clone()).await.unwrap();
+    let blobs = soland_storage_postgres::PgBlobStore { pool: pool.clone() };
+    for seed in ['3', '4'] {
+        let stored = soland_storage::BlobStore::get(&blobs, &blob(seed))
+            .await
+            .unwrap()
+            .expect("the carried Blob is stored with the Genesis Commit");
+        assert_eq!(stored.storage_key, carried(seed).storage_key);
+        assert_eq!(stored.realm_id.as_deref(), Some(realm_id.as_str()));
+    }
     let genesis_ref = genesis.authority_commit.event.event_id.clone();
     let installed = groups.current(&scope).await.unwrap().unwrap();
     assert_eq!(
