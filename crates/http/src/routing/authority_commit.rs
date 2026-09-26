@@ -182,6 +182,22 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            // constraint-schema.md section 8.1: an exhausted hard quota is
+            // refused before any business effect, as `rate_limited`.
+            Some(soland_storage::ConflictCode::RateLimited) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::RateLimited,
+                    res,
+                    detail,
+                );
+            }
+            Some(soland_storage::ConflictCode::RealmFrozen) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::RealmFrozen,
+                    res,
+                    detail,
+                );
+            }
             // join-policy.md §4: an entry refused by its rule or gates is one
             // non-enumerating `gate_check_failed`, whatever gate failed.
             Some(soland_storage::ConflictCode::GateCheckFailed) => {

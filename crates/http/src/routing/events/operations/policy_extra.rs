@@ -60,10 +60,10 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .and_then(Value::as_str)
         .unwrap_or(realm_id);
     let members = realm_members(state, realm_id);
-    // `ak.message.mention.broadcast` registers `max_operations`/`period` as
-    // required constraints, so only a grant that carries its quota beside a
-    // bounded temporal window may broadcast. The owner aggregate is not such
-    // a grant.
+    // `strand-and-message.md` §9.4.4: the broadcast grant is judged by the one
+    // constraint evaluator, whose registry row requires the rate quota, and
+    // must also be time-bounded. The owner aggregate is not such a grant. A
+    // quota-bound grant is reserved only where its Event is admitted.
     let Some(target) = arkret_wire::RealmId::new(realm_id.to_owned())
         .ok()
         .and_then(|realm| {
@@ -79,27 +79,33 @@ pub(crate) async fn validate_audience_mention_operation_policy(
                 tracing::error!(?error, %realm_id, "capability authorization read failed");
                 arkret_wire::ErrorCode::INTERNAL_ERROR
             })?;
-    let named = authorization
-        .grants
-        .iter()
-        .filter(|effective| {
-            soland_storage::grant_names_target(
-                &effective.grant,
-                &[arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST],
-                &target.1,
-            )
-        })
-        .collect::<Vec<_>>();
-    if named.is_empty() {
-        return Err("ak.message.mention.broadcast required for audience_mention");
-    }
-    if !named
-        .iter()
-        .any(|effective| grant_has_broadcast_safety_constraints(&effective.grant))
-    {
-        return Err(
-            "ak.message.mention.broadcast grant requires temporal and rate_limiting constraints",
-        );
+    let facts = soland_storage::OperationFacts {
+        strand_id: operation
+            .payload
+            .get("strand_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        object_kind: Some("message".to_owned()),
+        track: Some("discussion".to_owned()),
+        ..soland_storage::OperationFacts::default()
+    };
+    match authorization.evaluate(
+        &[arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST],
+        &target.1,
+        &facts,
+    ) {
+        soland_storage::GrantEvaluation::Allowed(satisfied)
+            if satisfied.iter().any(|grant| {
+                soland_storage::capability_grant_expires_at(grant.grant).is_some()
+            }) => {}
+        soland_storage::GrantEvaluation::Unnamed => {
+            return Err("ak.message.mention.broadcast required for audience_mention");
+        }
+        _ => {
+            return Err(
+                "ak.message.mention.broadcast grant requires temporal and rate_limiting constraints",
+            );
+        }
     }
 
     let Some(policy) = effective_audience_mention_policy_for_realm(state, realm_id).await else {
@@ -197,34 +203,6 @@ pub(crate) async fn actor_governs_realm(
     evaluation_basis: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool, &'static str> {
     crate::authz::actor_may(state, realm_id, actor, actions, realm_id, evaluation_basis).await
-}
-
-/// The registered broadcast floor of one grant: a temporal constraint with an
-/// expiry, a quota of positive `max_operations` per `period`, and no other
-/// constraint family.
-pub(crate) fn grant_has_broadcast_safety_constraints(
-    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
-) -> bool {
-    use arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind;
-    let has_temporal = grant.constraints.iter().any(|constraint| {
-        constraint.constraint_kind == GrantConstraintKind::Temporal
-            && constraint.expires_at.is_some()
-    });
-    let has_quota = grant.constraints.iter().any(|constraint| {
-        constraint.constraint_kind == GrantConstraintKind::Quota
-            && constraint.max_operations.is_some_and(|value| value > 0)
-            && constraint
-                .period
-                .as_deref()
-                .is_some_and(|period| !period.trim().is_empty())
-    });
-    let closed = grant.constraints.iter().all(|constraint| {
-        matches!(
-            constraint.constraint_kind,
-            GrantConstraintKind::Temporal | GrantConstraintKind::Quota
-        )
-    });
-    has_temporal && has_quota && closed
 }
 
 pub(crate) async fn effective_audience_mention_policy_for_realm(

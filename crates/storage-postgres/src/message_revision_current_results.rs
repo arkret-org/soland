@@ -206,7 +206,6 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if !member.present {
         return Err(conflict("Message actor is not a confirmed Realm member"));
     }
-    require_open_realm(conn, &event.realm_id, commit).await?;
     require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id).await?;
     if !mls_carrier {
         require_plaintext_message_service(conn, &event.realm_id, commit).await?;
@@ -239,31 +238,6 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
 struct ServiceIdRow {
     #[diesel(sql_type = Text)]
     value: String,
-}
-
-/// No archive, tombstone or destroy of the Realm precedes this Commit.
-async fn require_open_realm(
-    conn: &mut AsyncPgConnection,
-    realm_id: &arkret_wire::RealmId,
-    commit: &arkret_wire::RealmCommit,
-) -> PersistenceResult<()> {
-    let realm_closed = diesel::sql_query(
-        "SELECT EXISTS (SELECT 1 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
-         WHERE e.realm_id=$1 AND e.state='committed' AND c.stream_position<$2 \
-           AND e.kind IN ('ak.realm.archive','ak.realm.tombstone','ak.realm.destroy')) AS present",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .bind::<BigInt, _>(
-        i64::try_from(commit.stream_position)
-            .map_err(|_| conflict("invalid Message stream position"))?,
-    )
-    .get_result::<PresentRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if realm_closed.present {
-        return Err(conflict("Message Realm has a closed lifecycle"));
-    }
-    Ok(())
 }
 
 /// The Message's Strand is an active Realm-scope Strand of this Realm whose
@@ -562,21 +536,23 @@ pub(crate) async fn commit_message_revise_current_result_in_connection(
         crate::realm_authorization_cut::RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_governed_member(&event.kind)?;
     let target = locked_message_target(conn, &event.realm_id, &typed.message_id).await?;
-    cut.require_authored_target_kind(
-        &event.kind,
+    cut.require_authored_target_in_connection(
+        conn,
+        event,
         &crate::realm_authorization_cut::AuthoredTarget {
             author: &target.author,
             created_at: target.created_at,
+            strand_id: &target.strand_id,
         },
         commit.committed_at,
-    )?;
+    )
+    .await?;
     if message_is_redacted(conn, &event.realm_id, &target.message_id).await? {
         return Err(PersistenceError::Conflict(format!(
             "{}: a redacted Message cannot be revised",
             soland_storage::ConflictCode::FailedPrecondition
         )));
     }
-    require_open_realm(conn, &event.realm_id, commit).await?;
     require_active_discussion_strand(conn, &event.realm_id, &target.strand_id).await?;
     require_plaintext_message_service(conn, &event.realm_id, commit).await?;
     let replaced = diesel::sql_query(

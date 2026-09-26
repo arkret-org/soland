@@ -771,11 +771,19 @@ pub(crate) async fn commit_capability_grant_current_result_in_connection(
     // Grant and revoke are capability-gated: the same-cut evaluator requires
     // a joined actor holding the kind's action (the root controller through
     // its effective `ak.realm.owner`). Relinquish is subject-only and needs
-    // no action; it still decides at the Realm authority lock.
+    // no action; it still decides at the Realm authority lock, under the
+    // Realm lifecycle gates.
     let cut = match event.kind {
         arkret_wire::EventKind::CapabilityRelinquish => {
             crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id)
                 .await?;
+            crate::realm_authorization_cut::RealmAuthorizationCut::read(
+                conn,
+                &event.realm_id,
+                &event.actor_id,
+            )
+            .await?
+            .require_open_lifecycle(event)?;
             None
         }
         _ => Some(

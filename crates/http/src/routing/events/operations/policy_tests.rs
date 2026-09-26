@@ -265,6 +265,28 @@ async fn install_projected_grant(
     resource: String,
     actions: Vec<String>,
 ) -> SeededGrant {
+    install_constrained_grant(
+        state,
+        realm_id,
+        issuer,
+        subject,
+        resource,
+        actions,
+        Vec::new(),
+    )
+    .await
+}
+
+/// [`install_projected_grant`] carrying `constraints`.
+async fn install_constrained_grant(
+    state: &AppState,
+    realm_id: String,
+    issuer: String,
+    subject: String,
+    resource: String,
+    actions: Vec<String>,
+    constraints: Vec<arkret_models_collaboration::governance::grant_constraint::GrantConstraint>,
+) -> SeededGrant {
     let realm_id = arkret_identifiers::RealmId::new(realm_id).expect("fixture Realm id");
     let store = state.test_persistence();
     let grants = store.capability_grant_current_results();
@@ -279,7 +301,7 @@ async fn install_projected_grant(
             subject: fixture_actor(&subject),
             actions,
             resources: vec![resource],
-            constraints: Vec::new(),
+            constraints,
         })
         .await
         .expect("fixture grant");
@@ -1663,6 +1685,85 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
     validate_operation_policy(&state, &[tombstone])
         .await
         .expect("circle-scoped manage grant authorizes lifecycle");
+}
+
+/// `capabilities.md` §5.4: Circle management over the whole Realm is
+/// narrowed by `allowed_circle_ids`; an unnarrowed Realm-wide grant is not an
+/// authorization shape the evaluator accepts.
+#[tokio::test]
+async fn realm_wide_circle_management_is_narrowed_by_allowed_circle_ids() {
+    use arkret_models_collaboration::governance::grant_constraint::{
+        GrantConstraint, GrantConstraintEffect, GrantConstraintKind,
+    };
+    let state = test_state();
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:AVm2x0Z3uN9m7cDkq5YHn0yVjg3HX2Hc8yHwVnQYc2dM".to_owned(),
+    )
+    .unwrap();
+    install_collaboration_realm(&state, &realm_id);
+    let listed = "ak:circle:AdYzZqwOV7QGAA-4lkcJ7t3e37ykrejD-IweH6iPy9vz";
+    let other = "ak:circle:AScD0xd0vWSGWhC2n9BZHco7N_jYnNgmEIifpAo_uxUJ";
+    let mut narrowing = GrantConstraint::new(
+        GrantConstraintKind::ScopeLimitation,
+        GrantConstraintEffect::Allow,
+    );
+    narrowing.allowed_circle_ids = vec![listed.parse().unwrap()];
+    install_constrained_grant(
+        &state,
+        realm_id.to_string(),
+        "ak:did_core:web:owner.example".to_owned(),
+        ALICE_CORE_ID.to_owned(),
+        realm_id.to_string(),
+        vec!["ak.circle.manage".to_owned()],
+        vec![narrowing],
+    )
+    .await;
+    install_projected_grant(
+        &state,
+        realm_id.to_string(),
+        "ak:did_core:web:owner.example".to_owned(),
+        BOB_CORE_ID.to_owned(),
+        realm_id.to_string(),
+        vec!["ak.circle.manage".to_owned()],
+    )
+    .await;
+    let tombstone = |sender: &str, sequence: &str, circle_id: &str| {
+        op(
+            realm_id.clone(),
+            sequence,
+            arkret_wire::EventKind::CircleTombstone,
+            json!({"sender": sender, "circle_id": circle_id}),
+        )
+    };
+    validate_operation_policy(
+        &state,
+        &[tombstone(
+            "ak:did_core:web:alice.example",
+            "000000000891",
+            listed,
+        )],
+    )
+    .await
+    .expect("the listed Circle is inside the grant");
+    assert_eq!(
+        validate_operation_policy(
+            &state,
+            &[tombstone(
+                "ak:did_core:web:alice.example",
+                "000000000892",
+                other
+            )],
+        )
+        .await
+        .unwrap_err(),
+        "circle_manage_capability_required"
+    );
+    assert_eq!(
+        validate_operation_policy(&state, &[tombstone(BOB_CORE_ID, "000000000893", listed)],)
+            .await
+            .unwrap_err(),
+        "circle_manage_capability_required"
+    );
 }
 
 #[tokio::test]

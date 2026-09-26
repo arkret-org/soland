@@ -70,14 +70,17 @@ pub(crate) async fn commit_message_redact_current_result_in_connection(
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_governed_member(&event.kind)?;
     let target = locked_message_target(conn, &event.realm_id, &payload.message_id).await?;
-    cut.require_authored_target_kind(
-        &event.kind,
+    cut.require_authored_target_in_connection(
+        conn,
+        event,
         &AuthoredTarget {
             author: &target.author,
             created_at: target.created_at,
+            strand_id: &target.strand_id,
         },
         commit.committed_at,
-    )?;
+    )
+    .await?;
     if message_is_redacted(conn, &event.realm_id, &target.message_id).await? {
         return Err(PersistenceError::Conflict(format!(
             "{}: the Message is already redacted",

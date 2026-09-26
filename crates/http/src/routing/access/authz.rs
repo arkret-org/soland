@@ -71,6 +71,7 @@ async fn authz_check(
                     &authorization,
                     &[body.action.as_str()],
                     target,
+                    &soland_storage::OperationFacts::default(),
                 ))
             }
             None => None,
@@ -79,7 +80,11 @@ async fn authz_check(
     };
     let reason_code = match &verdict {
         Some(verdict) if verdict.allowed() => None,
-        Some(CapabilityVerdict::ConstraintsNotSatisfied) => Some("constraints_not_satisfied"),
+        Some(
+            CapabilityVerdict::ConstraintsNotSatisfied
+            | CapabilityVerdict::Quarantined
+            | CapabilityVerdict::RequiresReview,
+        ) => Some("constraints_not_satisfied"),
         _ => Some(
             crate::authz::validate_runtime_capability_action(&body.action)
                 .err()
@@ -100,14 +105,14 @@ async fn authz_check(
             .collect(),
         _ => Vec::new(),
     };
-    // The local preflight yields a binary allow/deny verdict. spec §18 models
-    // the decision as a five-valued enum where `quarantine`/`require_review`
-    // are local moderation soft outcomes (not produced here); a local refusal
-    // maps to the conservative terminal `hard_deny`.
-    let decision = if reason_code.is_none() {
-        AuthzDecision::Allow
-    } else {
-        AuthzDecision::HardDeny
+    // A matching `quarantine` / `require_review` constraint of a named grant
+    // is its own decision (constraint-schema.md section 15.4); every other
+    // refusal maps to the conservative terminal `hard_deny`.
+    let decision = match &verdict {
+        _ if reason_code.is_none() => AuthzDecision::Allow,
+        Some(CapabilityVerdict::Quarantined) => AuthzDecision::Quarantine,
+        Some(CapabilityVerdict::RequiresReview) => AuthzDecision::RequireReview,
+        _ => AuthzDecision::HardDeny,
     };
     let policy_results = vec![json!({
         "actor_id": body.actor_id,

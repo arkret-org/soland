@@ -43,6 +43,7 @@ mod audit;
 mod authority_commit;
 mod blobs;
 mod capability_grant_current_results;
+mod capability_quota;
 mod committed_disclosure;
 mod contacts;
 #[cfg(test)]

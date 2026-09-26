@@ -88,7 +88,9 @@ async fn authorize_sidecar_ensure(
     .await?
     {
         verdict if verdict.allowed() => return Ok(()),
-        crate::authz::CapabilityVerdict::ConstraintsNotSatisfied => {
+        crate::authz::CapabilityVerdict::ConstraintsNotSatisfied
+        | crate::authz::CapabilityVerdict::Quarantined
+        | crate::authz::CapabilityVerdict::RequiresReview => {
             return Err(sidecar_create_denied(
                 "ak.self.agent.sidecar.command.ensure.v1 denied by policy",
             ));

@@ -4286,6 +4286,38 @@ CREATE TABLE capability_grant_current_results (
 CREATE INDEX capability_grant_current_result_status
  ON capability_grant_current_results(realm_id,status,grant_id);
 
+-- The logical quota authority of hard grant quotas (constraint-schema.md
+-- section 8.1): one linearizable counter per (grant, constraint, counter key,
+-- UTC epoch-aligned window), reserved inside the transaction that commits the
+-- operation, so a refused or rolled-back operation consumes nothing.  One
+-- consumption row per operation identity counts an exact retry once.
+CREATE TABLE capability_quota_counters (
+ grant_id TEXT NOT NULL,
+ constraint_key TEXT NOT NULL,
+ counter_key TEXT NOT NULL,
+ window_id BIGINT NOT NULL,
+ consumed BIGINT NOT NULL CHECK(consumed >= 0),
+ PRIMARY KEY(grant_id,constraint_key,counter_key,window_id)
+);
+-- The token bucket a `burst` adds on the same authority; `level` counts
+-- tokens in units of 1/period_ms and refills at max_operations per ms.
+CREATE TABLE capability_quota_buckets (
+ grant_id TEXT NOT NULL,
+ constraint_key TEXT NOT NULL,
+ counter_key TEXT NOT NULL,
+ level BIGINT NOT NULL CHECK(level >= 0),
+ refilled_at_ms BIGINT NOT NULL,
+ PRIMARY KEY(grant_id,constraint_key,counter_key)
+);
+CREATE TABLE capability_quota_consumptions (
+ grant_id TEXT NOT NULL,
+ constraint_key TEXT NOT NULL,
+ operation_identity TEXT NOT NULL,
+ counter_key TEXT NOT NULL,
+ window_id BIGINT NOT NULL,
+ PRIMARY KEY(grant_id,constraint_key,operation_identity)
+);
+
 -- Authoritative transaction inputs for co-governed parent-membership
 -- admission.  These are typed current results written in the same transaction
 -- as their accepting RealmCommit; the in-process product projection is never

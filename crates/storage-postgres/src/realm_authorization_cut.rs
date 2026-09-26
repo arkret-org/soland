@@ -21,25 +21,39 @@
 //! authorizing actions on a selector covering the Realm, with an intact issuer
 //! chain. Membership is a required input, never an authorization source.
 //!
+//! Every grant is judged by [`soland_storage::evaluate_grants`], the single
+//! constraint evaluator (`authz/constraint-schema.md` §15.4); a hard quota a
+//! satisfied grant owes is reserved on the quota authority inside the same
+//! transaction ([`crate::capability_quota`]), so the reservation commits or
+//! rolls back with the Event it admits.
+//!
 //! An action whose registry row lists `required_evaluator_checks` is never
 //! sufficient on its own: only a kind-specific caller that discharges those
 //! checks may count it. The one such check decided here is
 //! `actor_eq_target_author` of the `.own` Message actions
-//! ([`RealmAuthorizationCut::require_authored_target_kind`]), together with the
-//! self-service windows of `authz/constraint-schema.md` §14.2 that their
-//! `required_constraints` name.
+//! ([`RealmAuthorizationCut::require_authored_target_in_connection`]).
+//!
+//! The Realm authority row lock taken first is the one dependency lock of the
+//! cut. Every writer of the root, grant, policy bundle and member rows, and of
+//! the Realm's terminal lifecycle, commits on the Realm stream through that
+//! row (`authz/capabilities.md` §3.2), so a concurrent change of any of them
+//! either committed before the lock was granted and is read here, or waits
+//! for this transaction and is decided against its result.
 
 use std::collections::BTreeMap;
 
 use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilityGrant, CapabilitySubject, GrantConstraint, GrantConstraintEffect,
-    GrantConstraintKind, GrantConstraintSubkind, IssuerAuthorityRef,
+    CapabilityGrant, CapabilitySubject, IssuerAuthorityRef,
 };
 use arkret_wire::{
-    ActorId, CapabilityActionId, CurrentRevision, EventKind, GrantId, RealmId, WireResourceSelector,
+    ActorId, CapabilityActionId, CurrentRevision, EventKind, GrantId, RealmId, StrandId,
+    WireResourceSelector,
 };
-use soland_storage::{ActorRealmAuthorization, EffectiveActorGrant, grant_covers};
+use soland_storage::{
+    ActorRealmAuthorization, AuthorizationOperation, EffectiveActorGrant, GrantEvaluation,
+    OperationFacts, evaluate_grants,
+};
 
 use super::{
     AsyncPgConnection, Jsonb, OptionalExtension, PersistenceError, PersistenceResult,
@@ -64,6 +78,12 @@ struct MembershipRow {
 }
 
 #[derive(QueryableByName)]
+struct LifecycleRow {
+    #[diesel(sql_type = Text)]
+    kind: String,
+}
+
+#[derive(QueryableByName)]
 struct LockedAuthorityRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
@@ -82,6 +102,7 @@ pub(crate) struct RealmAuthorizationCut {
     revisions: BTreeMap<GrantId, CurrentRevision>,
     policy_bundle: Option<RealmPolicyBundlePayload>,
     actor_membership: Option<String>,
+    lifecycle: RealmLifecycleGates,
     /// The Direct Conversation profile's verdict for the Event this cut was
     /// read for (`contact-and-direct-conversation.md` §8.3/§8.4). `Profile`
     /// means the profile's evaluator or phase mask authorized the Event; no
@@ -152,6 +173,7 @@ impl RealmAuthorizationCut {
         .optional()
         .map_err(PersistenceError::database)?
         .map(|row| row.membership);
+        let lifecycle = RealmLifecycleGates::read(conn, realm_id).await?;
         Ok(Self {
             realm_id: realm_id.clone(),
             actor: actor.clone(),
@@ -160,6 +182,7 @@ impl RealmAuthorizationCut {
             revisions,
             policy_bundle,
             actor_membership,
+            lifecycle,
             direct_conversation: None,
         })
     }
@@ -200,28 +223,98 @@ impl RealmAuthorizationCut {
         self.actor_membership.as_deref() == Some("join")
     }
 
-    /// Whether an active Capability Grant whose subject is exactly the actor
-    /// names one of `actions` on a selector covering the whole Realm, has only
-    /// temporal constraints whose window contains `at`, and descends from the
-    /// current authority root through an intact issuer chain.
+    /// `constraint-schema.md` §15.4 over the actor's effective grants at `at`.
+    pub(crate) fn evaluate<'a>(
+        &'a self,
+        actions: &'a [&'a str],
+        target: &'a WireResourceSelector,
+        facts: &'a OperationFacts,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> GrantEvaluation<'a> {
+        evaluate_grants(
+            &AuthorizationOperation {
+                actor: &self.actor,
+                actions,
+                target,
+                at,
+                facts,
+            },
+            self.effective_grants(at).map(|(_, grant)| grant),
+        )
+    }
+
+    /// Whether an effective grant allows one of `actions` over the whole
+    /// Realm without owing a quota reservation. A caller that cannot reserve
+    /// on the quota authority never counts a quota-bound grant.
     pub(crate) fn grants_cover_any(
         &self,
         actions: &[&str],
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        self.covering_grants(actions, at).next().is_some()
+        let realm = WireResourceSelector::realm(self.realm_id.clone());
+        !self
+            .evaluate(actions, &realm, &OperationFacts::default(), at)
+            .unreserved()
+            .is_empty()
     }
 
-    /// Every grant that alone would satisfy [`Self::grants_cover_any`].
-    fn covering_grants<'a>(
-        &'a self,
-        actions: &'a [&'a str],
+    /// Decide inside the accepting transaction whether the actor may exercise
+    /// one of `actions` on `target` for the Event `identity`. A refusal
+    /// constraint of any named grant refuses; otherwise a satisfied grant owing
+    /// no quota, then the owner aggregate when `owner_covers`, then the first
+    /// satisfied grant whose quota reservations succeed admits the Event.
+    async fn admit_actions_in_connection(
+        &self,
+        conn: &mut AsyncPgConnection,
+        actions: &[&str],
+        target: &WireResourceSelector,
+        facts: &OperationFacts,
+        owner_covers: bool,
+        identity: &str,
         at: chrono::DateTime<chrono::Utc>,
-    ) -> impl Iterator<Item = &'a CapabilityGrant> + 'a {
-        let realm = WireResourceSelector::realm(self.realm_id.clone());
-        self.effective_grants(at)
-            .filter(move |(_, grant)| grant_covers(grant, actions, &realm))
-            .map(|(_, grant)| grant)
+    ) -> PersistenceResult<ActionAdmission> {
+        let evaluation = self.evaluate(actions, target, facts, at);
+        match evaluation {
+            GrantEvaluation::Denied => Err(capability_denied(
+                "a deny constraint of an effective grant matches the operation",
+            )),
+            GrantEvaluation::Quarantined | GrantEvaluation::RequiresReview => {
+                Err(PersistenceError::Conflict(
+                    "failed_precondition: an effective grant requires quarantine or review \
+                     evidence this Station does not accept"
+                        .to_owned(),
+                ))
+            }
+            GrantEvaluation::Allowed(satisfied) => {
+                if satisfied.iter().any(|grant| grant.reservations.is_empty()) || owner_covers {
+                    return Ok(ActionAdmission::Admitted);
+                }
+                for grant in &satisfied {
+                    if crate::capability_quota::try_reserve_in_connection(
+                        conn,
+                        &grant.reservations,
+                        identity,
+                    )
+                    .await?
+                    {
+                        return Ok(ActionAdmission::Admitted);
+                    }
+                }
+                Err(PersistenceError::Conflict(format!(
+                    "{}: every grant allowing the operation has exhausted its quota",
+                    soland_storage::ConflictCode::RateLimited
+                )))
+            }
+            GrantEvaluation::Unsatisfied if !owner_covers => {
+                Ok(ActionAdmission::NotHeld { named: true })
+            }
+            GrantEvaluation::Unnamed if !owner_covers => {
+                Ok(ActionAdmission::NotHeld { named: false })
+            }
+            GrantEvaluation::Unsatisfied | GrantEvaluation::Unnamed => {
+                Ok(ActionAdmission::Admitted)
+            }
+        }
     }
 
     /// Every active grant whose subject is exactly the actor, whose temporal
@@ -305,26 +398,40 @@ impl RealmAuthorizationCut {
         })
     }
 
-    /// Whether the actor holds one of the actions authorizing `kind`: the
-    /// root controller through its effective `ak.realm.owner`, anyone else
-    /// through an active covering grant.
-    ///
-    /// Actions with registered evaluator checks are left out: they authorize
-    /// only through the caller that discharges those checks.
-    pub(crate) fn holds_event_kind(
-        &self,
-        kind: &EventKind,
-        at: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        if self.profile_authorized() {
-            return true;
-        }
-        let actions = arkret_schema::capability_actions_for_event_kind(kind.as_str())
+    /// The actions that authorize `kind` on their own: those without
+    /// registered evaluator checks.
+    fn unconditional_actions(kind: &EventKind) -> Vec<&'static str> {
+        arkret_schema::capability_actions_for_event_kind(kind.as_str())
             .filter(|descriptor| descriptor.required_evaluator_checks.is_empty())
             .map(|descriptor| descriptor.action.as_str())
-            .collect::<Vec<_>>();
-        (self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER))
-            || self.grants_cover_any(&actions, at)
+            .collect()
+    }
+
+    /// `realm-and-space.md` §2.6.0/§2.6.1: after a terminal Event only audit
+    /// Events are admitted, and an archived or frozen Realm admits only the
+    /// closed exemption set. The terminal refusal code is reserved, so it is
+    /// a bare `failed_precondition`.
+    pub(crate) fn require_open_lifecycle(
+        &self,
+        event: &arkret_wire::Event,
+    ) -> PersistenceResult<()> {
+        if self.lifecycle.terminal && !arkret_wire::events::kinds::is_audit_kind(&event.kind) {
+            return Err(PersistenceError::Conflict(format!(
+                "failed_precondition: the Realm is terminal and refuses {}",
+                event.kind.as_str()
+            )));
+        }
+        if self.lifecycle.archived || self.lifecycle.frozen {
+            let payload = serde_json::Value::Object(event.payload.clone().into_iter().collect());
+            if !arkret_wire::events::kinds::realm_write_gate_exempt(&event.kind, &payload) {
+                return Err(PersistenceError::Conflict(format!(
+                    "{}: the Realm is archived or frozen and refuses {}",
+                    soland_storage::ConflictCode::RealmFrozen,
+                    event.kind.as_str()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The Realm has an authority root and a policy bundle at this cut and the
@@ -359,36 +466,63 @@ impl RealmAuthorizationCut {
         Ok(())
     }
 
-    /// The complete capability-gated verdict for `kind`: the Realm has an
+    /// The complete capability-gated verdict for `event`: the Realm has an
     /// authority root and a policy bundle, the actor is a joined member, and
-    /// the actor holds an authorizing action.
-    pub(crate) fn require_event_kind(
+    /// the actor holds an authorizing action whose constraints admit the
+    /// Event, reserving any quota it owes.
+    pub(crate) async fn require_event_in_connection(
         &self,
-        kind: &EventKind,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<()> {
+        let kind = &event.kind;
+        self.require_open_lifecycle(event)?;
         self.require_governed_member(kind)?;
-        if !self.holds_event_kind(kind, at) {
-            return Err(capability_denied(format!(
+        if self.profile_authorized() {
+            return Ok(());
+        }
+        let actions = Self::unconditional_actions(kind);
+        let owner =
+            self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER);
+        let (target, facts) = self.event_operation(event);
+        match self
+            .admit_actions_in_connection(
+                conn,
+                &actions,
+                &target,
+                &facts,
+                owner,
+                event.event_id.as_str(),
+                at,
+            )
+            .await?
+        {
+            ActionAdmission::Admitted => Ok(()),
+            ActionAdmission::NotHeld { .. } => Err(capability_denied(format!(
                 "the actor holds no action authorizing {}",
                 kind.as_str()
-            )));
+            ))),
         }
-        Ok(())
     }
 
-    /// The capability-gated verdict for a `kind` that acts on one authored
-    /// object: an unconditional action as in [`Self::require_event_kind`], or,
-    /// when the actor authored `target`, an action whose only evaluator check is
-    /// `actor_eq_target_author` on a covering grant whose self-service window
-    /// (`authz/constraint-schema.md` §14.2) still contains `at`. A window that
-    /// elapsed is `failed_precondition`, never a capability grant.
-    pub(crate) fn require_authored_target_kind(
+    /// The capability-gated verdict for an `event` that acts on one authored
+    /// object: an unconditional action as in
+    /// [`Self::require_event_in_connection`], or, when the actor authored
+    /// `target`, an action whose only evaluator check is
+    /// `actor_eq_target_author` on a grant whose constraints, including the
+    /// self-service windows of `authz/constraint-schema.md` §14.2, admit the
+    /// Event. A grant that names the action but no longer admits it is
+    /// `failed_precondition`, never a capability grant.
+    pub(crate) async fn require_authored_target_in_connection(
         &self,
-        kind: &EventKind,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
         target: &AuthoredTarget<'_>,
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<()> {
+        let kind = &event.kind;
+        self.require_open_lifecycle(event)?;
         self.require_governed_member(kind)?;
         // The profile's participant allowlist carries only the `.own`
         // variants, so its authority reaches only the actor's own object.
@@ -402,7 +536,24 @@ impl RealmAuthorizationCut {
                 )))
             };
         }
-        if self.holds_event_kind(kind, at) {
+        let realm = WireResourceSelector::realm(self.realm_id.clone());
+        let facts = OperationFacts {
+            strand_id: Some(target.strand_id.to_string()),
+            object_kind: Some("message".to_owned()),
+            track: Some(DISCUSSION_TRACK.to_owned()),
+            target_created_at: Some(target.created_at),
+            target_owner: Some(target.author.clone()),
+            ..OperationFacts::default()
+        };
+        let identity = event.event_id.as_str();
+        let actions = Self::unconditional_actions(kind);
+        let owner =
+            self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER);
+        if self
+            .admit_actions_in_connection(conn, &actions, &realm, &facts, owner, identity, at)
+            .await?
+            == ActionAdmission::Admitted
+        {
             return Ok(());
         }
         if target.author != &self.actor {
@@ -417,26 +568,118 @@ impl RealmAuthorizationCut {
             })
             .map(|descriptor| descriptor.action.as_str())
             .collect::<Vec<_>>();
-        let mut window_elapsed = false;
-        for action in &own_actions {
-            for grant in self.covering_grants(std::slice::from_ref(action), at) {
-                if self_service_window_permits(grant, action, target.created_at, at) {
-                    return Ok(());
-                }
-                window_elapsed = true;
-            }
-        }
-        if window_elapsed {
-            return Err(PersistenceError::Conflict(format!(
+        match self
+            .admit_actions_in_connection(conn, &own_actions, &realm, &facts, false, identity, at)
+            .await?
+        {
+            ActionAdmission::Admitted => Ok(()),
+            ActionAdmission::NotHeld { named: true } => Err(PersistenceError::Conflict(format!(
                 "failed_precondition: the self-service window of {} has elapsed",
                 kind.as_str()
-            )));
+            ))),
+            ActionAdmission::NotHeld { named: false } => Err(capability_denied(format!(
+                "the actor holds no action authorizing {} on this target",
+                kind.as_str()
+            ))),
         }
-        Err(capability_denied(format!(
-            "the actor holds no action authorizing {} on this target",
-            kind.as_str()
-        )))
     }
+
+    /// The target and operation facts an Event names in its own payload.
+    fn event_operation(
+        &self,
+        event: &arkret_wire::Event,
+    ) -> (WireResourceSelector, OperationFacts) {
+        let realm = WireResourceSelector::realm(self.realm_id.clone());
+        let kind = event.kind.as_str();
+        let family = kind
+            .strip_prefix("ak.")
+            .and_then(|rest| rest.split('.').next())
+            .filter(|family| {
+                matches!(
+                    *family,
+                    "strand" | "message" | "morph" | "space" | "circle" | "relation" | "view"
+                )
+            })
+            .map(str::to_owned);
+        let payload_id = |field: &str| {
+            event
+                .payload
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let mut facts = OperationFacts {
+            object_kind: family,
+            strand_id: payload_id("strand_id"),
+            space_id: payload_id("space_id"),
+            circle_id: payload_id("circle_id"),
+            ..OperationFacts::default()
+        };
+        if event.kind == EventKind::MessageCreate {
+            facts.track = Some(DISCUSSION_TRACK.to_owned());
+            if let Some(strand_id) = facts
+                .strand_id
+                .as_deref()
+                .and_then(|value| value.parse::<StrandId>().ok())
+            {
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), strand_id),
+                    facts,
+                );
+            }
+        }
+        (realm, facts)
+    }
+}
+
+/// The lifecycle gates of `realm-and-space.md` §2.6.0/§2.6.1, folded from the
+/// Realm's committed lifecycle Events in stream order. Every one of them
+/// commits on the Realm stream under the authority row lock, so the fold read
+/// after that lock is the cut's own.
+#[derive(Clone, Copy, Debug, Default)]
+struct RealmLifecycleGates {
+    archived: bool,
+    frozen: bool,
+    terminal: bool,
+}
+
+impl RealmLifecycleGates {
+    async fn read(conn: &mut AsyncPgConnection, realm_id: &RealmId) -> PersistenceResult<Self> {
+        let events = sql_query(
+            "SELECT e.kind FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+             WHERE e.realm_id=$1 AND c.realm_id=e.realm_id AND e.state='committed' \
+               AND e.kind IN ('ak.realm.archive','ak.realm.restore','ak.realm.freeze',\
+                              'ak.realm.unfreeze','ak.realm.tombstone','ak.realm.destroy') \
+             ORDER BY c.stream_position ASC",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .load::<LifecycleRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        let mut gates = Self::default();
+        for event in events {
+            match event.kind.as_str() {
+                "ak.realm.archive" => gates.archived = true,
+                "ak.realm.restore" => gates.archived = false,
+                "ak.realm.freeze" => gates.frozen = true,
+                "ak.realm.unfreeze" => gates.frozen = false,
+                _ => gates.terminal = true,
+            }
+        }
+        Ok(gates)
+    }
+}
+
+/// The track every Message belongs to (`authz/constraint-schema.md` §6.1).
+const DISCUSSION_TRACK: &str = "discussion";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActionAdmission {
+    Admitted,
+    /// No grant admits the operation; `named` when some grant names it.
+    NotHeld {
+        named: bool,
+    },
 }
 
 const ACTOR_EQ_TARGET_AUTHOR: &str = "actor_eq_target_author";
@@ -445,112 +688,7 @@ const ACTOR_EQ_TARGET_AUTHOR: &str = "actor_eq_target_author";
 pub(crate) struct AuthoredTarget<'a> {
     pub(crate) author: &'a ActorId,
     pub(crate) created_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Seconds of one designator run such as `2W3D` or `1H30M`; each designator
-/// appears at most once and in the order of `units`.
-fn designator_seconds(part: &str, units: &[(char, i64)]) -> Option<i64> {
-    let mut total = 0_i64;
-    let mut digits = String::new();
-    let mut remaining = units;
-    for character in part.chars() {
-        if character.is_ascii_digit() {
-            digits.push(character);
-            continue;
-        }
-        let offset = remaining.iter().position(|(unit, _)| *unit == character)?;
-        let amount = digits.parse::<i64>().ok()?;
-        total = total.checked_add(amount.checked_mul(remaining[offset].1)?)?;
-        digits.clear();
-        remaining = &remaining[offset + 1..];
-    }
-    digits.is_empty().then_some(total)
-}
-
-/// A registered window `P[nW][nD][T[nH][nM][nS]]`. Year and month designators
-/// have no fixed length, so a window spelled with them contains no instant.
-fn window_duration(value: &str) -> Option<chrono::TimeDelta> {
-    let rest = value.strip_prefix('P').filter(|rest| !rest.is_empty())?;
-    let (date, time) = match rest.split_once('T') {
-        Some((_, "")) => return None,
-        Some((date, time)) => (date, time),
-        None => (rest, ""),
-    };
-    let seconds = designator_seconds(date, &[('W', 7 * 86_400), ('D', 86_400)])?.checked_add(
-        designator_seconds(time, &[('H', 3_600), ('M', 60), ('S', 1)])?,
-    )?;
-    chrono::TimeDelta::try_seconds(seconds)
-}
-
-fn within_window(
-    created_at: chrono::DateTime<chrono::Utc>,
-    window: &str,
-    at: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    window_duration(window)
-        .and_then(|window| created_at.checked_add_signed(window))
-        .is_some_and(|closes| at >= created_at && at <= closes)
-}
-
-/// `authz/constraint-schema.md` §15 for one `.own` action on one grant: every
-/// temporal constraint that governs the action must permit it. A constraint
-/// that names other actions only is neutral; an edit or redact window without
-/// an action gate, or a governing constraint whose effect is not `allow`, fails
-/// closed.
-fn self_service_window_permits(
-    grant: &CapabilityGrant,
-    action: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
-    at: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    grant
-        .constraints
-        .iter()
-        .all(|constraint| constraint_permits_own_action(constraint, action, created_at, at))
-}
-
-fn constraint_permits_own_action(
-    constraint: &GrantConstraint,
-    action: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
-    at: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    if constraint.constraint_kind != GrantConstraintKind::Temporal {
-        return false;
-    }
-    let window_subkind = matches!(
-        constraint.constraint_subkind,
-        Some(GrantConstraintSubkind::EditWindow | GrantConstraintSubkind::RedactWindow)
-    );
-    if constraint.applies_to_actions.is_empty() {
-        if window_subkind {
-            return false;
-        }
-    } else if !constraint
-        .applies_to_actions
-        .iter()
-        .any(|governed| governed == action)
-    {
-        return constraint.effect == GrantConstraintEffect::Allow;
-    }
-    if constraint.effect != GrantConstraintEffect::Allow {
-        return false;
-    }
-    let edit = constraint.message_edit_window.as_deref();
-    let redact = constraint.message_redact_window.as_deref();
-    match action {
-        CapabilityActionId::MESSAGE_REVISE_OWN => {
-            edit.is_none_or(|window| within_window(created_at, window, at))
-        }
-        CapabilityActionId::MESSAGE_REDACT_OWN => match (redact, edit) {
-            (Some(window), _) => within_window(created_at, window, at),
-            (None, Some(window)) if constraint.redact_after_window_allowed != Some(true) => {
-                within_window(created_at, window, at)
-            }
-            _ => true,
-        },
-        _ => false,
-    }
+    pub(crate) strand_id: &'a StrandId,
 }
 
 /// Take the Realm authority row lock for the accepting transaction. The lock
@@ -584,125 +722,6 @@ pub(crate) async fn authorize_capability_gated_event_in_connection(
 ) -> PersistenceResult<RealmAuthorizationCut> {
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
-    cut.require_event_kind(&event.kind, at)?;
+    cut.require_event_in_connection(conn, event, at).await?;
     Ok(cut)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn at(minutes: i64) -> chrono::DateTime<chrono::Utc> {
-        chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap()
-            + chrono::TimeDelta::minutes(minutes)
-    }
-
-    fn window(subkind: GrantConstraintSubkind, actions: &[&str]) -> GrantConstraint {
-        let mut constraint =
-            GrantConstraint::new(GrantConstraintKind::Temporal, GrantConstraintEffect::Allow);
-        constraint.constraint_subkind = Some(subkind);
-        constraint.applies_to_actions = actions.iter().map(|action| (*action).to_owned()).collect();
-        constraint
-    }
-
-    #[test]
-    fn registered_windows_have_fixed_lengths_only() {
-        for (value, seconds) in [
-            ("PT15M", 900),
-            ("PT24H", 86_400),
-            ("P1W2DT3H4M5S", 9 * 86_400 + 3 * 3_600 + 4 * 60 + 5),
-            ("P0D", 0),
-        ] {
-            assert_eq!(
-                window_duration(value),
-                chrono::TimeDelta::try_seconds(seconds),
-                "{value}"
-            );
-        }
-        for value in [
-            "P", "PT", "P1Y", "P1M", "PT1H1H", "PT1M1H", "15M", "P1DT", "PT-1S",
-        ] {
-            assert_eq!(window_duration(value), None, "{value}");
-        }
-    }
-
-    #[test]
-    fn own_actions_follow_their_own_window_and_ignore_the_other() {
-        let revise_own = CapabilityActionId::MESSAGE_REVISE_OWN;
-        let redact_own = CapabilityActionId::MESSAGE_REDACT_OWN;
-        let mut edit = window(GrantConstraintSubkind::EditWindow, &[revise_own]);
-        edit.message_edit_window = Some("PT15M".to_owned());
-        assert!(constraint_permits_own_action(
-            &edit,
-            revise_own,
-            at(0),
-            at(15)
-        ));
-        assert!(!constraint_permits_own_action(
-            &edit,
-            revise_own,
-            at(0),
-            at(16)
-        ));
-        // A window gated to another action is neutral.
-        assert!(constraint_permits_own_action(
-            &edit,
-            redact_own,
-            at(0),
-            at(600)
-        ));
-
-        // Redact shares the edit window it is gated by unless it opts out.
-        let mut shared = window(
-            GrantConstraintSubkind::EditWindow,
-            &[revise_own, redact_own],
-        );
-        shared.message_edit_window = Some("PT15M".to_owned());
-        assert!(!constraint_permits_own_action(
-            &shared,
-            redact_own,
-            at(0),
-            at(16)
-        ));
-        shared.redact_after_window_allowed = Some(true);
-        assert!(constraint_permits_own_action(
-            &shared,
-            redact_own,
-            at(0),
-            at(600)
-        ));
-        shared.message_redact_window = Some("PT1H".to_owned());
-        assert!(!constraint_permits_own_action(
-            &shared,
-            redact_own,
-            at(0),
-            at(61)
-        ));
-
-        // A window without its action gate, a non-allow governing effect and a
-        // non-temporal constraint fail closed.
-        let mut ungated = window(GrantConstraintSubkind::EditWindow, &[]);
-        ungated.message_edit_window = Some("PT15M".to_owned());
-        assert!(!constraint_permits_own_action(
-            &ungated,
-            revise_own,
-            at(0),
-            at(1)
-        ));
-        let mut denying = edit.clone();
-        denying.effect = GrantConstraintEffect::Deny;
-        assert!(!constraint_permits_own_action(
-            &denying,
-            revise_own,
-            at(0),
-            at(1)
-        ));
-        let quota = GrantConstraint::new(GrantConstraintKind::Quota, GrantConstraintEffect::Allow);
-        assert!(!constraint_permits_own_action(
-            &quota,
-            revise_own,
-            at(0),
-            at(1)
-        ));
-    }
 }

@@ -242,42 +242,51 @@ pub struct ActorRealmAuthorization {
 }
 
 impl ActorRealmAuthorization {
-    /// The effective grants that alone authorize one of `actions` on
-    /// `target`: they name the action, one of their resources covers the
-    /// target, and every constraint they carry is discharged by the temporal
-    /// window already applied (see [`grant_covers`]).
-    pub fn covering_grants<'a>(
+    /// `constraint-schema.md` §15.4 over the effective grants for one
+    /// operation of this actor.
+    pub fn evaluate<'a>(
         &'a self,
         actions: &'a [&'a str],
         target: &'a arkret_wire::WireResourceSelector,
-    ) -> impl Iterator<Item = &'a EffectiveActorGrant> + 'a {
-        self.grants
-            .iter()
-            .filter(move |effective| grant_covers(&effective.grant, actions, target))
+        facts: &'a crate::OperationFacts,
+    ) -> crate::GrantEvaluation<'a> {
+        crate::evaluate_grants(
+            &crate::AuthorizationOperation {
+                actor: &self.actor,
+                actions,
+                target,
+                at: self.evaluated_at,
+                facts,
+            },
+            self.grants.iter().map(|effective| &effective.grant),
+        )
     }
 
-    /// Whether an effective grant names one of `actions` on `target` but
-    /// carries a constraint this evaluator cannot discharge.
-    pub fn has_constrained_grant(
+    /// The effective grant row of `grant`.
+    pub fn effective(
         &self,
-        actions: &[&str],
-        target: &arkret_wire::WireResourceSelector,
-    ) -> bool {
+        grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+    ) -> Option<&EffectiveActorGrant> {
         self.grants
             .iter()
-            .any(|effective| grant_names_target(&effective.grant, actions, target))
+            .find(|effective| effective.grant.id == grant.id)
     }
 
     /// Whether the actor holds the effective `ak.realm.owner` aggregate: it is
     /// the current root controller, or an effective grant of
-    /// `ak.realm.owner` covers the whole Realm (`authz/capabilities.md` §3.2).
+    /// `ak.realm.owner` over the whole Realm allows it without owing a quota
+    /// reservation (`authz/capabilities.md` §3.2).
     pub fn holds_realm_owner(&self) -> bool {
         let realm = arkret_wire::WireResourceSelector::realm(self.realm_id.clone());
         self.root_controller
-            || self
-                .covering_grants(&[arkret_wire::CapabilityActionId::REALM_OWNER], &realm)
-                .next()
-                .is_some()
+            || !self
+                .evaluate(
+                    &[arkret_wire::CapabilityActionId::REALM_OWNER],
+                    &realm,
+                    &crate::OperationFacts::default(),
+                )
+                .unreserved()
+                .is_empty()
     }
 }
 
@@ -293,40 +302,6 @@ pub fn capability_grant_expires_at(
         .filter(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
         .filter_map(|constraint| constraint.expires_at)
         .min()
-}
-
-/// Whether `grant` names one of `actions` on a resource selector covering
-/// `target`, ignoring its constraints.
-pub fn grant_names_target(
-    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
-    actions: &[&str],
-    target: &arkret_wire::WireResourceSelector,
-) -> bool {
-    grant
-        .actions
-        .iter()
-        .any(|action| actions.contains(&action.as_str()))
-        && grant
-            .resources
-            .iter()
-            .any(|resource| resource_selector_covers(resource, target))
-}
-
-/// Whether `grant` alone authorizes one of `actions` on `target`. Only a
-/// grant whose constraints are all temporal qualifies: its window is decided
-/// by the effective-at check, while every other constraint family fails
-/// closed until its evaluator exists.
-pub fn grant_covers(
-    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
-    actions: &[&str],
-    target: &arkret_wire::WireResourceSelector,
-) -> bool {
-    use arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind;
-    grant
-        .constraints
-        .iter()
-        .all(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
-        && grant_names_target(grant, actions, target)
 }
 
 /// Whether resource selector `parent` covers `child`: the same kind with every
@@ -626,6 +601,17 @@ mod capability_grant_current_result_tests {
         }
     }
 
+    fn allows(
+        authorization: &ActorRealmAuthorization,
+        action: &str,
+        target: &arkret_wire::WireResourceSelector,
+    ) -> bool {
+        !authorization
+            .evaluate(&[action], target, &crate::OperationFacts::default())
+            .unreserved()
+            .is_empty()
+    }
+
     #[test]
     fn realm_grant_covers_contained_resources_and_only_its_actions() {
         let authorization = authorization(vec![grant(CapabilityGrantCurrentStatus::Active)]);
@@ -636,51 +622,39 @@ mod capability_grant_current_result_tests {
                 [0x51; 32],
             )),
         );
-        assert!(
-            authorization
-                .covering_grants(&["ak.message.create"], &strand)
-                .next()
-                .is_some()
-        );
-        assert!(
-            authorization
-                .covering_grants(&["ak.realm.admin"], &strand)
-                .next()
-                .is_none()
-        );
+        assert!(allows(&authorization, "ak.message.create", &strand));
+        assert!(!allows(&authorization, "ak.realm.admin", &strand));
         let other = arkret_wire::WireResourceSelector::realm(
             "ak:realm:ASm71QhtF54BxHBvRFcIhmLfPFYTrXhTcLnVAEMmqZ5t"
                 .parse()
                 .unwrap(),
         );
-        assert!(
-            authorization
-                .covering_grants(&["ak.message.create"], &other)
-                .next()
-                .is_none()
-        );
+        assert!(!allows(&authorization, "ak.message.create", &other));
         assert!(!authorization.holds_realm_owner());
     }
 
     #[test]
-    fn a_non_temporal_constraint_names_the_target_but_never_covers_it() {
+    fn an_undecidable_constraint_names_the_target_but_never_allows_it() {
         use arkret_models_collaboration::governance::grant_constraint::{
-            GrantConstraint, GrantConstraintEffect, GrantConstraintKind,
+            GrantConstraint, GrantConstraintEffect, GrantConstraintKind, GrantConstraintSubkind,
         };
         let mut constrained = grant(CapabilityGrantCurrentStatus::Active);
-        constrained.constraints = vec![GrantConstraint::new(
-            GrantConstraintKind::Quota,
+        let mut claim = GrantConstraint::new(
+            GrantConstraintKind::ClaimBased,
             GrantConstraintEffect::Allow,
-        )];
+        );
+        claim.constraint_subkind = Some(GrantConstraintSubkind::Claim);
+        constrained.constraints = vec![claim];
         let authorization = authorization(vec![constrained]);
         let target = arkret_wire::WireResourceSelector::realm(realm());
-        assert!(
-            authorization
-                .covering_grants(&["ak.message.create"], &target)
-                .next()
-                .is_none()
-        );
-        assert!(authorization.has_constrained_grant(&["ak.message.create"], &target));
+        assert!(matches!(
+            authorization.evaluate(
+                &["ak.message.create"],
+                &target,
+                &crate::OperationFacts::default()
+            ),
+            crate::GrantEvaluation::Unsatisfied
+        ));
     }
 
     #[test]

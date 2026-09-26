@@ -48,6 +48,7 @@ mod devices;
 mod events;
 mod federation;
 mod governance;
+mod grant_evaluation;
 mod idempotency;
 #[doc(hidden)]
 pub mod ids;
@@ -95,6 +96,7 @@ pub use devices::*;
 pub use events::*;
 pub use federation::*;
 pub use governance::*;
+pub use grant_evaluation::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use invite_new_source_ledger::*;
@@ -248,6 +250,12 @@ pub enum ConflictCode {
     MimiRoomBindingMigrationProofInvalid,
     /// The exact recipient endpoint has no remaining queue capacity.
     RecipientQueueAtCapacity,
+    /// Every grant that would allow the operation has exhausted its hard
+    /// rate quota (`constraint-schema.md` section 8.1).
+    RateLimited,
+    /// The Realm is archived or frozen and the write is outside the closed
+    /// exemption set (`realm-and-space.md` section 2.6.0).
+    RealmFrozen,
     /// The actor chain exceeded its sibling or predecessor fork cap.
     ForkQuarantine,
     /// A Realm with this id already exists.
@@ -335,7 +343,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 65] = [
+    pub const ALL: [Self; 67] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
@@ -363,6 +371,8 @@ impl ConflictCode {
         Self::MembershipCompensationConflict,
         Self::MimiRoomBindingMigrationProofInvalid,
         Self::RecipientQueueAtCapacity,
+        Self::RateLimited,
+        Self::RealmFrozen,
         Self::ForkQuarantine,
         Self::RealmAlreadyExists,
         Self::RecoveryPolicyConflict,
@@ -437,6 +447,8 @@ impl ConflictCode {
                 arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID
             }
             Self::RecipientQueueAtCapacity => "quota_exceeded",
+            Self::RateLimited => arkret_wire::ErrorCode::RATE_LIMITED,
+            Self::RealmFrozen => arkret_wire::ErrorCode::REALM_FROZEN,
             Self::ForkQuarantine => "fork_quarantine",
             Self::RealmAlreadyExists => "realm_already_exists",
             Self::RecoveryPolicyConflict => "recovery_policy_conflict",

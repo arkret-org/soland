@@ -326,7 +326,8 @@ async fn admit_member_state(
         EdgeWriter::SelfOrAdmin | EdgeWriter::Admin => {
             RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id)
                 .await?
-                .require_event_kind(&event.kind, commit.committed_at)
+                .require_event_in_connection(conn, event, commit.committed_at)
+                .await
         }
     }
 }

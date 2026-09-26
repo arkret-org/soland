@@ -8,19 +8,27 @@
 //! result is.
 
 use arkret_wire::{CapabilityActionId, WireResourceSelector};
-use soland_storage::{ActorRealmAuthorization, EffectiveActorGrant};
+use soland_storage::{
+    ActorRealmAuthorization, EffectiveActorGrant, GrantEvaluation, OperationFacts,
+};
 
 /// The outcome of asking whether an actor may exercise one of a set of
 /// actions on one resource.
 #[derive(Clone, Debug)]
 pub enum CapabilityVerdict {
-    /// Effective grants that each alone authorize the request.
+    /// Effective grants that each allow the request without owing a quota
+    /// reservation.
     Granted(Vec<EffectiveActorGrant>),
     /// The actor holds the effective `ak.realm.owner` aggregate and that
     /// aggregate covers one of the requested actions.
     RealmOwner,
-    /// An effective grant names the request but carries a constraint this
-    /// evaluator cannot discharge; it fails closed.
+    /// A `quarantine` constraint of a named grant matches the request.
+    Quarantined,
+    /// A `require_review` constraint of a named grant matches the request.
+    RequiresReview,
+    /// A grant names the request, but a `deny` constraint matches it or no
+    /// named grant's `allow` constraints admit it without a quota reservation
+    /// this read-only decision cannot take.
     ConstraintsNotSatisfied,
     /// Nothing authorizes the request.
     Denied,
@@ -44,31 +52,46 @@ pub fn realm_owner_covers(action: &str) -> bool {
 }
 
 /// Decide whether the actor of `authorization` may exercise one of `actions`
-/// on `target`. A covering grant wins over the owner aggregate so the verdict
-/// names the grants that authorized it.
+/// on `target` with `facts` (`authz/constraint-schema.md` §15.4). A refusal
+/// constraint of any named grant wins over every grant and the owner
+/// aggregate; otherwise a satisfying grant wins over the owner aggregate so
+/// the verdict names the grants that authorized it.
 #[must_use]
 pub fn evaluate(
     authorization: &ActorRealmAuthorization,
     actions: &[&str],
     target: &WireResourceSelector,
+    facts: &OperationFacts,
 ) -> CapabilityVerdict {
-    let granted = authorization
-        .covering_grants(actions, target)
-        .cloned()
-        .collect::<Vec<_>>();
-    if !granted.is_empty() {
-        return CapabilityVerdict::Granted(granted);
+    let evaluation = authorization.evaluate(actions, target, facts);
+    let owner = || {
+        target.realm_id.as_ref() == Some(&authorization.realm_id)
+            && authorization.holds_realm_owner()
+            && actions.iter().any(|action| realm_owner_covers(action))
+    };
+    match &evaluation {
+        GrantEvaluation::Denied => CapabilityVerdict::ConstraintsNotSatisfied,
+        GrantEvaluation::Quarantined => CapabilityVerdict::Quarantined,
+        GrantEvaluation::RequiresReview => CapabilityVerdict::RequiresReview,
+        GrantEvaluation::Allowed(_) => {
+            let granted = evaluation
+                .unreserved()
+                .into_iter()
+                .filter_map(|grant| authorization.effective(grant).cloned())
+                .collect::<Vec<_>>();
+            if !granted.is_empty() {
+                CapabilityVerdict::Granted(granted)
+            } else if owner() {
+                CapabilityVerdict::RealmOwner
+            } else {
+                CapabilityVerdict::ConstraintsNotSatisfied
+            }
+        }
+        GrantEvaluation::Unsatisfied if owner() => CapabilityVerdict::RealmOwner,
+        GrantEvaluation::Unsatisfied => CapabilityVerdict::ConstraintsNotSatisfied,
+        GrantEvaluation::Unnamed if owner() => CapabilityVerdict::RealmOwner,
+        GrantEvaluation::Unnamed => CapabilityVerdict::Denied,
     }
-    if target.realm_id.as_ref() == Some(&authorization.realm_id)
-        && authorization.holds_realm_owner()
-        && actions.iter().any(|action| realm_owner_covers(action))
-    {
-        return CapabilityVerdict::RealmOwner;
-    }
-    if authorization.has_constrained_grant(actions, target) {
-        return CapabilityVerdict::ConstraintsNotSatisfied;
-    }
-    CapabilityVerdict::Denied
 }
 
 #[cfg(test)]
@@ -151,6 +174,7 @@ mod tests {
             &authorization(false, vec![grant(&[CapabilityActionId::REALM_ADMIN])]),
             &[CapabilityActionId::REALM_ADMIN],
             &realm(),
+            &OperationFacts::default(),
         );
         let CapabilityVerdict::Granted(grants) = verdict else {
             panic!("expected a granted verdict");
@@ -162,19 +186,33 @@ mod tests {
     fn the_owner_aggregate_covers_event_actions_but_not_self_actions() {
         let root = authorization(true, Vec::new());
         assert!(matches!(
-            evaluate(&root, &[CapabilityActionId::MESSAGE_CREATE], &realm()),
+            evaluate(
+                &root,
+                &[CapabilityActionId::MESSAGE_CREATE],
+                &realm(),
+                &OperationFacts::default()
+            ),
             CapabilityVerdict::RealmOwner
         ));
         assert!(matches!(
             evaluate(
                 &root,
                 &[CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1],
-                &realm()
+                &realm(),
+                &OperationFacts::default()
             ),
             CapabilityVerdict::Denied
         ));
         let co_owner = authorization(false, vec![grant(&[CapabilityActionId::REALM_OWNER])]);
-        assert!(evaluate(&co_owner, &[CapabilityActionId::REALM_ADMIN], &realm()).allowed());
+        assert!(
+            evaluate(
+                &co_owner,
+                &[CapabilityActionId::REALM_ADMIN],
+                &realm(),
+                &OperationFacts::default()
+            )
+            .allowed()
+        );
     }
 
     #[test]
@@ -183,7 +221,8 @@ mod tests {
             evaluate(
                 &authorization(false, Vec::new()),
                 &[CapabilityActionId::REALM_ADMIN],
-                &realm()
+                &realm(),
+                &OperationFacts::default()
             ),
             CapabilityVerdict::Denied
         ));

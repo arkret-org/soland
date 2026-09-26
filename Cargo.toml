@@ -74,6 +74,7 @@ base64 = "0.23.1"
 bs58 = "0.5.1"
 bytes = "1.12.1"
 chrono = "0.4.45"
+chrono-tz = { version = "0.10.4", default-features = false }
 deadpool = "0.13"
 diesel = "2.3.12"
 diesel-async = "0.9"

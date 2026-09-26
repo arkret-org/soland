@@ -470,7 +470,7 @@ async fn authorize_invite_cancel(
             if inviter == event.actor_id && cut.actor_is_joined() {
                 return Ok(());
             }
-            cut.require_event_kind(&event.kind, at)
+            cut.require_event_in_connection(conn, event, at).await
         }
     }
 }

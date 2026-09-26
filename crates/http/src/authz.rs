@@ -53,6 +53,7 @@ pub(crate) async fn authorize(
         &authorization,
         actions,
         &target,
+        &soland_storage::OperationFacts::default(),
     ))
 }
 
