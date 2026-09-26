@@ -1052,6 +1052,7 @@ impl PersistenceHandle {
         expected_current_head: Option<String>,
         document: DidDocumentState,
         event: DidLogEvent,
+        service_identity: Option<soland_storage::ServiceIdentitySuccessor>,
     ) -> crate::ServiceResult<soland_storage::WebvhLogCommitOutcome> {
         let document = soland_storage::WebvhDocumentRecord {
             did: document.did,
@@ -1073,7 +1074,7 @@ impl PersistenceHandle {
         Ok(self
             .persistence
             .webvh()
-            .commit_log_operation(expected_current_head, document, event)
+            .commit_log_operation(expected_current_head, document, event, service_identity)
             .await?)
     }
 

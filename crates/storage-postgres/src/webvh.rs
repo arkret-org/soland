@@ -1,9 +1,9 @@
 use super::{
     AsyncConnection, BigInt, Integer, Jsonb, Nullable, OptionalExtension, PersistenceError,
     PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    ServiceRegistrationCommitOutcome, Text, Timestamptz, Value, WebvhDocumentRecord,
-    WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore, async_trait, decode_registration_outcome,
-    pg_conn, registration_as_existing, registrations_match, sql_query,
+    ServiceIdentitySuccessor, ServiceRegistrationCommitOutcome, Text, Timestamptz, Value,
+    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore, async_trait,
+    decode_registration_outcome, pg_conn, registration_as_existing, registrations_match, sql_query,
     valid_new_service_registration_records, webvh_freshness_on_put,
 };
 pub struct PgWebvhStore {
@@ -54,6 +54,11 @@ struct WebvhLogRow {
     operation: Value,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
+}
+#[derive(QueryableByName)]
+struct ServiceIdentityJsonRow {
+    #[diesel(sql_type = Jsonb)]
+    identity: Value,
 }
 #[derive(QueryableByName)]
 struct WebvhCommitLockRow {
@@ -199,6 +204,7 @@ impl WebvhStore for PgWebvhStore {
         expected_current_head: Option<String>,
         document: WebvhDocumentRecord,
         event: WebvhLogRecord,
+        service_identity: Option<ServiceIdentitySuccessor>,
     ) -> PersistenceResult<WebvhLogCommitOutcome> {
         if document.did != event.did
             || document.seq != event.seq
@@ -214,6 +220,40 @@ impl WebvhStore for PgWebvhStore {
         {
             return Ok(WebvhLogCommitOutcome::Conflict);
         }
+        let identity_values = if let Some(transition) = service_identity {
+            transition
+                .expected
+                .validate()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            transition
+                .next
+                .validate()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            if transition.expected.identity.did.as_str() != event.did
+                || transition.next.identity.did.as_str() != event.did
+                || transition.expected.identity.service_id != transition.next.identity.service_id
+                || transition.expected.identity.registration_key
+                    != transition.next.identity.registration_key
+                || transition.next.identity.version_id
+                    != event
+                        .operation
+                        .get("versionId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                || transition.next.registration_receipt.log_head_digest != event.event_digest
+                || serde_json::to_value(&transition.next.did_document)
+                    .map_err(PersistenceError::database)?
+                    != document.did_document
+            {
+                return Ok(WebvhLogCommitOutcome::Conflict);
+            }
+            Some((
+                serde_json::to_value(&transition.expected).map_err(PersistenceError::database)?,
+                serde_json::to_value(&transition.next).map_err(PersistenceError::database)?,
+            ))
+        } else {
+            None
+        };
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -242,6 +282,16 @@ impl WebvhStore for PgWebvhStore {
                 .bind::<Text, _>(&event.did)
                 .load::<WebvhLogRow>(&mut *conn)
                 .await.map_err(PersistenceError::database)?;
+                let identity_current = if let Some((expected, next)) = &identity_values {
+                    let row = sql_query("SELECT identity FROM service_identity WHERE id='self' FOR UPDATE")
+                        .get_result::<ServiceIdentityJsonRow>(&mut *conn)
+                        .await.optional().map_err(PersistenceError::database)?;
+                    match row.map(|row| row.identity) {
+                        Some(value) if value == *expected => Some(false),
+                        Some(value) if value == *next => Some(true),
+                        _ => return Ok(WebvhLogCommitOutcome::Conflict),
+                    }
+                } else { None };
                 let version_id = event
                     .operation
                     .get("versionId")
@@ -258,6 +308,7 @@ impl WebvhStore for PgWebvhStore {
                 }) {
                     return Ok(if existing.event_digest == event.event_digest
                         && existing.operation == event.operation
+                        && identity_current.is_none_or(|already_next| already_next)
                     {
                         WebvhLogCommitOutcome::Duplicate
                     } else {
@@ -286,6 +337,7 @@ impl WebvhStore for PgWebvhStore {
                 if !stored_state_matches_log
                     || current_head != expected_current_head
                     || event.seq != expected_seq
+                    || identity_current == Some(true)
                 {
                     return Ok(WebvhLogCommitOutcome::Conflict);
                 }
@@ -326,6 +378,15 @@ impl WebvhStore for PgWebvhStore {
                 .bind::<Timestamptz, _>(document.updated_at)
                 .execute(&mut *conn)
                 .await.map_err(PersistenceError::database)?;
+                if let Some((expected, next)) = identity_values {
+                    let updated = sql_query("UPDATE service_identity SET identity=$2 WHERE id='self' AND identity=$1")
+                        .bind::<Jsonb, _>(expected)
+                        .bind::<Jsonb, _>(next)
+                        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                    if updated != 1 {
+                        return Err(PersistenceError::Conflict("service identity CAS failed after WebVH successor".to_owned()).into());
+                    }
+                }
                 Ok(WebvhLogCommitOutcome::Accepted)
         })
         .await

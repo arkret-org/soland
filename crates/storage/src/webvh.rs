@@ -18,6 +18,7 @@ pub trait WebvhStore: Send + Sync {
         expected_current_head: Option<String>,
         document: WebvhDocumentRecord,
         event: WebvhLogRecord,
+        service_identity: Option<ServiceIdentitySuccessor>,
     ) -> PersistenceResult<WebvhLogCommitOutcome>;
     async fn get_service_registration(
         &self,
@@ -32,6 +33,14 @@ pub trait WebvhStore: Send + Sync {
         document: WebvhDocumentRecord,
         event: WebvhLogRecord,
     ) -> PersistenceResult<ServiceRegistrationCommitOutcome>;
+}
+
+/// The deployment's own service DID successor, committed with its public
+/// WebVH log and document. Secrets remain in KeyStore under these opaque refs.
+#[derive(Clone, Debug)]
+pub struct ServiceIdentitySuccessor {
+    pub expected: arkret_identity::service_identity::StoredDidCoreIdentity,
+    pub next: arkret_identity::service_identity::StoredDidCoreIdentity,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WebvhLogCommitOutcome {

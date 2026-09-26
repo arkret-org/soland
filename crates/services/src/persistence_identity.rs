@@ -1691,7 +1691,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
             match self
                 .0
                 .webvh()
-                .commit_log_operation(expected_current_head, document, event)
+                .commit_log_operation(expected_current_head, document, event, None)
                 .await?
             {
                 soland_storage::WebvhLogCommitOutcome::Accepted => {

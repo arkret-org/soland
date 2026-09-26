@@ -210,13 +210,14 @@ impl WebvhStore for FaultWebvhStore {
         expected_current_head: Option<String>,
         document: WebvhDocumentRecord,
         event: WebvhLogRecord,
+        service_identity: Option<soland_storage::ServiceIdentitySuccessor>,
     ) -> PersistenceResult<WebvhLogCommitOutcome> {
         self.injector
             .check(FaultPoint::WebvhLogCommit, FaultTiming::Before)?;
         let outcome = self
             .inner
             .webvh()
-            .commit_log_operation(expected_current_head, document, event)
+            .commit_log_operation(expected_current_head, document, event, service_identity)
             .await?;
         self.injector
             .check(FaultPoint::WebvhLogCommit, FaultTiming::After)?;

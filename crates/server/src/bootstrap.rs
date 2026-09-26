@@ -954,7 +954,7 @@ async fn restore_identity_bundle(
             created_at,
         };
         match persistence
-            .commit_webvh_log_operation(Some(previous_digest), document, event)
+            .commit_webvh_log_operation(Some(previous_digest), document, event, None)
             .await
             .map_err(|error| anyhow::anyhow!("replaying service WebVH history failed: {error}"))?
         {
@@ -1297,6 +1297,15 @@ async fn reconcile_pending_local_rotation(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("service WebVH head has no versionId"))?;
     if head_version == stored.identity.version_id {
+        // The database cut may have committed before the canonical next-key
+        // ref was promoted. Only the candidate matching the committed head
+        // may become the next generation's canonical key.
+        let next_ref = next_control_key_ref(&stored.identity.control_key_ref)?;
+        promote_matching_control_candidate(
+            required_key_store(key_store)?,
+            &next_ref,
+            &head.operation,
+        )?;
         return Ok(stored);
     }
 
@@ -1672,9 +1681,9 @@ fn reissue_registration_receipt(
 ///
 /// The new pre-commitment is persisted under a content-addressed candidate
 /// reference before publication, then promoted to the canonical generation
-/// reference only after the log-head CAS succeeds. This keeps concurrent boots
+/// reference only after the database cut succeeds. This keeps concurrent boots
 /// from overwriting the winning key while retaining enough material to recover
-/// if the process stops between the log commit and identity update.
+/// if the process stops between the cut and key promotion.
 async fn authorize_account_authority_key(
     persistence: &PersistenceHandle,
     config: &AppConfig,
@@ -1854,7 +1863,27 @@ async fn publish_service_document_successor(
         expires_at: now,
         updated_at: now,
     };
-    let event_digest_for_receipt = event_digest.clone();
+    let mut updated = stored.clone();
+    let signing_seed = load_signing_seed(
+        config,
+        Some(key_store),
+        &updated.identity.active_signing_key_ref,
+    )?;
+    updated.registration_receipt = reissue_registration_receipt(
+        &updated,
+        &rotation.version_id,
+        &event_digest,
+        &rotation.current_update_public_key_multibase,
+        &signing_seed,
+        now,
+    )?;
+    updated.identity.control_key_ref = signing_control_ref;
+    updated.identity.version_id = rotation.version_id.clone();
+    updated.identity.last_verified_at = now;
+    updated.did_document = serde_json::from_value(state).map_err(|error| {
+        anyhow::anyhow!("the rotated Station DID document is not a service document: {error}")
+    })?;
+    updated.stored_at = now;
     let event = WebvhLogRecord {
         event_digest,
         did: did.to_string(),
@@ -1863,7 +1892,15 @@ async fn publish_service_document_successor(
         created_at: now,
     };
     match persistence
-        .commit_webvh_log_operation(Some(head.event_digest.clone()), document, event)
+        .commit_webvh_log_operation(
+            Some(head.event_digest.clone()),
+            document,
+            event,
+            Some(soland_storage::ServiceIdentitySuccessor {
+                expected: stored,
+                next: updated.clone(),
+            }),
+        )
         .await
         .map_err(|error| anyhow::anyhow!("publishing the Station DID successor failed: {error}"))?
     {
@@ -1875,43 +1912,13 @@ async fn publish_service_document_successor(
             )
         }
     }
-    key_store
-        .store(following_control_ref.as_str(), &following_seed)
-        .map_err(|error| anyhow::anyhow!("promoting the next WebVH control key failed: {error}"))?;
-
-    let mut updated = stored;
-    // The receipt states which version this deployment serves, and
-    // `service_resolution` compares the runtime commitment against both it and
-    // `identity.version_id`. Leaving either behind would advertise a resolution
-    // the log no longer heads, so the self-hosted Provider re-issues over the
-    // successor. `signing_control_ref` is now the active control key: the
-    // entry consumed the previous pre-commitment.
-    let signing_seed = load_signing_seed(
-        config,
-        Some(key_store),
-        &updated.identity.active_signing_key_ref,
-    )?;
-    updated.registration_receipt = reissue_registration_receipt(
-        &updated,
-        &rotation.version_id,
-        &event_digest_for_receipt,
-        &rotation.current_update_public_key_multibase,
-        &signing_seed,
-        now,
-    )?;
-    updated.identity.control_key_ref = signing_control_ref;
-    updated.identity.version_id = rotation.version_id;
-    updated.identity.last_verified_at = now;
-    updated.did_document = serde_json::from_value(state).map_err(|error| {
-        anyhow::anyhow!("the rotated Station DID document is not a service document: {error}")
-    })?;
-    updated.stored_at = now;
+    promote_matching_control_candidate(key_store, &following_control_ref, &rotation.log_entry)?;
     tracing::info!(
         did = %did,
         version_id = %updated.identity.version_id,
         "published a service DID document successor"
     );
-    persist_stored_identity(persistence, updated).await
+    Ok(updated)
 }
 
 async fn mint_local_service_identity(
@@ -2204,7 +2211,10 @@ mod tests {
     use std::sync::Mutex;
 
     use arkret_keystore::{KeyBytes, KeyStore, KeyStoreError};
-    use soland_storage::{DeliveryPolicyStoreRegistry, ResolutionStoreRegistry};
+    use soland_storage::{
+        DeliveryPolicyStoreRegistry, ResolutionStoreRegistry, ServiceIdentitySuccessor,
+        WebvhLogCommitOutcome,
+    };
     use soland_storage_postgres::PgPersistenceStore;
     use soland_storage_postgres::test_database::TestDatabase;
 
@@ -2376,6 +2386,265 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn service_document_successor_is_atomic_with_identity_and_cas() {
+        let database = Arc::new(TestDatabase::lease().await);
+        let persistence_store = Arc::new(PgPersistenceStore::leased(database.clone()));
+        let persistence = PersistenceHandle::new(persistence_store.clone());
+        let key_store = TestKeyStore::default();
+        resolve_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(&key_store),
+            None,
+            true,
+        )
+        .await
+        .expect("first provisioning");
+        let before = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        let first_head = persistence
+            .webvh_history(before.identity.did.as_str())
+            .await
+            .unwrap();
+        assert_eq!(first_head.len(), 1);
+
+        let (client, connection) = tokio_postgres::connect(database.url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        let connection_task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client.batch_execute(
+            "CREATE FUNCTION fail_service_identity_successor() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN RAISE EXCEPTION 'injected service identity write failure'; END $$; \
+             CREATE TRIGGER fail_service_identity_successor BEFORE UPDATE ON service_identity \
+             FOR EACH ROW EXECUTE FUNCTION fail_service_identity_successor()",
+        ).await.unwrap();
+        let authority_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            &SigningKey::from_bytes(&[0x5d; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let config = AppConfig {
+            account_authority_url: Some("https://auth.example".to_owned()),
+            account_authority_public_key_multibase: Some(authority_key),
+            ..bootstrap_config()
+        };
+        let failure =
+            resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+                .await
+                .expect_err("identity write failure must roll back the public successor");
+        assert!(
+            failure
+                .to_string()
+                .contains("injected service identity write failure"),
+            "{failure}"
+        );
+        assert_eq!(
+            persistence_store.service_identity().get().await.unwrap(),
+            Some(before.clone())
+        );
+        assert_eq!(
+            persistence
+                .webvh_history(before.identity.did.as_str())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            persistence_store
+                .webvh()
+                .get_document(before.identity.did.as_str())
+                .await
+                .unwrap()
+                .unwrap()
+                .seq,
+            1
+        );
+
+        client.batch_execute("DROP TRIGGER fail_service_identity_successor ON service_identity; DROP FUNCTION fail_service_identity_successor()").await.unwrap();
+        resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+            .await
+            .expect("retry commits the complete successor");
+        let next = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        let history = persistence
+            .webvh_history(before.identity.did.as_str())
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        let document = persistence_store
+            .webvh()
+            .get_document(before.identity.did.as_str())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(document.seq, 2);
+        assert_eq!(
+            next.identity.version_id,
+            history[1].operation["versionId"].as_str().unwrap()
+        );
+
+        let mut divergent = next.clone();
+        divergent.identity.last_verified_at += chrono::TimeDelta::seconds(1);
+        let stale = persistence_store
+            .webvh()
+            .commit_log_operation(
+                Some(first_head[0].event_digest.clone()),
+                document,
+                soland_storage::WebvhLogRecord {
+                    event_digest: history[1].event_digest.clone(),
+                    did: history[1].did.clone(),
+                    seq: history[1].seq,
+                    operation: history[1].operation.clone(),
+                    created_at: history[1].created_at,
+                },
+                Some(ServiceIdentitySuccessor {
+                    expected: before,
+                    next: divergent,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale, WebvhLogCommitOutcome::Conflict);
+        assert_eq!(
+            persistence_store.service_identity().get().await.unwrap(),
+            Some(next)
+        );
+        connection_task.abort();
+    }
+
+    #[tokio::test]
+    async fn concurrent_service_successors_preserve_the_winning_control_key() {
+        let database = Arc::new(TestDatabase::lease().await);
+        let persistence_store = Arc::new(PgPersistenceStore::leased(database.clone()));
+        let persistence = PersistenceHandle::new(persistence_store.clone());
+        let key_store = Arc::new(TestKeyStore::default());
+        resolve_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(key_store.as_ref()),
+            None,
+            true,
+        )
+        .await
+        .expect("first provisioning");
+        let before = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        let core = arkret_wire::project_did_to_core_id(&before.identity.did).unwrap();
+        let (client, connection) = tokio_postgres::connect(database.url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        let connection_task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client
+            .query_one(
+                "SELECT pg_advisory_lock(hashtextextended($1, 0))",
+                &[&core.as_str()],
+            )
+            .await
+            .unwrap();
+
+        let attempts: Vec<_> = [0x61, 0x62]
+            .into_iter()
+            .map(|byte| {
+                let persistence = persistence.clone();
+                let key_store = key_store.clone();
+                let authority_key =
+                    arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+                        &SigningKey::from_bytes(&[byte; 32])
+                            .verifying_key()
+                            .to_bytes(),
+                    );
+                let config = AppConfig {
+                    account_authority_url: Some("https://auth.example".to_owned()),
+                    account_authority_public_key_multibase: Some(authority_key),
+                    ..bootstrap_config()
+                };
+                tokio::spawn(async move {
+                    resolve_service_identity(
+                        &persistence,
+                        &config,
+                        Some(key_store.as_ref()),
+                        None,
+                        false,
+                    )
+                    .await
+                })
+            })
+            .collect();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let waiting: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted \
+                     AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
+                    &[],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if waiting >= 2 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "both successor proposals must reach the same WebVH CAS"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        client
+            .query_one(
+                "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+                &[&core.as_str()],
+            )
+            .await
+            .unwrap();
+        let mut success_count = 0;
+        for attempt in attempts {
+            if attempt.await.unwrap().is_ok() {
+                success_count += 1;
+            }
+        }
+        assert_eq!(success_count, 1);
+        let after = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        let history = persistence
+            .webvh_history(after.identity.did.as_str())
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert_ne!(after.identity.version_id, before.identity.version_id);
+        validate_stored_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(key_store.as_ref()),
+            &after,
+        )
+        .await
+        .expect("the winning candidate remains bound to the committed head");
+        connection_task.abort();
     }
 
     #[tokio::test]
