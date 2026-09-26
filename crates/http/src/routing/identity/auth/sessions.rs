@@ -419,13 +419,11 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
     }
 }
 
-/// Agent sessions have no DeviceId. Until every legacy handler is migrated to
-/// the Agent authorization triple, only the formally registered recipient
-/// queue read and ACK operations may receive one.
-/// The endpoints whose handlers authorize an Agent runtime by its typed
-/// holder binding, each with the one operation its grant scope must admit:
-/// the recipient queue (read and ACK), the Agent sender queue, and the
-/// actor-private Events an Agent authors for its controller.
+/// Agent sessions have no DeviceId. Only handlers that authorize the typed
+/// Agent holder and its current key may receive one.
+/// Each admitted endpoint maps to the exact operation its grant must cover:
+/// recipient and sender queues, actor-private Events, and Agent-aware
+/// KeyPackage claim, read, upload and consume handlers.
 fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
     use arkret_wire::ServiceOperationId;
     match (method, path) {
@@ -440,6 +438,18 @@ fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
         }
         ("POST", "/_arkret/self/actor-private-events") => {
             Some(ServiceOperationId::SELF_ACTOR_PRIVATE_EVENTS_COMMAND_SUBMIT_V1)
+        }
+        ("POST", "/_arkret/self/keys/keypackages/upload") => {
+            Some(ServiceOperationId::SELF_KEYS_KEYPACKAGES_UPLOAD_CREATE_V1)
+        }
+        ("POST", "/_arkret/self/keys/keypackages/claim") => {
+            Some(ServiceOperationId::SELF_KEYS_KEYPACKAGES_COMMAND_CLAIM_V1)
+        }
+        ("POST", "/_arkret/self/keys/keypackages/claims/query") => {
+            Some(ServiceOperationId::SELF_KEYS_KEYPACKAGES_READ_CLAIM_V1)
+        }
+        ("POST", "/_arkret/self/keys/keypackages/consume") => {
+            Some(ServiceOperationId::SELF_KEYS_KEYPACKAGES_COMMAND_CONSUME_V1)
         }
         _ => None,
     }
@@ -498,7 +508,7 @@ fn enforce_agent_session_operation(
         return Err((
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "Agent grant does not authorize this recipient queue operation",
+            "Agent grant does not authorize this operation",
         ));
     }
     Ok(())
@@ -904,6 +914,26 @@ mod tests {
                 "POST",
                 "/_arkret/self/actor-private-events",
                 ServiceOperationId::SELF_ACTOR_PRIVATE_EVENTS_COMMAND_SUBMIT_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/keys/keypackages/upload",
+                ServiceOperationId::SELF_KEYS_KEYPACKAGES_UPLOAD_CREATE_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/keys/keypackages/claim",
+                ServiceOperationId::SELF_KEYS_KEYPACKAGES_COMMAND_CLAIM_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/keys/keypackages/claims/query",
+                ServiceOperationId::SELF_KEYS_KEYPACKAGES_READ_CLAIM_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/keys/keypackages/consume",
+                ServiceOperationId::SELF_KEYS_KEYPACKAGES_COMMAND_CONSUME_V1,
             ),
         ] {
             assert_eq!(agent_recipient_operation(method, path), Some(operation));

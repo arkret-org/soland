@@ -493,6 +493,15 @@ async fn upload_keypackage(
         ));
     }
     body.validate_shape().map_err(AppError::param_invalid)?;
+    if session.agent_session.is_some()
+        != (body.device_id.is_none()
+            && body.agent_verification_method.is_some()
+            && body.agent_key_authorize_event_id.is_some())
+    {
+        return Err(AppError::capability_denied(
+            "KeyPackage signer branch must match the calling session",
+        ));
+    }
     let principal_id = body.principal_id.clone();
     let actor_id = body.principal_id.to_string();
     if actor_id != session.actor {
@@ -541,6 +550,18 @@ async fn upload_keypackage(
         &body.agent_verification_method,
         &body.agent_key_authorize_event_id,
     ) {
+        if !current_agent_key_authorization_matches_method(
+            state,
+            &principal_id,
+            event_id.as_str(),
+            method.as_str(),
+        )
+        .await
+        {
+            return Err(AppError::capability_denied(
+                "Agent KeyPackage method or authorization is not current",
+            ));
+        }
         (
             None,
             Some(KeyPackageTrustBinding::agent_key_authorize(
@@ -2030,6 +2051,16 @@ async fn claim_keypackage(
             "minimal-metadata pairwise KeyPackage claim is retired",
         ));
     }
+    if session.agent_session.is_some()
+        != matches!(
+            &body.requester_authorization,
+            PeerKeyPackageRequesterAuthorization::Agent { .. }
+        )
+    {
+        return Err(AppError::capability_denied(
+            "KeyPackage requester branch must match the calling session",
+        ));
+    }
     let requester_id = body
         .unsigned_request()
         .requester_principal_id(&body.requester_authorization)
@@ -3013,6 +3044,15 @@ async fn verify_keypackage_consumer_signature(
     signing_input: &[u8],
     cached_keypackage: Option<&MlsKeyPackageRow>,
 ) -> Result<Option<MlsKeyPackageRow>, AppError> {
+    let recipient_is_agent = matches!(
+        consumer,
+        arkret_models_crypto::RecipientMlsDurableSigner::Agent { .. }
+    );
+    if session.agent_session.is_some() != recipient_is_agent {
+        return Err(AppError::capability_denied(
+            "durable recipient signer branch must match the calling session",
+        ));
+    }
     match consumer {
         arkret_models_crypto::RecipientMlsDurableSigner::Device {
             recipient_device_id,
@@ -3836,7 +3876,10 @@ async fn verify_session_keypackage_write_signature(
 ) -> Result<Option<MlsKeyPackageRow>, AppError> {
     let principal = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
-    if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
+    if session.agent_session.is_some() {
+        let binding = current_agent_keypackage_trust_binding(state, &principal)
+            .await?
+            .ok_or_else(|| AppError::capability_denied("Agent key authorization is unavailable"))?;
         let authorize_event_id = binding
             .agent_key_authorize_event_id
             .as_deref()
@@ -3903,7 +3946,10 @@ async fn verify_session_keypackage_revoke_signature(
 ) -> Result<(), AppError> {
     let principal = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
-    if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
+    if session.agent_session.is_some() {
+        let binding = current_agent_keypackage_trust_binding(state, &principal)
+            .await?
+            .ok_or_else(|| AppError::capability_denied("Agent key authorization is unavailable"))?;
         let authorize_event_id = binding
             .agent_key_authorize_event_id
             .as_deref()
