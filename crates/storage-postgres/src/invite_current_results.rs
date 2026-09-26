@@ -20,15 +20,17 @@
 //! evaluator in [`crate::realm_authorization_cut`]; the in-process reducer
 //! projection and the retired `realm_invites` mirror are never read.
 
+use arkret_event_draft::EventPayloadExt;
+use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_models_collaboration::governance::membership_invite::{
-    InviteAcceptPayload, InviteCancelPayload, InviteCancelTargetState, InviteCreatePayload,
-    InviteDirectedInviteeValue, InviteLiveTargetOccupant, InviteLiveTargetValue,
-    InvitePreviousState, InviteRevokePayload, InviteRevokePreviousState, InviteRevokeTargetState,
-    validate_invite_create_wire_keys,
+    InviteAcceptPayload, InviteCancelPayload, InviteCancelTargetState, InviteClaimPayload,
+    InviteCreatePayload, InviteDirectedInviteeValue, InviteLiveTargetOccupant,
+    InviteLiveTargetValue, InvitePreviousState, InviteRevokePayload, InviteRevokePreviousState,
+    InviteRevokeTargetState, InviteThirdPartyCreatePayload, validate_invite_create_wire_keys,
 };
-use arkret_wire::{AccountId, ActorId, EventKind, InviteId, InviteState};
+use arkret_wire::{AccountId, ActorId, EventKind, InviteId, InviteState, SecurityClass};
 use diesel::OptionalExtension as _;
-use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Jsonb, Nullable, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 use soland_storage::{ConflictCode, PersistenceError, PersistenceResult};
@@ -396,6 +398,118 @@ async fn commit_invite_create(
     .await
 }
 
+/// Accept the 3PID create with its pure lifecycle and rebuildable commitment
+/// index at the same authority cut. A claim remains closed until its two
+/// independent signatures can be verified against accepted key history.
+async fn commit_invite_third_party_create(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    authorize_capability_gated_event_in_connection(conn, event, commit.committed_at).await?;
+    if event.actor_id.as_account_id().is_none() {
+        return Err(coded(
+            ConflictCode::CapabilityDenied,
+            "a third-party Invite must be authored by an Account",
+        ));
+    }
+    let payload: InviteThirdPartyCreatePayload = typed_payload(event)?;
+    payload.validate().map_err(schema_violation)?;
+    let genesis = diesel::sql_query(
+        "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind=$2 AND e.state='committed'",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(EventKind::RealmCreate.as_str())
+    .get_result::<EnvelopeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| corrupt("third-party Invite Realm has no accepted genesis"))?;
+    let genesis = serde_json::from_value::<arkret_wire::Event>(genesis.envelope)
+        .map_err(corrupt)?
+        .as_realm_create()
+        .map_err(corrupt)?
+        .object;
+    let max_lifetime = if genesis.security_class == SecurityClass::HighAssurance {
+        chrono::TimeDelta::hours(24)
+    } else {
+        chrono::TimeDelta::days(7)
+    };
+    if payload.expires_at <= commit.committed_at
+        || payload.expires_at <= event.created_at
+        || payload.expires_at > event.created_at + max_lifetime
+    {
+        return Err(coded(
+            ConflictCode::FailedPrecondition,
+            "third-party Invite is expired or exceeds its Realm security-class lifetime",
+        ));
+    }
+    let policy = diesel::sql_query(
+        "SELECT value FROM realm_policy_bundle_current_results WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .get_result::<ValueRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(|row| serde_json::from_value::<RealmPolicyBundlePayload>(row.value).map_err(corrupt))
+    .transpose()?;
+    if !policy
+        .as_ref()
+        .and_then(|policy| policy.allowed_third_party_invite_verification_ids.as_ref())
+        .is_some_and(|allowed| allowed.contains(&payload.third_party_invite.verification_id))
+    {
+        return Err(coded(
+            ConflictCode::CapabilityDenied,
+            "verification service is absent from the accepted Realm policy allowlist",
+        ));
+    }
+    let commitment = payload
+        .third_party_invite
+        .token_commitment
+        .as_ref()
+        .ok_or_else(|| schema_violation("third-party Invite has no token commitment"))?;
+    let invite_id = InviteId::from_event_id(&event.event_id);
+    let inserted = diesel::sql_query(
+        "INSERT INTO invite_third_party_create_index \
+         (realm_id,invite_id,token_commitment,create_event_id,create_commit_id) \
+         VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(invite_id.as_str())
+    .bind::<Text, _>(commitment.as_str())
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if inserted != 1 {
+        return Err(coded(
+            ConflictCode::DuplicateConflict,
+            "third-party Invite or token commitment already exists",
+        ));
+    }
+    let inserted = upsert(
+        conn,
+        "INSERT INTO invite_lifecycle_current_results \
+         (realm_id,invite_id,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+        event.realm_id.as_str(),
+        invite_id.as_str(),
+        &Value::String(InviteState::Pending.as_str().to_owned()),
+        commit,
+    )
+    .await?;
+    if inserted != 1 {
+        return Err(coded(
+            ConflictCode::DuplicateConflict,
+            "the third-party Invite already has a lifecycle result",
+        ));
+    }
+    Ok(())
+}
+
 async fn commit_invite_revoke(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -608,6 +722,8 @@ pub(crate) async fn commit_invite_current_results_in_connection(
     if !matches!(
         event.kind,
         EventKind::InviteCreate
+            | EventKind::InviteThirdParty
+            | EventKind::InviteClaim
             | EventKind::InviteRevoke
             | EventKind::InviteCancel
             | EventKind::InviteAccept
@@ -617,6 +733,11 @@ pub(crate) async fn commit_invite_current_results_in_connection(
     require_realm_stream_carrier(event, commit)?;
     match event.kind {
         EventKind::InviteCreate => commit_invite_create(conn, event, commit).await,
+        EventKind::InviteThirdParty => commit_invite_third_party_create(conn, event, commit).await,
+        EventKind::InviteClaim => Err(coded(
+            ConflictCode::UnsupportedFeature,
+            "third-party claim requires production verification of binding and subject proofs",
+        )),
         EventKind::InviteRevoke => commit_invite_revoke(conn, event, commit).await,
         EventKind::InviteCancel => commit_invite_cancel(conn, event, commit).await,
         EventKind::InviteAccept => commit_invite_accept(conn, event, commit).await,
@@ -639,6 +760,20 @@ struct OpenDirectedInviteRow {
 }
 
 #[derive(diesel::QueryableByName)]
+struct InviteCurrentRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    invite_id: String,
+    #[diesel(sql_type = Jsonb)]
+    lifecycle: Value,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    invitee: Option<Value>,
+}
+
+#[derive(diesel::QueryableByName)]
 struct EnvelopeRow {
     #[diesel(sql_type = Jsonb)]
     envelope: Value,
@@ -651,6 +786,39 @@ pub struct PgInviteCurrentResultStore {
 
 #[async_trait::async_trait]
 impl soland_storage::InviteCurrentResultStore for PgInviteCurrentResultStore {
+    async fn invites_in_realm(
+        &self,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> PersistenceResult<Vec<soland_storage::InviteCurrent>> {
+        use diesel_async::AsyncConnection as _;
+
+        let mut conn = crate::pg_conn(&self.pool).await?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async |conn| {
+            diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let rows = diesel::sql_query(
+                "SELECT l.realm_id,l.invite_id,l.value AS lifecycle,l.updated_at, \
+                        d.value->'invitee_account_id' AS invitee \
+                 FROM invite_lifecycle_current_results l \
+                 LEFT JOIN invite_directed_invitee_current_results d \
+                   ON d.realm_id=l.realm_id AND d.invite_id=l.invite_id \
+                 WHERE ($1::text IS NULL OR l.realm_id=$1) \
+                 ORDER BY l.realm_id ASC,l.invite_id ASC",
+            )
+            .bind::<Nullable<Text>, _>(realm_id.map(arkret_wire::RealmId::as_str))
+            .load::<InviteCurrentRow>(&mut *conn)
+            .await?;
+            let mut invites = Vec::with_capacity(rows.len());
+            for row in rows {
+                invites.push(invite_current(conn, row).await?);
+            }
+            Ok(invites)
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
+    }
+
     async fn open_directed_invites_for_invitee(
         &self,
         invitee: &AccountId,
@@ -689,6 +857,120 @@ impl soland_storage::InviteCurrentResultStore for PgInviteCurrentResultStore {
         .await
         .map_err(crate::PgTransactionError::into_persistence)
     }
+}
+
+async fn invite_current(
+    conn: &mut AsyncPgConnection,
+    row: InviteCurrentRow,
+) -> PersistenceResult<soland_storage::InviteCurrent> {
+    let realm_id = row
+        .realm_id
+        .parse::<arkret_wire::RealmId>()
+        .map_err(corrupt)?;
+    let invite_id = row.invite_id.parse::<InviteId>().map_err(corrupt)?;
+    let state = row
+        .lifecycle
+        .as_str()
+        .and_then(InviteState::from_wire)
+        .ok_or_else(|| corrupt("invite_lifecycle value is not a registered state"))?;
+    let invitee_account_id = row
+        .invitee
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(corrupt)?;
+    let token = crate::ids::parse_event_id(invite_id.event_id().as_str())
+        .ok_or_else(|| corrupt("InviteId does not retype to a canonical Event token"))?;
+    let envelope = diesel::sql_query(
+        "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.realm_id=$2 AND e.kind IN ($3,$4) AND e.state='committed'",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(EventKind::InviteCreate.as_str())
+    .bind::<Text, _>(EventKind::InviteThirdParty.as_str())
+    .get_result::<EnvelopeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| corrupt("invite_lifecycle has no committed create Event"))?
+    .envelope;
+    let event = serde_json::from_value::<arkret_wire::Event>(envelope).map_err(corrupt)?;
+    let (introduction_evidence_digest, third_party_invite, expires_at) = match event.kind {
+        EventKind::InviteCreate => {
+            let create = typed_payload::<InviteCreatePayload>(&event)?;
+            if Some(&create.invitee_account_id) != invitee_account_id.as_ref() {
+                return Err(corrupt(
+                    "directed invitee disagrees with committed create Event",
+                ));
+            }
+            (
+                Some(create.introduction_evidence_digest),
+                None,
+                create.expires_at,
+            )
+        }
+        EventKind::InviteThirdParty => {
+            if invitee_account_id.is_some() {
+                return Err(corrupt("third-party Invite has a directed invitee"));
+            }
+            let create = typed_payload::<InviteThirdPartyCreatePayload>(&event)?;
+            (None, Some(create.third_party_invite), create.expires_at)
+        }
+        _ => return Err(corrupt("Invite create Event kind is invalid")),
+    };
+    let accepted_claim = if third_party_invite.is_some() {
+        let claims = diesel::sql_query(
+            "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+             WHERE e.realm_id=$1 AND e.kind=$2 AND e.state='committed' \
+               AND e.envelope->'payload'->>'invite_id'=$3 LIMIT 2",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(EventKind::InviteClaim.as_str())
+        .bind::<Text, _>(invite_id.as_str())
+        .load::<EnvelopeRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if claims.len() > 1 {
+            return Err(corrupt("more than one committed claim names an Invite"));
+        }
+        claims
+            .into_iter()
+            .next()
+            .map(|row| {
+                let event =
+                    serde_json::from_value::<arkret_wire::Event>(row.envelope).map_err(corrupt)?;
+                let claim = typed_payload::<InviteClaimPayload>(&event)?;
+                Ok(soland_storage::AcceptedThirdPartyClaim {
+                    event_id: event.event_id,
+                    subject_account_id: claim.subject_account_id,
+                    claim_nonce: claim.claim_nonce,
+                    token_commitment: claim.token_commitment,
+                    verification_id: claim.binding_proof.verification_id,
+                    claimed_at: event.created_at,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    if third_party_invite.is_some() && state == InviteState::Claimed && accepted_claim.is_none() {
+        return Err(corrupt(
+            "claimed third-party Invite has no committed claim Event",
+        ));
+    }
+    Ok(soland_storage::InviteCurrent {
+        realm_id,
+        invite_id,
+        state,
+        state_updated_at: row.updated_at,
+        inviter: event.actor_id,
+        invitee_account_id,
+        introduction_evidence_digest,
+        third_party_invite,
+        expires_at,
+        created_at: event.created_at,
+        accepted_claim,
+    })
 }
 
 async fn open_directed_invite(

@@ -252,6 +252,17 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Invite results, optionally across all Realms, at one committed cut.
+    pub async fn invites_in_realm(
+        &self,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> PersistenceResult<Vec<soland_storage::InviteCurrent>> {
+        self.persistence
+            .invite_current_results()
+            .invites_in_realm(realm_id)
+            .await
+    }
+
     /// The authorization inputs of `actor` in `realm_id`, read from one
     /// snapshot and evaluated at `at`.
     pub async fn actor_realm_authorization(

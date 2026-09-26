@@ -59,6 +59,7 @@ mod federation;
 mod governance;
 mod idempotency;
 mod invite_current_results;
+pub use invite_current_results::PgInviteCurrentResultStore;
 mod invite_locators;
 mod invite_new_source_ledger;
 mod issued_realm_snapshots;

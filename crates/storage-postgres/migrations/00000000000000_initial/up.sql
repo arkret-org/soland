@@ -4534,6 +4534,18 @@ CREATE TABLE invite_lifecycle_current_results (
   'expired','revoked_by_capability_loss','revoked_by_inviter_left','invalidated_by_rate_limit'))
 );
 
+-- Rebuildable 3PID create index. The immutable commitment and Invite identity
+-- come from the accepted `ak.invite.third_party` Event; this is not a second
+-- lifecycle or claim state source.
+CREATE TABLE invite_third_party_create_index (
+ realm_id TEXT NOT NULL,
+ invite_id TEXT NOT NULL,
+ token_commitment TEXT COLLATE "C" NOT NULL UNIQUE,
+ create_event_id TEXT NOT NULL UNIQUE,
+ create_commit_id TEXT NOT NULL,
+ PRIMARY KEY(realm_id,invite_id)
+);
+
 -- `invite_live_target` typed current: the one live directed-invite slot of an
 -- invitee account inside the Realm, keyed by canonical_json(invitee_account_id).
 -- The value is `{create_event_id}` while occupied and JSON null once a

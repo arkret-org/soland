@@ -11,12 +11,13 @@ use soland_services::hydration::HydrationProjectionAdapter;
 use soland_services::projection::ProjectionService;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, EventCommitRequest,
-    EventCommitUnitOfWork, OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
-    SelfProducerCommitGuard,
+    EventCommitUnitOfWork, InviteCurrentResultStore, OrdinaryRealmBootstrapCommitOutcome,
+    OrdinaryRealmBootstrapCommitUnit, SelfProducerCommitGuard,
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, account_snapshot_material,
+    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgInviteCurrentResultStore,
+    account_snapshot_material,
 };
 
 #[tokio::test]
@@ -4622,6 +4623,20 @@ async fn invite_create_writes_three_families_and_rejects_occupied_live_target() 
             .is_some()
     );
     let families = invite_families(&pool, &realm_id).await;
+    let current = PgInviteCurrentResultStore { pool: pool.clone() };
+    let in_realm = current.invites_in_realm(Some(&realm_id)).await.unwrap();
+    let all_realms = current.invites_in_realm(None).await.unwrap();
+    assert_eq!(in_realm.len(), 1);
+    assert_eq!(all_realms.len(), 1);
+    assert_eq!(in_realm[0].invite_id, invite_id);
+    assert_eq!(in_realm[0].state, arkret_wire::InviteState::Pending);
+    assert_eq!(
+        in_realm[0].inviter,
+        arkret_wire::ActorId::account(creator.clone())
+    );
+    assert_eq!(in_realm[0].invitee_account_id.as_ref(), Some(&bob));
+    assert!(in_realm[0].third_party_invite.is_none());
+    assert!(in_realm[0].accepted_claim.is_none());
     assert_eq!(
         families.lifecycle,
         vec![(
@@ -4707,6 +4722,115 @@ async fn invite_create_writes_three_families_and_rejects_occupied_live_target() 
     );
     uow.commit_event(other).await.unwrap();
     assert_eq!(invite_families(&pool, &realm_id).await.live_target.len(), 2);
+}
+
+/// A 3PID create has a committed create Event and pending lifecycle at one
+/// cut, but no directed invitee slot. A missing policy allowlist fails before
+/// any accepted Event or derived commitment index can persist.
+#[tokio::test]
+async fn third_party_invite_create_reads_from_committed_event_and_lifecycle() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = creator_account(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let payload = serde_json::json!({
+        "third_party_invite": {
+            "oob_code_kind": "offline_token",
+            "token_commitment": format!("sha256:{}", "a".repeat(64)),
+            "token_salt_id": "salt-test-1410",
+            "token_entropy_bits": 128,
+            "max_claims": 1,
+            "verification_id": "ak:did_core:web:verifier.example",
+            "verification_public_key": "did:web:verifier.example#invite-1"
+        },
+        "expires_at": arkret_canonical::format_timestamp_canonical(at + chrono::TimeDelta::hours(12))
+    });
+    let refused = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::InviteThirdParty,
+        payload.clone(),
+    );
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &refused,
+        soland_storage::ConflictCode::CapabilityDenied,
+    )
+    .await;
+
+    let policy = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::RealmPolicyBundle,
+        serde_json::json!({
+            "policy_revision": 2,
+            "federation_policy": "closed",
+            "allowed_third_party_invite_verification_ids": ["ak:did_core:web:verifier.example"]
+        }),
+    );
+    uow.commit_event(policy.clone()).await.unwrap();
+    let mut long_lived_payload = payload.clone();
+    long_lived_payload["expires_at"] = serde_json::json!(
+        arkret_canonical::format_timestamp_canonical(at + chrono::TimeDelta::days(2))
+    );
+    let long_lived = realm_event_request_as(
+        &policy,
+        &creator,
+        arkret_wire::EventKind::InviteThirdParty,
+        long_lived_payload,
+    );
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &long_lived,
+        soland_storage::ConflictCode::FailedPrecondition,
+    )
+    .await;
+    let create = realm_event_request_as(
+        &policy,
+        &creator,
+        arkret_wire::EventKind::InviteThirdParty,
+        payload,
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let current = PgInviteCurrentResultStore { pool: pool.clone() };
+    let in_realm = current.invites_in_realm(Some(&realm_id)).await.unwrap();
+    let all_realms = current.invites_in_realm(None).await.unwrap();
+    assert_eq!(in_realm.len(), 1);
+    assert_eq!(all_realms.len(), 1);
+    let invite = &in_realm[0];
+    assert_eq!(
+        invite.invite_id,
+        arkret_wire::InviteId::from_event_id(&create.authority_commit.event.event_id)
+    );
+    assert_eq!(invite.state, arkret_wire::InviteState::Pending);
+    assert_eq!(invite.inviter, arkret_wire::ActorId::account(creator));
+    assert!(invite.invitee_account_id.is_none());
+    assert!(invite.accepted_claim.is_none());
+    assert_eq!(
+        invite
+            .third_party_invite
+            .as_ref()
+            .unwrap()
+            .verification_id
+            .as_str(),
+        "ak:did_core:web:verifier.example"
+    );
+    let families = invite_families(&pool, &realm_id).await;
+    assert_eq!(families.lifecycle.len(), 1);
+    assert!(families.directed.is_empty());
+    assert!(families.live_target.is_empty());
 }
 
 /// Real PostgreSQL: the same-cut evaluator refuses an actor without an

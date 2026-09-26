@@ -207,6 +207,7 @@ DROP TABLE IF EXISTS moderation_state_current_results CASCADE;
 DROP TABLE IF EXISTS moderation_report_current_results CASCADE;
 DROP TABLE IF EXISTS realm_set_default_strand_current_results CASCADE;
 DROP TABLE IF EXISTS invite_lifecycle_current_results CASCADE;
+DROP TABLE IF EXISTS invite_third_party_create_index CASCADE;
 DROP TABLE IF EXISTS invite_live_target_current_results CASCADE;
 DROP TABLE IF EXISTS invite_directed_invitee_current_results CASCADE;
 DROP TABLE IF EXISTS projection_morphs CASCADE;
