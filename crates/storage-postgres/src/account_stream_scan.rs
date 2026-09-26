@@ -19,10 +19,10 @@
 //! routed to it (`federation.md` §4.1.1): from each currently joined member's
 //! readable floor to the head, and for a member whose leave or ban ended its
 //! joined state, from its readable floor through that terminating Commit.
-//! Within the union each row is served in full only when that Station may
-//! hold the Event's complete canonical bytes; a row outside every interval or
-//! withheld from that Station keeps only its Commit, so the page stays one
-//! verifiable chain.
+//! A page stops before the first position outside every interval. Within
+//! them each row is served in full only when that Station may hold the
+//! Event's complete canonical bytes; a row withheld from that Station keeps
+//! only its Commit, so the page stays one verifiable chain.
 
 use arkret_wire::{
     AccountId, ActorId, CommitStreamRef, CommittedEventView, DidCoreId, ReadableFloor,
@@ -660,6 +660,16 @@ pub(crate) async fn scan_stream_for_peer(
                 .retain(|item| item.commit().stream_position <= last);
             page.truncated = false;
         }
+        // A position outside every interval is not this peer's to read, not
+        // even as a Commit: the page stops before it.
+        if let Some(cut) = page.committed_events.iter().position(|item| {
+            !intervals
+                .iter()
+                .any(|interval| interval.covers(item.commit().stream_position))
+        }) {
+            page.committed_events.truncate(cut);
+            page.truncated = false;
+        }
         let at = chrono::Utc::now();
         let mut full = Vec::new();
         let mut withheld = std::collections::BTreeSet::new();
@@ -669,10 +679,7 @@ pub(crate) async fn scan_stream_for_peer(
                     "a governing stream page holds only full rows".to_owned(),
                 )));
             };
-            let position = view.commit.stream_position;
-            if !intervals.iter().any(|interval| interval.covers(position))
-                || !peer_holds_full_event(conn, &view.event, peer, &joined, at).await?
-            {
+            if !peer_holds_full_event(conn, &view.event, peer, &joined, at).await? {
                 withheld.insert(view.commit.commit_id.clone());
             }
             full.push(view.clone());

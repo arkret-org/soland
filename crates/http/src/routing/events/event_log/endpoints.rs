@@ -90,8 +90,12 @@ async fn withheld_chain_node(
     let caller =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)
             .map_err(|_| AppError::not_found("committed event not found"))?;
-    if !crate::routing::realm_has_member(state, commit.realm_id.as_str(), &caller.to_string()).await
-    {
+    let joined = state
+        .authority_commits()
+        .realm_member_joined(&commit.realm_id, &caller)
+        .await
+        .map_err(|error| AppError::internal(format!("membership lookup failed: {error}")))?;
+    if !joined {
         return Err(AppError::not_found("committed event not found"));
     }
     json_ok(CommittedEventView::Withheld(

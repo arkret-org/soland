@@ -970,6 +970,14 @@ pub trait AuthorityCommitStore: Send + Sync {
         stream_ref: &CommitStreamRef,
     ) -> PersistenceResult<Option<arkret_wire::RealmCommit>>;
 
+    /// Whether `member` is joined in `realm_id` at this Station's typed
+    /// current, governing or replica.
+    async fn realm_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+    ) -> PersistenceResult<bool>;
+
     /// The withheld chain node this member Station holds for `event_id`.
     async fn committed_chain_node(
         &self,

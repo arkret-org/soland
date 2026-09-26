@@ -1102,6 +1102,14 @@ impl AuthorityCommitApplication {
         Ok(self.store().held_stream_head_commit(stream_ref).await?)
     }
 
+    pub async fn realm_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+    ) -> ServiceResult<bool> {
+        Ok(self.store().realm_member_joined(realm_id, member).await?)
+    }
+
     pub async fn committed_chain_node(
         &self,
         event_id: &arkret_wire::EventId,

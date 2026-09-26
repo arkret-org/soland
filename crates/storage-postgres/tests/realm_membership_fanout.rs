@@ -2355,7 +2355,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
     let leave = membership_request(&message.authority_commit, alice.clone(), &alice, "leave");
     uow.commit_event(leave.clone()).await.unwrap();
     let carol_join = membership_request(&leave.authority_commit, carol.clone(), &carol, "join");
-    uow.commit_event(carol_join).await.unwrap();
+    uow.commit_event(carol_join.clone()).await.unwrap();
     let leave_position = leave.authority_commit.commit.stream_position;
     let AccountStreamScan::Page(departed) = peer_page(
         &store,
@@ -2394,6 +2394,34 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
         panic!("a page after the leave is empty, not refused");
     };
     assert!(after_leave.committed_events.is_empty());
+
+    // Bob, another member of that Station, joins after Carol: the Station has
+    // a right again from Bob's join, but never to Carol's join between the
+    // two intervals -- not even as a Commit.
+    let bob = remote_member("peer-scan-bob");
+    let bob_join = membership_request(&carol_join.authority_commit, bob.clone(), &bob, "join");
+    uow.commit_event(bob_join.clone()).await.unwrap();
+    let bob_position = bob_join.authority_commit.commit.stream_position;
+    let AccountStreamScan::Page(gap) = peer_page(
+        &store,
+        scan_request(&realm_id, After(Some(leave_position)), 10),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("a page into the gap is empty, not refused");
+    };
+    assert!(gap.committed_events.is_empty() && !gap.truncated);
+    let AccountStreamScan::Page(rejoined) = peer_page(
+        &store,
+        scan_request(&realm_id, After(Some(bob_position - 1)), 10),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("the Station reads again from Bob's join");
+    };
+    assert_eq!(rows(&rejoined), vec![(bob_position, true)]);
 }
 
 /// A member Station's held stream: the hosted member's join opens it pending

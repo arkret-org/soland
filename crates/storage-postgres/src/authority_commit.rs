@@ -2249,6 +2249,24 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .transpose()
     }
 
+    async fn realm_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        member: &arkret_wire::ActorId,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        Ok(sql_query(
+            "SELECT EXISTS (SELECT 1 FROM member_state_current_results \
+             WHERE realm_id=$1 AND member_id=$2 AND membership='join') AS present",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(member.to_string())
+        .get_result::<PresenceRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .present)
+    }
+
     async fn committed_chain_node(
         &self,
         event_id: &arkret_wire::EventId,
