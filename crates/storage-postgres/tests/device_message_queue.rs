@@ -523,6 +523,7 @@ impl CommittedAgent {
         use arkret_models_collaboration::events_payloads::agent::{
             AgentKeyApprovalEvidence, AgentKeyApprovalEvidenceKind, AgentKeyAuthorizePayload,
         };
+        use soland_storage::ActorProfileStore as _;
 
         let TwoDeviceHistory {
             history: controller,
@@ -571,19 +572,68 @@ impl CommittedAgent {
             at,
         );
         let pcr_realm_id = genesis.realm_id.clone();
-        authority
-            .install_genesis_authority(&soland_storage::CurrentRealmAuthority {
-                realm_id: pcr_realm_id.clone(),
-                generation: 0,
-                service_id: station.clone(),
-                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
-                    genesis.event_id.clone(),
-                ),
-                last_handoff_ref: None,
+        // The controller provisions the Agent in its own PCR, forward-declaring
+        // the genesis it froze; the genesis is then its own submission.
+        let provision = device_authorization_history::sign_event(
+            arkret_wire::test_support::raw_event_at(
+                arkret_wire::EventKind::AgentProvision.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: controller.events[0].realm_id.clone(),
+                },
+                controller.account.principal_id.clone(),
+                controller.account.station_id.clone(),
+                serde_json::json!({
+                    "schema": "ak.schema.agent_provision.v1",
+                    "agent_id": agent_id,
+                    "controller_principal_id": controller.account.principal_id,
+                    "principal_control_realm_id": pcr_realm_id,
+                    "controller_authorization_ref": format!("{AGENT_DID}#managed-controller"),
+                    "agent_slug": "queue-agent",
+                    "accountability_scope": "agent_operator",
+                    "requested_scope_digest": format!("sha256:{}", "9".repeat(64)),
+                    "selector_visibility": "private",
+                    "created_at": arkret_canonical::format_timestamp_canonical(at)
+                }),
+                at,
+            )
+            .unwrap(),
+            controller.device_verification_method.clone(),
+            controller.founding_device_signing_seed,
+        );
+        let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+        let committed_at = Utc::now();
+        profiles
+            .admit_agent_provision(soland_storage::AgentProvisionAdmissionWrite {
+                commit: authority
+                    .prepare_self_event_transaction(
+                        &provision,
+                        &station,
+                        station_method(&station),
+                        &ed25519_dalek::SigningKey::from_bytes(&STATION_AUTHORITY_SEED),
+                        committed_at,
+                    )
+                    .await
+                    .unwrap(),
+                queued_at: committed_at,
             })
             .await
             .unwrap();
-        admit(&authority, &store, &station, &genesis).await;
+        let committed_at = Utc::now();
+        profiles
+            .admit_agent_pcr_genesis(soland_storage::AgentPcrGenesisAdmissionWrite {
+                commit: authority
+                    .prepare_genesis_transaction(
+                        &genesis,
+                        &station,
+                        station_method(&station),
+                        &ed25519_dalek::SigningKey::from_bytes(&STATION_AUTHORITY_SEED),
+                        committed_at,
+                    )
+                    .unwrap(),
+                queued_at: committed_at,
+            })
+            .await
+            .unwrap();
 
         let runtime = ed25519_dalek::SigningKey::from_bytes(&AGENT_RUNTIME_SEED);
         let verification_method =
@@ -783,43 +833,48 @@ fn controller_signed(
     )
 }
 
-/// Commit `event` at the stream head with a Station-signed `RealmCommit`.
-///
-/// Agent key and lifecycle Events have no production admission unit yet, so
-/// this fixture uses the kind-agnostic storage admission reserved for tests.
+fn station_method(station: &arkret_wire::DidCoreId) -> arkret_wire::DidUrl {
+    arkret_wire::DidUrl::new(format!(
+        "{}#authority",
+        device_authorization_history::did_web_station(station)
+    ))
+    .unwrap()
+}
+
+/// Commit one Agent PCR control Event at the stream head through the
+/// Station's Agent control unit with a Station-signed `RealmCommit`.
 async fn admit(
     authority: &soland_services::authority_commit::AuthorityCommitApplication,
     store: &soland_storage_postgres::PgAuthorityCommitStore,
     station: &arkret_wire::DidCoreId,
     event: &arkret_wire::Event,
 ) -> arkret_wire::RealmCommit {
-    use soland_storage::AuthorityCommitStore as _;
+    use soland_storage::ActorProfileStore as _;
 
-    let method = arkret_wire::DidUrl::new(format!(
-        "{}#authority",
-        device_authorization_history::did_web_station(station)
-    ))
-    .unwrap();
     let committed_at = Utc::now();
     let transaction = authority
         .prepare_self_event_transaction(
             event,
             station,
-            method,
+            station_method(station),
             &ed25519_dalek::SigningKey::from_bytes(&STATION_AUTHORITY_SEED),
             committed_at,
         )
         .await
         .unwrap();
-    assert_eq!(
-        store
-            .admit_event_transaction(&transaction, committed_at)
-            .await
-            .unwrap(),
-        soland_storage::AuthorityCommitWriteOutcome::Committed,
-        "the governing Station commits the Agent Event"
-    );
-    transaction.commit
+    let outcome = soland_storage_postgres::PgActorProfileStore {
+        pool: store.pool.clone(),
+    }
+    .admit_agent_control_event(soland_storage::AgentControlAdmissionWrite {
+        commit: transaction,
+        queued_at: committed_at,
+    })
+    .await
+    .unwrap();
+    let soland_storage::AgentControlAdmissionOutcome::Committed(commit) = outcome else {
+        panic!("the governing Station commits the Agent Event");
+    };
+    commit
 }
 
 /// An Agent-sent envelope for `recipient` and its batch, keyed exactly like

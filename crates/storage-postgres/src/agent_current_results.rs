@@ -245,7 +245,13 @@ pub(crate) async fn project_agent_key_in_connection(
             let key = arkret_wire::derive_agent_key_current_key(&payload.agent_id, &key_id)
                 .map_err(|error| invalid(error.to_string()))?;
             let mut entries = load_key(conn, &event.realm_id, &key).await?;
+            let observed = entries.len();
             entries.retain(|entry| active_event_id(entry).is_none());
+            if entries.len() == observed {
+                return Err(invalid(
+                    "Agent key revoke names a key with no active authorization",
+                ));
+            }
             entries.push(json!({"tag_id":format!("{}:1",event.event_id),"value":event.payload}));
             write_key(conn, event, commit, &payload.agent_id, &key_id, entries).await?;
         }

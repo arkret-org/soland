@@ -30,6 +30,7 @@ mod account_summary;
 mod accounts;
 mod actor_private_events;
 mod actor_profiles;
+mod agent_control;
 mod agent_current_results;
 mod agent_draft_pending_intents;
 mod agent_membership_cascades;

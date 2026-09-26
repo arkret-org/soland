@@ -5430,3 +5430,502 @@ async fn agent_pcr_genesis_requires_its_provision_declaration() {
     ));
     assert_eq!(agent_pcr_footprint(&pool, &agent_pcr).await, created);
 }
+
+/// One controller-executed Event in the Agent's PCR.
+fn agent_control_event(
+    controller_method: &DidUrl,
+    signing_seed: [u8; 32],
+    executed_by: &arkret_wire::AccountId,
+    agent: &arkret_wire::AccountId,
+    agent_pcr: &RealmId,
+    authorization_ref: &str,
+    kind: EventKind,
+    payload: serde_json::Value,
+    at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::Event {
+    let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+        kind.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: agent_pcr.clone(),
+        },
+        arkret_wire::ActorId::account(agent.clone()),
+        payload,
+        at,
+    )
+    .unwrap();
+    event.executed_by = Some(arkret_wire::ActorId::account(executed_by.clone()));
+    event.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(authorization_ref.to_owned()).unwrap());
+    device_history_fixture::sign_event(event, controller_method.clone(), signing_seed)
+}
+
+fn agent_key_authorization(
+    agent_did: &arkret_wire::Did,
+    controller: &DidCoreId,
+    fragment: &str,
+    runtime_seed: [u8; 32],
+    supersedes: Vec<(String, arkret_wire::EventId)>,
+    at: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    let method = format!("{agent_did}#{fragment}");
+    let submit = arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1;
+    let mut value = serde_json::json!({
+        "agent_id": arkret_wire::project_did_to_core_id(agent_did).unwrap(),
+        "key_id": method,
+        "verification_method": method,
+        "public_key": {
+            "kty": "OKP",
+            "kid": method,
+            "algorithm": "Ed25519",
+            "key": arkret_canonical::base64url_encode(
+                SigningKey::from_bytes(&runtime_seed).verifying_key().as_bytes()
+            )
+        },
+        "accountable_principal_id": controller,
+        "agent_key_scope": {
+            "actions": [submit],
+            "resources": [{"kind": "operation", "operation": submit}]
+        },
+        "audience": ["ak:did_core:web:pcr-contract.example"],
+        "issued_at": arkret_canonical::format_timestamp_canonical(at),
+        "approval_evidence": {
+            "kind": "pairing_request",
+            "request_canonical_digest": format!("sha256:{}", "d".repeat(64)),
+            "pairing_request_id": format!("agent_pairing_request:{}", uuid::Uuid::now_v7()),
+            "approved_by": controller
+        }
+    });
+    if !supersedes.is_empty() {
+        value["supersedes"] = serde_json::Value::Array(
+            supersedes
+                .into_iter()
+                .map(|(key_id, event_id)| {
+                    serde_json::json!({"key_id": key_id, "authorized_event_ref": event_id})
+                })
+                .collect(),
+        );
+    }
+    value
+}
+
+#[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+struct AgentControlFootprint {
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    active_keys: i64,
+    #[diesel(sql_type = Text)]
+    status: String,
+}
+
+async fn agent_control_footprint(pool: &PgPool, realm: &RealmId) -> AgentControlFootprint {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
+                (SELECT COUNT(*) FROM agent_key_current_results k, \
+                   jsonb_array_elements(k.value->'authorizations') a \
+                  WHERE k.realm_id=$1 AND a->'value' ? 'verification_method') AS active_keys, \
+                (SELECT value #>> '{}' FROM agent_status_current_results WHERE realm_id=$1) \
+                  AS status",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<AgentControlFootprint>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
+    use soland_storage::{
+        ActorProfileStore, AgentControlAdmissionOutcome, AgentControlAdmissionWrite,
+        AgentPcrGenesisAdmissionWrite, AgentProvisionAdmissionWrite,
+    };
+
+    let (pool, station) = contract_store().await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let admit_genesis = async |fixture: DeviceHistoryFixture| {
+        let genesis = assemble(station.clone(), fixture);
+        store
+            .admit_pcr_genesis_unit(&genesis, genesis.transactions[1].commit.committed_at)
+            .await
+            .unwrap();
+        genesis
+    };
+    let controller_fixture = fixture(&station);
+    let controller = controller_fixture.account.clone();
+    let controller_realm = RealmId::new(controller_fixture.events[0].realm_id.to_string()).unwrap();
+    let method = controller_fixture.device_verification_method.clone();
+    let seed = controller_fixture.founding_device_signing_seed;
+    let station_did = controller_fixture.station_did.clone();
+    let controller_genesis = admit_genesis(controller_fixture).await;
+    let stranger_fixture = fixture(&station);
+    let stranger = stranger_fixture.account.clone();
+    let stranger_method = stranger_fixture.device_verification_method.clone();
+    let stranger_seed = stranger_fixture.founding_device_signing_seed;
+    admit_genesis(stranger_fixture).await;
+    let head = controller_genesis.transactions[1].commit.clone();
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    let tx = |event: arkret_wire::Event, commit: arkret_wire::RealmCommit| {
+        let authority = soland_storage::CurrentRealmAuthority {
+            realm_id: commit.realm_id.clone(),
+            generation: 0,
+            service_id: station.clone(),
+            authority_ref: commit.authority_ref.clone(),
+            last_handoff_ref: None,
+        };
+        AuthorityCommitTransaction {
+            expected_authority: authority,
+            event,
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        }
+    };
+
+    // Provision and found the Agent.
+    let agent_did = arkret_wire::Did::new(format!(
+        "did:web:agent-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
+    let agent = arkret_wire::AccountId::new(agent_id.clone(), station.clone());
+    let delegation = format!("{agent_did}#managed-controller");
+    let genesis = device_history_fixture::sign_event(
+        arkret_bootstrap::build_agent_pcr_create(arkret_bootstrap::AgentPcrCreateEventInput {
+            payload: arkret_bootstrap::AgentPcrCreatePayloadInput {
+                agent_id: agent_id.clone(),
+                governance_station_id: station.clone(),
+                initial_resolution: arkret_models_identity::ResolutionCommitment {
+                    did: agent_did.clone(),
+                    method_history_head: format!("sha256:{}", "c".repeat(64)),
+                    version_id: "1-agent".to_owned(),
+                },
+                genesis_salt: arkret_wire::GenesisSalt::new(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                )
+                .unwrap(),
+                trust_domain: arkret_wire::TrustDomainId::new(
+                    "ak:trust_domain:pcr-contract.example".to_owned(),
+                )
+                .unwrap(),
+                initial_join_rule: arkret_wire::JoinRule::Closed,
+                initial_history_access: arkret_wire::HistoryAccess::SinceJoin,
+                initial_discoverability: arkret_wire::Discoverability::Secret,
+            },
+            executed_by: arkret_wire::ActorId::account(controller.clone()),
+            authorization_ref: arkret_wire::AuthorizationRef::new(delegation.clone()).unwrap(),
+            created_at: head.committed_at,
+        })
+        .unwrap()
+        .into_event(),
+        method.clone(),
+        seed,
+    );
+    let agent_pcr = RealmId::from_event_id(&genesis.event_id);
+    let mut provision = agent_provision_event(
+        &controller,
+        &controller_realm,
+        &method,
+        seed,
+        &agent_id,
+        &agent_pcr,
+        "control",
+        head.committed_at,
+        head.committed_at,
+    );
+    provision.payload.insert(
+        "controller_authorization_ref".to_owned(),
+        serde_json::json!(delegation),
+    );
+    let provision = device_history_fixture::sign_event(provision, method.clone(), seed);
+    let provision_commit = station_successor(&head, &provision, &station_did, 1);
+    profiles
+        .admit_agent_provision(AgentProvisionAdmissionWrite {
+            commit: tx(provision.clone(), provision_commit.clone()),
+            queued_at: provision_commit.committed_at,
+        })
+        .await
+        .unwrap();
+    let genesis_commit = station_genesis_commit(
+        &head,
+        &genesis,
+        &station_did,
+        head.committed_at + chrono::TimeDelta::seconds(2),
+    );
+    profiles
+        .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
+            commit: tx(genesis.clone(), genesis_commit.clone()),
+            queued_at: genesis_commit.committed_at,
+        })
+        .await
+        .unwrap();
+
+    let t0 = genesis_commit.committed_at;
+    let control = |executed_by: &arkret_wire::AccountId,
+                   signer_method: &DidUrl,
+                   signing_seed: [u8; 32],
+                   kind: EventKind,
+                   payload: serde_json::Value| {
+        agent_control_event(
+            signer_method,
+            signing_seed,
+            executed_by,
+            &agent,
+            &agent_pcr,
+            &delegation,
+            kind,
+            payload,
+            t0,
+        )
+    };
+    let admit = async |event: &arkret_wire::Event, previous: &arkret_wire::RealmCommit| {
+        profiles
+            .admit_agent_control_event(AgentControlAdmissionWrite {
+                commit: tx(
+                    event.clone(),
+                    station_successor(previous, event, &station_did, 1),
+                ),
+                queued_at: previous.committed_at,
+            })
+            .await
+    };
+    let committed =
+        |outcome: Result<AgentControlAdmissionOutcome, PersistenceError>| match outcome.unwrap() {
+            AgentControlAdmissionOutcome::Committed(commit) => commit,
+            AgentControlAdmissionOutcome::Duplicate(_) => panic!("expected a fresh commit"),
+        };
+    let founded = agent_control_footprint(&pool, &agent_pcr).await;
+    assert_eq!(founded.status, "active");
+    assert_eq!(founded.active_keys, 0);
+
+    // The first runtime key.
+    let first = control(
+        &controller,
+        &method,
+        seed,
+        EventKind::AgentKeyAuthorize,
+        agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            "runtime-1",
+            [0x61; 32],
+            Vec::new(),
+            t0,
+        ),
+    );
+    let first_commit = committed(admit(&first, &genesis_commit).await);
+    assert!(matches!(
+        admit(&first, &first_commit).await.unwrap(),
+        AgentControlAdmissionOutcome::Duplicate(stored) if stored == first_commit
+    ));
+    let keyed = agent_control_footprint(&pool, &agent_pcr).await;
+    assert_eq!(keyed.active_keys, 1);
+
+    // A second key that names a stale (empty) active set, a key the
+    // controller's device did not sign, and an Event executed by another
+    // account the provision does not bind all write nothing.
+    let stale = control(
+        &controller,
+        &method,
+        seed,
+        EventKind::AgentKeyAuthorize,
+        agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            "runtime-2",
+            [0x62; 32],
+            Vec::new(),
+            t0,
+        ),
+    );
+    assert_eq!(
+        admit(&stale, &first_commit)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(ConflictCode::ReducerProjectionFailed)
+    );
+    let forged = control(
+        &controller,
+        &method,
+        [0x5c; 32],
+        EventKind::AgentKeyAuthorize,
+        agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            "runtime-2",
+            [0x62; 32],
+            vec![(format!("{agent_did}#runtime-1"), first.event_id.clone())],
+            t0,
+        ),
+    );
+    assert_eq!(
+        admit(&forged, &first_commit)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(ConflictCode::SignatureInvalid)
+    );
+    let hijacked = control(
+        &stranger,
+        &stranger_method,
+        stranger_seed,
+        EventKind::AgentKeyAuthorize,
+        agent_key_authorization(
+            &agent_did,
+            &stranger.principal_id,
+            "runtime-2",
+            [0x62; 32],
+            vec![(format!("{agent_did}#runtime-1"), first.event_id.clone())],
+            t0,
+        ),
+    );
+    assert_eq!(
+        admit(&hijacked, &first_commit)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(ConflictCode::FailedPrecondition)
+    );
+    assert_eq!(agent_control_footprint(&pool, &agent_pcr).await, keyed);
+
+    // Replacement names the exact active set and swaps the key atomically.
+    let second = control(
+        &controller,
+        &method,
+        seed,
+        EventKind::AgentKeyAuthorize,
+        agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            "runtime-2",
+            [0x62; 32],
+            vec![(format!("{agent_did}#runtime-1"), first.event_id.clone())],
+            t0,
+        ),
+    );
+    let second_commit = committed(admit(&second, &first_commit).await);
+    assert_eq!(
+        agent_control_footprint(&pool, &agent_pcr).await.active_keys,
+        1
+    );
+
+    // Revoking the superseded key finds nothing active; revoking the current
+    // key empties the set.
+    let revoke = |key: &str| {
+        control(
+            &controller,
+            &method,
+            seed,
+            EventKind::AgentKeyRevoke,
+            serde_json::json!({
+                "agent_id": agent_id,
+                "key_id": format!("{agent_did}#{key}"),
+                "revoked_by": controller.principal_id,
+                "revoked_at": arkret_canonical::format_timestamp_canonical(t0)
+            }),
+        )
+    };
+    assert_eq!(
+        admit(&revoke("runtime-1"), &second_commit)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(ConflictCode::ReducerProjectionFailed)
+    );
+    let revoked_commit = committed(admit(&revoke("runtime-2"), &second_commit).await);
+    assert_eq!(
+        agent_control_footprint(&pool, &agent_pcr).await.active_keys,
+        0
+    );
+
+    // The lifecycle follows the registered FSM from its accepted status.
+    let status = |kind: EventKind, transition: &str, previous: &str| {
+        control(
+            &controller,
+            &method,
+            seed,
+            kind,
+            serde_json::json!({
+                "transition": transition,
+                "previous_status": previous,
+                "status_changed_at": arkret_canonical::format_timestamp_canonical(t0)
+            }),
+        )
+    };
+    let paused_commit = committed(
+        admit(
+            &status(EventKind::SelfAgentPause, "pause", "active"),
+            &revoked_commit,
+        )
+        .await,
+    );
+    assert_eq!(
+        agent_control_footprint(&pool, &agent_pcr).await.status,
+        "paused"
+    );
+    assert_eq!(
+        admit(
+            &status(EventKind::SelfAgentResume, "resume", "active"),
+            &paused_commit,
+        )
+        .await
+        .unwrap_err()
+        .conflict_code(),
+        Some(ConflictCode::ReducerProjectionFailed)
+    );
+    let deactivated_commit = committed(
+        admit(
+            &status(EventKind::SelfAgentDeactivate, "deactivate", "paused"),
+            &paused_commit,
+        )
+        .await,
+    );
+    let terminal = agent_control_footprint(&pool, &agent_pcr).await;
+    assert_eq!(terminal.status, "deactivated");
+
+    // Terminal: no key may be attached again.
+    let after = control(
+        &controller,
+        &method,
+        seed,
+        EventKind::AgentKeyAuthorize,
+        agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            "runtime-3",
+            [0x63; 32],
+            Vec::new(),
+            t0,
+        ),
+    );
+    assert_eq!(
+        admit(&after, &deactivated_commit)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(ConflictCode::FailedPrecondition)
+    );
+
+    // The generic commit path never writes an Agent control Event.
+    store
+        .queue_event(&after, deactivated_commit.committed_at)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .commit_transaction(&tx(
+                after.clone(),
+                station_successor(&deactivated_commit, &after, &station_did, 1),
+            ))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        agent_control_footprint(&pool, &agent_pcr).await.active_keys,
+        0
+    );
+    assert_eq!(terminal.status, "deactivated");
+}

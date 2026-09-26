@@ -76,7 +76,13 @@ pub(crate) async fn admit_agent_provision_in_connection(
     let values = record(event, &payload, commit.clone())?;
     // The Event actor is the controller account (checked above), so the
     // signer the cut verifies is the controller's own active device.
-    if let PcrSelfEventCut::Known(stored) = verify_pcr_self_event(conn, &write.commit, WHAT).await?
+    if let PcrSelfEventCut::Known(stored) = verify_pcr_self_event(
+        conn,
+        &write.commit,
+        Some(payload.controller_authorization_ref.as_str()),
+        WHAT,
+    )
+    .await?
     {
         return Ok(AgentProvisionAdmissionOutcome::Duplicate(record(
             event, &payload, stored,

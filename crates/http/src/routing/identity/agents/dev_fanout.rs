@@ -12,25 +12,7 @@ use serde_json::Value;
 use soland_http::error::AppError;
 
 use super::SessionRecord;
-use crate::routing::events::event_log::submit_one_error_to_app_error;
 use crate::state::AppState;
-
-fn agent_fanout_submit_error(
-    kind: &str,
-    status: salvo::http::StatusCode,
-    wire_code: String,
-    detail: String,
-) -> AppError {
-    // One shared mapping for every surface that submits a caller-signed Event:
-    // see `event_log::submit_one_error_to_app_error` for why an unregistered
-    // reducer reason keeps its HTTP class instead of becoming a 500.
-    submit_one_error_to_app_error(
-        &format!("agent fan-out submit failed for {kind}"),
-        status,
-        wire_code,
-        &detail,
-    )
-}
 
 /// Resolve the authenticated controller's own Principal Control Realm. Agent
 /// provisioning may write controller-owned facts there, but it must never
@@ -296,22 +278,81 @@ pub(super) fn validate_durable_agent_lifecycle(
     Ok(())
 }
 
-/// Submit an already validated, controller-signed Event through ordinary Event
-/// admission while preserving the reducer's wire error.
+/// Admit an already validated, controller-signed Agent PCR control Event
+/// (`ak.agent.key.*`, `ak.self.agent.*`) through the Agent control unit: the
+/// unit decides the provision binding, the controller device, accountability
+/// and the kind's lifecycle or key-set gate at the Agent PCR cut.
 pub(super) async fn submit_signed_agent_event(
     state: &AppState,
     session: &SessionRecord,
     submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<String, AppError> {
     let event = &submission.event;
-    let event_kind = event.kind.as_str().to_owned();
+    if submission.approval_signatures.is_some() {
+        return Err(AppError::schema_violation(
+            "an Agent control Event carries no approval signatures",
+        ));
+    }
+    if event
+        .executed_by
+        .as_ref()
+        .and_then(arkret_wire::ActorId::as_account_id)
+        .map(|account| account.principal_id.as_str())
+        != Some(session.actor.as_str())
+    {
+        return Err(AppError::capability_denied(
+            "an Agent control Event is executed by the authenticated controller",
+        ));
+    }
     let event_id = event.event_id.to_string();
-    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
+    let committed_at = chrono::Utc::now();
+    let method = arkret_wire::DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let transaction = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
+        .await
+        .map_err(|error| agent_control_admission_error(error.conflict_code(), error.detail()))?;
+    state
+        .persistence()
+        .admit_agent_control_event(soland_storage::AgentControlAdmissionWrite {
+            commit: transaction,
+            queued_at: committed_at,
+        })
         .await
         .map_err(|error| {
-            agent_fanout_submit_error(&event_kind, error.status(), error.code(), error.message())
+            agent_control_admission_error(error.conflict_code(), &error.to_string())
         })?;
     Ok(event_id)
+}
+
+/// The Agent control unit's refusals: a registered reducer projection that
+/// cannot apply (a stale `supersedes`, a revoke with nothing active, a status
+/// edge outside the FSM) and a missing accountability record are
+/// `failed_precondition` with their reason; the rest share the PCR self-Event
+/// mapping.
+fn agent_control_admission_error(
+    code: Option<soland_storage::ConflictCode>,
+    detail: &str,
+) -> AppError {
+    use soland_storage::ConflictCode;
+    match code {
+        Some(ConflictCode::ReducerProjectionFailed) => {
+            AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+                .with_reason_code(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED)
+        }
+        other => crate::routing::identity::account::profile_admission_error(other, detail),
+    }
 }
 
 /// AKP-0008 §4.11 — submit a durable lifecycle transition event
@@ -367,26 +408,6 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
-    }
-
-    #[test]
-    fn reducer_rejection_keeps_failed_precondition_reason() {
-        let error = agent_fanout_submit_error(
-            "ak.capability.grant",
-            salvo::http::StatusCode::PRECONDITION_FAILED,
-            "grant_exceeds_issuer_authority".to_owned(),
-            "grant_exceeds_issuer_authority".to_owned(),
-        );
-
-        assert_eq!(error.code, ErrorCode::FailedPrecondition);
-        assert_eq!(
-            error.reason_code.as_deref(),
-            Some("grant_exceeds_issuer_authority")
-        );
-        assert_eq!(
-            error.http_status(),
-            soland_http::error::error_http_status(error.code)
-        );
     }
 
     #[test]

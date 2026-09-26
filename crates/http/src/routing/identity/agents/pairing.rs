@@ -626,65 +626,65 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             "pairing controller Account belongs to another Station",
         ));
     }
-    let events = state
-        .event_queries()
-        .accepted_events_for_actor(&agent_actor.to_string())
+    // The exact frozen command either has a covering RealmCommit or the
+    // pairing stays awaiting it; a cached Event row alone proves nothing.
+    let pending_event_id = EventId::new(pending_authorize_event_id.clone()).map_err(|error| {
+        AppError::internal(format!("pending authorize Event id is invalid: {error}"))
+    })?;
+    let Some(accepted) = state
+        .authority_commits()
+        .committed_event(&pending_event_id)
         .await
         .map_err(|error| {
             AppError::internal(format!("authorization reconciliation failed: {error}"))
-        })?;
-    let accepted = events.into_iter().find(|event| {
-        if event.event_id != pending_authorize_event_id
-            || event.kind != arkret_wire::event_kind_str::AGENT_KEY_AUTHORIZE
-            || event.actor_id != agent_actor.to_string()
-        {
-            return false;
-        }
-        let envelope = &event.envelope;
-        let payload = envelope.get("payload").unwrap_or(&Value::Null);
-        let evidence = payload.get("approval_evidence").unwrap_or(&Value::Null);
-        envelope_actor(envelope, "executed_by").as_ref() == Some(&controller_actor)
-            && envelope.get("authorization_ref").and_then(Value::as_str)
-                == Some(expected_authorization_ref.as_str())
-            && envelope.get("realm_id").and_then(Value::as_str) == Some(expected_realm_id.as_str())
-            && payload.get("agent_id").and_then(Value::as_str) == Some(agent_id.as_str())
-            && payload.get("verification_method").and_then(Value::as_str)
-                == Some(verification_method.as_str())
-            && payload.get("public_key") == key_authorization_event.payload.get("public_key")
-            && payload
-                .get("accountable_principal_id")
-                .and_then(Value::as_str)
-                == Some(controller_principal_id.as_str())
-            && payload
-                .get("agent_key_scope")
-                .is_some_and(|scope| agent_key_scope_within_requested_scope(&agent_record, scope))
-            && payload
-                .get("audience")
-                .and_then(Value::as_array)
-                .is_some_and(|audience| {
-                    audience
-                        .iter()
-                        .any(|entry| entry.as_str() == Some(state.service_id().as_str()))
-                })
-            && evidence.get("kind").and_then(Value::as_str) == Some("pairing_request")
-            && evidence.get("approved_by").and_then(Value::as_str)
-                == Some(controller_principal_id.as_str())
-            && evidence.get("pairing_request_id").and_then(Value::as_str)
-                == Some(pairing_request_id.as_str())
-            && evidence
-                .get("request_canonical_digest")
-                .and_then(Value::as_str)
-                == Some(expected_request_digest.as_str())
-    });
-    let Some(accepted) = accepted else {
+        })?
+    else {
         return Ok(agent_record);
     };
-    let authorize_event: arkret_wire::Event = serde_json::from_value(accepted.envelope.clone())
-        .map_err(|error| {
-            AppError::internal(format!(
-                "accepted Agent authorization Event is invalid: {error}"
-            ))
-        })?;
+    let envelope = serde_json::to_value(&accepted.event)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let payload = envelope.get("payload").unwrap_or(&Value::Null);
+    let evidence = payload.get("approval_evidence").unwrap_or(&Value::Null);
+    let matches = accepted.event.kind == arkret_wire::EventKind::AgentKeyAuthorize
+        && accepted.event.actor_id == agent_actor
+        && envelope_actor(&envelope, "executed_by").as_ref() == Some(&controller_actor)
+        && envelope.get("authorization_ref").and_then(Value::as_str)
+            == Some(expected_authorization_ref.as_str())
+        && accepted.event.realm_id.as_str() == expected_realm_id
+        && payload.get("agent_id").and_then(Value::as_str) == Some(agent_id.as_str())
+        && payload.get("verification_method").and_then(Value::as_str)
+            == Some(verification_method.as_str())
+        && payload.get("public_key") == key_authorization_event.payload.get("public_key")
+        && payload
+            .get("accountable_principal_id")
+            .and_then(Value::as_str)
+            == Some(controller_principal_id.as_str())
+        && payload
+            .get("agent_key_scope")
+            .is_some_and(|scope| agent_key_scope_within_requested_scope(&agent_record, scope))
+        && payload
+            .get("audience")
+            .and_then(Value::as_array)
+            .is_some_and(|audience| {
+                audience
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(state.service_id().as_str()))
+            })
+        && evidence.get("kind").and_then(Value::as_str) == Some("pairing_request")
+        && evidence.get("approved_by").and_then(Value::as_str)
+            == Some(controller_principal_id.as_str())
+        && evidence.get("pairing_request_id").and_then(Value::as_str)
+            == Some(pairing_request_id.as_str())
+        && evidence
+            .get("request_canonical_digest")
+            .and_then(Value::as_str)
+            == Some(expected_request_digest.as_str());
+    if !matches {
+        return Err(pairing_failed_precondition(
+            "accepted authorize Event differs from the frozen pairing command",
+        ));
+    }
+    let authorize_event = accepted.event.clone();
     if authorize_event.event_id != key_authorization_event.event_id
         || authorize_event.payload != key_authorization_event.payload
     {
@@ -692,26 +692,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             "accepted Event differs from the frozen controller command",
         ));
     }
-    // The accepted Commit and the current projection are durable authority
-    // evidence. A cached Event row alone cannot activate the runtime key.
-    let committed = state
-        .authority_commits()
-        .committed_event(&authorize_event.event_id)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("Agent authorization Commit unavailable: {error}"))
-        })?
-        .ok_or_else(|| {
-            pairing_failed_precondition("Agent authorization Event has no RealmCommit")
-        })?;
-    if committed.event != authorize_event
-        || committed.commit.event_ref != authorize_event.event_id
-        || committed.event.realm_id.as_str() != expected_realm_id
-    {
-        return Err(pairing_failed_precondition(
-            "Agent authorization Commit and Event disagree",
-        ));
-    }
+    let committed = accepted;
     let (active_authorizations, visible_heads, lifecycle) =
         accepted_agent_key_authorization_snapshot(state, &agent_record).await?;
     let covered = visible_heads.iter().any(|head| {
@@ -723,7 +704,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &active_authorizations,
         &(
             authorized_key.agent_key_id.to_string(),
-            accepted.event_id.clone(),
+            committed.event.event_id.to_string(),
         ),
     ) else {
         return Ok(agent_record);
@@ -743,7 +724,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         if outcome == AgentKeyPairActivationState::Active {
             let mut frozen_agent = agent_record.clone();
             frozen_agent.paired_pairing_request_id = Some(pairing_request_id.clone());
-            frozen_agent.authorized_event_ref = Some(accepted.event_id.clone());
+            frozen_agent.authorized_event_ref = Some(committed.event.event_id.to_string());
             frozen_agent.authorized_verification_method = Some(verification_method.clone());
             frozen_agent.authorized_public_key_digest =
                 Some(authorized_public_key_digest.as_str().to_owned());
@@ -787,7 +768,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             .unwrap_or_default(),
         pairing_request_id,
         paired_request_digest,
-        authorized_event_ref: accepted.event_id,
+        authorized_event_ref: committed.event.event_id.to_string(),
         authorized_verification_method: verification_method,
         authorized_public_key_digest: authorized_public_key_digest.as_str().to_owned(),
         signer_resolution_evidence_ref,
@@ -985,13 +966,6 @@ pub(super) async fn agent_key_pair(
     } else {
         aa.authenticated_session(state, req).await?
     };
-    // The old EventInitialSubmission/Seal authoring path cannot satisfy the
-    // current Agent unit gate. Until the authority protocol port is wired,
-    // reject before recording a pairing intent or consuming its challenge.
-    let _ = session;
-    return Err(pairing_failed_precondition(
-        "Agent pairing authority commit provider is unavailable",
-    ));
     let proposed_authorization =
         arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload::try_from(
             &body.authorize_event.event,
@@ -1212,19 +1186,13 @@ pub(super) async fn agent_key_pair(
             "runtime approval was already consumed or changed",
         ));
     }
-    let authorize_event_value = serde_json::to_value(&body.authorize_event.event)
-        .map_err(|error| AppError::param_invalid(format!("authorize_event invalid: {error}")))?;
     // Development and production consume the exact controller-signed Event
     // supplied by the client. A server-generated substitute would break the
     // Agent-PCR authorship and idempotency contract.
     let event_id = submit_production_key_authorize_event(
         state,
         &session,
-        &authorize_event_value,
         &agent_record,
-        agent_id,
-        &proposed_authorization.verification_method,
-        runtime_public_key_digest.as_str(),
         body.authorize_event.clone(),
     )
     .await?;
@@ -1580,19 +1548,28 @@ async fn finalize_terminal_account_notification(
     Ok(())
 }
 
+/// Admit the exact controller-signed `ak.agent.key.authorize` in the Agent
+/// PCR. The Agent control unit rechecks the provision binding, the
+/// controller's active device, a non-terminal lifecycle and the exact active
+/// set it supersedes at the Agent PCR cut; activation follows the accepted
+/// Commit through the reconciler.
 pub(super) async fn submit_production_key_authorize_event(
-    _state: &AppState,
-    _session: &SessionRecord,
-    _envelope: &Value,
-    _agent_record: &AgentPrincipalRecord,
-    _agent_id: &str,
-    _verification_method: &str,
-    _authorized_public_key_digest: &str,
-    _submission: arkret_wire::EventAdmissionSubmission,
+    state: &AppState,
+    session: &SessionRecord,
+    agent_record: &AgentPrincipalRecord,
+    submission: arkret_wire::EventAdmissionSubmission,
 ) -> Result<String, AppError> {
-    Err(pairing_failed_precondition(
-        "Agent pairing authority commit provider is unavailable",
-    ))
+    let event = &submission.event;
+    if event.kind != arkret_wire::EventKind::AgentKeyAuthorize
+        || event.realm_id.as_str() != agent_record.principal_control_realm_id
+        || event.authorization_ref.as_deref()
+            != Some(agent_record.controller_authorization_ref.as_str())
+    {
+        return Err(pairing_failed_precondition(
+            "authorize Event is not the Agent PCR key authorization of this pairing",
+        ));
+    }
+    super::dev_fanout::submit_signed_agent_event(state, session, submission).await
 }
 
 fn pairing_account_actor(principal: &str, station: &str) -> Result<arkret_wire::ActorId, AppError> {

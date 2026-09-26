@@ -240,12 +240,16 @@ pub(crate) async fn verify_device_signer_in_connection(
 pub(crate) async fn verify_pcr_self_event(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
+    authorization_ref: Option<&str>,
     what: &str,
 ) -> Result<PcrSelfEventCut, PgTransactionError> {
     let event = &transaction.event;
     let commit = &transaction.commit;
     if event.executed_by.is_some()
-        || event.authorization_ref.is_some()
+        || event
+            .authorization_ref
+            .as_deref()
+            .is_some_and(|reference| Some(reference) != authorization_ref)
         || event.applet_id.is_some()
         || commit.event_ref != event.event_id
         || commit.realm_id != event.realm_id
@@ -481,7 +485,7 @@ pub(crate) async fn admit_profile_in_connection(
             "the Actor Profile unit admits only ak.profile.create or ak.profile.update",
         ));
     }
-    let signer = match verify_pcr_self_event(conn, &write.commit, WHAT).await? {
+    let signer = match verify_pcr_self_event(conn, &write.commit, None, WHAT).await? {
         PcrSelfEventCut::Known(stored) => {
             let record = profile_result_at(conn, &stored.commit_id)
                 .await?
@@ -695,7 +699,7 @@ pub(crate) async fn admit_accountability_grant_in_connection(
     let grant: AccountabilityGrantPayload = payload(event, WHAT)?;
     let value = AccountabilityProjection::from_grant(&grant)
         .map_err(|error| rejected(ConflictCode::SchemaViolation, &error.to_string()))?;
-    let signer = match verify_pcr_self_event(conn, &write.commit, WHAT).await? {
+    let signer = match verify_pcr_self_event(conn, &write.commit, None, WHAT).await? {
         PcrSelfEventCut::Known(stored) => {
             let record = accountability_result_at(conn, &stored.commit_id)
                 .await?
@@ -857,6 +861,25 @@ impl soland_storage::ActorProfileStore for PgActorProfileStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             crate::agent_pcr_genesis::admit_agent_pcr_genesis_in_connection(conn, &write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn admit_agent_control_event(
+        &self,
+        write: soland_storage::AgentControlAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AgentControlAdmissionOutcome> {
+        write.commit.validate().map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "invalid Agent control authority transaction: {error}"
+            ))
+        })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_control::admit_agent_control_event_in_connection(conn, &write).await
         })
         .await
         .map_err(PgTransactionError::into_persistence)

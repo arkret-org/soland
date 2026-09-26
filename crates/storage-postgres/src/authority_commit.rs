@@ -12,10 +12,7 @@ use super::{
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
     Text, Timestamptz, Value, async_trait, ids, pg_conn, sql_query,
 };
-use crate::agent_current_results::{
-    lock_agent_producer_current, project_agent_key_in_connection,
-    project_agent_status_in_connection,
-};
+use crate::agent_current_results::lock_agent_producer_current;
 use crate::capability_grant_current_results::{
     commit_capability_grant_current_result_in_connection,
     commit_realm_authority_root_current_result_in_connection,
@@ -1157,6 +1154,20 @@ pub(crate) async fn commit_verified_agent_provision_in_connection(
     .await
 }
 
+/// Only the Agent control unit may call this after the provision binding,
+/// the controller device cut and the kind's gate under the Agent PCR lock.
+pub(crate) async fn commit_verified_agent_control_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::AgentControl,
+    )
+    .await
+}
+
 /// Only the Agent PCR genesis unit may call this after the provision
 /// declaration reverse lookup and the controller device cut.
 pub(crate) async fn commit_verified_agent_pcr_genesis_in_connection(
@@ -1198,6 +1209,7 @@ enum VerifiedPcrUnit {
     ProfileOrAccountability,
     AgentProvision,
     AgentPcrGenesis,
+    AgentControl,
 }
 
 fn is_agent_pcr_genesis(event: &arkret_wire::Event) -> bool {
@@ -1270,6 +1282,14 @@ async fn commit_transaction_in_connection_with_device_guard(
         return Err(
             PersistenceError::Conflict("agent_pcr_genesis_unit_required".to_owned()).into(),
         );
+    }
+    // Agent key and lifecycle Events decide the controller delegation and
+    // the Agent's current key set and lifecycle at one Agent PCR cut; only
+    // their unit may commit them.
+    if crate::agent_control::is_agent_control_kind(&transaction.event.kind)
+        && verified_unit != VerifiedPcrUnit::AgentControl
+    {
+        return Err(PersistenceError::Conflict("agent_control_unit_required".to_owned()).into());
     }
     // ak.agent.provision projects four typed results atomically
     // (key-management.md section 3.6.3); only its unit writes that set.
@@ -1806,10 +1826,6 @@ impl PgAuthorityCommitStore {
                     &transaction.commit,
                 )
                 .await?;
-                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
-                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
             }
             crate::account_summary::publish_realm_account_summary_in_connection(
                 conn,
@@ -2565,10 +2581,6 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     &transaction.commit,
                 )
                 .await?;
-                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
-                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
             }
             Ok(outcome)
         })
@@ -2610,10 +2622,6 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     &transaction.commit,
                 )
                 .await?;
-                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
-                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
             }
             Ok(outcome)
         })
@@ -2641,10 +2649,6 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     &transaction.commit,
                 )
                 .await?;
-                project_agent_status_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
-                project_agent_key_in_connection(conn, &transaction.event, &transaction.commit)
-                    .await?;
             }
             Ok(outcome)
         })

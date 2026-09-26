@@ -107,6 +107,21 @@ pub enum AgentPcrGenesisAdmissionOutcome {
     Duplicate(RealmCommit),
 }
 
+/// One controller-executed Agent PCR control Event (`ak.agent.key.authorize`,
+/// `ak.agent.key.revoke`, `ak.self.agent.{pause,resume,deactivate}`) and the
+/// Agent PCR Commit prepared at the head it was read against.
+#[derive(Clone, Debug)]
+pub struct AgentControlAdmissionWrite {
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AgentControlAdmissionOutcome {
+    Committed(RealmCommit),
+    Duplicate(RealmCommit),
+}
+
 #[async_trait]
 pub trait ActorProfileStore: Send + Sync {
     /// Admit one profile Event under the owner's PCR authority lock: the
@@ -146,6 +161,17 @@ pub trait ActorProfileStore: Send + Sync {
         &self,
         write: AgentPcrGenesisAdmissionWrite,
     ) -> PersistenceResult<AgentPcrGenesisAdmissionOutcome>;
+
+    /// Admit one Agent PCR control Event under the Agent PCR lock: the
+    /// provision binding, the controller device's active status and proof,
+    /// the controller's accountability for the Agent and the kind's
+    /// lifecycle or key-set gate all hold at that cut, and the Event, its
+    /// Commit and the registered Agent results are written together. Any
+    /// refusal writes nothing.
+    async fn admit_agent_control_event(
+        &self,
+        write: AgentControlAdmissionWrite,
+    ) -> PersistenceResult<AgentControlAdmissionOutcome>;
 
     /// The current profile of the account's local PCR, with the exact Event
     /// and Commit that produced it.

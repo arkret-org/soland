@@ -129,6 +129,17 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Admit one controller-executed Agent PCR control Event through its unit.
+    pub async fn admit_agent_control_event(
+        &self,
+        write: soland_storage::AgentControlAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AgentControlAdmissionOutcome> {
+        self.persistence
+            .actor_profiles()
+            .admit_agent_control_event(write)
+            .await
+    }
+
     /// Admit one issuer-signed accountability grant through its PCR unit.
     pub async fn admit_accountability_grant(
         &self,
