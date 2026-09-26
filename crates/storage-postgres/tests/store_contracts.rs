@@ -9,14 +9,14 @@ mod pcr_genesis;
 mod support;
 
 use soland_storage::contract_tests::{
-    AppletFormalCommitContractStores, ConsentCommitContractStores, EventCommitContractStores,
-    assert_account_localpart_remove_contract, assert_applet_formal_commit_transaction_contract,
-    assert_atomic_event_admission_contract, assert_consent_projection_commit_contract,
-    assert_device_message_snapshot_guard_contract, assert_event_commit_unit_of_work_contract,
-    assert_federation_outbox_store_contract, assert_idempotency_store_contract,
-    assert_invite_new_source_ledger_contract, assert_last_resort_claim_ledger_contract,
-    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
-    assert_organization_registration_store_contract,
+    AppletFormalCommitContractStores, ConsentCommitContractStores, EventCommitContractMessages,
+    EventCommitContractStores, assert_account_localpart_remove_contract,
+    assert_applet_formal_commit_transaction_contract, assert_atomic_event_admission_contract,
+    assert_consent_projection_commit_contract, assert_device_message_snapshot_guard_contract,
+    assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
+    assert_idempotency_store_contract, assert_invite_new_source_ledger_contract,
+    assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
+    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
@@ -2485,6 +2485,10 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
     let contacts = PgContactStore { pool: pool.clone() };
     let invite_policies = PgInviteReceivePolicyStore { pool: pool.clone() };
     let namespace = format!("postgres-event-commit-{}", uuid::Uuid::now_v7());
+    let discussion = ordinary_realm::open_discussion(&pool, &namespace).await;
+    let at = discussion.committed_at();
+    let accepted = discussion.message_after(&discussion.head.authority_commit, "accepted", at);
+    let rollback = discussion.message_after(&accepted.authority_commit, "rolled back", at);
     assert_event_commit_unit_of_work_contract(
         EventCommitContractStores {
             unit_of_work: &unit_of_work,
@@ -2496,6 +2500,7 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
             contacts: &contacts,
             invite_policies: &invite_policies,
         },
+        EventCommitContractMessages { accepted, rollback },
         &namespace,
     )
     .await;

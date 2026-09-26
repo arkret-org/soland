@@ -38,9 +38,9 @@ use super::{
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
     OrganizationRegistrationTerminalReason, PeerClaimTerminalTransition,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
-    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
-    RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventStore,
+    RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput, RealmMetaRecord,
+    RealmMetaStore, applet_effective_scope_key,
 };
 
 /// Shared account-localpart removal semantics for every persistence adapter.
@@ -2322,8 +2322,56 @@ pub async fn assert_atomic_event_admission_contract(
     );
 }
 
+/// Two consecutive local Messages a domain writer admits: `accepted` extends
+/// the stream head of an admitted ordinary collaboration Realm with an active
+/// default discussion Strand, and `rollback` is the next Message after it.
+///
+/// Every Realm-stream Event kind is decided by its own typed writer at the
+/// accepting cut, so the atomicity cases below need Events that pass their
+/// writer; building that Realm is the adapter's job, not this contract's.
+pub struct EventCommitContractMessages {
+    pub accepted: EventCommitRequest,
+    pub rollback: EventCommitRequest,
+}
+
+fn contract_outbox_record(
+    id: &str,
+    namespace: &str,
+    idempotency_key: String,
+    now: chrono::DateTime<Utc>,
+) -> FederationOutboxRecord {
+    FederationOutboxRecord {
+        id: id.to_owned(),
+        peer_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+            .expect("peer service id"),
+        peer_url: Some("https://peer.example".to_owned()),
+        endpoint: "/_arkret/peer/events".to_owned(),
+        idempotency_key,
+        payload_json: "{}".to_owned(),
+        coalescing_key: None,
+        coalescing_position: None,
+        state: FederationOutboxState::Pending,
+        leased_from_state: None,
+        realm_fanout: None,
+        attempts: 0,
+        semantic_attempts: 0,
+        next_attempt_at: now.timestamp(),
+        last_http_status: None,
+        last_error_code: None,
+        last_response_excerpt: None,
+        lease_owner: None,
+        lease_token: None,
+        lease_expires_at: None,
+        policy_version: None,
+        supersedes_outbox_id: None,
+        created_at: now.timestamp(),
+        completed_at: None,
+    }
+}
+
 pub async fn assert_event_commit_unit_of_work_contract(
     stores: EventCommitContractStores<'_>,
+    messages: EventCommitContractMessages,
     namespace: &str,
 ) {
     let now = database_timestamp_now();
@@ -2334,72 +2382,32 @@ pub async fn assert_event_commit_unit_of_work_contract(
         DidCoreId::new(principal_id.clone()).expect("idempotency principal id");
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
-    // Every Event this contract commits belongs to one Realm, so they share
-    // one authority and one chained commit stream.
-    let mut stream = ContractCommitStream::new(&realm_id);
-    stream.install(stores.authority).await;
-    let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
-    let event_id = event.event_id.clone();
-    let request = EventCommitRequest {
-        authority_commit: stream.accept(&event),
-        self_producer_guard: None,
-        forwarded_producer_evidence: None,
-        parent_membership_admission: None,
-        contact_projection: None,
-        consent_projection: None,
-        event,
-        device_revocation_transition: None,
-        device_revocation_gate: None,
-        projections: vec![ProjectionEventRecord {
-            event_id: event_id.clone(),
-            realm_id: realm_id.clone(),
-            event_kind: "ak.message.create".to_owned(),
-            operation_kind: "create".to_owned(),
-            operation_id: None,
-            sender: Some(principal_id.clone()),
-            payload: serde_json::json!({"body": "contract"}),
-            created_at: now,
-            received_at: now,
-        }],
-        idempotency: Some(IdempotencyRecord {
-            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
-            operation_id: "arkret://operations/contract/event-commit".to_owned(),
-            idempotency_key: idempotency_key.clone(),
-            request_hash: format!("sha256:{event_uuid}"),
-            response_status: 200,
-            response_body: serde_json::json!({"event_id": event_id}),
-            created_at: now,
-            expires_at: now + Duration::hours(1),
-        }),
-        outbox: vec![FederationOutboxRecord {
-            id: outbox_id.clone(),
-            peer_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
-                .expect("peer service id"),
-            peer_url: Some("https://peer.example".to_owned()),
-            endpoint: "/_arkret/peer/events".to_owned(),
-            idempotency_key: format!("peer:{event_uuid}"),
-            payload_json: "{}".to_owned(),
-            coalescing_key: None,
-            coalescing_position: None,
-            state: FederationOutboxState::Pending,
-            leased_from_state: None,
-            realm_fanout: None,
-            attempts: 0,
-            semantic_attempts: 0,
-            next_attempt_at: now.timestamp(),
-            last_http_status: None,
-            last_error_code: None,
-            last_response_excerpt: None,
-            lease_owner: None,
-            lease_token: None,
-            lease_expires_at: None,
-            policy_version: None,
-            supersedes_outbox_id: None,
-            created_at: now.timestamp(),
-            completed_at: None,
-        }],
-        realm_fanout_source: None,
-    };
+    let EventCommitContractMessages {
+        accepted: mut request,
+        rollback: mut failed,
+    } = messages;
+    let event_id = request.event.event_id.clone();
+    assert_eq!(
+        request.projections.len(),
+        1,
+        "the accepted Message carries exactly its own projection record"
+    );
+    request.idempotency = Some(IdempotencyRecord {
+        authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+        operation_id: "arkret://operations/contract/event-commit".to_owned(),
+        idempotency_key: idempotency_key.clone(),
+        request_hash: format!("sha256:{event_uuid}"),
+        response_status: 200,
+        response_body: serde_json::json!({"event_id": event_id}),
+        created_at: now,
+        expires_at: now + Duration::hours(1),
+    });
+    request.outbox = vec![contract_outbox_record(
+        &outbox_id,
+        namespace,
+        format!("peer:{event_uuid}"),
+        now,
+    )];
 
     let outcome = stores
         .unit_of_work
@@ -2419,13 +2427,26 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .expect("committed Event pair exists after atomic acceptance");
     assert_eq!(committed.event.event_id, committed_event_id);
     assert_eq!(committed.commit.event_ref, committed_event_id);
-    let event_outbox = stores
-        .events
-        .federation_outbox_for_event(&event_id)
-        .await
-        .expect("read Event delivery intents");
-    assert_eq!(event_outbox.len(), 1);
-    assert_eq!(event_outbox[0].id, outbox_id);
+    assert!(
+        stores
+            .outbox
+            .get(&outbox_id)
+            .await
+            .expect("read the unit's delivery intent")
+            .is_some(),
+        "the caller's delivery intent commits with the Event"
+    );
+    // Only the committed-replication intents the unit plans for remote joined
+    // members are linked to their Event (`federation.md` section 4.1.1); this
+    // founder-only Realm owes none, and a caller-supplied intent is not one.
+    assert!(
+        stores
+            .events
+            .federation_outbox_for_event(&event_id)
+            .await
+            .expect("read Event delivery intents")
+            .is_empty()
+    );
     assert!(
         stores
             .projections
@@ -2447,6 +2468,10 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .expect("read idempotency record")
             .is_some()
     );
+
+    // The Contact cases below commit into their own contract Realm stream.
+    let mut stream = ContractCommitStream::new(&realm_id);
+    stream.install(stores.authority).await;
 
     // Contact admission installs the canonical Event, its Commit, the holder's
     // Contact row and the peer carrier in one unit. Reading them back only
@@ -2666,68 +2691,30 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_uuid = uuid::Uuid::now_v7();
     let rollback_idempotency_key = format!("event-rollback:{namespace}:{rollback_uuid}");
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
-    let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 4, now);
-    let rollback_event_id = rollback_event.event_id.clone();
-    let failed = EventCommitRequest {
-        authority_commit: stream.order(&rollback_event),
-        self_producer_guard: None,
-        forwarded_producer_evidence: None,
-        parent_membership_admission: None,
-        contact_projection: None,
-        consent_projection: None,
-        event: rollback_event,
-        device_revocation_transition: None,
-        device_revocation_gate: None,
-        projections: vec![ProjectionEventRecord {
-            event_id: rollback_event_id.clone(),
-            realm_id: "not-a-typed-realm-id".to_owned(),
-            event_kind: "ak.message.create".to_owned(),
-            operation_kind: "create".to_owned(),
-            operation_id: None,
-            sender: Some(principal_id.clone()),
-            payload: serde_json::json!({}),
-            created_at: now,
-            received_at: now,
-        }],
-        idempotency: Some(IdempotencyRecord {
-            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
-            operation_id: "arkret://operations/contract/rollback".to_owned(),
-            idempotency_key: rollback_idempotency_key.clone(),
-            request_hash: format!("sha256:{rollback_uuid}"),
-            response_status: 200,
-            response_body: serde_json::json!({}),
-            created_at: now,
-            expires_at: now + Duration::hours(1),
-        }),
-        outbox: vec![FederationOutboxRecord {
-            id: rollback_outbox_id.clone(),
-            peer_id: DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
-                .expect("peer service id"),
-            peer_url: Some("https://peer.example".to_owned()),
-            endpoint: "/_arkret/peer/events".to_owned(),
-            idempotency_key: format!("peer:{rollback_uuid}"),
-            payload_json: "{}".to_owned(),
-            coalescing_key: None,
-            coalescing_position: None,
-            state: FederationOutboxState::Pending,
-            leased_from_state: None,
-            realm_fanout: None,
-            attempts: 0,
-            semantic_attempts: 0,
-            next_attempt_at: now.timestamp(),
-            last_http_status: None,
-            last_error_code: None,
-            last_response_excerpt: None,
-            lease_owner: None,
-            lease_token: None,
-            lease_expires_at: None,
-            policy_version: None,
-            supersedes_outbox_id: None,
-            created_at: now.timestamp(),
-            completed_at: None,
-        }],
-        realm_fanout_source: None,
+    let rollback_event_id = failed.event.event_id.clone();
+    // The Message itself passes its writer; the malformed projection record
+    // written later in the same unit must take the Event, its Commit, the
+    // idempotency outcome and the delivery intent down with it.
+    let [projection] = failed.projections.as_mut_slice() else {
+        panic!("the rollback Message carries exactly its own projection record");
     };
+    projection.realm_id = "not-a-typed-realm-id".to_owned();
+    failed.idempotency = Some(IdempotencyRecord {
+        authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+        operation_id: "arkret://operations/contract/rollback".to_owned(),
+        idempotency_key: rollback_idempotency_key.clone(),
+        request_hash: format!("sha256:{rollback_uuid}"),
+        response_status: 200,
+        response_body: serde_json::json!({}),
+        created_at: now,
+        expires_at: now + Duration::hours(1),
+    });
+    failed.outbox = vec![contract_outbox_record(
+        &rollback_outbox_id,
+        namespace,
+        format!("peer:{rollback_uuid}"),
+        now,
+    )];
     assert!(stores.unit_of_work.commit_event(failed).await.is_err());
     assert!(
         !stores
