@@ -2777,7 +2777,8 @@ mod tests {
             let _ = connection.await;
         });
         client.batch_execute(
-            "CREATE FUNCTION fail_signer_identity_successor() RETURNS trigger LANGUAGE plpgsql AS $$ \
+            "DROP TRIGGER IF EXISTS fail_signer_identity_successor ON service_identity; \
+             CREATE OR REPLACE FUNCTION fail_signer_identity_successor() RETURNS trigger LANGUAGE plpgsql AS $$ \
              BEGIN RAISE EXCEPTION 'injected signer identity failure'; END $$; \
              CREATE TRIGGER fail_signer_identity_successor BEFORE UPDATE ON service_identity \
              FOR EACH ROW EXECUTE FUNCTION fail_signer_identity_successor()",
@@ -2809,12 +2810,18 @@ mod tests {
                 .len(),
             1
         );
+        let still_original = bundle_backend
+            .load(&before.identity.registration_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(still_original.identity, original_bundle.identity);
         assert_eq!(
-            bundle_backend
-                .load(&before.identity.registration_key)
-                .unwrap()
-                .unwrap(),
-            original_bundle
+            still_original.webvh_history_entries,
+            original_bundle.webvh_history_entries
+        );
+        assert_eq!(
+            still_original.receipt_chains,
+            original_bundle.receipt_chains
         );
         client.batch_execute("DROP TRIGGER fail_signer_identity_successor ON service_identity; DROP FUNCTION fail_signer_identity_successor()")
             .await.unwrap();
