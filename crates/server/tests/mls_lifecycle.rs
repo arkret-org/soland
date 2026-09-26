@@ -855,8 +855,8 @@ async fn mls_lifecycle_body() {
         b"epoch 1"
     );
 
-    // Consume stays fail closed until the durable receipt's Welcome binding is
-    // specified (arkret-work spec-open 0715).
+    // Consume stays fail closed until the Station records the claim-ledger
+    // Welcome binding it must compare the durable receipt against.
     let receipt = arkret_models_crypto::RecipientMlsDurableReceipt {
         domain: arkret_wire::NonEmptyString::new(
             arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1.to_owned(),
@@ -874,10 +874,7 @@ async fn mls_lifecycle_body() {
         mls_group_id: group_id.clone(),
         mls_epoch: 1,
         welcome_ref: welcome.welcome_id.clone(),
-        welcome_digest: arkret_wire::Hash::new(
-            arkret_canonical::canonical_sha256(&serde_json::to_value(&welcome).unwrap()).unwrap(),
-        )
-        .unwrap(),
+        welcome_digest: welcome.durable_receipt_digest().unwrap(),
         durable_at: chrono::Utc::now(),
         signature: arkret_models_crypto::KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(bob.method.to_string()).unwrap(),
