@@ -13,7 +13,10 @@ mod pcr_genesis;
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use ordinary_realm::{bootstrap_unit_with_join_rule, founder, next_request};
-use soland_storage::{AuthorityCommitStore, ConflictCode, EventCommitUnitOfWork};
+use soland_storage::{
+    AuthorityCommitStore, ConflictCode, EventBatchCommitRequest, EventCommitRequest,
+    EventCommitUnitOfWork,
+};
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork};
 
@@ -42,6 +45,103 @@ async fn rows(pool: &soland_storage_postgres::PgPool) -> Vec<SidecarRow> {
     .load::<SidecarRow>(&mut *conn)
     .await
     .unwrap()
+}
+
+#[derive(diesel::QueryableByName)]
+struct ContextRow {
+    #[diesel(sql_type = Text)]
+    sidecar_id: String,
+    #[diesel(sql_type = Jsonb)]
+    context_ref: serde_json::Value,
+    #[diesel(sql_type = BigInt)]
+    version: i64,
+    #[diesel(sql_type = Text)]
+    attach_event_id: String,
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+async fn contexts(pool: &soland_storage_postgres::PgPool) -> Vec<ContextRow> {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT sidecar_id,context_ref,version,attach_event_id,current_commit_id,value \
+         FROM sidecar_context_current_results ORDER BY sidecar_id,context_ref_digest",
+    )
+    .load::<ContextRow>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+fn attach_request(
+    prior: &EventCommitRequest,
+    sidecar_id: &arkret_wire::SidecarId,
+    source_context_ref: serde_json::Value,
+    version: u64,
+    predecessor: Option<&arkret_wire::EventId>,
+    create_event_id: &arkret_wire::EventId,
+) -> EventCommitRequest {
+    let at = prior.authority_commit.commit.committed_at;
+    let realm_id = prior.authority_commit.event.realm_id.clone();
+    let mut payload = serde_json::json!({
+        "sidecar_id": sidecar_id,
+        "source_context_ref": source_context_ref,
+        "version": version,
+    });
+    if let Some(predecessor) = predecessor {
+        payload["predecessor_event_ref"] = serde_json::json!(predecessor);
+    }
+    let mut event = ordinary_realm::event_for_actor(
+        arkret_wire::EventKind::SidecarContextAttach,
+        arkret_wire::ScopeRef::Sidecar {
+            realm_id: realm_id.clone(),
+            sidecar_id: sidecar_id.clone(),
+        },
+        prior.authority_commit.event.actor_id.clone(),
+        payload,
+        at,
+    );
+    event.semantic_refs = vec![arkret_wire::SemanticRef::new(
+        create_event_id.to_string(),
+        "after",
+    )];
+    ordinary_realm::reseal(&mut event);
+    let mut request = ordinary_realm::request_for_event(&prior.authority_commit, event, at);
+    request.authority_commit.commit.stream_ref = arkret_wire::CommitStreamRef::Sidecar {
+        realm_id,
+        sidecar_id: sidecar_id.clone(),
+    };
+    if matches!(&prior.authority_commit.commit.stream_ref,
+        arkret_wire::CommitStreamRef::Sidecar { sidecar_id: prior_id, .. } if prior_id == sidecar_id)
+    {
+        request.authority_commit.commit.stream_position =
+            prior.authority_commit.commit.stream_position + 1;
+        request.authority_commit.commit.previous_commit_ref =
+            Some(prior.authority_commit.commit.commit_id.clone());
+    } else {
+        request.authority_commit.commit.stream_position = 0;
+        request.authority_commit.commit.previous_commit_ref = None;
+    }
+    request.authority_commit.commit.commit_id =
+        arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            format!(
+                "sidecar-context:{}",
+                request.authority_commit.event.event_id
+            )
+            .as_bytes(),
+        ));
+    request
+}
+
+fn batch(create: EventCommitRequest, attach: EventCommitRequest) -> EventBatchCommitRequest {
+    EventBatchCommitRequest {
+        events: vec![create, attach],
+        franking_replay_nonce: None,
+        applet_record: None,
+        applet_authoring_preview: None,
+        agent_membership_cascade: None,
+    }
 }
 
 #[tokio::test]
@@ -150,4 +250,130 @@ async fn sidecar_genesis_reserves_exact_controller_and_current_in_one_commit() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn sidecar_create_and_context_attach_commit_atomically_or_write_nothing() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let discussion = ordinary_realm::open_discussion(&pool, "sidecar-attach-cut").await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let at = discussion.head.authority_commit.commit.committed_at;
+    let create = next_request(
+        &discussion.head.authority_commit,
+        arkret_wire::EventKind::SidecarCreate,
+        &founder(),
+        serde_json::json!({}),
+        at,
+    );
+    let sidecar_id = arkret_wire::SidecarId::from_event_id(&create.authority_commit.event.event_id);
+    let source = serde_json::json!({"kind":"strand","strand_id":discussion.strand_id});
+    let attach = attach_request(
+        &create,
+        &sidecar_id,
+        source.clone(),
+        1,
+        None,
+        &create.authority_commit.event.event_id,
+    );
+    uow.commit_event_batch(batch(create.clone(), attach.clone()))
+        .await
+        .unwrap();
+    assert_eq!(rows(&pool).await.len(), 1);
+    let current = contexts(&pool).await;
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].sidecar_id, sidecar_id.as_str());
+    assert_eq!(current[0].context_ref, source);
+    assert_eq!(current[0].version, 1);
+    assert_eq!(
+        current[0].attach_event_id,
+        attach.authority_commit.event.event_id.as_str()
+    );
+    assert_eq!(
+        current[0].current_commit_id,
+        attach.authority_commit.commit.commit_id.as_str()
+    );
+    assert_eq!(current[0].value["sidecar_id"], sidecar_id.as_str());
+    assert_eq!(current[0].value["version"], 1);
+
+    let successor = attach_request(
+        &attach,
+        &sidecar_id,
+        source.clone(),
+        2,
+        Some(&attach.authority_commit.event.event_id),
+        &create.authority_commit.event.event_id,
+    );
+    uow.commit_event(successor.clone()).await.unwrap();
+    let current = contexts(&pool).await;
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].version, 2);
+    assert_eq!(
+        current[0].attach_event_id,
+        successor.authority_commit.event.event_id.as_str()
+    );
+
+    let stale = attach_request(
+        &successor,
+        &sidecar_id,
+        serde_json::json!({"kind":"strand","strand_id":discussion.strand_id}),
+        4,
+        Some(&successor.authority_commit.event.event_id),
+        &create.authority_commit.event.event_id,
+    );
+    let error = uow.commit_event(stale.clone()).await.unwrap_err();
+    assert_eq!(error.conflict_code(), Some(ConflictCode::CasConflict));
+    assert_eq!(contexts(&pool).await[0].version, 2);
+    assert!(
+        PgAuthorityCommitStore { pool: pool.clone() }
+            .committed_event(&stale.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let another = TestDatabase::lease().await;
+    let other_pool = another.pool();
+    let other_discussion =
+        ordinary_realm::open_discussion(&other_pool, "sidecar-attach-rollback").await;
+    let other_uow = PgEventCommitUnitOfWork::new(other_pool.clone());
+    let other_at = other_discussion.head.authority_commit.commit.committed_at;
+    let other_create = next_request(
+        &other_discussion.head.authority_commit,
+        arkret_wire::EventKind::SidecarCreate,
+        &founder(),
+        serde_json::json!({}),
+        other_at,
+    );
+    let other_id =
+        arkret_wire::SidecarId::from_event_id(&other_create.authority_commit.event.event_id);
+    let absent_strand =
+        arkret_wire::StrandId::from_event_id(&other_create.authority_commit.event.event_id);
+    let invalid_attach = attach_request(
+        &other_create,
+        &other_id,
+        serde_json::json!({"kind":"strand","strand_id":absent_strand}),
+        1,
+        None,
+        &other_create.authority_commit.event.event_id,
+    );
+    let error = other_uow
+        .commit_event_batch(batch(other_create.clone(), invalid_attach.clone()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.conflict_code(),
+        Some(ConflictCode::FailedPrecondition)
+    );
+    assert!(rows(&other_pool).await.is_empty());
+    assert!(contexts(&other_pool).await.is_empty());
+    let store = PgAuthorityCommitStore {
+        pool: other_pool.clone(),
+    };
+    for event_id in [
+        &other_create.authority_commit.event.event_id,
+        &invalid_attach.authority_commit.event.event_id,
+    ] {
+        assert!(store.committed_event(event_id).await.unwrap().is_none());
+    }
 }

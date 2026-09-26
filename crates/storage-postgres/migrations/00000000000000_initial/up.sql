@@ -4410,6 +4410,27 @@ CREATE TABLE sidecar_current_results (
  CHECK(value->>'realm_id'=realm_id),
  CHECK(value->'controller_account_id'=controller_account_id)
 );
+CREATE TABLE sidecar_context_current_results (
+ realm_id TEXT NOT NULL,
+ sidecar_id TEXT NOT NULL REFERENCES sidecar_current_results(sidecar_id),
+ context_ref_digest TEXT NOT NULL,
+ context_ref JSONB NOT NULL,
+ version BIGINT NOT NULL CHECK(version BETWEEN 1 AND 9007199254740991),
+ predecessor_event_ref TEXT,
+ attach_event_id TEXT NOT NULL UNIQUE,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ source_stream_ref JSONB NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(sidecar_id,context_ref_digest),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(source_stream_ref->>'kind'='sidecar'),
+ CHECK(source_stream_ref->>'sidecar_id'=sidecar_id),
+ CHECK(value->>'sidecar_id'=sidecar_id),
+ CHECK(value->'source_context_ref'=context_ref),
+ CHECK((version=1 AND predecessor_event_ref IS NULL) OR (version>1 AND predecessor_event_ref IS NOT NULL))
+);
 
 -- Event-derived Strand identity and its complete registered current value.
 CREATE TABLE strand_current_results (
