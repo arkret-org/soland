@@ -1450,6 +1450,31 @@ fn next_webvh_version_time(head: &Value) -> anyhow::Result<chrono::DateTime<chro
     })
 }
 
+async fn wait_for_service_webvh_version_time(
+    version_time: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + MAX_WAIT;
+    loop {
+        let wall_now = chrono::Utc::now();
+        if wall_now >= version_time {
+            return Ok(());
+        }
+        let remaining = (version_time - wall_now)
+            .to_std()
+            .map_err(|error| anyhow::anyhow!("invalid service WebVH versionTime wait: {error}"))?;
+        if remaining > MAX_WAIT || tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "service WebVH versionTime is too far ahead of the local clock; refusing to activate the successor"
+            );
+        }
+        tokio::time::sleep(
+            remaining.min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+        )
+        .await;
+    }
+}
+
 /// JWK `kid` under which an Account Authority publishes its S2S signing key.
 ///
 /// coauth mints this key as `coauth_keyring::ACCOUNT_AUTHORITY_KEY_ID` and
@@ -1876,6 +1901,7 @@ async fn publish_service_document_successor(
         .iter()
         .map(|entry| entry.operation.clone())
         .collect();
+    let version_time = next_webvh_version_time(&head.operation)?;
     let rotation = arkret_signatures::webvh::prepare_service_rotation(
         &arkret_signatures::webvh::ServiceRotationInput {
             did: did.as_str(),
@@ -1883,7 +1909,7 @@ async fn publish_service_document_successor(
             state: &state,
             current_update_seed: &signing_seed,
             next_update_public_key_multibase: &following_public_key,
-            version_time: next_webvh_version_time(&head.operation)?,
+            version_time,
         },
     )
     .map_err(|error| anyhow::anyhow!("building the Station DID successor failed: {error}"))?;
@@ -1910,6 +1936,11 @@ async fn publish_service_document_successor(
         .ok()
         .and_then(|len| len.checked_add(1))
         .ok_or_else(|| anyhow::anyhow!("Station WebVH sequence overflow"))?;
+    // Historical verifiers select the assertion method at the evidence's real
+    // signing instant. A same-second successor may have a versionTime one
+    // second ahead of the wall clock; wait before signing its receipt or
+    // committing the new active signer, rather than backdating evidence.
+    wait_for_service_webvh_version_time(version_time).await?;
     let now = chrono::Utc::now();
     let document = WebvhDocumentRecord {
         did: did.to_string(),
@@ -2854,13 +2885,23 @@ mod tests {
                 .as_slice(),
             &new_seed
         );
-        assert_eq!(
-            persistence
-                .webvh_history(after.identity.did.as_str())
-                .await
-                .unwrap()
-                .len(),
-            2
+        let history = persistence
+            .webvh_history(after.identity.did.as_str())
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        let successor_time = history[1].operation["versionTime"]
+            .as_str()
+            .unwrap()
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        assert!(
+            after.registration_receipt.issued_at >= successor_time,
+            "the new receipt must not be signed in the old assertion-key interval"
+        );
+        assert!(
+            chrono::Utc::now() >= successor_time,
+            "the runtime must not serve the new signer before its WebVH versionTime"
         );
         let rotated_bundle = bundle_backend
             .load(&after.identity.registration_key)
@@ -2915,6 +2956,17 @@ mod tests {
         );
         std::fs::remove_dir_all(bundle_dir).unwrap();
         connection_task.abort();
+    }
+
+    #[tokio::test]
+    async fn successor_refuses_version_time_far_ahead_of_local_clock() {
+        let future = chrono::Utc::now() + chrono::TimeDelta::seconds(20);
+        let started = tokio::time::Instant::now();
+        let error = wait_for_service_webvh_version_time(future)
+            .await
+            .expect_err("an implausible future head must fail closed");
+        assert!(error.to_string().contains("too far ahead"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[tokio::test]
