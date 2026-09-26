@@ -640,13 +640,14 @@ mod tests {
         arkret_wire::ServiceOperationId::EdgeAppletManagedActorCommandAuthorV1,
     )];
 
-    /// Advertised Station members served by the co-located Account Authority
-    /// of the same Station TCB (device-lifecycle.md §2.1.1): the deployment
-    /// gateway routes them to that process, which owns the pending pairing
-    /// ledger, while this Station admits the relayed authorization over the
-    /// private admission channel. They are not an implementation backlog.
-    const SERVED_BY_ACCOUNT_AUTHORITY: &[arkret_wire::ServiceOperationId] =
-        &[arkret_wire::ServiceOperationId::GateAccountCommandPairDeviceV1];
+    /// Advertised Station members served by the Account Authority of the
+    /// same Station TCB: the deployment gateway routes pairing and issuer-
+    /// ledger revocation to Coauth, while exact hard logout stays on Soland.
+    /// These are not an implementation backlog for the bare Soland router.
+    const SERVED_BY_ACCOUNT_AUTHORITY: &[arkret_wire::ServiceOperationId] = &[
+        arkret_wire::ServiceOperationId::GateAccountCommandPairDeviceV1,
+        arkret_wire::ServiceOperationId::GateAccountCommandRevokeSessionV1,
+    ];
 
     /// `service-surface.md` §3: Describe advertises only bundles this
     /// deployment really implements, and the expanded `(operation_id,
