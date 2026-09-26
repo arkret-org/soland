@@ -270,6 +270,11 @@ async fn validate_request_acceptance_receipt(
         ));
     }
 
+    crate::routing::identity::contact_federation::cache_contact_assertion_signatures(
+        state,
+        vec![&receipt.signature],
+    )
+    .await?;
     validate_request_receipt_cryptography(state, receipt, "request_receipt")?;
 
     let expected_issuer = record

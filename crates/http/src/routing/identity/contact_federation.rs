@@ -755,7 +755,7 @@ pub(crate) async fn cache_contact_outcome_assertion_history(
     cache_contact_assertion_signatures(state, signatures).await
 }
 
-async fn cache_contact_assertion_signatures(
+pub(crate) async fn cache_contact_assertion_signatures(
     state: &AppState,
     signatures: Vec<&ProtocolSignature>,
 ) -> Result<(), AppError> {
