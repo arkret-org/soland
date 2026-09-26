@@ -337,7 +337,7 @@ impl ProjectionState {
                     // `ak.circle.member.manage` (narrowed by
                     // `allowed_circle_ids`) on this Circle. The authoritative
                     // capability decision runs in the HTTP surface
-                    // (`SolandAuthzEngine::check`) and is stamped into the payload;
+                    // (the durable authorization cut) and is stamped into the payload;
                     // the reducer fails closed when that verdict is absent.
                     return ProjectionEffect::Rejected {
                         reason: CIRCLE_MEMBER_MANAGE_CAPABILITY_REQUIRED.to_owned(),

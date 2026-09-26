@@ -15,7 +15,7 @@ use serde_json::Value;
 /// AKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
 /// an actor other than the target) requires the requester_id to hold
 /// `ak.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
-/// The HTTP surface runs the authoritative `SolandAuthzEngine::check` and stamps a
+/// The HTTP surface decides it from the durable authorization cut and stamps a
 /// verdict into the operation payload; the reducer fails closed when that
 /// verdict is absent or false, so an unauthorised one-way add is rejected even
 /// if it bypasses the HTTP gate.

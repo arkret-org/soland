@@ -5,8 +5,6 @@
 //! grant Event from reviving them. Rebuildable historical metadata supports
 //! routing and history queries but never grants current authority.
 
-use arkret_wire::CapabilityActionId;
-
 use super::*;
 
 const RESOURCE_SELECTOR_MAX_ITEMS: usize = 256;
@@ -204,38 +202,13 @@ pub fn engine_grant_from_capability_facet(
     engine_grant_from_cell_body(grant_id, value, false)
 }
 
-/// The single active-grant predicate for the accepted capability projection.
-///
-/// Realm pin, active-set membership, effective expiry from temporal constraints,
-/// and action / resource
-/// matching all live here so a fix to any one of them cannot be applied at one
-/// call site while another keeps admitting the grant. Callers layer their own
-/// usage constraint — a specific issuer, a named `grant_id`, or holder
-/// de-duplication — on top of this.
+/// Whether a projected grant is live for `action` on `resource_expr`: Realm pin,
+/// active-set membership, effective expiry from temporal constraints, and an
+/// action test that admits a registry-anchored aggregate expansion.
 ///
 /// `resource_expr` MUST already be expanded through
 /// `ProjectionState::authz_resource_expr`; `evaluation_basis` is the caller's
 /// admission / evaluation timestamp.
-fn projected_grant_is_active_for(
-    grant: &crate::capability::Grant,
-    realm_id: &str,
-    action: &str,
-    resource_expr: &str,
-    evaluation_basis: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    grant.realm_id == realm_id
-        && !grant.revoked
-        && !crate::capability::is_grant_expired(grant, evaluation_basis)
-        && grant.actions.iter().any(|candidate| candidate == action)
-        && crate::capability::resource_matches(&grant.resource, resource_expr)
-}
-
-/// Operational sibling of [`projected_grant_is_active_for`]: identical except
-/// the action test admits a registry-anchored aggregate expansion.
-///
-/// Kept as a separate function rather than a flag so no caller can flip "does
-/// this holder carry the action" into "may this holder author that Event" by
-/// passing the wrong boolean.
 fn projected_grant_covers_action(
     grant: &crate::capability::Grant,
     realm_id: &str,
@@ -439,39 +412,6 @@ impl ProjectionState {
         })
     }
 
-    /// Literal action match only — the grant names `action` verbatim.
-    ///
-    /// Separate from [`Self::issuer_has_projected_capability`] because an
-    /// aggregate expansion answers "may this holder author that Event", which
-    /// is a different question from "does this holder actually carry that
-    /// action". Governance and owner checks want the second one.
-    pub fn issuer_holds_literal_capability(
-        &self,
-        issuer: &arkret_wire::ActorId,
-        realm_id: &str,
-        action: &str,
-        resource: &str,
-        evaluation_basis: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let resource_expr = self.authz_resource_expr(realm_id, resource);
-        self.projected_capability_grants().any(|grant| {
-            &grant.subject_id == issuer
-                && projected_grant_is_active_for(
-                    &grant,
-                    realm_id,
-                    action,
-                    &resource_expr,
-                    evaluation_basis,
-                )
-                && self.grant_authority_is_live_for(
-                    &grant,
-                    action,
-                    &resource_expr,
-                    evaluation_basis,
-                )
-        })
-    }
-
     /// Operational coverage: may `issuer` directly author under `action`?
     ///
     /// A literal hit needs no registry basis. An aggregate expansion
@@ -508,81 +448,6 @@ impl ProjectionState {
                     evaluation_basis,
                 )
         })
-    }
-
-    /// True when `actor` currently speaks for this Realm's owner aggregate.
-    ///
-    /// Two sources, both revocable-by-governance and neither of them a
-    /// membership or `realm_states[..].owner` fallback:
-    /// 1. `actor` is the controller of the registered authority-root cell;
-    /// 2. `actor` holds a live, verbatim `ak.realm.owner` co-owner grant.
-    pub fn actor_holds_effective_realm_owner(
-        &self,
-        realm_id: &str,
-        actor: &arkret_wire::ActorId,
-        evaluation_basis: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let actor_value = serde_json::to_value(actor).unwrap_or(Value::Null);
-        if self
-            .realm_authority_root(realm_id)
-            .and_then(|root| root.get("controller_actor_id"))
-            == Some(&actor_value)
-        {
-            return true;
-        }
-        self.issuer_holds_literal_capability(
-            actor,
-            realm_id,
-            CapabilityActionId::REALM_OWNER,
-            realm_id,
-            evaluation_basis,
-        )
-    }
-
-    /// True when `actor` speaks for the Realm owner aggregate and that
-    /// aggregate operationally covers `action` in the Realm reducer profile's
-    /// compiled action set.
-    ///
-    /// This is intentionally narrower than [`Self::actor_governs_realm`]: a
-    /// generic authorization preflight must not turn owner grant authority
-    /// into direct access to non-Event endpoints, nor may it authorize the two
-    /// root-control-only Realm lifecycle actions.
-    pub fn realm_owner_operationally_covers_action(
-        &self,
-        realm_id: &str,
-        actor: &arkret_wire::ActorId,
-        action: &str,
-        evaluation_basis: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
-            && arkret_policy::owner_may_author_action(action).unwrap_or(false)
-    }
-
-    /// The shared Realm-governance predicate over projected capability state.
-    ///
-    /// A governance decision (join review, ban, applet install, ...) is allowed
-    /// when `actor` either speaks for the Realm owner aggregate or holds one of
-    /// `actions` verbatim. Realm membership and the discardable
-    /// `realm_states[..].owner` presentation mirror are never inputs. Every
-    /// review surface routes through this one function so the two legs cannot
-    /// drift apart per surface.
-    pub fn actor_governs_realm(
-        &self,
-        realm_id: &str,
-        actor: &arkret_wire::ActorId,
-        actions: &[&str],
-        evaluation_basis: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
-            || actions.iter().any(|action| {
-                self.issuer_holds_literal_capability(
-                    actor,
-                    realm_id,
-                    action,
-                    realm_id,
-                    evaluation_basis,
-                )
-            })
     }
 
     /// Materialize a grant only while it is still live.
@@ -813,32 +678,6 @@ impl ProjectionState {
             }
         }
         ProjectionEffect::AgentKeyRevokeProjected { agent_id, key_id }
-    }
-
-    /// Every persisted capability grant for the exact `subject_id`, paired with the
-    /// Realm that governs its grant cell. Revocation must be submitted in
-    /// this Realm; a controller PCR is not a cross-Realm revocation surface.
-    pub fn grant_locations_for_subject(
-        &self,
-        subject_id: &arkret_wire::ActorId,
-    ) -> Vec<(String, String)> {
-        self.capability_grant_metadata
-            .values()
-            .filter(|grant| &grant.subject_id == subject_id)
-            .map(|grant| (grant.grant_id.clone(), grant.realm_id.clone()))
-            .collect()
-    }
-
-    /// Non-terminal grants for `subject_id`, including pending Agent grants
-    /// that are durable but not yet in the effective authz index.
-    pub fn unrevoked_grant_locations_for_subject(
-        &self,
-        subject_id: &arkret_wire::ActorId,
-    ) -> Vec<(String, String)> {
-        self.grant_locations_for_subject(subject_id)
-            .into_iter()
-            .filter(|(grant_id, _)| self.capability_grant_value(grant_id).is_some())
-            .collect()
     }
 
     /// Confirmed historical revocations identify peer fanout destinations.

@@ -43,33 +43,6 @@ pub(super) fn actor_facet_subject(actor: &arkret_wire::ActorId) -> String {
 /// it into the authority-root facet.
 pub(super) const FIXTURE_GOVERNANCE_STATION: &str = "ak:did_core:web:reducer-test.example";
 
-/// Materialize the genesis authority-root facet for a Realm.
-///
-/// `realm-and-space.md` section 2.5 makes this facet the sole source of Realm
-/// owner authority, so a reducer test that needs an owner installs the facet
-/// rather than a self-issued grant. The shape is exactly what
-/// `genesis_authority_root_value` derives from an `ak.realm.create` payload,
-/// so a test can never seed a shape the create reducer would not produce.
-pub(super) fn install_realm_authority_root(
-    state: &mut ProjectionState,
-    realm_id: &str,
-    controller_actor_id: &str,
-) {
-    let controller = arkret_wire::ActorId::service(
-        arkret_identifiers::DidCoreId::new(controller_actor_id).unwrap(),
-    );
-    state.set_realm_facet(
-        realm_id,
-        facet::REALM_AUTHORITY_ROOT,
-        serde_json::json!({
-            "controller_actor_id": controller,
-            "controller_epoch": 0,
-            "governance_station_id": FIXTURE_GOVERNANCE_STATION,
-            "authority_generation": 0,
-        }),
-    );
-}
-
 pub(super) fn make_operation(
     object_kind: impl AsRef<str>,
     realm_id: &str,
