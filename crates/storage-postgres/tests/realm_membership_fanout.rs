@@ -1090,6 +1090,62 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         .await
         .unwrap_err();
     assert_code(&error, ConflictCode::CapabilityDenied);
+
+    // Alice joins again after a position this Station has no right to: her
+    // own join re-opens the held stream at the join, pending a new anchor,
+    // and the gap is never pulled (decision 0122).
+    let rejoin = membership_request(&later.authority_commit, alice.clone(), &alice, "join");
+    assert_eq!(
+        store
+            .install_committed_replica(&replica(&unit, &rejoin, true))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let reopened = store
+        .replica_stream_anchor(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.join_commit, rejoin.authority_commit.commit);
+    assert_eq!(reopened.anchored_head, None);
+    let after_rejoin = sourced(next_request(
+        &rejoin.authority_commit,
+        arkret_wire::EventKind::RealmProfile,
+        &founder(),
+        serde_json::json!({"name":"After the rejoin"}),
+        last.commit.committed_at,
+    ));
+    assert_code(
+        &store
+            .install_committed_replica(&replica(&unit, &after_rejoin, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    anchor_at_join(&store, &rejoin, vec![joined_row(&rejoin, &alice)]).await;
+    // The position in the gap is behind the re-opened head.
+    assert_code(
+        &store
+            .install_committed_replica(&replica(&unit, &later, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::ForkQuarantine,
+    );
+    assert_eq!(
+        store
+            .install_committed_replica(&replica(&unit, &after_rejoin, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert!(
+        store
+            .committed_event(&later.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// A hosted invitee's `ak.invite.accept` is its join: the replica opens the

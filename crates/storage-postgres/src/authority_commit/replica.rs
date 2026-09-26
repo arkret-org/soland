@@ -5,7 +5,10 @@
 //! and the source RealmCommit exactly, only as the direct successor of the
 //! stream this Station already holds. The one way to open a held stream is a
 //! hosted member's own verified join (its `ak.member.state{join}` or its
-//! `ak.invite.accept`); the stream then stays pending anchor until the
+//! `ak.invite.accept`) while no hosted member is joined -- on a stream this
+//! Station does not hold yet or, after its last hosted member left, on the
+//! stream it still holds, where continuity then restarts at the join; the
+//! stream then stays pending anchor until the
 //! governing Station's bootstrap snapshot is installed as its typed current.
 //! Commits at or below that snapshot head are held for continuity only; each
 //! later replica is re-verified against the hosted-member basis and the
@@ -444,14 +447,25 @@ pub(super) async fn install_committed_replica_in_connection(
     let key = stream_key(&commit.stream_ref)?;
     let head = locked_head(conn, &key).await?;
     let anchor = locked_anchor(conn, &key).await?;
-    match &replica.role {
-        CommittedReplicaRole::OpeningJoin { member_account_id } => {
-            if head.is_some() || anchor.is_some() {
-                return Err(conflict(
-                    ConflictCode::ForkQuarantine,
-                    "this Station already holds the stream a join would open",
-                ));
-            }
+    // A hosted member's own join opens the stream -- or, once no hosted
+    // member is joined any more, re-opens it at the join (decision 0122).
+    let opening = match &replica.role {
+        CommittedReplicaRole::OpeningJoin { member_account_id }
+            if head.is_none()
+                || !hosts_joined_member(conn, &event.realm_id, &replica.local_service_id)
+                    .await? =>
+        {
+            Some(member_account_id)
+        }
+        _ => None,
+    };
+    let Some(member_account_id) = opening else {
+        return store_held_successor(conn, replica, &key, head.as_ref(), anchor).await;
+    };
+    let member_account_id =
+        serde_json::to_value(member_account_id).map_err(PersistenceError::database)?;
+    match (&head, anchor) {
+        (None, None) => {
             store_replica_rows(conn, event, commit, &key, replica.received_at).await?;
             sql_query(
                 "INSERT INTO replica_stream_anchors \
@@ -461,44 +475,76 @@ pub(super) async fn install_committed_replica_in_connection(
             .bind::<Text, _>(&key)
             .bind::<Text, _>(commit.realm_id.as_str())
             .bind::<Text, _>(commit.commit_id.as_str())
-            .bind::<Jsonb, _>(
-                serde_json::to_value(member_account_id).map_err(PersistenceError::database)?,
-            )
+            .bind::<Jsonb, _>(&member_account_id)
             .execute(&mut *conn)
             .await?;
-            crate::unit_of_work::commit_parent_membership_current_results(conn, event, commit)
-                .await?;
-            crate::account_summary::publish_realm_account_summary_in_connection(
-                conn,
-                &event.realm_id,
-            )
-            .await?;
         }
-        CommittedReplicaRole::HeldStream => {
-            let anchored = anchored_head(anchor)?;
-            require_direct_successor(head.as_ref(), commit)?;
-            if commit.stream_position <= anchored.stream_position {
-                // The installed snapshot already carries this Commit's effect.
-                store_replica_rows(conn, event, commit, &key, replica.received_at).await?;
-                return Ok(CommittedReplicaOutcome::Stored);
-            }
-            if !hosts_joined_member(conn, &event.realm_id, &replica.local_service_id).await? {
+        // The rows held so far stay canonical only; continuity restarts at
+        // this join and the positions before it are not pulled.
+        (Some(head), Some(_)) => {
+            if commit.stream_position <= head.stream_position {
                 return Err(conflict(
-                    ConflictCode::CapabilityDenied,
-                    "no member this Station hosts may hold the Event",
+                    ConflictCode::ForkQuarantine,
+                    "a different Commit is held at or after this stream position",
                 ));
             }
-            require_visible(conn, event, &replica.local_service_id).await?;
             store_replica_rows(conn, event, commit, &key, replica.received_at).await?;
-            crate::replica_current::advance_in_connection(conn, event, commit).await?;
-            if crate::account_summary::changes_account_summary_inputs(&event.kind) {
-                crate::account_summary::publish_realm_account_summary_in_connection(
-                    conn,
-                    &event.realm_id,
-                )
-                .await?;
-            }
+            sql_query(
+                "UPDATE replica_stream_anchors SET join_commit_id = $2, member_account_id = $3, \
+                 anchor_commit_id = NULL, anchor_stream_position = NULL, anchored_at = NULL \
+                 WHERE stream_key = $1",
+            )
+            .bind::<Text, _>(&key)
+            .bind::<Text, _>(commit.commit_id.as_str())
+            .bind::<Jsonb, _>(&member_account_id)
+            .execute(&mut *conn)
+            .await?;
         }
+        _ => {
+            return Err(PersistenceError::Internal(
+                "the held stream and its replica anchor disagree".to_owned(),
+            )
+            .into());
+        }
+    }
+    crate::unit_of_work::commit_parent_membership_current_results(conn, event, commit).await?;
+    crate::account_summary::publish_realm_account_summary_in_connection(conn, &event.realm_id)
+        .await?;
+    Ok(CommittedReplicaOutcome::Stored)
+}
+
+/// Store a direct successor of an anchored held stream. At or below the
+/// installed snapshot head it is held for continuity only; after it, the
+/// hosted-member basis and visibility are re-verified at local typed current,
+/// which the Event then advances.
+async fn store_held_successor(
+    conn: &mut AsyncPgConnection,
+    replica: &CommittedReplica,
+    key: &str,
+    head: Option<&arkret_wire::RealmCommit>,
+    anchor: Option<AnchorRow>,
+) -> Result<CommittedReplicaOutcome, PgTransactionError> {
+    let event = &replica.event;
+    let commit = &replica.commit;
+    let anchored = anchored_head(anchor)?;
+    require_direct_successor(head, commit)?;
+    if commit.stream_position <= anchored.stream_position {
+        // The installed snapshot already carries this Commit's effect.
+        store_replica_rows(conn, event, commit, key, replica.received_at).await?;
+        return Ok(CommittedReplicaOutcome::Stored);
+    }
+    if !hosts_joined_member(conn, &event.realm_id, &replica.local_service_id).await? {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "no member this Station hosts may hold the Event",
+        ));
+    }
+    require_visible(conn, event, &replica.local_service_id).await?;
+    store_replica_rows(conn, event, commit, key, replica.received_at).await?;
+    crate::replica_current::advance_in_connection(conn, event, commit).await?;
+    if crate::account_summary::changes_account_summary_inputs(&event.kind) {
+        crate::account_summary::publish_realm_account_summary_in_connection(conn, &event.realm_id)
+            .await?;
     }
     Ok(CommittedReplicaOutcome::Stored)
 }

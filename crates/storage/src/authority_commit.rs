@@ -831,9 +831,11 @@ pub enum AcceptedDeviceAuthorizationOutcome {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommittedReplicaRole {
     /// A hosted member's own verified join (its `ak.member.state{join}` or
-    /// its directed `ak.invite.accept`) on a stream this Station does not hold
-    /// yet: it opens the held stream, which stays pending anchor until the
-    /// governing Station's bootstrap snapshot is installed.
+    /// its directed `ak.invite.accept`). While no hosted member is joined it
+    /// opens the held stream -- or re-opens the stream this Station still
+    /// holds, restarting continuity at the join (decision 0122) -- which stays
+    /// pending anchor until the governing Station's bootstrap snapshot is
+    /// installed; otherwise it is an ordinary held-stream successor.
     OpeningJoin {
         member_account_id: arkret_wire::AccountId,
     },

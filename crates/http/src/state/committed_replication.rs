@@ -183,14 +183,18 @@ async fn replicate_one(
         .authority_commits()
         .held_stream_head_commit(&commit.stream_ref)
         .await?;
-    let (continuity, role) = match (&held, hosted_member_join(state, item)) {
-        (Some(head), _) => (
-            CommitContinuity::After(head),
-            CommittedReplicaRole::HeldStream,
-        ),
-        (None, Some(member_account_id)) => (
+    // A hosted member's own join is verified for its Commit signature,
+    // generation and Event binding only: whether it opens (or re-opens) the
+    // held stream or directly follows it is decided by the store under its
+    // locks, which re-proves continuity for a successor.
+    let (continuity, role) = match (hosted_member_join(state, item), &held) {
+        (Some(member_account_id), _) => (
             CommitContinuity::Standalone,
             CommittedReplicaRole::OpeningJoin { member_account_id },
+        ),
+        (None, Some(head)) => (
+            CommitContinuity::After(head),
+            CommittedReplicaRole::HeldStream,
         ),
         (None, None) => (
             CommitContinuity::StreamStart,
