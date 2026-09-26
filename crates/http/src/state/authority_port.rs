@@ -62,6 +62,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::ModerationDecision
         | EventKind::ModerationDecisionLift
         | EventKind::InviteCreate
+        | EventKind::InviteThirdParty
         | EventKind::InviteRevoke
         | EventKind::InviteCancel
         | EventKind::InviteAccept

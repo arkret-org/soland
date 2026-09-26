@@ -52,7 +52,9 @@ async fn refresh_direct_conversation_peer_claim(
         64 * 1024,
     )
     .await
-    .map_err(|_| ServiceError::Conflict("temporarily_unavailable: peer claim read unavailable".into()))?;
+    .map_err(|_| {
+        ServiceError::Conflict("temporarily_unavailable: peer claim read unavailable".into())
+    })?;
     if response.status != 200 {
         return Err(ServiceError::Conflict(
             "temporarily_unavailable: peer claim read was refused".into(),
@@ -71,7 +73,9 @@ async fn refresh_direct_conversation_peer_claim(
         &outcome,
     )
     .await
-    .map_err(|_| ServiceError::Conflict("temporarily_unavailable: peer claim receipt unavailable".into()))?;
+    .map_err(|_| {
+        ServiceError::Conflict("temporarily_unavailable: peer claim receipt unavailable".into())
+    })?;
     Ok(())
 }
 
@@ -105,6 +109,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
         arkret_wire::EventKind::InviteCreate
+            | arkret_wire::EventKind::InviteThirdParty
             | arkret_wire::EventKind::InviteRevoke
             | arkret_wire::EventKind::InviteCancel
             | arkret_wire::EventKind::InviteAccept
