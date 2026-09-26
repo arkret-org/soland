@@ -315,6 +315,14 @@ impl AuthorityProtocolPort for AppState {
             )
             .await;
         }
+        // A key revocation is likewise controller-executed for the Agent and
+        // decided by the Agent control unit.
+        if event.kind == arkret_wire::EventKind::AgentKeyRevoke {
+            return super::authority_agent_control::submit_self_agent_key_revoke(
+                self, session, &request,
+            )
+            .await;
+        }
         let (producer_guard, producer_key) =
             super::authority_producer_validation::verify_self_event_producer_key(
                 self, session, event,

@@ -222,7 +222,8 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::AuthorityCycle
                 | soland_storage::ConflictCode::AuthorityExpiryWidening
                 | soland_storage::ConflictCode::AccountabilityGrantMissing
-                | soland_storage::ConflictCode::AgentPcrGenesisDeclarationMissing),
+                | soland_storage::ConflictCode::AgentPcrGenesisDeclarationMissing
+                | soland_storage::ConflictCode::ReducerProjectionFailed),
             ) => {
                 return crate::error::render_error_with_reason_code(
                     res,

@@ -8,6 +8,7 @@ mod account_authority_device_pairing;
 mod actor_private;
 mod app_state;
 mod authority_accountability_grant;
+mod authority_agent_control;
 mod authority_agent_pcr_genesis;
 mod authority_bootstrap_validation;
 mod authority_contact;

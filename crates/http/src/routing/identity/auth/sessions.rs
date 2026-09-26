@@ -765,6 +765,33 @@ async fn enforce_agent_session_authority(
             "Agent lifecycle or key authorization is no longer active",
         ));
     }
+    // The grant's key authorization must still be the Agent's one active
+    // accepted key under an active accepted lifecycle at the Agent PCR head:
+    // a committed revoke, supersede, pause or deactivate ends the session.
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        grant.account_id.station_id.clone(),
+    ));
+    let current = crate::routing::identity::current_signer_evidence::current_agent_endpoint_key(
+        state,
+        &agent_actor,
+        verification_method,
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "Agent key authorization or lifecycle is no longer active",
+        )
+    })?;
+    if current.1.event_id != *agent_key_authorization_ref {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "auth_expired",
+            "Agent key authorization is no longer current",
+        ));
+    }
     crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &record,
