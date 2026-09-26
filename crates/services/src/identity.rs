@@ -1983,7 +1983,7 @@ pub struct KeyBackupService {
     backups: Arc<dyn KeyBackupPort>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentSessionState {
     pub granted_scope: Vec<String>,
     pub scope_details: Value,
@@ -2016,10 +2016,9 @@ pub struct SessionIdentityState {
     /// established this session. It must never be derived from `actor`.
     pub account_pk: Option<AccountPk>,
     pub actor: String,
-    pub device_id: String,
+    pub endpoint: SessionEndpointState,
     pub audience: String,
     pub session_public_key: Option<String>,
-    pub agent_session: Option<AgentSessionState>,
     /// Present only for request-scoped `ak.session.grant` authentication. This
     /// preserves the credential class and closed bootstrap binding through
     /// authorization; local/dev sessions deliberately carry `None`.
@@ -2027,6 +2026,41 @@ pub struct SessionIdentityState {
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// The authenticated endpoint kind. Only a Human session carries a DeviceId.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionEndpointState {
+    HumanDevice { device_id: String },
+    AgentRuntime { state: AgentSessionState },
+    ServiceSynthetic,
+}
+
+impl SessionIdentityState {
+    pub fn human_device_id(&self) -> Option<&String> {
+        match &self.endpoint {
+            SessionEndpointState::HumanDevice { device_id } => Some(device_id),
+            SessionEndpointState::AgentRuntime { .. } | SessionEndpointState::ServiceSynthetic => {
+                None
+            }
+        }
+    }
+
+    /// Use only after the request's Human endpoint gate. An unexpected Agent
+    /// or service call cannot acquire a synthetic DeviceId.
+    pub fn require_human_device_id(&self) -> &String {
+        self.human_device_id()
+            .expect("Human endpoint gate must precede DeviceId use")
+    }
+
+    pub fn agent_session(&self) -> Option<&AgentSessionState> {
+        match &self.endpoint {
+            SessionEndpointState::AgentRuntime { state } => Some(state),
+            SessionEndpointState::HumanDevice { .. } | SessionEndpointState::ServiceSynthetic => {
+                None
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -2111,7 +2145,7 @@ impl SessionService {
             .filter(|session| {
                 session.actor == actor_id
                     && session.revoked_at.is_none()
-                    && session.agent_session.is_some()
+                    && session.agent_session().is_some()
             })
             .count())
     }

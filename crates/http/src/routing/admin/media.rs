@@ -98,7 +98,7 @@ async fn admin_get_realm_media_service(
         json!({
             "realm_id": realm_id,
             "present": value.is_some(),
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
         }),
         "accepted",
     )
@@ -144,7 +144,7 @@ async fn get_media_statistics(
         "admin.media.statistics",
         json!({
             "count": blobs.len(),
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
         }),
         "accepted",
     )
@@ -182,7 +182,7 @@ async fn get_media_by_actor(
         "admin.media.by_actor",
         json!({
             "actor_count": rows.len(),
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
         }),
         "accepted",
     )

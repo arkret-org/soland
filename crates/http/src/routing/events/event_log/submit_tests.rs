@@ -129,10 +129,9 @@ mod applet_formal_admission_tests {
             account_pk: None,
             token_hash: "fixture".to_owned(),
             actor: actor_id.to_owned(),
-            device_id: String::new(),
+            endpoint: soland_services::identity::SessionEndpointState::ServiceSynthetic,
             audience: "ak:did_core:web:ps.example".to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: now + Duration::minutes(5),
             created_at: now,
@@ -221,7 +220,10 @@ mod applet_formal_admission_tests {
         );
 
         let mut wrong_session_device = session.clone();
-        wrong_session_device.device_id = "device-other".to_owned();
+        wrong_session_device.endpoint =
+            soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "device-other".to_owned(),
+            };
         assert!(
             admission
                 .applet_formal_producer_signing_key(
@@ -376,10 +378,11 @@ mod internal_event_admission_tests {
             account_pk: None,
             token_hash: "internal-session".to_owned(),
             actor: actor.to_owned(),
-            device_id: device_id.to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: device_id.to_owned(),
+            },
             audience: "soland".to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: now + Duration::minutes(5),
             created_at: now,

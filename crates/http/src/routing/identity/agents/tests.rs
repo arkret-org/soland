@@ -119,10 +119,11 @@ fn test_session(actor: &str) -> SessionRecord {
         account_pk: None,
         token_hash: format!("test-session:{actor}"),
         actor: actor.to_owned(),
-        device_id: "test-device".to_owned(),
+        endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+            device_id: "test-device".to_owned(),
+        },
         audience: "did:web:soland.test".to_owned(),
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at: now() + chrono::Duration::minutes(5),
         created_at: now(),

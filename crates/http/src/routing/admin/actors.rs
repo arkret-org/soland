@@ -71,7 +71,7 @@ async fn get_actor(
         "admin.actors.get",
         json!({
             "actor_id": actor_id,
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
         }),
         "accepted",
     )

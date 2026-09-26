@@ -290,7 +290,7 @@ async fn session_is_agent_context(
     state: &AppState,
     session: &soland_services::identity::SessionIdentityState,
 ) -> Result<bool, AppError> {
-    if session.agent_session.is_some() {
+    if session.agent_session().is_some() {
         return Ok(true);
     }
     session_actor_is_agent_runtime(state.identities(), &session.actor).await

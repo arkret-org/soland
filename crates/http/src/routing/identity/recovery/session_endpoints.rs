@@ -823,7 +823,7 @@ fn recovery_grant_coordinates(
             "recovery session grant has the wrong holder binding",
         ));
     };
-    if device_id.as_str() != session.device_id {
+    if device_id.as_str() != session.require_human_device_id() {
         return Err(AppError::unauthenticated(
             "recovery candidate device does not match the authenticated session",
         ));

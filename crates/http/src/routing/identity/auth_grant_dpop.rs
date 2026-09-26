@@ -53,7 +53,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::Request;
 use sha2::{Digest, Sha256};
 use soland_services::identity::{
-    AgentSessionState as AgentSessionRecord, SessionGrantAuthorizationState,
+    AgentSessionState as AgentSessionRecord, SessionEndpointState, SessionGrantAuthorizationState,
     SessionIdentityState as SessionRecord,
 };
 
@@ -588,7 +588,7 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
 
 fn session_binding_from_introspection(
     grant: &SessionGrantValidationMetadata,
-) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
+) -> Result<SessionEndpointState, AuthError> {
     let authority = grant.account_id();
     if authority.station_id != grant.audience_id {
         return Err(unauthenticated(
@@ -610,13 +610,8 @@ fn session_binding_from_introspection(
                 "agent holder binding does not match the introspected subject",
             ));
         }
-        return Ok((
-            // SessionIdentityState still has a Human-only internal field. An
-            // Agent carries no DeviceId; the empty value is never a queue or
-            // MLS endpoint selector and every Agent operation uses the typed
-            // holder binding above instead.
-            String::new(),
-            Some(AgentSessionRecord {
+        return Ok(SessionEndpointState::AgentRuntime {
+            state: AgentSessionRecord {
                 granted_scope: grant.scopes.clone(),
                 scope_details: serde_json::json!({
                     "session_grant_id": grant.id,
@@ -625,8 +620,8 @@ fn session_binding_from_introspection(
                     "verification_method": verification_method,
                 }),
                 freshness_state: FreshnessState::Fresh,
-            }),
-        ));
+            },
+        });
     }
 
     if let SessionGrantHolderBinding::RecoveryCandidateDevice { device_id } = &grant.holder_binding
@@ -640,7 +635,9 @@ fn session_binding_from_introspection(
                 "recovery session grant has an invalid candidate-device binding",
             ));
         }
-        return Ok((device_id.to_string(), None));
+        return Ok(SessionEndpointState::HumanDevice {
+            device_id: device_id.to_string(),
+        });
     }
 
     let binding = grant.human_device_authorization_selector().map_err(|_| {
@@ -668,7 +665,9 @@ fn session_binding_from_introspection(
             "session grant device metadata does not match its holder binding",
         ));
     }
-    Ok((binding.device_id.to_string(), None))
+    Ok(SessionEndpointState::HumanDevice {
+        device_id: binding.device_id.to_string(),
+    })
 }
 
 pub(crate) fn session_record_from_introspected_grant_for_logout(
@@ -681,17 +680,16 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
             "session grant audience does not match this Station",
         ));
     }
-    let (device_id, agent_session) = session_binding_from_introspection(grant)?;
+    let endpoint = session_binding_from_introspection(grant)?;
     let token_hash =
         crate::routing::identity::auth::session_credential_hash(grant_jwt, state.service_id());
     Ok(SessionRecord {
         token_hash,
         account_pk: None,
         actor: grant.account_id.principal_id.to_string(),
-        device_id,
+        endpoint,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.as_str().to_owned()),
-        agent_session,
         session_grant: Some(SessionGrantAuthorizationState {
             grant_id: grant.id.clone(),
             revocation_ref: grant.revocation_ref.clone(),
@@ -801,7 +799,7 @@ pub(crate) async fn grant_dpop_session(
     }
 
     // 6a/6b. Human/device and agent grants carry closed typed holder bindings.
-    let (device_id, agent_session) = session_binding_from_introspection(&grant)?;
+    let endpoint = session_binding_from_introspection(&grant)?;
 
     // 6c. grant not expired.
     if grant.expires_at <= crate::wire::now() {
@@ -816,11 +814,7 @@ pub(crate) async fn grant_dpop_session(
     verify_grant_dpop_request(state, req, grant_jwt, Some(&grant.cnf_jkt))?;
 
     Ok(session_from_verified_grant(
-        state,
-        grant_jwt,
-        grant,
-        device_id,
-        agent_session,
+        state, grant_jwt, grant, endpoint,
     ))
 }
 
@@ -834,8 +828,7 @@ pub(crate) fn session_from_verified_grant(
     state: &AppState,
     grant_jwt: &str,
     grant: SessionGrantValidationMetadata,
-    device_id: String,
-    agent_session: Option<AgentSessionRecord>,
+    endpoint: SessionEndpointState,
 ) -> SessionRecord {
     let grant_context = SessionGrantAuthorizationState {
         grant_id: grant.id.clone(),
@@ -855,10 +848,9 @@ pub(crate) fn session_from_verified_grant(
         ),
         account_pk: None,
         actor: grant.account_id.principal_id.to_string(),
-        device_id,
+        endpoint,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.into_string()),
-        agent_session,
         session_grant: Some(grant_context),
         expires_at: grant.expires_at,
         created_at: crate::wire::now(),
@@ -915,7 +907,7 @@ pub(crate) async fn authenticated_session_account_id(
 /// WebSocket binding which validates its holder proof out of band.
 pub(crate) fn grant_session_binding(
     grant: &SessionGrantValidationMetadata,
-) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
+) -> Result<SessionEndpointState, AuthError> {
     session_binding_from_introspection(grant)
 }
 
@@ -1306,8 +1298,8 @@ mod tests {
         assert!(session_binding_from_introspection(&grant).is_err());
         grant.audience_id = grant.account_id.station_id.clone();
         let expected = grant.account_id.clone();
-        let (device, agent) = session_binding_from_introspection(&grant).unwrap();
-        let mut session = session_from_verified_grant(&state, "test-grant", grant, device, agent);
+        let endpoint = session_binding_from_introspection(&grant).unwrap();
+        let mut session = session_from_verified_grant(&state, "test-grant", grant, endpoint);
         // This is a foreign credential snapshot, not authentication at this
         // ambient Station; its audience remains bound to its signed authority.
         session.audience = expected.station_id.to_string();
@@ -1356,8 +1348,12 @@ mod tests {
             .unwrap(),
         };
 
-        let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
-        let agent_session = agent_session.unwrap();
+        let SessionEndpointState::AgentRuntime {
+            state: agent_session,
+        } = session_binding_from_introspection(&grant).unwrap()
+        else {
+            panic!("Agent grant must produce an Agent endpoint");
+        };
         assert_eq!(
             agent_session.granted_scope,
             vec!["ak.self.committed_event.read.scan.v1"]

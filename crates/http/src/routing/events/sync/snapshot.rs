@@ -89,11 +89,12 @@ pub(crate) async fn build_sync_snapshot(
     let mut to_device_limited = false;
     let mut to_device_next_cursor = None;
     let mut to_device_lost = None;
-    let to_device = if let Some(session) = session.filter(|session| session.agent_session.is_none())
+    let to_device = if let Some(session) =
+        session.filter(|session| session.agent_session().is_none())
     {
         let lost_watermark = match state
             .deliveries()
-            .device_message_lost_watermark(&session.actor, &session.device_id)
+            .device_message_lost_watermark(&session.actor, &session.require_human_device_id())
             .await
         {
             Ok(watermark) => watermark,

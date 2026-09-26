@@ -107,14 +107,19 @@ async fn list(
             .map_err(|error| invalid_cursor(error))?,
         limit: Some(limit),
     };
-    let active_series = active_pointers_for_device(state, account, &session.device_id).await?;
+    let active_series =
+        active_pointers_for_device(state, account, &session.require_human_device_id()).await?;
     let filter = arkret_server::cursor_filter_digest(&json!({
         "operation":operation, "series_id":query.series_id, "backup_kind":query.backup_kind,
         "order":"backup_kind,series_id,series_seq,backup_id", "active_series":active_series,
     }))
     .map_err(invalid_cursor)?;
-    let context = CursorBindingContext::for_account(account, session.device_id.clone(), filter)
-        .map_err(invalid_cursor)?;
+    let context = CursorBindingContext::for_account(
+        account,
+        session.require_human_device_id().clone(),
+        filter,
+    )
+    .map_err(invalid_cursor)?;
     let previous = if let Some(token) = &query.cursor {
         let decoded = CursorAuthority::decode_stream(token.as_str()).map_err(invalid_cursor)?;
         let stored = state.sync().cursor(&decoded.h).await.map_err(internal)?;
@@ -133,7 +138,7 @@ async fn list(
     } else {
         None
     };
-    let device_id = arkret_wire::DeviceId::new(session.device_id.clone())
+    let device_id = arkret_wire::DeviceId::new(session.require_human_device_id().clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let confirmed = state
         .key_backups()

@@ -105,10 +105,11 @@ mod tests {
             account_pk: None,
             token_hash: "directory-test-token".to_owned(),
             actor: alice.to_owned(),
-            device_id: "ak:device:019a0000-0000-7000-8000-000000000001".to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "ak:device:019a0000-0000-7000-8000-000000000001".to_owned(),
+            },
             audience: state.service_id().clone(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: observed_at + chrono::Duration::hours(1),
             created_at: observed_at,

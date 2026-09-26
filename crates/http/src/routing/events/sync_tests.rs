@@ -469,10 +469,11 @@ pub(crate) fn roster_session(state: &AppState, actor: &str) -> SessionIdentitySt
         account_pk: None,
         token_hash: "token".to_owned(),
         actor: actor.to_owned(),
-        device_id: "device-1".to_owned(),
+        endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+            device_id: "device-1".to_owned(),
+        },
         audience: state.service_id().clone(),
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at: now() + chrono::Duration::hours(1),
         created_at: now(),

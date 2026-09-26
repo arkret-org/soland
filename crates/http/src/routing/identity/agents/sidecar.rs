@@ -495,7 +495,7 @@ async fn sidecar_view(
     if controller_actor.as_account_id() != Some(&controller_account) {
         return Err(AppError::not_found("Sidecar not found"));
     }
-    let controller_device_id = session.device_id.as_str();
+    let controller_device_id = session.require_human_device_id().as_str();
     let desired =
         derive_sidecar_desired_agent_ids(state, &record.realm_id, &controller_account).await?;
     let desired_typed = typed_agent_ids(&desired)?;

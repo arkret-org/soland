@@ -76,7 +76,7 @@ pub(crate) async fn read(
     // every request. Agent and recovery credentials must not receive this
     // controller-holder-private projection.
     let pending_allowed = pending_intents_allowed(
-        session.agent_session.is_some(),
+        session.agent_session().is_some(),
         session.account_pk.is_some(),
     );
     let watermark = state
@@ -301,7 +301,7 @@ pub(crate) async fn read(
                         .get("key")
                         .and_then(Value::as_str)
                         .ok_or("account data key absent")?;
-                    if event.actor_id!=actor || crate::routing::identity::account_data::is_service_internal_account_data_key(key) || (session.agent_session.is_some() && crate::routing::identity::account_data::is_controller_private_account_data_key(key)) {continue;}
+                    if event.actor_id!=actor || crate::routing::identity::account_data::is_service_internal_account_data_key(key) || (session.agent_session().is_some() && crate::routing::identity::account_data::is_controller_private_account_data_key(key)) {continue;}
                     account_data.events.push(event);
                 }
 

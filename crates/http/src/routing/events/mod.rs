@@ -49,7 +49,7 @@ pub(crate) fn require_agent_session_scope(
     session: &SessionRecord,
     required_scope: &str,
 ) -> Result<(), soland_http::error::AppError> {
-    let Some(agent_session) = session.agent_session.as_ref() else {
+    let Some(agent_session) = session.agent_session() else {
         return Ok(());
     };
     if agent_session
@@ -108,10 +108,9 @@ mod tests {
             account_pk: None,
             token_hash: "grant".to_owned(),
             actor: "did:web:agent.example".to_owned(),
-            device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             audience: "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
             session_public_key: Some("{}".to_owned()),
-            agent_session: Some(AgentSessionRecord {
+            endpoint: soland_services::identity::SessionEndpointState::AgentRuntime { state: AgentSessionRecord {
                 granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
                 scope_details: serde_json::json!({
                     "controller_principal_id": "ak:did_core:web:alice.example",
@@ -124,7 +123,7 @@ mod tests {
                     "policy_refs": [],
                 }),
                 freshness_state: FreshnessState::Fresh,
-            }),
+            } },
             session_grant: None,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
             created_at: Utc::now(),
@@ -137,10 +136,9 @@ mod tests {
             account_pk: None,
             token_hash: "human".to_owned(),
             actor: "did:web:alice.example".to_owned(),
-            device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice { device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned() },
             audience: "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
             created_at: Utc::now(),

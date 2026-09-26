@@ -64,7 +64,7 @@ async fn keys_upload(
     let body = body.into_inner();
     let unsigned = body.unsigned();
     let device_id = body.device_id.as_str().to_owned();
-    if device_id != session.device_id {
+    if device_id.as_str() != session.require_human_device_id() {
         return Err(AppError::capability_denied(
             "session device does not match upload device",
         ));

@@ -213,7 +213,7 @@ pub(super) fn validate_event_audience_fields(
         ));
     }
     if let Some(device_id) = event_string_field(object, &["device_id"])
-        && device_id != session.device_id
+        && device_id.as_str() != session.require_human_device_id()
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,

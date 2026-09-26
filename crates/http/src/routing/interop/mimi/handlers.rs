@@ -745,7 +745,7 @@ async fn verify_mimi_consent_requester_proof(
             .map_err(|_| mimi_consent_proof_invalid())?;
         if actor.as_account_id() != Some(&grant.account_id)
             || agent_id != actor.signing_principal_id()
-            || session.agent_session.as_ref().is_none_or(|agent| {
+            || session.agent_session().is_none_or(|agent| {
                 !agent.granted_scope.iter().any(|scope| {
                     scope == arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REQUEST_CONSENT_V1
                 })
@@ -900,10 +900,11 @@ async fn verify_mimi_consent_update_authority(
                 account_pk: None,
                 token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
                 actor: body.actor_id.to_string(),
-                device_id,
+                endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                    device_id,
+                },
                 audience: state.service_id().to_string(),
                 session_public_key: None,
-                agent_session: None,
                 session_grant: None,
                 expires_at: now() + chrono::Duration::minutes(5),
                 created_at: now(),

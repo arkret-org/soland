@@ -463,7 +463,7 @@ pub(in crate::routing) fn validate_device_revoke_submission(
             "ak.device.revoke payload.device_id is required",
         ));
     }
-    if device_id == session.device_id {
+    if device_id == session.require_human_device_id() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "cannot_self_revoke",
@@ -660,10 +660,11 @@ mod refs_limit_tests {
             token_hash: "test".into(),
             account_pk: None,
             actor: "ak:did_core:web:alice.example".into(),
-            device_id: "device".into(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "device".into(),
+            },
             audience: state.service_id().clone(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),
@@ -718,10 +719,11 @@ mod refs_limit_tests {
             token_hash: "contact-visibility".into(),
             account_pk: None,
             actor: "ak:did_core:web:alice.example".into(),
-            device_id: "device".into(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "device".into(),
+            },
             audience: state.service_id().clone(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),

@@ -123,7 +123,7 @@ async fn issue_ice_config(
             "actor_id must match the authenticated actor",
         ));
     }
-    if validate_device_id(device_id).is_err() || device_id != session.device_id {
+    if validate_device_id(device_id).is_err() || device_id != session.require_human_device_id() {
         return Err(AppError::param_invalid(
             "device_id must match the authenticated device",
         ));
@@ -515,7 +515,7 @@ async fn handle_rtc_token(
         ));
     }
     let actor_id = body.actor_id.clone();
-    if body.device_id.as_str() != session.device_id {
+    if body.device_id.as_str() != session.require_human_device_id() {
         return Err(AppError::param_invalid(
             "device_id must match the authenticated device",
         ));

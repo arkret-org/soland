@@ -99,7 +99,7 @@ pub(crate) async fn verify_self_event_producer_key(
         } => {
             if agent_id != &account.principal_id
                 || verification_method != &proof.verification_method
-                || session.agent_session.is_none()
+                || session.agent_session().is_none()
                 || grant.device_binding.is_some()
             {
                 return Err(rejected("Agent grant triple differs from Event producer"));
@@ -377,10 +377,11 @@ mod tests {
             token_hash: "local-only".to_owned(),
             account_pk: None,
             actor: account.principal_id.as_str().to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-0000000000a1".to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "ak:device:01904100-0000-7000-8000-0000000000a1".to_owned(),
+            },
             audience: account.station_id.as_str().to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: now + chrono::Duration::hours(1),
             created_at: now,
@@ -399,10 +400,11 @@ mod tests {
             token_hash: "human-session".to_owned(),
             account_pk: None,
             actor: account.principal_id.as_str().to_owned(),
-            device_id: device_id.as_str().to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: device_id.as_str().to_owned(),
+            },
             audience: account.station_id.as_str().to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: Some(SessionGrantAuthorizationState {
                 grant_id: arkret_identifiers::SessionGrantId::from_issuance_digest([0x42; 32]),
                 revocation_ref: "fixture".to_owned(),

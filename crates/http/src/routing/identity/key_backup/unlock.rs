@@ -232,7 +232,12 @@ pub(super) async fn verify_key_backup_unlock_proof(
             .map_err(|error| AppError::capability_denied(error.to_string()))?,
         state.service_core_id(),
     );
-    validate_key_backup_unlock_proof_shape(proof, &account_id, &session.device_id, backup)?;
+    validate_key_backup_unlock_proof_shape(
+        proof,
+        &account_id,
+        &session.require_human_device_id(),
+        backup,
+    )?;
     let typed: KeyBackupUnlockProof =
         serde_json::from_value(proof.clone()).map_err(|error| schema_error(error.to_string()))?;
     let now = Utc::now();
@@ -263,7 +268,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
             crate::routing::identity::device_generation::active_device_revocation_gate_selector(
                 state,
                 &session.actor,
-                &session.device_id,
+                &session.require_human_device_id(),
             )
             .await
             .map_err(|error| AppError::capability_denied(error.to_string()))?;
@@ -299,7 +304,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
                 .identities()
                 .find_device(soland_services::identity::FindDeviceQuery {
                     actor_id: session.actor.clone(),
-                    device_id: session.device_id.clone(),
+                    device_id: session.require_human_device_id().clone(),
                 })
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
@@ -311,7 +316,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
                 .ok_or_else(|| AppError::capability_denied("current device key missing"))?;
             if !key_backup_verification_method_matches_device_key(
                 &session.actor,
-                &session.device_id,
+                &session.require_human_device_id(),
                 key,
                 method,
             ) {
@@ -416,7 +421,7 @@ pub(super) async fn issue_key_backup_unlock_challenge(
     crate::routing::identity::device_generation::active_device_revocation_gate_selector(
         state,
         &session.actor,
-        &session.device_id,
+        &session.require_human_device_id(),
     )
     .await
     .map_err(|error| AppError::capability_denied(error.to_string()))?;
@@ -448,11 +453,11 @@ pub(super) async fn issue_key_backup_unlock_challenge(
         nonce: random(16),
         operation: "ak.self.keys.backups.command.unlock.v1".to_owned(),
         account_id: arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(session.actor)
+            arkret_wire::DidCoreId::new(session.actor.clone())
                 .map_err(|error| AppError::internal(error.to_string()))?,
             state.service_core_id(),
         ),
-        requesting_device_id: arkret_wire::DeviceId::new(session.device_id)
+        requesting_device_id: arkret_wire::DeviceId::new(session.require_human_device_id())
             .map_err(|error| AppError::internal(error.to_string()))?,
         backup_id: typed.backup_id,
         series_id: typed.series_id,

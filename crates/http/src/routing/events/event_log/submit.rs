@@ -468,7 +468,15 @@ impl InternalEventAdmission {
         object: &serde_json::Map<String, Value>,
     ) -> bool {
         session.actor == self.session_actor_id
-            && session.device_id == self.device_id
+            && match &session.endpoint {
+                soland_services::identity::SessionEndpointState::HumanDevice { device_id } => {
+                    device_id == &self.device_id
+                }
+                soland_services::identity::SessionEndpointState::ServiceSynthetic => {
+                    self.device_id.is_empty()
+                }
+                soland_services::identity::SessionEndpointState::AgentRuntime { .. } => false,
+            }
             && object
                 .get("actor_id")
                 .cloned()

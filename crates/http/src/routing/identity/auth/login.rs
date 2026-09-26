@@ -189,11 +189,12 @@ pub(super) async fn dev_login(
         token_hash,
         account_pk: Some(account_pk),
         actor: actor_str.to_owned(),
-        device_id: device_id_str.to_owned(),
+        endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+            device_id: device_id_str.to_owned(),
+        },
         audience: state.service_id().clone(),
         // dev-login does not carry a ak.session.grant signing key; bearer-only.
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at,
         created_at: now(),

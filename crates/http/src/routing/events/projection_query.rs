@@ -1460,10 +1460,11 @@ mod relation_actor_endpoint_tests {
             token_hash: "test".into(),
             account_pk: None,
             actor: principal.to_string(),
-            device_id: "device".into(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "device".into(),
+            },
             audience: state.service_id().clone(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: now + chrono::Duration::hours(1),
             created_at: now,

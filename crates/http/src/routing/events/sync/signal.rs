@@ -227,8 +227,8 @@ async fn admit_signal(
     // class action at both the declared Commit and the current accepted head.
     verify_signal_scope_authority(state, envelope, &actor).await?;
 
-    match (&envelope.sender_device_id, &session.agent_session) {
-        (Some(device_id), None) if device_id.as_str() == session.device_id => {
+    match (&envelope.sender_device_id, session.agent_session()) {
+        (Some(device_id), None) if device_id.as_str() == session.require_human_device_id() => {
             verify_signal_device_proof(state, envelope, &actor).await
         }
         (None, Some(_)) => verify_signal_agent_proof(state, session, envelope, &actor).await,
@@ -402,8 +402,7 @@ async fn verify_signal_agent_proof(
     actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
     let agent_session = session
-        .agent_session
-        .as_ref()
+        .agent_session()
         .filter(|agent| agent.freshness_state == arkret_wire::FreshnessState::Fresh)
         .ok_or_else(|| signal_proof_invalid("Agent Signal requires a fresh Agent session"))?;
     let _ = agent_session;
@@ -1036,7 +1035,7 @@ pub(crate) async fn pending_signals_for_subscriber(
         }
         let watermark = state
             .deliveries()
-            .signal_watermark(&actor_key, &session.device_id, &realm_id)
+            .signal_watermark(&actor_key, &session.require_human_device_id(), &realm_id)
             .await
             .unwrap_or(0);
         let records = state
@@ -1052,7 +1051,8 @@ pub(crate) async fn pending_signals_for_subscriber(
             }
             // A device never receives its own Signal back.
             if record.sender_actor_id == actor_key
-                && record.sender_device_id.as_deref() == Some(session.device_id.as_str())
+                && record.sender_device_id.as_deref()
+                    == Some(session.require_human_device_id().as_str())
             {
                 continue;
             }
@@ -1064,7 +1064,12 @@ pub(crate) async fn pending_signals_for_subscriber(
         if highest > watermark {
             let _ = state
                 .deliveries()
-                .advance_signal_watermark(&actor_key, &session.device_id, &realm_id, highest)
+                .advance_signal_watermark(
+                    &actor_key,
+                    &session.require_human_device_id(),
+                    &realm_id,
+                    highest,
+                )
                 .await;
         }
     }

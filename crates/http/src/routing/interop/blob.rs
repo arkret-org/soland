@@ -597,7 +597,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 "blob.get",
                 json!({
                     "blob_ref": blob_ref.clone(),
-                    "device_id": session.as_ref().map(|session| session.device_id.clone()),
+                    "device_id": session.as_ref().map(|session| session.require_human_device_id().clone()),
                     "purpose": purpose,
                     "realm_id": blob.realm_id.clone(),
                     "presigned": session.is_none(),
@@ -1730,10 +1730,11 @@ mod tests {
             token_hash: "blob-membership-fixture".to_owned(),
             account_pk: None,
             actor: principal.to_string(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000071".to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "ak:device:01904100-0000-7000-8000-000000000071".to_owned(),
+            },
             audience: "ak:did_core:web:other-station.example".to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: now() + chrono::Duration::minutes(5),
             created_at: now(),

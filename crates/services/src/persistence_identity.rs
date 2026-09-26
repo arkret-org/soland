@@ -1194,23 +1194,22 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
         &self,
         token_hash: &str,
     ) -> crate::ServiceResult<Option<crate::identity::SessionIdentityState>> {
-        Ok(self
-            .0
+        self.0
             .sessions()
             .get(token_hash)
             .await?
-            .map(application_session_identity))
+            .map(application_session_identity)
+            .transpose()
     }
 
     async fn sessions(&self) -> crate::ServiceResult<Vec<crate::identity::SessionIdentityState>> {
-        Ok(self
-            .0
+        self.0
             .sessions()
             .snapshot_all()
             .await?
             .into_iter()
             .map(application_session_identity)
-            .collect())
+            .collect()
     }
 
     async fn save_session(
@@ -1219,7 +1218,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
     ) -> crate::ServiceResult<()> {
         self.0
             .sessions()
-            .put(&persistence_session_identity(session))
+            .put(&persistence_session_identity(session)?)
             .await?;
         Ok(())
     }
@@ -1237,7 +1236,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
         }
         session.revoked_at = Some(revoked_at);
         self.0.sessions().put(&session).await?;
-        Ok(Some(application_session_identity(session)))
+        Ok(Some(application_session_identity(session)?))
     }
 
     async fn revoke_actor_sessions(
@@ -1284,55 +1283,57 @@ impl PersistenceSessions {
 
 fn application_session_identity(
     session: soland_storage::SessionRecord,
-) -> crate::identity::SessionIdentityState {
-    crate::identity::SessionIdentityState {
+) -> crate::ServiceResult<crate::identity::SessionIdentityState> {
+    // Local bearers are Human device sessions. Agent sessions are accepted
+    // only as request-scoped SessionGrants; a legacy empty DeviceId must not
+    // become a synthetic authenticated endpoint.
+    if session.agent_session.is_some() || session.device_id.is_empty() {
+        return Err(crate::ServiceError::SchemaViolation(
+            "stored local session has no Human device binding".to_owned(),
+        ));
+    }
+    Ok(crate::identity::SessionIdentityState {
         token_hash: session.token_hash,
         account_pk: Some(session.account_pk),
         actor: session.actor,
-        device_id: session.device_id,
+        endpoint: crate::identity::SessionEndpointState::HumanDevice {
+            device_id: session.device_id,
+        },
         audience: session.audience,
         session_public_key: session.session_public_key,
-        agent_session: session
-            .agent_session
-            .map(|agent| crate::identity::AgentSessionState {
-                granted_scope: agent.granted_scope,
-                scope_details: agent.scope_details,
-                freshness_state: agent.freshness_state,
-            }),
         session_grant: None,
         expires_at: session.expires_at,
         created_at: session.created_at,
         revoked_at: session.revoked_at,
-    }
+    })
 }
 
 fn persistence_session_identity(
     session: crate::identity::SessionIdentityState,
-) -> soland_storage::SessionRecord {
+) -> crate::ServiceResult<soland_storage::SessionRecord> {
     debug_assert!(
         session.session_grant.is_none(),
         "request-scoped session grants must never be persisted"
     );
-    soland_storage::SessionRecord {
+    let crate::identity::SessionEndpointState::HumanDevice { device_id } = session.endpoint else {
+        return Err(crate::ServiceError::SchemaViolation(
+            "only Human device sessions may be stored as local bearers".to_owned(),
+        ));
+    };
+    Ok(soland_storage::SessionRecord {
         token_hash: session.token_hash,
         account_pk: session
             .account_pk
             .expect("only account-bound sessions may be persisted"),
         actor: session.actor,
-        device_id: session.device_id,
+        device_id,
         audience: session.audience,
         session_public_key: session.session_public_key,
-        agent_session: session
-            .agent_session
-            .map(|agent| soland_storage::AgentSessionRecord {
-                granted_scope: agent.granted_scope,
-                scope_details: agent.scope_details,
-                freshness_state: agent.freshness_state,
-            }),
+        agent_session: None,
         expires_at: session.expires_at,
         created_at: session.created_at,
         revoked_at: session.revoked_at,
-    }
+    })
 }
 
 #[async_trait::async_trait]

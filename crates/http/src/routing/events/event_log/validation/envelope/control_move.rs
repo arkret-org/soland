@@ -98,7 +98,7 @@ pub(super) async fn reject_revoked_actor_device_signature(
         .collect::<std::collections::BTreeSet<_>>();
 
     let mut candidate_devices = proof_devices;
-    candidate_devices.insert(session.device_id.clone());
+    candidate_devices.insert(session.require_human_device_id().clone());
     if let Some(device_id) = event_string_field(object, &["device_id"]) {
         candidate_devices.insert(device_id);
     }

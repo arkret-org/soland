@@ -37,13 +37,13 @@ pub(crate) fn session_actor_from_credential(
         .map(|grant| &grant.holder_binding)
     {
         Some(SessionGrantHolderBinding::AgentRuntime { agent_id, .. }) => {
-            if agent_id != &principal || session.agent_session.is_none() {
+            if agent_id != &principal || session.agent_session().is_none() {
                 return Err(AppError::unauthenticated(
                     "AgentRuntime holder does not match the session",
                 ));
             }
         }
-        Some(_) if session.agent_session.is_some() => {
+        Some(_) if session.agent_session().is_some() => {
             return Err(AppError::unauthenticated(
                 "human credential cannot carry an Agent session",
             ));
@@ -56,7 +56,7 @@ pub(crate) fn session_actor_from_credential(
 /// Credential classification is independent of the shared AccountId shape.
 /// Callers have already authenticated the grant or stored Agent session.
 fn has_agent_credential(session: &SessionIdentityState) -> bool {
-    session.agent_session.is_some()
+    session.agent_session().is_some()
         || session.session_grant.as_ref().is_some_and(|grant| {
             matches!(
                 grant.holder_binding,
@@ -146,10 +146,11 @@ mod tests {
             token_hash: "test".into(),
             account_pk: None,
             actor: "ak:did_core:web:alice.example".into(),
-            device_id: "device".into(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "device".into(),
+            },
             audience: state.service_id().clone(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),
@@ -179,11 +180,13 @@ mod tests {
     async fn verified_agent_session_uses_account_identity_without_a_human_account_row() {
         let state = state();
         let mut session = session(&state);
-        session.agent_session = Some(soland_services::identity::AgentSessionState {
-            granted_scope: vec![],
-            scope_details: serde_json::json!({}),
-            freshness_state: arkret_wire::FreshnessState::Fresh,
-        });
+        session.endpoint = soland_services::identity::SessionEndpointState::AgentRuntime {
+            state: soland_services::identity::AgentSessionState {
+                granted_scope: vec![],
+                scope_details: serde_json::json!({}),
+                freshness_state: arkret_wire::FreshnessState::Fresh,
+            },
+        };
         let actor = session_actor_from_credential(&state, &session).unwrap();
         assert_eq!(
             actor,

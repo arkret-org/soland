@@ -753,7 +753,7 @@ async fn contact_authority_realm(
                 .identities()
                 .find_device(soland_services::identity::FindDeviceQuery {
                     actor_id: account_id.principal_id.to_string(),
-                    device_id: session.device_id.clone(),
+                    device_id: session.require_human_device_id().clone(),
                 })
                 .await
                 .map_err(|error| {

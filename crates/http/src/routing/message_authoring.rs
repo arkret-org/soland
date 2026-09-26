@@ -303,7 +303,7 @@ async fn prepare(
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
             account.principal_id.as_str(),
-            &session.device_id,
+            &session.require_human_device_id(),
         )
         .await
         .map_err(|e| AppError::capability_denied(e.to_string()))?;
@@ -313,7 +313,9 @@ async fn prepare(
     let operation_id = "ak.self.messages.command.prepare.v1";
     let key = format!(
         "{}:{}:{}",
-        session.device_id, generation.authorization_ref.event_id, body.request_id
+        session.require_human_device_id(),
+        generation.authorization_ref.event_id,
+        body.request_id
     );
     if let Some(record) = state
         .jobs()
@@ -339,7 +341,13 @@ async fn prepare(
         visible_target_scope(state, &body.realm_id, &body.intent.strand_id, &actor).await?;
         return json_ok(result);
     }
-    validate_encryption_context(state, &body.intent.content, &scope, &session.device_id).await?;
+    validate_encryption_context(
+        state,
+        &body.intent.content,
+        &scope,
+        &session.require_human_device_id(),
+    )
+    .await?;
     let digest_suite = state
         .projections()
         .realm_digest_suite(body.realm_id.as_str());

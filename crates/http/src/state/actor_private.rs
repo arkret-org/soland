@@ -120,7 +120,7 @@ async fn fanout_account_data(
     let (Ok(sender_account_id), Ok(sender_device_id)) = (
         crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(state, session)
             .await,
-        arkret_wire::DeviceId::new(session.device_id.clone()),
+        arkret_wire::DeviceId::new(session.require_human_device_id().clone()),
     ) else {
         tracing::warn!("accepted account data has no human-device sender to fan out from");
         return;

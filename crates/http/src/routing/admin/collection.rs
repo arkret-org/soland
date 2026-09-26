@@ -154,7 +154,7 @@ pub(super) async fn admin_collection(
         "admin.collection",
         json!({
             "resource": resource.clone(),
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
             "count": page.len(),
         }),
         "accepted",

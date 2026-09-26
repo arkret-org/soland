@@ -214,10 +214,9 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
         // An applet service is not a device. This session authenticates the
         // source service signature, so it names no device rather than a
         // literal that no device directory can resolve.
-        device_id: String::new(),
+        endpoint: soland_services::identity::SessionEndpointState::ServiceSynthetic,
         audience: state.service_id().clone(),
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at: now + chrono::Duration::minutes(5),
         created_at: now,

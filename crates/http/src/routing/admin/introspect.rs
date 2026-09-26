@@ -196,7 +196,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         expires_at: Some(arkret_canonical::normalize_timestamp_canonical(
             session.expires_at,
         )),
-        device_id: Some(session.device_id.clone()),
+        device_id: Some(session.require_human_device_id().clone()),
         audit_context: serde_json::json!({ "synthetic": "development_mode" }),
     }
 }

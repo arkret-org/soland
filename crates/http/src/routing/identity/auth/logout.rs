@@ -89,7 +89,7 @@ pub(super) async fn logout(
                 state, &grant_jwt, &grant,
             )
             .map_err(auth_error_to_app_error)?;
-        if session.agent_session.is_some() {
+        if session.agent_session().is_some() {
             return Err(AppError::unauthenticated(
                 "account logout requires a device-bound session grant",
             ));
@@ -98,7 +98,7 @@ pub(super) async fn logout(
             grant_token_digest: digest.clone(),
             revocation_ref: grant.revocation_ref,
             account_id: grant.account_id,
-            device_id: arkret_wire::DeviceId::new(session.device_id)
+            device_id: arkret_wire::DeviceId::new(session.require_human_device_id())
                 .map_err(|error| AppError::internal(error.to_string()))?,
             cnf_jkt: grant.cnf_jkt,
             auth_side_confirmed: false,
@@ -228,13 +228,14 @@ async fn dev_mode_local_logout(
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
         let delivery_purge =
-            purge_device_delivery_state(state, &session.actor, &session.device_id).await;
+            purge_device_delivery_state(state, &session.actor, &session.require_human_device_id())
+                .await;
         append_audit_log(
             state,
             Some(&session.actor),
             "auth.logout",
             json!({
-                "device_id": session.device_id,
+                "device_id": session.require_human_device_id(),
                 "revoked_at": session.revoked_at,
                 "to_device_messages_dropped": delivery_purge.to_device_messages_dropped,
                 "push_registrations_removed": delivery_purge.push_registrations_removed,
@@ -611,7 +612,7 @@ async fn verify_cross_session_revoke_proof(
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!("configured service_id is not a valid DID: {error}"))
         })?;
-    let session_device = DeviceId::new(session.device_id.clone())
+    let session_device = DeviceId::new(session.require_human_device_id().clone())
         .map_err(|_| AppError::param_invalid("session device_id is not a valid DeviceId"))?;
     let expected_digest = arkret_models_collaboration::account_lifecycle::AccountLifecycleProof::session_revoke_request_digest(
         &actor,

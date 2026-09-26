@@ -15,10 +15,11 @@ pub(super) fn controller_service_session(
         token_hash: format!("agent-pair-commit:{controller_principal_id}"),
         account_pk: None,
         actor: controller_principal_id.to_owned(),
-        device_id: device_id.to_owned(),
+        endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+            device_id: device_id.to_owned(),
+        },
         audience: state.service_id().clone(),
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at: now() + chrono::Duration::minutes(5),
         created_at: now(),

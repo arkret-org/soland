@@ -62,7 +62,7 @@ fn cursor_account_device(
         )
     });
     let device_id = session
-        .map(|session| session.device_id.clone())
+        .map(|session| session.require_human_device_id().clone())
         .unwrap_or_else(|| "anonymous".to_owned());
     (account_id, device_id)
 }
@@ -163,7 +163,7 @@ pub(crate) async fn sync_token_for_account_positions(
                 .map_err(|_| SyncCursorError::Integrity("account baseline completion invalid"))?;
             let pending_allowed = session.is_some_and(|session| {
                 super::global_channels::pending_intents_allowed(
-                    session.agent_session.is_some(),
+                    session.agent_session().is_some(),
                     session.account_pk.is_some(),
                 )
             });
@@ -271,7 +271,8 @@ pub(crate) async fn sync_barrier_token_for_event(
     let (account_id, _) = cursor_account_device(state, Some(session));
     let account_id = account_id.expect("authenticated barrier cursor has an account");
     let binding_subject = cursor_binding_subject(Some(&account_id));
-    let binding = barrier_cursor_handle_binding(&account_id, &session.device_id, &target);
+    let binding =
+        barrier_cursor_handle_binding(&account_id, &session.require_human_device_id(), &target);
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour barrier cursor is valid")
@@ -284,7 +285,7 @@ pub(crate) async fn sync_barrier_token_for_event(
         CursorState {
             handle,
             binding_subject: Some(binding_subject),
-            device_id: Some(session.device_id.clone()),
+            device_id: Some(session.require_human_device_id().clone()),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
             filter_digest: None,
@@ -917,7 +918,7 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
             "barrier cursor binding subject does not match request actor",
         ));
     }
-    if record.device_id.as_deref() != Some(session.device_id.as_str()) {
+    if record.device_id.as_deref() != Some(session.require_human_device_id().as_str()) {
         return Err(SyncCursorError::Mismatch(
             "barrier cursor device does not match request device",
         ));
@@ -1095,7 +1096,7 @@ pub(super) async fn account_cursor_revoke(
     ) {
         None
     } else {
-        Some(session.device_id.clone())
+        Some(session.require_human_device_id().clone())
     };
     let application_record = soland_services::sync::CursorRevocationState {
         cursor_digest: sha256_hex(cursor.as_bytes()),
@@ -1150,7 +1151,7 @@ fn cursor_authority_revoked(
     state.sync().cursor_authority_revoked(
         &digest,
         account_id.as_ref(),
-        session.map(|session| session.device_id.as_str()),
+        session.map(|session| session.require_human_device_id().as_str()),
         chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now),
     )
 }
@@ -1323,7 +1324,7 @@ pub(crate) async fn parse_device_messages_cursor(
             "queue cursor outer purpose mismatch",
         ));
     }
-    if session.agent_session.is_none()
+    if session.agent_session().is_none()
         && cursor_authority_revoked(state, token, Some(session), now_ms)
     {
         return Err(SyncCursorError::Revoked);

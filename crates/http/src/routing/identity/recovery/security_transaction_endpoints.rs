@@ -56,7 +56,7 @@ async fn enforce_recovery_grant_transaction_binding(
         .ok_or_else(|| AppError::not_found("recovery session not found"))?;
     if recovery.principal_id.as_str() != session.actor
         || recovery.station_id.as_str() != session.audience
-        || recovery.requesting_device_id != session.device_id
+        || recovery.requesting_device_id.as_str() != session.require_human_device_id()
         || recovery.session_grant_id != grant.grant_id.as_str()
         || recovery.session_grant_cnf_jkt != grant.cnf_jkt
     {
@@ -164,7 +164,7 @@ pub(super) async fn security_transaction_create(
     )
     .await?;
     if let SecurityTransactionCreateRequest::SecurityRotation(rotation) = &request {
-        if rotation.authorizing_device_id.as_str() != session.device_id
+        if rotation.authorizing_device_id.as_str() != session.require_human_device_id()
             || state.account_lifecycle_state(session.actor.as_str()) != "active"
             || !authorizing_device_active(
                 state,
@@ -1531,7 +1531,7 @@ async fn continue_rotation_local_commit(
         || commit.transaction_request_digest != transaction.resource.request_digest
         || commit.prepared_plan_digest != transaction.resource.prepared_plan_digest
         || commit.local_commit_digest != plan.local_commit_digest
-        || commit.device_id.as_str() != session.device_id
+        || commit.device_id.as_str() != session.require_human_device_id()
     {
         return Err(crate::app_error!(
             FailedPrecondition,
@@ -1634,7 +1634,7 @@ async fn continue_commit_recovery_unit(
             "prepared recovery Event pair is malformed",
         ));
     };
-    if session.device_id != binding.replacement_device_id.as_str()
+    if session.require_human_device_id() != binding.replacement_device_id.as_str()
         || receipt.receipt_id != binding.terminal_receipt_id
         || receipt.transaction_id != transaction.resource.transaction_id
         || receipt.transaction_request_digest != transaction.resource.request_digest
@@ -1887,7 +1887,7 @@ async fn prepare_recovery_plan(
     intent
         .validate(&request.account_id)
         .map_err(|error| AppError::schema_violation(error.to_string()))?;
-    if session.device_id != intent.replacement_device_id.as_str() {
+    if session.require_human_device_id() != intent.replacement_device_id.as_str() {
         return Err(crate::app_error!(
             CapabilityDenied,
             "recovery transaction must be created by the replacement device session",

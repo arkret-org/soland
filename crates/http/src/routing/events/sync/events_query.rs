@@ -54,7 +54,11 @@ pub(crate) fn ndjson_line(value: &impl serde::Serialize) -> Bytes {
 
 pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionIdentityState>) -> String {
     match session {
-        Some(session) => format!("session:{}:{}", session.actor, session.device_id),
+        Some(session) => format!(
+            "session:{}:{}",
+            session.actor,
+            session.require_human_device_id()
+        ),
         None => format!("remote:{}", req.remote_addr()),
     }
 }

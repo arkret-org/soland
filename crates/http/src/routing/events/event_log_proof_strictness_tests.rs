@@ -85,10 +85,11 @@ fn session() -> SessionRecord {
         account_pk: None,
         token_hash: "hash".to_owned(),
         actor: "ak:did_core:web:alice.example".to_owned(),
-        device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+        endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
+        },
         audience: crate::test_event::station_id().to_string(),
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         created_at: chrono::Utc::now(),

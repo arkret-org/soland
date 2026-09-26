@@ -225,12 +225,12 @@ pub(super) async fn put_key_backup(
     let backup = backup.into_inner();
     let account_actor = local_backup_actor(state, &session.actor)?;
     validate_key_backup_body_typed(&typed_backup_id, &account_actor, &backup)?;
-    validate_key_backup_session_device(&backup, &session.device_id)?;
+    validate_key_backup_session_device(&backup, &session.require_human_device_id())?;
     let device_gate =
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
             &session.actor,
-            &session.device_id,
+            &session.require_human_device_id(),
         )
         .await
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
@@ -398,7 +398,7 @@ pub(super) async fn unlock_key_backup(
         .session_grant
         .as_ref()
         .map(|grant| format!("{}:{}", grant.grant_id, grant.cnf_jkt))
-        .unwrap_or_else(|| session.device_id.clone());
+        .unwrap_or_else(|| session.require_human_device_id().clone());
     if let arkret_models_crypto::KeyBackupUnlockAuthority::RecoverySession {
         recovery_session_id,
     } = &body.proof.authority
@@ -445,7 +445,7 @@ pub(super) async fn unlock_key_backup(
     // looked up by the path id and the shape check below requires
     // `proof.backup_id` to equal the envelope's own `backup_id`.
     if let Err(error) = verify_key_backup_unlock_proof(state, &proof, &session, &backup).await {
-        tracing::warn!(actor=%session.actor, device=%session.device_id, %backup_id, %request_digest, %error, "key backup unlock proof rejected");
+        tracing::warn!(actor=%session.actor, device=%session.require_human_device_id(), %backup_id, %request_digest, %error, "key backup unlock proof rejected");
         return Err(error);
     }
     // key-management.md §7.4.1 - anchor the released envelope's auth_data.signature
@@ -605,7 +605,7 @@ pub(super) async fn delete_key_backup(
         json!({
             "access_kind": "key_backup_delete",
             "backup_id": backup_id.clone(),
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
             "backup_kind": backup.get("backup_kind").cloned().unwrap_or(Value::Null),
             "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
             "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),

@@ -297,10 +297,11 @@ async fn peer_invites_submit(
             .signing_principal_id()
             .as_str()
             .to_owned(),
-        device_id: format!("peer-invite:{source_id}"),
+        endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+            device_id: format!("peer-invite:{source_id}"),
+        },
         audience: state.service_id().clone(),
         session_public_key: None,
-        agent_session: None,
         session_grant: None,
         expires_at: now() + Duration::minutes(5),
         created_at: now(),
@@ -632,7 +633,7 @@ async fn require_dispatchable_invite_event(
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
     let session_station = DidCoreId::new(session.audience.clone())
         .map_err(|error| AppError::internal(format!("session audience is invalid: {error}")))?;
-    let session_actor = if session.agent_session.is_some() {
+    let session_actor = if session.agent_session().is_some() {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             session_principal,
             session_station,
@@ -2771,10 +2772,11 @@ mod invite_locator_security_tests {
             token_hash: "peer-invite:test".to_owned(),
             account_pk: None,
             actor: PRODUCTION_INVITER.to_owned(),
-            device_id: "peer-invite:test".to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "peer-invite:test".to_owned(),
+            },
             audience: state.service_id().clone(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: now() + Duration::minutes(5),
             created_at: now(),

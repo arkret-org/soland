@@ -191,14 +191,9 @@ pub(crate) async fn revalidate_stream_session(
         {
             return Err(rejected);
         }
-        let (device_id, agent_session) =
-            super::super::auth_grant_dpop::grant_session_binding(&grant)?;
+        let endpoint = super::super::auth_grant_dpop::grant_session_binding(&grant)?;
         super::super::auth_grant_dpop::session_from_verified_grant(
-            state,
-            grant_jwt,
-            grant,
-            device_id,
-            agent_session,
+            state, grant_jwt, grant, endpoint,
         )
     } else {
         state
@@ -209,7 +204,7 @@ pub(crate) async fn revalidate_stream_session(
             .ok_or(rejected)?
     };
     if current.actor != original.actor
-        || current.device_id != original.device_id
+        || current.endpoint != original.endpoint
         || current.audience != original.audience
         || current.audience != *state.service_id()
         || current.revoked_at.is_some()
@@ -256,7 +251,7 @@ async fn enforce_recovery_session_grant_operation(
             "recovery session grant has the wrong holder binding",
         ));
     };
-    if device_id.as_str() != session.device_id || grant.device_binding.is_some() {
+    if device_id.as_str() != session.require_human_device_id() || grant.device_binding.is_some() {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
@@ -307,7 +302,7 @@ async fn enforce_recovery_session_grant_operation(
         || recovery.expires_at <= now()
         || recovery.principal_id.as_str() != session.actor
         || recovery.station_id.as_str() != session.audience
-        || recovery.requesting_device_id != session.device_id
+        || recovery.requesting_device_id.as_str() != session.require_human_device_id()
         || recovery.session_grant_id != grant.grant_id.as_str()
         || recovery.session_grant_cnf_jkt != grant.cnf_jkt
     {
@@ -476,7 +471,7 @@ fn classify_agent_session(
     session: &SessionRecord,
 ) -> Result<bool, (StatusCode, &'static str, &'static str)> {
     classify_agent_marker(
-        session.agent_session.is_some(),
+        session.agent_session().is_some(),
         session.session_grant.as_ref().map(|grant| {
             matches!(
                 &grant.holder_binding,
@@ -524,7 +519,7 @@ async fn enforce_session_device_revocation_gate(
     let current = super::super::device_generation::active_device_revocation_gate_selector(
         state,
         &session.actor,
-        &session.device_id,
+        &session.require_human_device_id(),
     )
     .await;
     let current = match current {
@@ -548,7 +543,7 @@ async fn enforce_session_device_revocation_gate(
                 .identities()
                 .find_device(soland_services::identity::FindDeviceQuery {
                     actor_id: session.actor.clone(),
-                    device_id: session.device_id.clone(),
+                    device_id: session.require_human_device_id().clone(),
                 })
                 .await
                 .map_err(|_| {
@@ -584,13 +579,14 @@ async fn enforce_session_device_revocation_gate(
         })?,
         state.service_core_id(),
     );
-    let device_id = arkret_wire::DeviceId::new(session.device_id.clone()).map_err(|_| {
-        (
-            StatusCode::UNAUTHORIZED,
-            "unauthenticated",
-            "session device is invalid",
-        )
-    })?;
+    let device_id =
+        arkret_wire::DeviceId::new(session.require_human_device_id().clone()).map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "session device is invalid",
+            )
+        })?;
     let admission = state
         .persistence()
         .pcr_device_admission(&account, &device_id, now())
@@ -616,7 +612,7 @@ async fn enforce_session_device_revocation_gate(
             "unauthenticated",
             "human session grant omitted its exact device binding",
         ))?;
-        if binding.device_id.as_str() != session.device_id {
+        if binding.device_id.as_str() != session.require_human_device_id() {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 "unauthenticated",

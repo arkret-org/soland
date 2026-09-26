@@ -57,7 +57,7 @@ fn device_message_expiry_admissible(
 pub(crate) fn recipient_queue_selector(
     session: &SessionIdentityState,
 ) -> Result<RecipientQueueSelector, AppError> {
-    if session.agent_session.is_some() {
+    if session.agent_session().is_some() {
         let Some(grant) = session.session_grant.as_ref() else {
             return Err(AppError::capability_denied(
                 "Agent recipient queue requires an authenticated Agent grant",
@@ -85,9 +85,12 @@ pub(crate) fn recipient_queue_selector(
             authorization_event_ref: agent_key_authorization_ref.to_string(),
         });
     }
+    let device_id = session.human_device_id().ok_or_else(|| {
+        AppError::capability_denied("recipient queue requires a Human device endpoint")
+    })?;
     Ok(RecipientQueueSelector::HumanDevice {
         recipient: session.actor.clone(),
-        device_id: session.device_id.clone(),
+        device_id: device_id.clone(),
     })
 }
 
@@ -205,7 +208,7 @@ async fn sending_endpoint(
     state: &AppState,
     session: &SessionIdentityState,
 ) -> Result<SendingEndpoint, AppError> {
-    if session.agent_session.is_some() {
+    if session.agent_session().is_some() {
         crate::routing::events::require_agent_session_scope(
             session,
             arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_SEND_V1,
@@ -262,12 +265,15 @@ async fn sending_endpoint(
     let device_unauthorized = |detail: &str| {
         AppError::capability_denied(detail.to_owned()).with_wire_code("device_unauthorized")
     };
-    let sender_device_id = arkret_wire::DeviceId::new(session.device_id.clone())
+    let endpoint_device_id = session
+        .human_device_id()
+        .ok_or_else(|| device_unauthorized("to-device send requires a Human device endpoint"))?;
+    let sender_device_id = arkret_wire::DeviceId::new(endpoint_device_id.clone())
         .map_err(|_| device_unauthorized("to-device send requires a typed sender device"))?;
     let gate = match super::device_generation::active_device_revocation_gate_selector(
         state,
         &session.actor,
-        &session.device_id,
+        endpoint_device_id,
     )
     .await
     {
@@ -450,7 +456,7 @@ async fn send_device_messages(
             .identities()
             .find_device(soland_services::identity::FindDeviceQuery {
                 actor_id: session.actor.clone(),
-                device_id: session.device_id.clone(),
+                device_id: session.require_human_device_id().clone(),
             })
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -937,7 +943,7 @@ async fn get_device_messages(
     let lost_watermark = if matches!(&selector, RecipientQueueSelector::HumanDevice { .. }) {
         state
             .deliveries()
-            .device_message_lost_watermark(&session.actor, &session.device_id)
+            .device_message_lost_watermark(&session.actor, &session.require_human_device_id())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
     } else {

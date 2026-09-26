@@ -45,7 +45,8 @@ pub(super) async fn set_read_cursor(
         AppError::schema_violation(format!("invalid advance_event submission: {error}"))
     })?;
     let event = submission.event;
-    let cursor = validate_caller_signed_read_cursor(&actor, &session.device_id, &event)?;
+    let cursor =
+        validate_caller_signed_read_cursor(&actor, &session.require_human_device_id(), &event)?;
     let owner = actor
         .as_account_id()
         .cloned()
@@ -104,10 +105,10 @@ async fn fanout_read_cursor_winner(
     let sender_account_id =
         crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(state, session)
             .await?;
-    let sender_device_id =
-        arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(|error| {
-            AppError::internal(format!("authenticated device id is invalid: {error}"))
-        })?;
+    let sender_device_id = arkret_identifiers::DeviceId::new(
+        session.require_human_device_id().clone(),
+    )
+    .map_err(|error| AppError::internal(format!("authenticated device id is invalid: {error}")))?;
     fanout_actor_private_update(
         state,
         &session.actor,

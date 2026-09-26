@@ -100,7 +100,7 @@ async fn query_audit_trail(
         Some(&session.actor),
         action,
         json!({
-            "device_id": session.device_id,
+            "device_id": session.require_human_device_id(),
             "filters": filters,
             "count": count,
         }),
@@ -826,10 +826,11 @@ mod tests {
             account_pk: None,
             token_hash: "hash".to_owned(),
             actor: actor.to_owned(),
-            device_id: "ak:device:test".to_owned(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: "ak:device:test".to_owned(),
+            },
             audience: "soland".to_owned(),
             session_public_key: None,
-            agent_session: None,
             session_grant: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             created_at: chrono::Utc::now(),

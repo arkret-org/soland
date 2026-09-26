@@ -97,7 +97,7 @@ async fn local_keypackage_owner_account_pk(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<soland_storage::AccountPk, AppError> {
-    if session.agent_session.is_some() {
+    if session.agent_session().is_some() {
         let principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
             .map_err(|_| AppError::capability_denied("Agent principal id is invalid"))?;
         let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
@@ -471,7 +471,7 @@ async fn upload_keypackage(
 ) -> JsonResult<KeyPackagesUploadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    if session.account_pk.is_none() && session.agent_session.is_none() {
+    if session.account_pk.is_none() && session.agent_session().is_none() {
         return Err(AppError::capability_denied(
             "KeyPackage upload requires an account- or Agent-bound session",
         ));
@@ -493,7 +493,7 @@ async fn upload_keypackage(
         ));
     }
     body.validate_shape().map_err(AppError::param_invalid)?;
-    if session.agent_session.is_some()
+    if session.agent_session().is_some()
         != (body.device_id.is_none()
             && body.agent_verification_method.is_some()
             && body.agent_key_authorize_event_id.is_some())
@@ -514,7 +514,7 @@ async fn upload_keypackage(
     }
     let (device_id, trust_binding, publish_trust_anchor) = if let Some(device_id) = &body.device_id
     {
-        if device_id.as_str() != session.device_id {
+        if device_id.as_str() != session.require_human_device_id() {
             return Err(AppError::capability_denied(
                 "device_id must match the calling session",
             ));
@@ -2051,7 +2051,7 @@ async fn claim_keypackage(
             "minimal-metadata pairwise KeyPackage claim is retired",
         ));
     }
-    if session.agent_session.is_some()
+    if session.agent_session().is_some()
         != matches!(
             &body.requester_authorization,
             PeerKeyPackageRequesterAuthorization::Agent { .. }
@@ -2097,7 +2097,7 @@ async fn claim_keypackage(
         PeerKeyPackageRequesterAuthorization::Device {
             requester_device_id,
             ..
-        } if requester_device_id.as_str() == session.device_id => {}
+        } if requester_device_id.as_str() == session.require_human_device_id() => {}
         PeerKeyPackageRequesterAuthorization::Agent {
             requester_agent_id, ..
         } if requester_agent_id.as_str() == session.actor => {}
@@ -3048,7 +3048,7 @@ async fn verify_keypackage_consumer_signature(
         consumer,
         arkret_models_crypto::RecipientMlsDurableSigner::Agent { .. }
     );
-    if session.agent_session.is_some() != recipient_is_agent {
+    if session.agent_session().is_some() != recipient_is_agent {
         return Err(AppError::capability_denied(
             "durable recipient signer branch must match the calling session",
         ));
@@ -3058,7 +3058,7 @@ async fn verify_keypackage_consumer_signature(
             recipient_device_id,
             ..
         } => {
-            if recipient_device_id.as_str() != session.device_id {
+            if recipient_device_id.as_str() != session.require_human_device_id() {
                 return Err(AppError::capability_denied(
                     "durable recipient device must match the calling session",
                 ));
@@ -3324,14 +3324,14 @@ async fn revoke_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if session.account_pk.is_none() && session.agent_session.is_none() {
+    if session.account_pk.is_none() && session.agent_session().is_none() {
         return Err(AppError::capability_denied(
             "KeyPackage revoke requires an account- or Agent-bound session",
         ));
     }
     let session_owner_account_pk = local_keypackage_owner_account_pk(state, &session).await?;
     let device_id = body.device_id.to_string();
-    if device_id != session.device_id {
+    if device_id.as_str() != session.require_human_device_id() {
         return Err(AppError::capability_denied(
             "device_id must match the calling session",
         ));
@@ -3856,7 +3856,7 @@ async fn verify_session_keypackage_write_signature(
 ) -> Result<Option<MlsKeyPackageRow>, AppError> {
     let principal = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
-    if session.agent_session.is_some() {
+    if session.agent_session().is_some() {
         let binding = current_agent_keypackage_trust_binding(state, &principal)
             .await?
             .ok_or_else(|| AppError::capability_denied("Agent key authorization is unavailable"))?;
@@ -3909,7 +3909,7 @@ async fn verify_session_keypackage_write_signature(
     verify_device_keypackage_signature(
         state,
         &principal,
-        &session.device_id,
+        &session.require_human_device_id(),
         signature,
         signing_input,
     )
@@ -3926,7 +3926,7 @@ async fn verify_session_keypackage_revoke_signature(
 ) -> Result<(), AppError> {
     let principal = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
-    if session.agent_session.is_some() {
+    if session.agent_session().is_some() {
         let binding = current_agent_keypackage_trust_binding(state, &principal)
             .await?
             .ok_or_else(|| AppError::capability_denied("Agent key authorization is unavailable"))?;
@@ -3972,7 +3972,7 @@ async fn verify_session_keypackage_revoke_signature(
     verify_device_keypackage_signature(
         state,
         &principal,
-        &session.device_id,
+        &session.require_human_device_id(),
         signature,
         signing_input,
     )
