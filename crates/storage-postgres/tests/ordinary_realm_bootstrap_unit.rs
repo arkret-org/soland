@@ -4808,13 +4808,40 @@ async fn third_party_invite_create_reads_from_committed_event_and_lifecycle() {
         soland_storage::ConflictCode::FailedPrecondition,
     )
     .await;
+    let mut conn = pool.get().await.unwrap();
+    let index_before = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM invite_third_party_create_index WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(index_before.count, 0);
+    drop(conn);
     let create = realm_event_request_as(
         &policy,
         &creator,
         arkret_wire::EventKind::InviteThirdParty,
-        payload,
+        payload.clone(),
     );
     uow.commit_event(create.clone()).await.unwrap();
+    let mut reused_payload = payload;
+    reused_payload["third_party_invite"]["token_salt_id"] =
+        serde_json::json!("salt-test-2145-reuse");
+    let reused_commitment = realm_event_request_as(
+        &create,
+        &creator,
+        arkret_wire::EventKind::InviteThirdParty,
+        reused_payload,
+    );
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &reused_commitment,
+        soland_storage::ConflictCode::DuplicateConflict,
+    )
+    .await;
     let current = PgInviteCurrentResultStore { pool: pool.clone() };
     let in_realm = current.invites_in_realm(Some(&realm_id)).await.unwrap();
     let all_realms = current.invites_in_realm(None).await.unwrap();
@@ -4842,6 +4869,19 @@ async fn third_party_invite_create_reads_from_committed_event_and_lifecycle() {
     assert_eq!(families.lifecycle.len(), 1);
     assert!(families.directed.is_empty());
     assert!(families.live_target.is_empty());
+    let mut conn = pool.get().await.unwrap();
+    let index_after = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM invite_third_party_create_index \
+         WHERE realm_id=$1 AND invite_id=$2 AND create_event_id=$3 AND create_commit_id=$4",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(invite.invite_id.as_str())
+    .bind::<Text, _>(create.authority_commit.event.event_id.as_str())
+    .bind::<Text, _>(create.authority_commit.commit.commit_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(index_after.count, 1);
 }
 
 /// Real PostgreSQL: the same-cut evaluator refuses an actor without an
