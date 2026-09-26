@@ -3340,6 +3340,33 @@ fn validate_contact_introduction_evidence_digest(
 
 /// Project a delivered contact fact into the local `subject_id`'s contact
 /// projection. Returns the receive status (`accepted` / `duplicate`).
+fn delivered_direction_predecessor<'a>(
+    row: &'a ContactRecord,
+    issuer: &arkret_wire::ActorId,
+    subject: &arkret_wire::ActorId,
+) -> Option<&'a arkret_wire::EventId> {
+    let stored_head = if row.requester_id == *issuer {
+        row.request_event_ref.as_ref()
+    } else if row.target_id == *issuer {
+        row.response_event_ref.as_ref()
+    } else {
+        return None;
+    };
+    // In a glare round both parties authored a request. The row has only one
+    // request/response slot, so the other direction's signed current proof is
+    // its durable head until a scope successor replaces it.
+    row.contact_round_evidence
+        .as_ref()
+        .and_then(|bundle| {
+            bundle
+                .current_proofs
+                .iter()
+                .find(|proof| !proof.terminal && proof.peer.contact_actor_id() == *subject)
+        })
+        .map(|proof| &proof.head_event_ref)
+        .or(stored_head)
+}
+
 async fn project_delivered_contact_fact(
     state: &AppState,
     fact_kind: &str,
@@ -3884,17 +3911,9 @@ async fn project_delivered_contact_fact(
                     "ak.contact.scope.update references no accepted contact_round",
                 ));
             };
-            let predecessor = if contact.requester_id == *issuer_id {
-                contact
-                    .request_event_ref
-                    .as_ref()
-                    .map(|value| value.as_str())
-            } else {
-                contact
-                    .response_event_ref
-                    .as_ref()
-                    .map(|value| value.as_str())
-            };
+            let predecessor =
+                delivered_direction_predecessor(&contact, issuer_id, subject_actor_id)
+                    .map(|value| value.as_str());
             if contact.status != "accepted"
                 || contact
                     .contact_round_id
@@ -3980,11 +3999,8 @@ async fn project_delivered_contact_fact(
                     "ak.contact.tombstone conflicts with the terminal Contact round",
                 ));
             }
-            let predecessor = if row.requester_id == *issuer_id {
-                row.request_event_ref.as_ref().map(|value| value.as_str())
-            } else {
-                row.response_event_ref.as_ref().map(|value| value.as_str())
-            };
+            let predecessor = delivered_direction_predecessor(&row, issuer_id, subject_actor_id)
+                .map(|value| value.as_str());
             if row.contact_round_id.as_ref().map(|value| value.as_str())
                 != Some(tombstone.contact_round_id.as_str())
                 || super::account::direction_version(state, &row, issuer_id)
