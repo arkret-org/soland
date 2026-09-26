@@ -121,6 +121,13 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
             return crate::error::render_error_code(code, res, detail);
         }
         match error.conflict_code() {
+            Some(soland_storage::ConflictCode::DuplicateConflict) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::DuplicateConflict,
+                    res,
+                    detail,
+                );
+            }
             Some(soland_storage::ConflictCode::EpochMismatch) => {
                 return crate::error::render_error_code(
                     arkret_wire::ErrorCode::EpochMismatch,
@@ -615,6 +622,26 @@ mod tests {
             body["type"], "https://arkret.org/problems/schema_violation",
             "{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn founding_same_key_different_unit_renders_duplicate_conflict() {
+        let mut res = Response::new();
+        render_service_error(
+            &mut res,
+            ServiceError::Conflict(
+                "duplicate_conflict: the idempotency key already founded another unit".to_owned(),
+            ),
+        );
+        assert_eq!(res.status_code, Some(StatusCode::CONFLICT));
+        let body: serde_json::Value = salvo::test::ResponseExt::take_json(&mut res)
+            .await
+            .expect("problem body");
+        assert_eq!(
+            body["type"],
+            "https://arkret.org/problems/duplicate_conflict"
+        );
+        assert_eq!(body["status"], 409);
     }
 
     #[tokio::test]
