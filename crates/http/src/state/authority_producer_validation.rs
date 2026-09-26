@@ -182,14 +182,18 @@ pub(crate) async fn verify_self_event_producer_key(
     let bytes = arkret_signatures::EventProofBuilder::new()
         .envelope_bytes(event)
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+    let verified = arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
         proof,
         &bytes,
         &event.actor_id,
         &key,
         digest_suite,
-    )
-    .map_err(|error| rejected(format!("Event producer proof invalid: {error}")))?;
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_ACCEPTED_BINDING,
+        verified.is_ok(),
+    );
+    verified.map_err(|error| rejected(format!("Event producer proof invalid: {error}")))?;
     Ok((guard, key))
 }
 
