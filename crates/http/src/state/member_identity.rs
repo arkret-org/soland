@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_models_identity::HandleClaim;
 #[cfg(test)]
 use arkret_models_identity::HandleClaimStatus;
-use arkret_models_identity::HandleClaim;
 use serde_json::Value;
 pub use soland_storage::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,

@@ -16,7 +16,7 @@
 //! Every refusal writes nothing.
 
 use arkret_models_collaboration::authority_commit::{
-    MLS_GENESIS_MATERIAL_MAX_DECODED_BYTES, MlsGenesisMaterial, PeerAuthorityForwardEventRequest,
+    MLS_GENESIS_MATERIAL_MAX_BLOB_BYTES, MlsGenesisMaterial, PeerAuthorityForwardEventRequest,
     PeerAuthorityForwardMlsRequest, PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
 };
 use arkret_models_identity::AccountDeviceSignerEvidence;
@@ -267,8 +267,9 @@ pub(crate) async fn fresh_producer_device_evidence(
 /// A: the raw GroupInfo and ratchet tree an `ak.mls.genesis` forward
 /// carries (encryption-and-audit.md §5.1.2), read from this Station's Blob
 /// store and proven to address the Genesis refs; `None` for every other kind.
-/// A Blob that is missing or does not address its ref is a bare
-/// `failed_precondition` before anything is forwarded.
+/// A Blob that is missing, larger than one carrier member holds or does not
+/// address its ref is a bare `failed_precondition` before anything is
+/// forwarded.
 async fn forwarded_genesis_material(
     state: &AppState,
     event: &Event,
@@ -280,7 +281,6 @@ async fn forwarded_genesis_material(
         serde_json::to_value(&event.payload)
             .and_then(serde_json::from_value)
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    let mut remaining = MLS_GENESIS_MATERIAL_MAX_DECODED_BYTES;
     let mut blobs = Vec::with_capacity(2);
     for blob_ref in [&payload.group_info_ref, &payload.ratchet_tree_ref] {
         let unavailable = || {
@@ -289,15 +289,18 @@ async fn forwarded_genesis_material(
                 ConflictCode::FailedPrecondition
             ))
         };
-        let bytes = crate::routing::mls::load_mls_public_blob(state, blob_ref.as_str(), remaining)
-            .await
-            .map_err(|_| unavailable())?;
+        let bytes = crate::routing::mls::load_mls_public_blob(
+            state,
+            blob_ref.as_str(),
+            MLS_GENESIS_MATERIAL_MAX_BLOB_BYTES,
+        )
+        .await
+        .map_err(|_| unavailable())?;
         let digest = blob_ref
             .as_str()
             .strip_prefix("ak:blob:")
             .ok_or_else(unavailable)?;
         arkret_canonical::verify_digest(&bytes, digest).map_err(|_| unavailable())?;
-        remaining -= bytes.len();
         blobs.push(bytes);
     }
     Ok(Some(MlsGenesisMaterial::from_bytes(&blobs[0], &blobs[1])))
