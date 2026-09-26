@@ -22,9 +22,6 @@ use crate::hlc::ServerHlc;
 /// In-memory projection state produced by the reducer.
 #[derive(Clone, Debug, Default)]
 pub struct ProjectionState {
-    /// Rebuildable historical grant metadata for routing and history queries.
-    /// Current authorization always reads the canonical active safety set.
-    pub capability_grant_metadata: BTreeMap<String, crate::capability::Grant>,
     /// Messages keyed by event_id. LWW by created_at.
     pub messages: BTreeMap<String, MessageState>,
     /// Reactions keyed by (event_id, actor, reaction_key). OR-Set.
@@ -236,9 +233,6 @@ impl ProjectionState {
     }
 
     pub(crate) fn projected_ref_exists(&self, target_ref: &str) -> bool {
-        if target_ref.starts_with("ak:grant:") {
-            return self.effective_engine_grant(target_ref).is_some();
-        }
         if target_ref.starts_with("ak:space:") {
             return self.space_containers.contains_key(target_ref);
         }
@@ -257,63 +251,6 @@ impl ProjectionState {
             return self.message_by_target_ref(target_ref).is_some();
         }
         false
-    }
-
-    pub fn authz_resource_expr(&self, realm_id: &str, resource: &str) -> String {
-        let mut resources = BTreeSet::new();
-        for token in resource.split(',').map(str::trim) {
-            if token.is_empty() {
-                continue;
-            }
-            resources.insert(token.to_owned());
-            self.append_space_hierarchy_authz_aliases(realm_id, token, &mut resources);
-        }
-        resources.into_iter().collect::<Vec<_>>().join(",")
-    }
-
-    fn append_space_hierarchy_authz_aliases(
-        &self,
-        realm_id: &str,
-        resource: &str,
-        resources: &mut BTreeSet<String>,
-    ) {
-        if !resource.starts_with("ak:space:") {
-            return;
-        }
-        let Some(space) = self.space_containers.get(resource) else {
-            return;
-        };
-        if space.realm_id != realm_id {
-            return;
-        }
-
-        let mut cursor = resource.to_owned();
-        let mut visited = BTreeSet::new();
-        for depth in 0..64 {
-            if !visited.insert(cursor.clone()) {
-                break;
-            }
-            let Some(space) = self.space_containers.get(&cursor) else {
-                break;
-            };
-            if space.realm_id != realm_id {
-                break;
-            }
-            let Some(parent_id) = space.parent_ref.as_deref() else {
-                break;
-            };
-            let Some(parent) = self.space_containers.get(parent_id) else {
-                break;
-            };
-            if parent.realm_id != realm_id {
-                break;
-            }
-            if depth == 0 {
-                resources.insert(format!("space_child_of:{parent_id}"));
-            }
-            resources.insert(format!("space_subtree_of:{parent_id}"));
-            cursor = parent_id.to_owned();
-        }
     }
 
     pub fn replay_resolved_pending(&mut self, hlc: &ServerHlc) -> usize {

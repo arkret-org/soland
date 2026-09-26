@@ -1,5 +1,3 @@
-use super::*;
-
 /// The `event_id` a fixture Operation carries so [`capability_add_dot`] can
 /// derive its registered dot, mirroring what
 /// `sdk_projection::projection_operation_from_event` injects on the submit
@@ -14,117 +12,6 @@ fn fixture_event_id_for_operation(operation_id: &str) -> String {
     arkret_identifiers::EventId::from_event_digest(&digest)
         .expect("SHA-256 is a registered Event digest suite")
         .to_string()
-}
-
-/// The `realm_root` authority ref of a root controller's grant.
-///
-/// `capability-grant.schema.json` closes the ref to the Realm, the accepted
-/// authority Event and the root delegation generation; the current-result
-/// basis is Station-local acceptance state, never a wire member.
-fn realm_root_ref(realm_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "kind": "realm_root",
-        "realm_id": realm_id,
-        "authority_event_ref": "ak:event:AY_KsmK6yLixEOrtHaJQKVPxqvToAwftLv3kDhf3WwDk",
-        "authority_generation": 0
-    })
-}
-
-mod capability_facet_tests {
-    use serde_json::{Value, json};
-
-    use super::{engine_grant_from_capability_facet, engine_grant_from_cell_body};
-
-    fn actor(value: &str) -> arkret_wire::ActorId {
-        arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(value).unwrap())
-    }
-
-    #[test]
-    fn engine_grant_reads_the_canonical_genesis_wrapper() {
-        let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
-        let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
-        let settled = json!({
-            "grant": {
-                "id": grant_id,
-                "realm_id": realm_id,
-                "issuer_id": actor("ak:did_core:web:owner.example"),
-                "issuer_authority_refs": [super::realm_root_ref(realm_id)],
-                "authority_depth": 1,
-                "authority_root_refs": [super::realm_root_ref(realm_id)],
-                "subject": actor("ak:did_core:web:owner.example"),
-                "actions": ["ak.realm.admin"],
-                "resources": [{
-                    "kind": "realm",
-                    "realm_id": realm_id,
-                    "match_scope": "realm_wide"
-                }],
-                "issued_at": "2026-07-28T00:00:00.000Z"
-            }
-        });
-
-        let grant = engine_grant_from_capability_facet(grant_id, &settled)
-            .expect("the canonical genesis wrapper must resolve to an effective grant");
-        assert_eq!(grant.grant_id, grant_id);
-        assert_eq!(grant.realm_id, realm_id);
-        assert_eq!(
-            grant.subject_id.signing_principal_id().as_str(),
-            "ak:did_core:web:owner.example"
-        );
-        assert!(
-            grant
-                .actions
-                .iter()
-                .any(|action| action == "ak.realm.admin")
-        );
-        // A revoked or relinquished grant keeps its facet carrying a JSON
-        // `null`, and that tombstone must never resolve to a live grant.
-        assert!(engine_grant_from_capability_facet(grant_id, &Value::Null).is_none());
-    }
-
-    #[test]
-    fn engine_grant_retains_field_and_track_constraints_without_alias_conversion() {
-        let body = json!({
-            "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
-            "issuer_id": actor("ak:did_core:web:owner.example"),
-            "issuer_authority_refs": [super::realm_root_ref(
-                "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic"
-            )],
-            "authority_depth": 1,
-            "subject": actor("ak:did_core:web:writer.example"),
-            "actions": ["ak.strand.update"],
-            "resources": [{
-                "kind": "strand",
-                "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
-                "strand_id": "ak:strand:AT3ARBdH1FM6GjXK9ulTx-YMvQOXys39dlUzZV6KyID9"
-            }],
-            "constraints": [{
-                "constraint_kind": "field_access",
-                "effect": "allow",
-                "allowed_write_fields": ["tracks.synthesis.content"]
-            }, {
-                "constraint_kind": "scope_limitation",
-                "effect": "allow",
-                "allowed_tracks": ["synthesis"]
-            }]
-        });
-        let grant = engine_grant_from_cell_body(
-            "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7",
-            &body,
-            false,
-        )
-        .expect("canonical constraints must project directly");
-
-        assert!(matches!(
-            &grant.constraints[0],
-            crate::capability::GrantConstraint::FieldAccess { allowed_write_fields, .. }
-                if allowed_write_fields == &["tracks.synthesis.content"]
-        ));
-        assert!(matches!(
-            &grant.constraints[1],
-            crate::capability::GrantConstraint::ScopeLimitation { allowed_tracks, .. }
-                if allowed_tracks == &["synthesis"]
-        ));
-    }
 }
 
 mod agent_key_tests {
@@ -186,15 +73,6 @@ mod agent_key_tests {
             operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
         }
         operation
-    }
-
-    #[test]
-    fn aggregate_admin_grant_uses_compiled_profile() {
-        let body = json!({
-            "actions": ["ak.realm.admin"],
-            "resources": [{ "kind": "realm", "realm_id": REALM }]
-        });
-        assert_eq!(super::validate_grant_body_scope(&body), Ok(()));
     }
 
     #[test]

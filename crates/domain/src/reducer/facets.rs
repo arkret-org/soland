@@ -25,7 +25,6 @@ pub mod facet {
     pub const CALL_STATE: &str = "call.state";
     pub const CALL_TRANSCRIPT: &str = "call.transcript";
     pub const CALL_TRANSCRIPT_RESULT: &str = "call.transcript_result";
-    pub const CAPABILITY_GRANT: &str = "capability.grant";
     pub const CIRCLE_HISTORY_ACCESS: &str = "circle.history_access";
     pub const CIRCLE_MEMBER: &str = "circle.member";
     pub const CONTAINER_ORDER: &str = "container.order";

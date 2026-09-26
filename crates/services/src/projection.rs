@@ -446,13 +446,6 @@ impl ProjectionService {
         Ok(())
     }
 
-    pub fn effective_engine_grant(
-        &self,
-        grant_id: &str,
-    ) -> Option<arkret_policy::authz::authority::Grant> {
-        self.state.lock().effective_engine_grant(grant_id)
-    }
-
     /// Cold-project one call's facet from the accepted Event sequence without
     /// touching live projection state.
     pub fn project_call_state_facet(

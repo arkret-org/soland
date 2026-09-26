@@ -45,9 +45,6 @@ mod projections;
 // `use super::*;`.
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use apply_capability::{
-    derive_authority_audit, engine_grant_from_capability_facet, engine_grant_from_cell_body,
-};
 pub use apply_objects::DeferredParentMembershipAdmission;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;

@@ -1263,7 +1263,7 @@ pub(super) fn enforce_mimi_proxy_download_egress_policy(
     // The in-protocol branch is the typed blob reference. A string that merely
     // opens with `ak:blob:` is not one, and must fall through to the URL /
     // scheme rules below rather than being waved past egress policy.
-    if soland_domain::capability::is_typed_blob_ref(asset_ref) {
+    if asset_ref.starts_with("ak:blob:") && arkret_identifiers::BlobRef::new(asset_ref).is_ok() {
         return Ok(());
     }
     if asset_ref.starts_with("//") || asset_ref.contains('\\') {
