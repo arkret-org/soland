@@ -496,6 +496,16 @@ async fn authority_transaction_materializes_grant_and_rejects_unapproved_service
     });
     let cases = [
         ("missing_expiry", base.clone()),
+        ("action_scoped_expiry", {
+            let mut body = base.clone();
+            body["constraints"] = serde_json::json!([{
+                "constraint_kind":"temporal",
+                "effect":"allow",
+                "applies_to_actions":["ak.realm.admin"],
+                "expires_at":"2026-09-22T00:00:00.000Z"
+            }]);
+            body
+        }),
         ("wildcard_resource", {
             let mut body = base.clone();
             body["resources"] = serde_json::json!([{"kind":"*"}]);
