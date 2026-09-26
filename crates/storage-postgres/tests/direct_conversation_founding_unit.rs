@@ -985,3 +985,599 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
         DirectConversationAdmissionCut::Refused(ConflictCode::DirectConversationMemberCountInvalid)
     );
 }
+
+const PARTICIPANT_SOURCE: &str = "ak.authority.direct_conversation_participant.v1";
+const BOOTSTRAP_SOURCE: &str = "ak.authority.direct_conversation_bootstrap_participant.v1";
+
+/// The authority source and critical ref one Direct Conversation Event cites.
+enum Cites<'a> {
+    Nothing,
+    Bootstrap(&'a arkret_wire::EventId),
+    Participant(&'a arkret_wire::EventId),
+}
+
+/// The next Realm-stream request by `actor` citing `cites`.
+fn cited(
+    previous: &AuthorityCommitTransaction,
+    kind: EventKind,
+    actor: ActorId,
+    payload: serde_json::Value,
+    cites: Cites<'_>,
+) -> soland_storage::EventCommitRequest {
+    let at = previous.commit.committed_at;
+    let mut event = ordinary_realm::event_for_actor(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: previous.event.realm_id.clone(),
+        },
+        actor,
+        payload,
+        at,
+    );
+    let (source, role, reference) = match cites {
+        Cites::Nothing => return ordinary_realm::request_for_event(previous, event, at),
+        Cites::Bootstrap(reference) => (
+            BOOTSTRAP_SOURCE,
+            "direct_conversation_founding_unit",
+            reference,
+        ),
+        Cites::Participant(reference) => {
+            (PARTICIPANT_SOURCE, "direct_conversation_binding", reference)
+        }
+    };
+    event.authorization_ref = Some(arkret_wire::AuthorizationRef::new(source).unwrap());
+    event.semantic_refs = vec![arkret_wire::SemanticRef::new(reference.to_string(), role)];
+    ordinary_realm::reseal(&mut event);
+    ordinary_realm::request_for_event(previous, event, at)
+}
+
+/// Attach the verified public MLS transition whose roster holds `principals`.
+fn with_group(
+    mut request: soland_storage::EventCommitRequest,
+    base: Option<(&arkret_wire::EventId, u64)>,
+    epoch: u64,
+    principals: &[&ActorId],
+) -> soland_storage::EventCommitRequest {
+    request.authority_commit.mls_state = Some(soland_storage::MlsStateInstallation {
+        effective_scope: request.authority_commit.event.scope_ref.clone(),
+        base: base.map(|(reference, epoch)| soland_storage::MlsInstalledBase {
+            current_mls_commit_event_ref: reference.clone(),
+            epoch,
+        }),
+        epoch,
+        public_state: format!("public-state-{epoch}").into_bytes(),
+        member_principals: principals.iter().map(|actor| (*actor).clone()).collect(),
+        genesis_blobs: Vec::new(),
+    });
+    request
+}
+
+fn mls_genesis_payload(realm_id: &RealmId, at: chrono::DateTime<chrono::Utc>) -> serde_json::Value {
+    serde_json::json!({
+        "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        "group_info_ref": format!("ak:blob:sha256:{}", "3".repeat(64)),
+        "ratchet_tree_ref": format!("ak:blob:sha256:{}", "4".repeat(64)),
+        "governance_binding":
+            arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm_id.clone(), None, 0, 0, 0)
+                .unwrap(),
+        "created_at": arkret_canonical::format_timestamp_canonical(at),
+    })
+}
+
+fn mls_commit_payload(
+    realm_id: &RealmId,
+    base: &arkret_wire::EventId,
+    previous_epoch: u64,
+    commit_bytes: &[u8],
+) -> serde_json::Value {
+    let binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+        realm_id.clone(),
+        Some(base.clone()),
+        previous_epoch,
+        previous_epoch + 1,
+        0,
+    )
+    .unwrap();
+    let envelope = arkret_models_crypto::MlsCommitEnvelope {
+        group_id: binding.mls_group_id().unwrap(),
+        epoch: previous_epoch + 1,
+        commit: arkret_wire::base64url::base64url_encode(commit_bytes),
+        commit_digest: Hash::new(arkret_canonical::sha256_digest(commit_bytes)).unwrap(),
+        ratchet_tree: None,
+    };
+    serde_json::to_value(
+        arkret_models_crypto::MlsCommitPayload::new(base.clone(), 0, &envelope, binding).unwrap(),
+    )
+    .unwrap()
+}
+
+/// One MLS ciphertext Message body frozen at `epoch` over `group_state_ref`.
+fn ciphertext(
+    strand_id: &arkret_wire::StrandId,
+    epoch: u64,
+    group_state_ref: &arkret_wire::EventId,
+) -> serde_json::Value {
+    serde_json::json!({
+        "strand_id": strand_id,
+        "track_name": "discussion",
+        "encrypted_content": arkret_models_crypto::EncryptedEnvelope {
+            version: "1.0".to_owned(),
+            content_type: "application/vnd.arkret.message+json".to_owned(),
+            encryption_context: arkret_models_crypto::EncryptedEnvelopeEncryptionContext::standard(
+                epoch,
+                group_state_ref.clone(),
+            ),
+            ciphertext: "Y2lwaGVydGV4dA".to_owned(),
+        },
+    })
+}
+
+/// The peer's durable acceptance of its Welcome of `commit`, as the claim,
+/// Welcome queue and consume services leave it (their own suites cover how):
+/// the claim ledger row consumed, bound to the Welcome, queued to the peer.
+async fn consume_peer_welcome(
+    pool: &PgPool,
+    station: &DidCoreId,
+    commit: &soland_storage::EventCommitRequest,
+    peer: &ActorId,
+) {
+    let claim_id = format!("ak:keypackage_claim:{}", uuid::Uuid::now_v7());
+    let welcome_id = format!("ak:mls_welcome_delivery:{}", uuid::Uuid::now_v7());
+    let request_id = uuid::Uuid::now_v7().simple().to_string();
+    let now = chrono::Utc::now();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO peer_keypackage_claims \
+         (source_id,claim_request_id,request_digest,key_package_use,keypackage_id,outcome, \
+          terminal_receipt,consume_receipt,claim_expires_at_unix_ms,expires_at,state,updated_at) \
+         VALUES ($1,$2,$3,'single_use',NULL,'{}'::jsonb,NULL,'{}'::jsonb,$4,$5,'consumed',$6)",
+    )
+    .bind::<Text, _>(station.as_str())
+    .bind::<Text, _>(&request_id)
+    .bind::<Text, _>(format!("sha256:{}", "6".repeat(64)))
+    .bind::<BigInt, _>(now.timestamp_millis() + 3_600_000)
+    .bind::<BigInt, _>(now.timestamp() + 86_400)
+    .bind::<BigInt, _>(now.timestamp())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO mls_welcome_deliveries \
+         (welcome_id,realm_id,commit_event_pk,recipient,recipient_endpoint_kind,recipient_device_id,\
+          recipient_verification_method,recipient_authorization_event_ref,\
+          recipient_device_authorization,keypackage_claim_ref,delivery_json,state,delivered_at) \
+         SELECT $1,$2,pk,$3,'device','device-1',NULL,$4,'{}'::jsonb,$5,$6,'delivered',now() \
+         FROM canonical_events WHERE envelope->>'event_id'=$7",
+    )
+    .bind::<Text, _>(&welcome_id)
+    .bind::<Text, _>(commit.authority_commit.event.realm_id.as_str())
+    .bind::<Text, _>(peer.signing_principal_id().as_str())
+    .bind::<Text, _>(unique_event_id("peer-device").as_str())
+    .bind::<Text, _>(&claim_id)
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({ "recipient_actor_id": peer }))
+    .bind::<Text, _>(commit.authority_commit.event.event_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO keypackage_claim_welcome_bindings \
+         (claim_id,source_id,claim_request_id,welcome_id,welcome_digest,commit_event_ref) \
+         VALUES ($1,$2,$3,$4,$5,$6)",
+    )
+    .bind::<Text, _>(&claim_id)
+    .bind::<Text, _>(station.as_str())
+    .bind::<Text, _>(&request_id)
+    .bind::<Text, _>(&welcome_id)
+    .bind::<Text, _>(format!("sha256:{}", "7".repeat(64)))
+    .bind::<Text, _>(commit.authority_commit.event.event_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+}
+
+/// Every row an admitted Direct Conversation Event can leave for `realm_id`.
+async fn dc_footprint(pool: &PgPool, realm_id: &RealmId) -> [i64; 8] {
+    let [authorities, events, commits, slots, members] = footprint(pool, realm_id).await;
+    [
+        authorities,
+        events,
+        commits,
+        slots,
+        members,
+        count(
+            pool,
+            "SELECT COUNT(*) AS count FROM message_revision_current_results WHERE realm_id=$1",
+            realm_id,
+        )
+        .await,
+        count(
+            pool,
+            "SELECT COALESCE(SUM(jsonb_array_length(value->'endorsements')),0)::bigint AS count \
+             FROM direct_conversation_binding_current_results WHERE realm_id=$1",
+            realm_id,
+        )
+        .await,
+        count(
+            pool,
+            "SELECT COUNT(*) AS count FROM mls_group_current_results WHERE realm_id=$1",
+            realm_id,
+        )
+        .await,
+    ]
+}
+
+#[derive(diesel::QueryableByName)]
+struct GroupStateRow {
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    current_exact_pair: bool,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    initial_exact_pair_group_state_ref: Option<String>,
+}
+
+async fn group_state(pool: &PgPool, realm_id: &RealmId) -> (bool, Option<String>) {
+    let mut conn = pool.get().await.unwrap();
+    let row = diesel::sql_query(
+        "SELECT current_exact_pair,initial_exact_pair_group_state_ref \
+         FROM direct_conversation_group_states WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<GroupStateRow>(&mut *conn)
+    .await
+    .unwrap();
+    (
+        row.current_exact_pair,
+        row.initial_exact_pair_group_state_ref,
+    )
+}
+
+/// `contact-and-direct-conversation.md` §7.2, §8.3 and §8.4 at the accepting
+/// cut: the root's materialization mask admits the one group Genesis; the
+/// bootstrap source's provisional phase lets only the founder send and Add the
+/// peer; once the peer's Welcome of the first exact-pair Commit is durable,
+/// the completion phase admits only binding endorsements, whose integrity is
+/// checked against the founding facts and that Commit; after the first
+/// endorsement both phases exit and every participant write names the binding
+/// under the participant source, with the pair's Contact still granting
+/// `direct_message`. A request authored against an older cut is re-decided
+/// at the current one, and every refusal writes nothing.
+#[tokio::test]
+async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zero_write_refusals() {
+    let pool = contract_pool().await;
+    let pair = pair(&pool).await;
+    let store = pair.store();
+    let at = now();
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    store
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await
+        .unwrap();
+    let realm_id = realm_of(&unit);
+    let facts = unit.facts().unwrap();
+    let create_ref = unit.transactions[0].event.event_id.clone();
+    let founder = pair.founder_actor();
+    let peer = pair.peer_actor();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let refused = async |request: &soland_storage::EventCommitRequest| {
+        let before = dc_footprint(&pool, &realm_id).await;
+        let code = refusal_code(uow.commit_event(request.clone()).await);
+        assert_eq!(dc_footprint(&pool, &realm_id).await, before);
+        code
+    };
+
+    // realm-and-space.md §2.5 row 5: the founding create fixed history.
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) AS count FROM realm_bootstrap_current_results \
+             WHERE realm_id=$1 AND result_family='realm_history_access' AND value='\"since_join\"'",
+            &realm_id,
+        )
+        .await,
+        1
+    );
+
+    // A bootstrap Message before the group Genesis has no provisional phase.
+    let early = cited(
+        &unit.transactions[3],
+        EventKind::MessageCreate,
+        founder.clone(),
+        ciphertext(&facts.main_strand_id, 0, &create_ref),
+        Cites::Bootstrap(&create_ref),
+    );
+    assert_eq!(
+        refused(&early).await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+
+    // The root's materialization mask admits the scope's one Genesis.
+    let genesis = with_group(
+        cited(
+            &unit.transactions[3],
+            EventKind::MlsGenesis,
+            founder.clone(),
+            mls_genesis_payload(&realm_id, at),
+            Cites::Nothing,
+        ),
+        None,
+        0,
+        &[&founder],
+    );
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let genesis_ref = genesis.authority_commit.event.event_id.clone();
+    assert_eq!(group_state(&pool, &realm_id).await, (false, None));
+
+    // Provisional: the founder alone sends under the bootstrap source.
+    let provisional = cited(
+        &genesis.authority_commit,
+        EventKind::MessageCreate,
+        founder.clone(),
+        ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+        Cites::Bootstrap(&create_ref),
+    );
+    uow.commit_event(provisional.clone()).await.unwrap();
+    let head = provisional.authority_commit.clone();
+    for denied in [
+        cited(
+            &head,
+            EventKind::MessageCreate,
+            founder.clone(),
+            ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+            Cites::Nothing,
+        ),
+        cited(
+            &head,
+            EventKind::MessageCreate,
+            founder.clone(),
+            ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+            Cites::Bootstrap(&genesis_ref),
+        ),
+        cited(
+            &head,
+            EventKind::MessageCreate,
+            peer.clone(),
+            ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+            Cites::Bootstrap(&create_ref),
+        ),
+    ] {
+        assert_eq!(
+            refused(&denied).await,
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        );
+    }
+
+    // The founder's Add makes the roster exactly the pair: the first such
+    // Commit is the binding's initial group state.
+    let add = with_group(
+        cited(
+            &head,
+            EventKind::MlsCommit,
+            founder.clone(),
+            mls_commit_payload(&realm_id, &genesis_ref, 0, b"add-peer"),
+            Cites::Bootstrap(&create_ref),
+        ),
+        Some((&genesis_ref, 0)),
+        1,
+        &[&founder, &peer],
+    );
+    uow.commit_event(add.clone()).await.unwrap();
+    let add_ref = add.authority_commit.event.event_id.clone();
+    assert_eq!(
+        group_state(&pool, &realm_id).await,
+        (true, Some(add_ref.to_string()))
+    );
+
+    let basis = {
+        #[derive(diesel::QueryableByName)]
+        struct BasisRow {
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            authorization_basis: serde_json::Value,
+        }
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "SELECT authorization_basis FROM direct_conversation_founding_slots WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<BasisRow>(&mut *conn)
+        .await
+        .unwrap()
+        .authorization_basis
+    };
+    // The canonical basis is the round's accepted request and accept heads.
+    assert_eq!(basis["kind"], "accepted_contact");
+    assert_eq!(basis["event_refs"].as_array().unwrap().len(), 2);
+    let endorsement = |group_state_ref: &arkret_wire::EventId, seconds: i64| {
+        serde_json::json!({
+            "pair_key": facts.pair_key,
+            "unordered_participant_ids": [founder.clone(), peer.clone()],
+            "realm_id": realm_id,
+            "main_strand_id": facts.main_strand_id,
+            "founding_unit_digest": facts.founding_unit_digest,
+            "authorization_basis": basis,
+            "initial_exact_pair_group_state_ref": group_state_ref,
+            "created_at": arkret_canonical::format_timestamp_canonical(
+                at + chrono::Duration::seconds(seconds),
+            ),
+        })
+    };
+
+    // Until the peer's Welcome is durable the Realm stays provisional: no
+    // endorsement, while the founder still sends at the new epoch.
+    let early_binding = cited(
+        &add.authority_commit,
+        EventKind::DirectConversationBound,
+        peer.clone(),
+        endorsement(&add_ref, 1),
+        Cites::Bootstrap(&create_ref),
+    );
+    assert_eq!(
+        refused(&early_binding).await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    let stale_provisional = cited(
+        &add.authority_commit,
+        EventKind::MessageCreate,
+        founder.clone(),
+        ciphertext(&facts.main_strand_id, 1, &add_ref),
+        Cites::Bootstrap(&create_ref),
+    );
+    let later_provisional = cited(
+        &add.authority_commit,
+        EventKind::MessageCreate,
+        founder.clone(),
+        ciphertext(&facts.main_strand_id, 1, &add_ref),
+        Cites::Bootstrap(&create_ref),
+    );
+    uow.commit_event(later_provisional.clone()).await.unwrap();
+
+    // Completion: once the peer consumed its Welcome, only an endorsement is
+    // admitted. The provisional Message authored at the older cut is re-decided
+    // at this one and refused.
+    consume_peer_welcome(&pool, &pair.station, &add, &peer).await;
+    let head = later_provisional.authority_commit.clone();
+    let replayed = ordinary_realm::request_for_event(
+        &head,
+        stale_provisional.authority_commit.event.clone(),
+        head.commit.committed_at,
+    );
+    assert_eq!(
+        refused(&replayed).await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    for (mutated, code) in [
+        (
+            endorsement(&genesis_ref, 1),
+            ConflictCode::DirectConversationBindingInvalid,
+        ),
+        (
+            {
+                let mut payload = endorsement(&add_ref, 1);
+                payload["pair_key"] = serde_json::json!(fixture_hash('9'));
+                payload
+            },
+            ConflictCode::DirectConversationBindingInvalid,
+        ),
+        (
+            {
+                let mut payload = endorsement(&add_ref, 1);
+                payload["authorization_basis"]["event_refs"][0] =
+                    serde_json::json!(unique_event_id("other-head"));
+                payload
+            },
+            ConflictCode::DirectConversationBindingInvalid,
+        ),
+    ] {
+        let request = cited(
+            &head,
+            EventKind::DirectConversationBound,
+            peer.clone(),
+            mutated,
+            Cites::Bootstrap(&create_ref),
+        );
+        assert_eq!(refused(&request).await, code);
+    }
+    let peer_endorsement = cited(
+        &head,
+        EventKind::DirectConversationBound,
+        peer.clone(),
+        endorsement(&add_ref, 1),
+        Cites::Bootstrap(&create_ref),
+    );
+    uow.commit_event(peer_endorsement.clone()).await.unwrap();
+    let binding_ref = peer_endorsement.authority_commit.event.event_id.clone();
+
+    // Found: a compatible endorsement by the other participant accumulates;
+    // the bootstrap source no longer carries a Message.
+    let founder_endorsement = cited(
+        &peer_endorsement.authority_commit,
+        EventKind::DirectConversationBound,
+        founder.clone(),
+        endorsement(&add_ref, 2),
+        Cites::Bootstrap(&create_ref),
+    );
+    uow.commit_event(founder_endorsement.clone()).await.unwrap();
+    let head = founder_endorsement.authority_commit.clone();
+    assert_eq!(dc_footprint(&pool, &realm_id).await[6], 2);
+    assert_eq!(
+        refused(&cited(
+            &head,
+            EventKind::MessageCreate,
+            founder.clone(),
+            ciphertext(&facts.main_strand_id, 1, &add_ref),
+            Cites::Bootstrap(&create_ref),
+        ))
+        .await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    // The participant source needs an accepted endorsement as its ref.
+    assert_eq!(
+        refused(&cited(
+            &head,
+            EventKind::MessageCreate,
+            peer.clone(),
+            ciphertext(&facts.main_strand_id, 1, &add_ref),
+            Cites::Participant(&add_ref),
+        ))
+        .await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    // The technical root carries no masked action once found.
+    let second_genesis = with_group(
+        cited(
+            &head,
+            EventKind::MlsGenesis,
+            founder.clone(),
+            mls_genesis_payload(&realm_id, at),
+            Cites::Nothing,
+        ),
+        None,
+        0,
+        &[&founder],
+    );
+    assert_eq!(
+        refused(&second_genesis).await,
+        ConflictCode::DirectConversationRootMaskViolation
+    );
+
+    // Both participants send under the binding, citing either endorsement.
+    let peer_message = cited(
+        &head,
+        EventKind::MessageCreate,
+        peer.clone(),
+        ciphertext(&facts.main_strand_id, 1, &add_ref),
+        Cites::Participant(&binding_ref),
+    );
+    uow.commit_event(peer_message.clone()).await.unwrap();
+    let founder_message = cited(
+        &peer_message.authority_commit,
+        EventKind::MessageCreate,
+        founder.clone(),
+        ciphertext(&facts.main_strand_id, 1, &add_ref),
+        Cites::Participant(&founder_endorsement.authority_commit.event.event_id),
+    );
+    uow.commit_event(founder_message.clone()).await.unwrap();
+    let head = founder_message.authority_commit.clone();
+
+    // A withdrawn directional Contact stops every send at the next cut.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE contacts SET tombstone_event_ref=request_event_ref \
+         WHERE (requester_id=$1 AND target_id=$2) OR (requester_id=$2 AND target_id=$1)",
+    )
+    .bind::<Text, _>(founder.to_string())
+    .bind::<Text, _>(peer.to_string())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert_eq!(
+        refused(&cited(
+            &head,
+            EventKind::MessageCreate,
+            peer.clone(),
+            ciphertext(&facts.main_strand_id, 1, &add_ref),
+            Cites::Participant(&binding_ref),
+        ))
+        .await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+}

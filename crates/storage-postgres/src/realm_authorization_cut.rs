@@ -47,6 +47,7 @@ use crate::capability_grant_current_results::{
     decode_authority_root, decode_row, grant_is_active_at, selector_covers,
     validate_ancestor_graph,
 };
+use crate::direct_conversation_admission::ProfileAuthority;
 
 #[derive(QueryableByName)]
 struct PolicyBundleRow {
@@ -78,6 +79,11 @@ pub(crate) struct RealmAuthorizationCut {
     grants: BTreeMap<GrantId, CapabilityGrant>,
     policy_bundle: Option<RealmPolicyBundlePayload>,
     actor_membership: Option<String>,
+    /// The Direct Conversation profile's verdict for the Event this cut was
+    /// read for (`contact-and-direct-conversation.md` §8.3/§8.4). `Profile`
+    /// means the profile's evaluator or phase mask authorized the Event; no
+    /// grant or owner aggregation may substitute it, and none is counted.
+    direct_conversation: Option<ProfileAuthority>,
 }
 
 impl RealmAuthorizationCut {
@@ -148,7 +154,32 @@ impl RealmAuthorizationCut {
             grants,
             policy_bundle,
             actor_membership,
+            direct_conversation: None,
         })
+    }
+
+    /// Read the cut for `event`'s actor together with the Direct
+    /// Conversation profile's verdict for `event` at the same cut. A profile
+    /// refusal is returned as its registered conflict.
+    pub(crate) async fn read_for_event(
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
+    ) -> PersistenceResult<Self> {
+        let mut cut = Self::read(conn, &event.realm_id, &event.actor_id).await?;
+        cut.direct_conversation =
+            crate::direct_conversation_admission::profile_authority_in_connection(conn, event)
+                .await?;
+        Ok(cut)
+    }
+
+    /// Whether the cut's Realm is a Direct Conversation, whose Events name
+    /// their profile authority source instead of a Realm root or grant.
+    pub(crate) fn is_direct_conversation(&self) -> bool {
+        self.direct_conversation.is_some()
+    }
+
+    fn profile_authorized(&self) -> bool {
+        self.direct_conversation == Some(ProfileAuthority::Profile)
     }
 
     /// Whether the actor is the current controller of the Realm authority root.
@@ -248,6 +279,9 @@ impl RealmAuthorizationCut {
         kind: &EventKind,
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
+        if self.profile_authorized() {
+            return true;
+        }
         let actions = arkret_schema::capability_actions_for_event_kind(kind.as_str())
             .filter(|descriptor| descriptor.required_evaluator_checks.is_empty())
             .map(|descriptor| descriptor.action.as_str())
@@ -259,6 +293,16 @@ impl RealmAuthorizationCut {
     /// The Realm has an authority root and a policy bundle at this cut and the
     /// actor is a joined member of it.
     pub(crate) fn require_governed_member(&self, kind: &EventKind) -> PersistenceResult<()> {
+        if self.profile_authorized() {
+            return if self.actor_is_joined() {
+                Ok(())
+            } else {
+                Err(capability_denied(format!(
+                    "{} is not a joined member of the Realm",
+                    kind.as_str()
+                )))
+            };
+        }
         if self.root.is_none() {
             return Err(PersistenceError::Conflict(
                 "failed_precondition: the Realm has no authority root at this cut".to_owned(),
@@ -309,6 +353,18 @@ impl RealmAuthorizationCut {
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<()> {
         self.require_governed_member(kind)?;
+        // The profile's participant allowlist carries only the `.own`
+        // variants, so its authority reaches only the actor's own object.
+        if self.profile_authorized() {
+            return if target.author == &self.actor {
+                Ok(())
+            } else {
+                Err(capability_denied(format!(
+                    "{} reaches only the actor's own object in a Direct Conversation",
+                    kind.as_str()
+                )))
+            };
+        }
         if self.holds_event_kind(kind, at) {
             return Ok(());
         }
@@ -490,7 +546,7 @@ pub(crate) async fn authorize_capability_gated_event_in_connection(
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<RealmAuthorizationCut> {
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
-    let cut = RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id).await?;
+    let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_event_kind(&event.kind, at)?;
     Ok(cut)
 }

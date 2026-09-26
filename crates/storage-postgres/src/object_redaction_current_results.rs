@@ -67,7 +67,7 @@ pub(crate) async fn commit_message_redact_current_result_in_connection(
     )
     .map_err(schema_violation)?;
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
-    let cut = RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id).await?;
+    let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_governed_member(&event.kind)?;
     let target = locked_message_target(conn, &event.realm_id, &payload.message_id).await?;
     cut.require_authored_target_kind(

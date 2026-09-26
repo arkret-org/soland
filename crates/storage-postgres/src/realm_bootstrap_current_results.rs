@@ -1,6 +1,7 @@
 //! Durable singleton current results established by an ordinary Realm bootstrap.
 
 use arkret_event_draft::EventPayloadExt;
+use arkret_models_collaboration::events_payloads::realm::RealmPurpose;
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
@@ -25,24 +26,35 @@ fn result_value<T: serde::Serialize>(value: &T) -> PersistenceResult<serde_json:
 /// bootstrap Event kinds. The authority root, policy bundle and creator
 /// member state have dedicated durable tables and are written by their own
 /// materializers in the same transaction.
+///
+/// `realm-and-space.md` §2.5 create projection row 5: a Direct Conversation
+/// genesis also runs `realm_history_access` `null -> since_join` in the same
+/// write, since that profile has no history-access bootstrap facet.
 pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<()> {
-    let (family, value) = match event.kind {
-        arkret_wire::EventKind::RealmCreate => (
-            "realm_genesis",
-            result_value(&typed_payload(event, EventPayloadExt::as_realm_create)?.object)?,
-        ),
-        arkret_wire::EventKind::RealmProfile => (
+    let rows = match event.kind {
+        arkret_wire::EventKind::RealmCreate => {
+            let genesis = typed_payload(event, EventPayloadExt::as_realm_create)?.object;
+            let mut rows = vec![("realm_genesis", result_value(&genesis)?)];
+            if genesis.purpose == RealmPurpose::DirectConversation {
+                rows.push((
+                    "realm_history_access",
+                    result_value(&arkret_wire::HistoryAccess::SinceJoin)?,
+                ));
+            }
+            rows
+        }
+        arkret_wire::EventKind::RealmProfile => vec![(
             "realm_profile",
             result_value(&typed_payload(event, EventPayloadExt::as_realm_profile)?)?,
-        ),
-        arkret_wire::EventKind::RealmJoinRule => (
+        )],
+        arkret_wire::EventKind::RealmJoinRule => vec![(
             "realm_join_rule",
             result_value(&typed_payload(event, EventPayloadExt::as_realm_join_rule)?.value)?,
-        ),
+        )],
         arkret_wire::EventKind::RealmHistoryAccess => {
             let payload = typed_payload(event, EventPayloadExt::as_realm_history_access)?;
             if payload.from.is_some() {
@@ -50,25 +62,38 @@ pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connec
                     "ordinary Realm bootstrap history must transition from null".to_owned(),
                 ));
             }
-            ("realm_history_access", result_value(&payload.to)?)
+            vec![("realm_history_access", result_value(&payload.to)?)]
         }
-        arkret_wire::EventKind::RealmDiscovery => (
+        arkret_wire::EventKind::RealmDiscovery => vec![(
             "realm_discovery",
             result_value(&typed_payload(event, EventPayloadExt::as_realm_discovery)?.value)?,
-        ),
-        arkret_wire::EventKind::RealmAlias => (
+        )],
+        arkret_wire::EventKind::RealmAlias => vec![(
             "realm_alias",
             result_value(&typed_payload(event, EventPayloadExt::as_realm_alias)?)?,
-        ),
-        arkret_wire::EventKind::RealmPlaintextVisibleServices => (
+        )],
+        arkret_wire::EventKind::RealmPlaintextVisibleServices => vec![(
             "realm_plaintext_visible_services",
             result_value(&typed_payload(
                 event,
                 EventPayloadExt::as_realm_plaintext_visible_services,
             )?)?,
-        ),
+        )],
         _ => return Ok(()),
     };
+    for (family, value) in rows {
+        insert_singleton(conn, event, commit, family, &value).await?;
+    }
+    Ok(())
+}
+
+async fn insert_singleton(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    family: &str,
+    value: &serde_json::Value,
+) -> PersistenceResult<()> {
     let position = i64::try_from(commit.stream_position).map_err(|_| {
         PersistenceError::SchemaViolation(
             "ordinary Realm bootstrap stream position exceeds PostgreSQL BIGINT".to_owned(),
@@ -83,7 +108,7 @@ pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connec
     .bind::<Text, _>(family)
     .bind::<Text, _>(commit.commit_id.as_str())
     .bind::<BigInt, _>(position)
-    .bind::<Jsonb, _>(&value)
+    .bind::<Jsonb, _>(value)
     .bind::<Timestamptz, _>(commit.committed_at)
     .execute(conn)
     .await

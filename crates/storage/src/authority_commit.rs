@@ -689,6 +689,11 @@ pub struct MlsStateInstallation {
     /// Station-private public RFC 9420 tracker state at `epoch`. It holds no
     /// member secret and is never a wire value.
     pub public_state: Vec<u8>,
+    /// The distinct principals of every leaf of the public state at `epoch`,
+    /// read from the verified tracker. A Direct Conversation Realm decides its
+    /// exact-pair group state from them (contact-and-direct-conversation.md
+    /// §7.2, §8.3).
+    pub member_principals: std::collections::BTreeSet<arkret_wire::ActorId>,
     /// The GroupInfo and ratchet tree Blobs a forwarded `ak.mls.genesis`
     /// carried (encryption-and-audit.md §5.1.2), stored with its Commit;
     /// empty for a same-Station Genesis, whose Blobs are already local, and
@@ -1624,6 +1629,7 @@ mod mls_installation_tests {
             }),
             epoch: 1,
             public_state: vec![1],
+            member_principals: Default::default(),
             genesis_blobs: Vec::new(),
         };
         assert!(validate_mls_installation(&event, &installed).is_ok());

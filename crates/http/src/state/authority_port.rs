@@ -52,6 +52,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::IdentityAccountabilityGrant => Ok(SelfEventRoute::AccountabilityGrant),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::StrandCreate
+        | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
         | EventKind::MessageCreate
         | EventKind::MemberState

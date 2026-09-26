@@ -2376,6 +2376,10 @@ async fn commit_one_in_connection(
             &request.authority_commit,
         )
         .await?;
+        crate::direct_conversation_admission::commit_binding_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::strand_current_results::commit_strand_create_current_result_in_connection(
             conn, event, commit,
         )

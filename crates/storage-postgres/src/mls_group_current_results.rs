@@ -264,6 +264,12 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
     )
     .await?;
     store_genesis_blobs(conn, event, &installation.genesis_blobs, commit).await?;
+    crate::direct_conversation_admission::record_group_state_in_connection(
+        conn,
+        event,
+        &installation.member_principals,
+    )
+    .await?;
     if transaction.welcomes.is_empty() {
         return Ok(());
     }

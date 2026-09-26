@@ -1107,6 +1107,7 @@ async fn postgres_agent_message_after_committed_key_revoke_is_capability_denied(
         base: None,
         epoch: 0,
         public_state: b"public-state-0".to_vec(),
+        member_principals: Default::default(),
         genesis_blobs: Vec::new(),
     });
     uow.commit_event(genesis.clone()).await.unwrap();

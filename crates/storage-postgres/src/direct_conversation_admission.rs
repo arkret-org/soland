@@ -12,24 +12,40 @@
 //! 4. `third_party_member_guard` for invite and membership candidates;
 //! 5. `invite_guard` for invite flows;
 //! 6. `root_phase_mask` for actions the technical authority root would carry;
-//! 7. the closed `ak.authority.direct_conversation_participant.v1` evaluator.
+//! 7. the closed participant evaluator: `ak.authority.direct_conversation_participant.v1` once a
+//!    binding is accepted, and the two verifier-derived phases of
+//!    `ak.authority.direct_conversation_bootstrap_participant.v1` before it (section 7.2).
 //!
 //! A Direct Conversation Realm is identified by its create-locked genesis
-//! `purpose`; its immutable pair, main Strand and founding digest come from the
-//! founder's local founding slot written by the founding unit. The in-process
-//! reducer projection is never an input. Every refusal is a
-//! [`ConflictCode`] the caller turns into the closed
-//! `{status="rejected",reason_code}` outcome with zero writes.
+//! `purpose`; its immutable pair, main Strand, founding digest and
+//! authorization basis come from the founder's local founding slot written by
+//! the founding unit. The binding, the unique group's exact-pair state,
+//! membership and the pair's Contact are read at the same cut, under the Realm
+//! authority row lock every writer of them holds. The in-process reducer
+//! projection is never an input. Every refusal is a [`ConflictCode`] the
+//! caller turns into the closed `{status="rejected",reason_code}` outcome with
+//! zero writes.
 
 use std::collections::BTreeSet;
 
-use arkret_wire::{ActorId, EventKind, RealmId};
+use arkret_models_collaboration::events_payloads::direct_conversation::{
+    DirectConversationBindingCurrentValue, DirectConversationBoundPayload,
+};
+use arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis;
+use arkret_wire::{ActorId, AuthoritySourceId, EventId, EventKind, RealmId, ScopeRef};
 use soland_storage::ConflictCode;
 
 use super::{
     AsyncPgConnection, Jsonb, OptionalExtension, PersistenceError, PersistenceResult,
     QueryableByName, RunQueryDsl, Text, sql_query,
 };
+
+/// The role of the critical ref a participant Event names its binding by.
+const BINDING_REF_ROLE: &str = "direct_conversation_binding";
+/// The role of the critical ref a bootstrap Event names its founding unit by.
+const FOUNDING_UNIT_REF_ROLE: &str = "direct_conversation_founding_unit";
+/// The scope both directions of the pair must grant for a send-like action.
+const DIRECT_MESSAGE_SCOPE: &str = "direct_message";
 
 #[derive(QueryableByName)]
 struct GenesisPurposeRow {
@@ -49,18 +65,38 @@ struct FoundingSlotRow {
     main_strand_id: String,
     #[diesel(sql_type = Text)]
     founding_unit_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    authorization_basis: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    event_ids: serde_json::Value,
 }
 
 #[derive(QueryableByName)]
 struct MemberRow {
     #[diesel(sql_type = Text)]
     member_id: String,
+    #[diesel(sql_type = Text)]
+    membership: String,
 }
 
 #[derive(QueryableByName)]
 struct RootControllerRow {
     #[diesel(sql_type = Jsonb)]
     controller_actor_id: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct GroupStateRow {
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    current_exact_pair: bool,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    initial_exact_pair_group_state_ref: Option<String>,
+}
+
+#[derive(QueryableByName)]
+struct BindingRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
 }
 
 /// Immutable founding facts of a Direct Conversation Realm.
@@ -71,12 +107,22 @@ pub(crate) struct DirectConversationRealm {
     founding: Option<FoundingFacts>,
 }
 
+impl DirectConversationRealm {
+    /// The immutable pair, when this Station holds the founding slot.
+    pub(crate) fn pair(&self) -> Option<BTreeSet<&ActorId>> {
+        self.founding.as_ref().map(FoundingFacts::pair)
+    }
+}
+
 struct FoundingFacts {
     founder: ActorId,
     peer: ActorId,
     pair_key: String,
     main_strand_id: String,
     founding_unit_digest: String,
+    authorization_basis: DirectConversationAuthorizationBasis,
+    /// The founding unit's accepted `ak.realm.create`.
+    create_event_id: EventId,
 }
 
 impl FoundingFacts {
@@ -85,8 +131,34 @@ impl FoundingFacts {
     }
 }
 
+/// The unique scope-derived group of the Realm against the pair, when its
+/// Genesis is accepted.
+struct GroupState {
+    current_exact_pair: bool,
+    initial_exact_pair_group_state_ref: Option<EventId>,
+}
+
+/// How the profile decided an Event's authority at this cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProfileAuthority {
+    /// The participant evaluator, a bootstrap phase or the technical root's
+    /// current phase mask authorizes the Event. No ordinary grant or owner
+    /// aggregation is consulted after it.
+    Profile,
+    /// No profile stage decides the Event; ordinary Realm authority does.
+    General,
+}
+
 fn decode_actor(value: &str, what: &str) -> PersistenceResult<ActorId> {
     serde_json::from_str(value)
+        .map_err(|error| PersistenceError::Database(format!("stored {what} is invalid: {error}")))
+}
+
+fn stored<T: serde::de::DeserializeOwned>(
+    value: serde_json::Value,
+    what: &str,
+) -> PersistenceResult<T> {
+    serde_json::from_value(value)
         .map_err(|error| PersistenceError::Database(format!("stored {what} is invalid: {error}")))
 }
 
@@ -110,7 +182,8 @@ pub(crate) async fn direct_conversation_realm_in_connection(
         return Ok(None);
     }
     let founding = sql_query(
-        "SELECT founder_id,peer_id,pair_key,main_strand_id,founding_unit_digest \
+        "SELECT founder_id,peer_id,pair_key,main_strand_id,founding_unit_digest,\
+                authorization_basis,event_ids \
          FROM direct_conversation_founding_slots WHERE realm_id=$1",
     )
     .bind::<Text, _>(realm_id.as_str())
@@ -119,20 +192,28 @@ pub(crate) async fn direct_conversation_realm_in_connection(
     .optional()
     .map_err(PersistenceError::database)?
     .map(|row| {
+        let event_ids: Vec<EventId> = stored(row.event_ids, "founding slot Event ids")?;
         Ok::<_, PersistenceError>(FoundingFacts {
             founder: decode_actor(&row.founder_id, "founding slot founder")?,
             peer: decode_actor(&row.peer_id, "founding slot peer")?,
             pair_key: row.pair_key,
             main_strand_id: row.main_strand_id,
             founding_unit_digest: row.founding_unit_digest,
+            authorization_basis: stored(
+                row.authorization_basis,
+                "founding slot authorization basis",
+            )?,
+            create_event_id: event_ids.into_iter().next().ok_or_else(|| {
+                PersistenceError::Database("stored founding slot has no create Event".to_owned())
+            })?,
         })
     })
     .transpose()?;
     Ok(Some(DirectConversationRealm { founding }))
 }
 
-/// The action an Event maps to under the closed participant allowlist
-/// (`ak.authority.direct_conversation_participant.v1`).
+/// Whether the Event maps to an action of the closed participant allowlist
+/// (`ak.authority.direct_conversation_participant.v1` `event_action_allowlist`).
 fn participant_action(event: &arkret_wire::Event) -> bool {
     match event.kind {
         EventKind::MessageCreate
@@ -149,6 +230,27 @@ fn participant_action(event: &arkret_wire::Event) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the Event maps to an action of the bootstrap source's allowlist
+/// (`ak.authority.direct_conversation_bootstrap_participant.v1`).
+fn bootstrap_action(event: &arkret_wire::Event) -> bool {
+    matches!(
+        event.kind,
+        EventKind::DirectConversationBound | EventKind::MessageCreate | EventKind::MlsCommit
+    )
+}
+
+/// The send-like actions the directional Contact heads gate: new content or
+/// key material delivered to the peer (sections 8.2 and 8.3).
+fn send_like(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::MessageCreate
+            | EventKind::MessageRevise
+            | EventKind::ReactionAdd
+            | EventKind::MlsCommit
+    )
 }
 
 fn membership_of(event: &arkret_wire::Event) -> Option<String> {
@@ -206,23 +308,37 @@ fn root_reliant(event: &arkret_wire::Event) -> bool {
         .is_some()
 }
 
-/// The membership participant set of `exact_two_projection`: every member
-/// row of the Realm, joined or left, so a participant who left still counts
-/// and can rejoin (`contact-and-direct-conversation.md` §8.4).
+/// The root phase mask's closed `masked_actions` of the phase after the
+/// founding unit: until the first binding endorsement is accepted the Realm is
+/// materializing and the root may carry the scope's unique `ak.mls.genesis`
+/// and the `ak.mls.commit` adding the other participant; once `found`, the
+/// mask is empty. The founding phase's four-Event unit never reaches here.
+fn root_masked(kind: &EventKind, bound: bool) -> bool {
+    !bound && matches!(kind, EventKind::MlsGenesis | EventKind::MlsCommit)
+}
+
+/// The membership rows of `exact_two_projection`: every member row of the
+/// Realm, joined or left, so a participant who left still counts and can
+/// rejoin (`contact-and-direct-conversation.md` §8.4).
 async fn participant_members(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
-) -> PersistenceResult<Vec<ActorId>> {
+) -> PersistenceResult<Vec<(ActorId, String)>> {
     sql_query(
-        "SELECT member_id FROM member_state_current_results \
+        "SELECT member_id,membership FROM member_state_current_results \
          WHERE realm_id=$1 AND membership IN ('join','leave') ORDER BY member_id FOR SHARE",
     )
     .bind::<Text, _>(realm_id.as_str())
     .load::<MemberRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?
-    .iter()
-    .map(|row| decode_actor(&row.member_id, "member_state member"))
+    .into_iter()
+    .map(|row| {
+        Ok((
+            decode_actor(&row.member_id, "member_state member")?,
+            row.membership,
+        ))
+    })
     .collect()
 }
 
@@ -238,44 +354,320 @@ async fn root_controller(
     .await
     .optional()
     .map_err(PersistenceError::database)?
+    .map(|row| stored(row.controller_actor_id, "authority-root controller"))
+    .transpose()
+}
+
+/// The scope-derived group's state against the pair, `None` before its
+/// Genesis is accepted.
+async fn group_state(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+) -> PersistenceResult<Option<GroupState>> {
+    sql_query(
+        "SELECT current_exact_pair,initial_exact_pair_group_state_ref \
+         FROM direct_conversation_group_states WHERE realm_id=$1 FOR SHARE",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<GroupStateRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
     .map(|row| {
-        serde_json::from_value(row.controller_actor_id).map_err(|error| {
-            PersistenceError::Database(format!("stored authority-root controller: {error}"))
+        Ok(GroupState {
+            current_exact_pair: row.current_exact_pair,
+            initial_exact_pair_group_state_ref: row
+                .initial_exact_pair_group_state_ref
+                .map(EventId::new)
+                .transpose()
+                .map_err(|error| {
+                    PersistenceError::Database(format!("stored group state ref: {error}"))
+                })?,
         })
     })
     .transpose()
 }
 
+/// The accepted `direct_conversation_binding` of the Realm, if any.
+pub(crate) async fn binding_current_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+) -> PersistenceResult<Option<DirectConversationBindingCurrentValue>> {
+    sql_query(
+        "SELECT value FROM direct_conversation_binding_current_results \
+         WHERE realm_id=$1 FOR SHARE",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<BindingRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(|row| stored(row.value, "direct_conversation_binding value"))
+    .transpose()
+}
+
+/// Both directional Contact heads of the pair are current, non-terminal and
+/// grant `direct_message` (`current_signed_directional_contact_heads_gate`).
+async fn contact_grants_direct_message(
+    conn: &mut AsyncPgConnection,
+    founding: &FoundingFacts,
+) -> PersistenceResult<bool> {
+    let contact = crate::direct_conversation_founding::current_contact(
+        crate::contacts::pair_contacts_in_connection(conn, &founding.founder, &founding.peer)
+            .await?,
+    );
+    let grants = |scopes: &[String]| scopes.iter().any(|scope| scope == DIRECT_MESSAGE_SCOPE);
+    Ok(contact.is_some_and(|contact| {
+        contact.status == "accepted"
+            && contact.tombstone_event_ref.is_none()
+            && grants(&contact.granted_to_target_scopes)
+            && grants(&contact.granted_to_requester_scopes)
+    }))
+}
+
+/// `exact_pair_completion_requires_recipient_durable_welcome`: the peer's
+/// Welcome of the first exact-pair Commit is bound to its claim and the peer
+/// consumed that claim once its join was durable (decision 0121).
+async fn peer_welcome_consumed(
+    conn: &mut AsyncPgConnection,
+    founding: &FoundingFacts,
+    group_state_ref: &EventId,
+) -> PersistenceResult<bool> {
+    Ok(sql_query(
+        "SELECT EXISTS(SELECT 1 FROM keypackage_claim_welcome_bindings b \
+           JOIN peer_keypackage_claims c \
+             ON c.source_id=b.source_id AND c.claim_request_id=b.claim_request_id \
+           JOIN mls_welcome_deliveries w ON w.welcome_id=b.welcome_id \
+           WHERE b.commit_event_ref=$1 AND c.state='consumed' \
+             AND w.delivery_json->'recipient_actor_id'=$2) AS present",
+    )
+    .bind::<Text, _>(group_state_ref.as_str())
+    .bind::<Jsonb, _>(serde_json::to_value(&founding.peer).map_err(PersistenceError::database)?)
+    .get_result::<crate::ExistsRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .present)
+}
+
+/// The one critical semantic ref of `role` an authority source requires.
+fn critical_ref<'a>(event: &'a arkret_wire::Event, role: &str) -> Option<&'a str> {
+    let mut refs = event
+        .semantic_refs
+        .iter()
+        .filter(|reference| reference.role == role);
+    match (refs.next(), refs.next()) {
+        (Some(reference), None) if reference.critical => Some(reference.id.as_str()),
+        _ => None,
+    }
+}
+
+fn bound_payload(event: &arkret_wire::Event) -> Option<DirectConversationBoundPayload> {
+    serde_json::to_value(&event.payload)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .filter(|payload: &DirectConversationBoundPayload| payload.validate_shape().is_ok())
+}
+
 /// Binding integrity (`ak.direct_conversation.admission.binding_integrity.v1`):
-/// every immutable field of the endorsement must equal the accepted founding
-/// facts and the unique scope-derived group's exact-pair winning state.
-fn binding_is_exact(event: &arkret_wire::Event, founding: Option<&FoundingFacts>) -> bool {
-    let Some(founding) = founding else {
+/// every immutable field of the endorsement equals the accepted founding facts,
+/// the canonical authorization basis and the first exact-pair winning state of
+/// the unique scope-derived group, and an already accepted binding carries the
+/// same semantic digest.
+fn binding_is_exact(
+    event: &arkret_wire::Event,
+    founding: Option<&FoundingFacts>,
+    group: Option<&GroupState>,
+    binding: Option<&DirectConversationBindingCurrentValue>,
+) -> bool {
+    let (Some(founding), Some(payload)) = (founding, bound_payload(event)) else {
         return false;
     };
-    let Ok(payload) = serde_json::to_value(&event.payload).and_then(
-        serde_json::from_value::<
-            arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBoundPayload,
-        >,
-    ) else {
-        return false;
+    let normalized_refs = |basis: &DirectConversationAuthorizationBasis| {
+        basis.event_refs.iter().cloned().collect::<BTreeSet<_>>()
     };
-    let fields_match = payload.validate_shape().is_ok()
-        && payload.pair_key.as_str() == founding.pair_key
+    let fields_match = payload.pair_key.as_str() == founding.pair_key
         && payload.realm_id == event.realm_id
         && payload.main_strand_id.as_str() == founding.main_strand_id
         && payload.founding_unit_digest.as_str() == founding.founding_unit_digest
+        && payload.authorization_basis.kind == founding.authorization_basis.kind
+        && normalized_refs(&payload.authorization_basis)
+            == normalized_refs(&founding.authorization_basis)
         && payload
             .unordered_participant_ids
             .iter()
             .collect::<BTreeSet<_>>()
             == founding.pair();
-    // `initial_exact_pair_group_state_ref` must name a winning Commit of the
-    // one scope-derived group holding exactly the pair. No MLS genesis or
-    // Commit is admitted at a same-cut group-state current yet (task 2145),
-    // so no reference can name such a state and the binding cannot be exact.
-    let group_state_is_winning = false;
-    fields_match && group_state_is_winning
+    let group_state_is_initial = group
+        .and_then(|group| group.initial_exact_pair_group_state_ref.as_ref())
+        == Some(&payload.initial_exact_pair_group_state_ref);
+    let same_binding = binding
+        .is_none_or(|binding| binding.binding_digest().ok() == payload.binding_digest().ok());
+    fields_match && group_state_is_initial && same_binding
+}
+
+/// The cut inputs stage 7 reads besides the Event.
+struct EvaluatorInputs<'a> {
+    founding: &'a FoundingFacts,
+    members: &'a [(ActorId, String)],
+    group: Option<&'a GroupState>,
+    binding: Option<&'a DirectConversationBindingCurrentValue>,
+}
+
+/// Stage 7 at the cut: whether the Event's registered authority source admits
+/// it. Every failed input collapses into one `false`.
+async fn participant_authority_admits(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    inputs: EvaluatorInputs<'_>,
+) -> PersistenceResult<bool> {
+    let EvaluatorInputs {
+        founding,
+        members,
+        group,
+        binding,
+    } = inputs;
+    let actor_joined = members
+        .iter()
+        .any(|(member, membership)| member == &event.actor_id && membership == "join");
+    let realm_scope =
+        matches!(&event.scope_ref, ScopeRef::Realm { realm_id } if realm_id == &event.realm_id);
+    if event.executed_by.is_some()
+        || !realm_scope
+        || !founding.pair().contains(&event.actor_id)
+        || !actor_joined
+    {
+        return Ok(false);
+    }
+    let source = event
+        .authorization_ref
+        .as_ref()
+        .and_then(|reference| AuthoritySourceId::from_wire(reference.as_str()));
+    let admitted = match source {
+        Some(AuthoritySourceId::DirectConversationParticipantV1) => {
+            let (Some(binding), Some(group)) = (binding, group) else {
+                return Ok(false);
+            };
+            let covered = critical_ref(event, BINDING_REF_ROLE)
+                .and_then(|reference| EventId::new(reference).ok())
+                .is_some_and(|reference| binding.endorsed_by(&reference));
+            participant_action(event) && covered && group.current_exact_pair
+        }
+        Some(AuthoritySourceId::DirectConversationBootstrapParticipantV1) => {
+            let names_founding = critical_ref(event, FOUNDING_UNIT_REF_ROLE)
+                == Some(founding.create_event_id.as_str());
+            let Some(group) = group else {
+                return Ok(false);
+            };
+            if !bootstrap_action(event) || !names_founding {
+                return Ok(false);
+            }
+            match (binding, &group.initial_exact_pair_group_state_ref) {
+                // Section 7.2: after the first endorsement both phases have
+                // exited; only a compatible endorsement of the settled digest
+                // (checked by binding integrity) still accumulates.
+                (Some(_), _) => event.kind == EventKind::DirectConversationBound,
+                // `exact_pair_founding_completion`.
+                (None, Some(initial)) if peer_welcome_consumed(conn, founding, initial).await? => {
+                    event.kind == EventKind::DirectConversationBound && group.current_exact_pair
+                }
+                // `provisional_history_send`: the founder alone manages its
+                // own leaf, sends and Adds the peer.
+                (None, _) => {
+                    event.actor_id == founding.founder
+                        && event.kind != EventKind::DirectConversationBound
+                }
+            }
+        }
+        _ => false,
+    };
+    if !admitted {
+        return Ok(false);
+    }
+    if send_like(&event.kind) && !contact_grants_direct_message(conn, founding).await? {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// The table's verdict for `event` at the caller's cut: the first refusing
+/// stage, or whether the profile itself authorized the Event.
+async fn evaluate_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &DirectConversationRealm,
+    event: &arkret_wire::Event,
+) -> PersistenceResult<Result<ProfileAuthority, ConflictCode>> {
+    let founding = realm.founding.as_ref();
+    let group = group_state(conn, &event.realm_id).await?;
+    let binding = binding_current_in_connection(conn, &event.realm_id).await?;
+    if event.kind == EventKind::DirectConversationBound
+        && !binding_is_exact(event, founding, group.as_ref(), binding.as_ref())
+    {
+        return Ok(Err(ConflictCode::DirectConversationBindingInvalid));
+    }
+    if matches!(
+        event.kind,
+        EventKind::RealmDestroy | EventKind::RealmTombstone
+    ) {
+        return Ok(Err(ConflictCode::DirectConversationTerminalForbidden));
+    }
+    let Some(founding) = founding else {
+        return Ok(Err(ConflictCode::DirectConversationMemberCountInvalid));
+    };
+    let pair = founding.pair();
+    let members = participant_members(conn, &event.realm_id).await?;
+    let distinct = members
+        .iter()
+        .map(|(member, _)| member)
+        .collect::<BTreeSet<_>>();
+    if pair.len() != 2 || distinct.len() != members.len() || distinct != pair {
+        return Ok(Err(ConflictCode::DirectConversationMemberCountInvalid));
+    }
+    if event.kind == EventKind::InviteThirdParty
+        || (matches!(event.kind, EventKind::InviteCreate | EventKind::MemberState)
+            && member_candidate(event).is_none_or(|candidate| !pair.contains(&candidate)))
+    {
+        return Ok(Err(
+            ConflictCode::DirectConversationThirdPartyMemberForbidden,
+        ));
+    }
+    if matches!(
+        event.kind,
+        EventKind::InviteCreate | EventKind::InviteThirdParty
+    ) {
+        return Ok(Err(ConflictCode::DirectConversationInviteForbidden));
+    }
+    let evaluated = participant_action(event) || bootstrap_action(event);
+    if !evaluated
+        && root_reliant(event)
+        && root_controller(conn, &event.realm_id).await?.as_ref() == Some(&event.actor_id)
+    {
+        if root_masked(&event.kind, binding.is_some()) {
+            return Ok(Ok(ProfileAuthority::Profile));
+        }
+        return Ok(Err(ConflictCode::DirectConversationRootMaskViolation));
+    }
+    if evaluated {
+        let admitted = participant_authority_admits(
+            conn,
+            event,
+            EvaluatorInputs {
+                founding,
+                members: &members,
+                group: group.as_ref(),
+                binding: binding.as_ref(),
+            },
+        )
+        .await?;
+        return Ok(if admitted {
+            Ok(ProfileAuthority::Profile)
+        } else {
+            Err(ConflictCode::DirectConversationParticipantAuthorityDenied)
+        });
+    }
+    if is_space_kind(&event.kind) {
+        return Ok(Err(ConflictCode::DirectConversationSpaceForbidden));
+    }
+    Ok(Ok(ProfileAuthority::General))
 }
 
 /// Evaluate the admission table for `event` at the caller's cut.
@@ -289,63 +681,15 @@ pub(crate) async fn admission_refusal_in_connection(
     let Some(realm) = direct_conversation_realm_in_connection(conn, &event.realm_id).await? else {
         return Ok(None);
     };
-    let founding = realm.founding.as_ref();
-    if event.kind == EventKind::DirectConversationBound && !binding_is_exact(event, founding) {
-        return Ok(Some(ConflictCode::DirectConversationBindingInvalid));
-    }
-    if matches!(
-        event.kind,
-        EventKind::RealmDestroy | EventKind::RealmTombstone
-    ) {
-        return Ok(Some(ConflictCode::DirectConversationTerminalForbidden));
-    }
-    let Some(founding) = founding else {
-        return Ok(Some(ConflictCode::DirectConversationMemberCountInvalid));
-    };
-    let pair = founding.pair();
-    let members = participant_members(conn, &event.realm_id).await?;
-    let distinct = members.iter().collect::<BTreeSet<_>>();
-    if pair.len() != 2 || distinct.len() != members.len() || distinct != pair {
-        return Ok(Some(ConflictCode::DirectConversationMemberCountInvalid));
-    }
-    if event.kind == EventKind::InviteThirdParty
-        || (matches!(event.kind, EventKind::InviteCreate | EventKind::MemberState)
-            && member_candidate(event).is_none_or(|candidate| !pair.contains(&candidate)))
-    {
-        return Ok(Some(
-            ConflictCode::DirectConversationThirdPartyMemberForbidden,
-        ));
-    }
-    if matches!(
-        event.kind,
-        EventKind::InviteCreate | EventKind::InviteThirdParty
-    ) {
-        return Ok(Some(ConflictCode::DirectConversationInviteForbidden));
-    }
-    let participant = participant_action(event);
-    if !participant
-        && event.kind != EventKind::DirectConversationBound
-        && root_reliant(event)
-        && root_controller(conn, &event.realm_id).await?.as_ref() == Some(&event.actor_id)
-    {
-        return Ok(Some(ConflictCode::DirectConversationRootMaskViolation));
-    }
-    // The closed participant evaluator requires an accepted binding
-    // endorsement covering the Event, the unique group's exact-pair winning
-    // state, both directional Contact grants and the action's lifecycle gate.
-    // The binding and group-state inputs have no same-cut current until MLS
-    // admission lands (task 2145), so every allowlisted action is denied with
-    // the one non-enumerating reason; the founder's provisional bootstrap
-    // phase needs the same accepted group Genesis and is denied alike.
-    if participant {
-        return Ok(Some(
-            ConflictCode::DirectConversationParticipantAuthorityDenied,
-        ));
-    }
-    if is_space_kind(&event.kind) {
-        return Ok(Some(ConflictCode::DirectConversationSpaceForbidden));
-    }
-    Ok(None)
+    Ok(evaluate_in_connection(conn, &realm, event).await?.err())
+}
+
+fn refusal(code: ConflictCode, event: &arkret_wire::Event) -> PersistenceError {
+    PersistenceError::Conflict(format!(
+        "{}: the Direct Conversation admission table refused {}",
+        code.as_str(),
+        event.kind.as_str()
+    ))
 }
 
 /// Refuse `event` inside its accepting transaction when a stage matches. The
@@ -355,19 +699,127 @@ pub(crate) async fn admit_direct_conversation_event_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
 ) -> PersistenceResult<()> {
-    if direct_conversation_realm_in_connection(conn, &event.realm_id)
-        .await?
-        .is_none()
-    {
+    profile_authority_in_connection(conn, event)
+        .await
+        .map(|_| ())
+}
+
+/// The profile's authority verdict for `event` inside its accepting
+/// transaction, under the Realm authority row lock: `None` for a Realm that is
+/// not a Direct Conversation, a refusal as its registered conflict, and
+/// otherwise whether the profile authorized the Event or leaves it to
+/// ordinary Realm authority. Kind writers that decide capability-gated
+/// authority call this instead of counting grants or the owner aggregate for
+/// a Direct Conversation (section 8.3: they never substitute the evaluator).
+pub(crate) async fn profile_authority_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+) -> PersistenceResult<Option<ProfileAuthority>> {
+    let Some(realm) = direct_conversation_realm_in_connection(conn, &event.realm_id).await? else {
+        return Ok(None);
+    };
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    match evaluate_in_connection(conn, &realm, event).await? {
+        Ok(authority) => Ok(Some(authority)),
+        Err(code) => Err(refusal(code, event)),
+    }
+}
+
+/// The Realm's scope-derived group state against its pair after an accepted
+/// `ak.mls.genesis` or `ak.mls.commit`, written with the group current in
+/// the same transaction. The first Commit whose roster principals are exactly
+/// the pair becomes the Realm's `initial_exact_pair_group_state_ref`.
+pub(crate) async fn record_group_state_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    member_principals: &BTreeSet<ActorId>,
+) -> PersistenceResult<()> {
+    let Some(realm) = direct_conversation_realm_in_connection(conn, &event.realm_id).await? else {
+        return Ok(());
+    };
+    let exact_pair = realm
+        .pair()
+        .is_some_and(|pair| member_principals.iter().collect::<BTreeSet<_>>() == pair);
+    sql_query(
+        "INSERT INTO direct_conversation_group_states \
+         (realm_id,current_group_state_ref,current_exact_pair,initial_exact_pair_group_state_ref) \
+         VALUES ($1,$2,$3,CASE WHEN $3 THEN $2 END) \
+         ON CONFLICT (realm_id) DO UPDATE SET \
+           current_group_state_ref=EXCLUDED.current_group_state_ref, \
+           current_exact_pair=EXCLUDED.current_exact_pair, \
+           initial_exact_pair_group_state_ref=COALESCE(\
+             direct_conversation_group_states.initial_exact_pair_group_state_ref,\
+             EXCLUDED.initial_exact_pair_group_state_ref)",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<diesel::sql_types::Bool, _>(exact_pair)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
+}
+
+/// `ak.direct_conversation.bound` `result_writes`: add the accepted
+/// endorsement under its `<event_id>:0` dot to the Realm's binding set. The
+/// table already refused an endorsement of another digest before this write.
+pub(crate) async fn commit_binding_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingEndorsementEntry;
+    if event.kind != EventKind::DirectConversationBound {
         return Ok(());
     }
-    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
-    match admission_refusal_in_connection(conn, event).await? {
-        Some(code) => Err(PersistenceError::Conflict(format!(
-            "{}: the Direct Conversation admission table refused {}",
-            code.as_str(),
-            event.kind.as_str()
-        ))),
-        None => Ok(()),
+    let payload = bound_payload(event).ok_or_else(|| {
+        PersistenceError::SchemaViolation("ak.direct_conversation.bound payload is invalid".into())
+    })?;
+    let entry = DirectConversationBindingEndorsementEntry {
+        tag_id: arkret_models_collaboration::exact_current_results::CanonicalEventDot::new(
+            event.event_id.clone(),
+            0,
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+        value: payload.clone(),
+    };
+    let value = match binding_current_in_connection(conn, &event.realm_id).await? {
+        Some(current) => current.with_endorsement(entry),
+        None => Ok(DirectConversationBindingCurrentValue {
+            endorsements: vec![entry],
+        }),
     }
+    .map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "{}: {error}",
+            ConflictCode::DirectConversationBindingInvalid.as_str()
+        ))
+    })?;
+    let digest = value
+        .binding_digest()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let position = i64::try_from(commit.stream_position).map_err(|_| {
+        PersistenceError::SchemaViolation("binding stream position exceeds BIGINT".to_owned())
+    })?;
+    sql_query(
+        "INSERT INTO direct_conversation_binding_current_results \
+         (realm_id,pair_key,binding_digest,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7) \
+         ON CONFLICT (realm_id) DO UPDATE SET \
+           current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_position=EXCLUDED.current_stream_position, \
+           value=EXCLUDED.value, updated_at=EXCLUDED.updated_at \
+         WHERE direct_conversation_binding_current_results.binding_digest=EXCLUDED.binding_digest",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(payload.pair_key.as_str())
+    .bind::<Text, _>(digest.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<diesel::sql_types::BigInt, _>(position)
+    .bind::<Jsonb, _>(serde_json::to_value(&value).map_err(PersistenceError::database)?)
+    .bind::<diesel::sql_types::Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(())
 }

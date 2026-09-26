@@ -99,6 +99,7 @@ fn with_installation(
         }),
         epoch,
         public_state: format!("public-state-{epoch}").into_bytes(),
+        member_principals: Default::default(),
         genesis_blobs: Vec::new(),
     });
     request

@@ -134,7 +134,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     let ordinary = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
          WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
-           AND e.state='committed' AND e.envelope->'payload'->'object'->>'purpose'='collaboration') AS present",
+           AND e.state='committed' AND e.envelope->'payload'->'object'->>'purpose' IN ('collaboration','direct_conversation')) AS present",
     )
     .bind::<Text, _>(event.realm_id.as_str())
     .get_result::<PresentRow>(&mut *conn)
@@ -142,7 +142,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     .map_err(PersistenceError::database)?;
     if !ordinary.present {
         return Err(conflict(
-            "Message current writer supports ordinary collaboration Realms only",
+            "Message current writer supports collaboration and Direct Conversation Realms only",
         ));
     }
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
@@ -174,15 +174,19 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     // capabilities.md §2.2: joining does not grant writing. The same-cut
     // evaluator admits a joined author holding `ak.message.create`, the root
     // controller through its effective `ak.realm.owner`.
-    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+    let cut = crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
         conn,
         event,
         commit.committed_at,
     )
     .await?;
-    if event.authorization_ref.as_ref().is_some_and(|reference| {
-        controller != event.actor_id || reference.as_str() != root.authority_event_ref.as_str()
-    }) {
+    // A Direct Conversation Message names its profile authority source,
+    // which the profile table already decided at this cut.
+    if !cut.is_direct_conversation()
+        && event.authorization_ref.as_ref().is_some_and(|reference| {
+            controller != event.actor_id || reference.as_str() != root.authority_event_ref.as_str()
+        })
+    {
         return Err(conflict(
             "Message authorization ref differs from current Realm root",
         ));
@@ -554,12 +558,8 @@ pub(crate) async fn commit_message_revise_current_result_in_connection(
         serde_json::from_value(payload.clone())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
-    let cut = crate::realm_authorization_cut::RealmAuthorizationCut::read(
-        conn,
-        &event.realm_id,
-        &event.actor_id,
-    )
-    .await?;
+    let cut =
+        crate::realm_authorization_cut::RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_governed_member(&event.kind)?;
     let target = locked_message_target(conn, &event.realm_id, &typed.message_id).await?;
     cut.require_authored_target_kind(

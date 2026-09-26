@@ -284,17 +284,44 @@ pub fn next_request_for_actor(
     payload: serde_json::Value,
     at: chrono::DateTime<chrono::Utc>,
 ) -> EventCommitRequest {
-    let realm_id = previous.event.realm_id.clone();
-    let station = previous.expected_authority.service_id.clone();
     let event = event_for_actor(
         kind,
         arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
+            realm_id: previous.event.realm_id.clone(),
         },
         actor,
         payload,
         at,
     );
+    request_for_event(previous, event, at)
+}
+
+/// Re-derive `event`'s content-bound identity and structural producer proof
+/// after a caller changed its signed content.
+pub fn reseal(event: &mut arkret_wire::Event) {
+    event
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let digest = arkret_wire::Hash::new(
+        event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap(),
+    )
+    .unwrap();
+    let proof = event.producer_proof.as_mut().unwrap();
+    proof.event_digest = digest.clone();
+    proof.jws = arkret_wire::test_support::structural_only_detached_jws(&digest);
+}
+
+/// The unit of work request committing the exact `event` on the Realm stream
+/// right after `previous`.
+pub fn request_for_event(
+    previous: &AuthorityCommitTransaction,
+    event: arkret_wire::Event,
+    at: chrono::DateTime<chrono::Utc>,
+) -> EventCommitRequest {
+    let realm_id = previous.event.realm_id.clone();
+    let station = previous.expected_authority.service_id.clone();
     let commit = arkret_wire::RealmCommit {
         commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
             format!("{}:{}", event.event_id, previous.commit.stream_position + 1).as_bytes(),

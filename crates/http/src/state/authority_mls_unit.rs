@@ -203,6 +203,7 @@ async fn verify_genesis(
             "an MLS Genesis roster is exactly the creator's own leaf",
         ));
     }
+    let member_principals = leaves.iter().map(|leaf| leaf.actor_id.clone()).collect();
     let public_state = tracker
         .export_state()
         .map_err(|error| ServiceError::Internal(error.to_string()))?;
@@ -218,6 +219,7 @@ async fn verify_genesis(
         base: None,
         epoch: 0,
         public_state,
+        member_principals,
         genesis_blobs,
     })
 }
@@ -344,6 +346,12 @@ async fn verify_commit(
             "the Commit does not advance the current group by one covering epoch",
         ));
     }
+    let member_principals = tracker
+        .leaves()
+        .map_err(|error| schema(error.to_string()))?
+        .into_iter()
+        .map(|leaf| leaf.actor_id)
+        .collect();
     Ok((
         MlsStateInstallation {
             effective_scope: event.scope_ref.clone(),
@@ -355,6 +363,7 @@ async fn verify_commit(
             public_state: tracker
                 .export_state()
                 .map_err(|error| ServiceError::Internal(error.to_string()))?,
+            member_principals,
             genesis_blobs: Vec::new(),
         },
         added_leaves,

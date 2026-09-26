@@ -21,7 +21,9 @@
 use std::collections::BTreeSet;
 
 use arkret_models_collaboration::contact_operations::ContactRound;
-use arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence;
+use arkret_models_collaboration::objects::direct_conversation::{
+    DirectConversationAuthorizationBasis, DirectConversationFoundingAuthorityEvidence,
+};
 use arkret_wire::ActorId;
 use soland_storage::{
     AuthorityCommitWriteOutcome, ConflictCode, ContactRecord,
@@ -56,7 +58,7 @@ const DIRECT_MESSAGE_SCOPE: &str = "direct_message";
 
 /// The current accepted Contact of the pair: the most recent row, with a
 /// non-accepted row winning a tie so stale acceptance never masks a change.
-fn current_contact(records: Vec<ContactRecord>) -> Option<ContactRecord> {
+pub(crate) fn current_contact(records: Vec<ContactRecord>) -> Option<ContactRecord> {
     records.into_iter().max_by(|left, right| {
         left.updated_at
             .cmp(&right.updated_at)
@@ -68,13 +70,17 @@ fn current_contact(records: Vec<ContactRecord>) -> Option<ContactRecord> {
 /// accepted Contact round is the one the genesis names, both directional
 /// current heads reference it, grant `direct_message` and are fresh, and the
 /// founder derived from its root round is the unit's author.
+///
+/// Returns the canonical `accepted_contact` authorization basis every binding
+/// endorsement must name (section 8.3): the round's accepted request and
+/// accept Event refs, its two directional current heads.
 async fn verify_contact_round_founding_authority(
     conn: &mut diesel_async::AsyncPgConnection,
     facts: &DirectConversationFoundingFacts,
     contact_round_id: &arkret_wire::Hash,
     local_station: &arkret_wire::DidCoreId,
     at: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<()> {
+) -> PersistenceResult<DirectConversationAuthorizationBasis> {
     let stale = |detail: &str| conflict(ConflictCode::FailedPrecondition, detail);
     let contact = current_contact(
         crate::contacts::pair_contacts_in_connection(conn, &facts.founder_id, &facts.peer_id)
@@ -189,7 +195,17 @@ async fn verify_contact_round_founding_authority(
             "only the founder derived from the pair's root Contact round may found it",
         ));
     }
-    Ok(())
+    let mut heads = contact_round_evidence
+        .current_proofs
+        .iter()
+        .map(|proof| proof.head_event_ref.clone())
+        .collect::<Vec<_>>();
+    heads.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    let basis = DirectConversationAuthorizationBasis::accepted_contact(heads);
+    basis
+        .validate_shape()
+        .map_err(|error| stale(&format!("the Contact round heads are not a basis: {error}")))?;
+    Ok(basis)
 }
 
 fn account_station(actor: &ActorId) -> Option<&arkret_wire::DidCoreId> {
@@ -292,7 +308,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
             )
             .into());
         }
-        match &facts.authority_ref {
+        let authorization_basis = match &facts.authority_ref {
             DirectConversationFoundingAuthorityRef::ContactRound(contact_round_id) => {
                 verify_contact_round_founding_authority(
                     conn,
@@ -301,7 +317,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                     &authority.service_id,
                     committed_at,
                 )
-                .await?;
+                .await?
             }
             // `ak.agent.provision` has no atomic typed current admission yet
             // (task 2230), so no accepted provision or current controller
@@ -313,7 +329,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                 )
                 .into());
             }
-        }
+        };
         let authority_inserted = sql_query(
             "INSERT INTO realm_authorities \
              (realm_id,generation,service_id,authority_ref,last_handoff_ref) \
@@ -383,8 +399,8 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
         sql_query(
             "INSERT INTO direct_conversation_founding_slots \
              (founder_id,trust_domain_id,pair_key,peer_id,founding_unit_digest,realm_id,\
-              main_strand_id,event_ids,commits_json,idempotency_key,accepted_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+              main_strand_id,authorization_basis,event_ids,commits_json,idempotency_key,accepted_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
         )
         .bind::<Text, _>(&founder_id)
         .bind::<Text, _>(&trust_domain_id)
@@ -393,6 +409,9 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
         .bind::<Text, _>(&digest)
         .bind::<Text, _>(facts.realm_id.as_str())
         .bind::<Text, _>(facts.main_strand_id.as_str())
+        .bind::<Jsonb, _>(
+            serde_json::to_value(&authorization_basis).map_err(PersistenceError::database)?,
+        )
         .bind::<Jsonb, _>(serde_json::to_value(&event_ids).map_err(PersistenceError::database)?)
         .bind::<Jsonb, _>(serde_json::to_value(&commits).map_err(PersistenceError::database)?)
         .bind::<Text, _>(&idempotency_key)

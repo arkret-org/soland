@@ -3770,6 +3770,7 @@ CREATE TABLE public.direct_conversation_founding_slots (
     founding_unit_digest text NOT NULL,
     realm_id text NOT NULL,
     main_strand_id text NOT NULL,
+    authorization_basis jsonb NOT NULL,
     event_ids jsonb NOT NULL,
     commits_json jsonb NOT NULL,
     idempotency_key text NOT NULL,
@@ -3781,6 +3782,40 @@ CREATE TABLE public.direct_conversation_founding_slots (
     PRIMARY KEY (founder_id, trust_domain_id, pair_key),
     UNIQUE (founder_id, idempotency_key),
     UNIQUE (realm_id)
+);
+
+-- The one scope-derived MLS group of a Direct Conversation Realm against its
+-- immutable pair (contact-and-direct-conversation.md 7.2 and 8.3), written by
+-- the governing Station in the transaction of every accepted ak.mls.genesis
+-- and ak.mls.commit of the Realm scope. current_exact_pair holds when the
+-- current roster's principals are exactly the pair;
+-- initial_exact_pair_group_state_ref is the first winning Commit that
+-- reached that state and never changes afterwards.
+CREATE TABLE public.direct_conversation_group_states (
+    realm_id text PRIMARY KEY,
+    current_group_state_ref text NOT NULL,
+    current_exact_pair boolean NOT NULL,
+    initial_exact_pair_group_state_ref text,
+    CONSTRAINT direct_conversation_group_states_initial_check CHECK (NOT current_exact_pair OR initial_exact_pair_group_state_ref IS NOT NULL)
+);
+
+-- `direct_conversation_binding` typed current (contact-and-direct-conversation.md
+-- 8.3): the add-only set of accepted endorsements of the Realm's one binding,
+-- each tagged by its accepting Event's `<event_id>:0` dot with the complete
+-- payload. binding_digest is the receiver-derived semantic digest every
+-- endorsement carries; it is an index, never a wire value.
+CREATE TABLE public.direct_conversation_binding_current_results (
+    realm_id text PRIMARY KEY,
+    pair_key text NOT NULL UNIQUE,
+    binding_digest text NOT NULL,
+    current_commit_id text NOT NULL,
+    current_stream_position bigint NOT NULL CHECK (current_stream_position BETWEEN 0 AND 9007199254740991),
+    value jsonb NOT NULL,
+    updated_at timestamptz NOT NULL,
+    CHECK (jsonb_typeof(value) = 'object'),
+    CHECK ((value - 'endorsements') = '{}'::jsonb),
+    CHECK (jsonb_typeof(value->'endorsements') = 'array'),
+    CHECK (jsonb_array_length(value->'endorsements') > 0)
 );
 
 -- Durable Realm metadata projection: owner, lifecycle, visibility and the
