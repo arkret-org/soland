@@ -627,6 +627,16 @@ impl AuthorityCommitApplication {
         Ok(self.store().direct_conversation_admission(event).await?)
     }
 
+    pub async fn direct_conversation_pending_peer_claim_query(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<Option<soland_storage::DirectConversationPendingPeerClaimQuery>> {
+        Ok(self
+            .store()
+            .direct_conversation_pending_peer_claim_query(realm_id)
+            .await?)
+    }
+
     /// Atomically publish both PCR genesis Events and Commits, the identity
     /// resolution current result and the founding device current result.
     pub async fn admit_pcr_genesis_unit(

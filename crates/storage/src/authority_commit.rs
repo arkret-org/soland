@@ -14,6 +14,16 @@ use chrono::{DateTime, Utc};
 
 use crate::PersistenceResult;
 
+/// A delivered cross-Station KeyPackage claim whose exact pair Welcome may
+/// have been consumed since the last source-side observation.
+#[derive(Clone, Debug)]
+pub struct DirectConversationPendingPeerClaimQuery {
+    pub peer_id: String,
+    pub original_request_body: String,
+    pub claim_request_id: String,
+    pub request_digest: String,
+}
+
 /// Result of a caller-scoped stream scan at one governing read cut. The
 /// caller is an authenticated Account (`self`) or peer Station (`peer`).
 #[derive(Clone, Debug, PartialEq)]
@@ -1324,6 +1334,13 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         event: &Event,
     ) -> PersistenceResult<DirectConversationAdmissionCut>;
+
+    /// Find the first exact-pair Add's pending remote claim, if its durable
+    /// consume receipt has not yet been observed on the governing Station.
+    async fn direct_conversation_pending_peer_claim_query(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<DirectConversationPendingPeerClaimQuery>>;
 
     /// Install the complete PCR genesis, founding device current, and exact
     /// idempotency receipt in one durable transaction.

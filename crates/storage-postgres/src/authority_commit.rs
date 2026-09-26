@@ -2221,6 +2221,54 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn direct_conversation_pending_peer_claim_query(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<soland_storage::DirectConversationPendingPeerClaimQuery>> {
+        #[derive(QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = Text)]
+            peer_id: String,
+            #[diesel(sql_type = Text)]
+            original_request_body: String,
+            #[diesel(sql_type = Text)]
+            claim_request_id: String,
+            #[diesel(sql_type = Text)]
+            request_digest: String,
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT o.peer_id, o.payload_json AS original_request_body, \
+                    c.claim_request_id, c.request_digest \
+             FROM direct_conversation_group_states g \
+             JOIN federation_outbox fan \
+               ON fan.endpoint='/_arkret/peer/events' \
+              AND fan.payload_json::jsonb #>> '{replications,0,source_commit,event_ref}' \
+                  =g.initial_exact_pair_group_state_ref \
+             JOIN peer_keypackage_claims c \
+               ON c.outcome #>> '{claims,0,claim_id}' \
+                  =fan.payload_json::jsonb #>> '{replications,0,welcomes,0,keypackage_claim_ref}' \
+             JOIN federation_outbox o \
+               ON o.idempotency_key=c.claim_request_id \
+              AND o.endpoint='/_arkret/peer/keys/keypackages/claim' \
+              AND o.peer_id=fan.peer_id \
+              AND o.peer_id=c.outcome->'claim_receipt'->>'destination_id' \
+             WHERE g.realm_id=$1 AND c.state IN ('claimed','last_resort_claimed') \
+             LIMIT 1",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<Row>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        Ok(row.map(|row| soland_storage::DirectConversationPendingPeerClaimQuery {
+            peer_id: row.peer_id,
+            original_request_body: row.original_request_body,
+            claim_request_id: row.claim_request_id,
+            request_digest: row.request_digest,
+        }))
+    }
+
     async fn admit_self_ordinary_realm_bootstrap_unit(
         &self,
         unit: &OrdinaryRealmBootstrapCommitUnit,

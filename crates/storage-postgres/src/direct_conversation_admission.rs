@@ -434,12 +434,24 @@ async fn peer_welcome_consumed(
     group_state_ref: &EventId,
 ) -> PersistenceResult<bool> {
     Ok(sql_query(
-        "SELECT EXISTS(SELECT 1 FROM keypackage_claim_welcome_bindings b \
+        "SELECT (EXISTS(SELECT 1 FROM keypackage_claim_welcome_bindings b \
            JOIN peer_keypackage_claims c \
              ON c.source_id=b.source_id AND c.claim_request_id=b.claim_request_id \
            JOIN mls_welcome_deliveries w ON w.welcome_id=b.welcome_id \
            WHERE b.commit_event_ref=$1 AND c.state='consumed' \
-             AND w.delivery_json->'recipient_actor_id'=$2) AS present",
+             AND w.delivery_json->'recipient_actor_id'=$2) \
+          OR EXISTS(SELECT 1 FROM federation_outbox fan \
+            JOIN peer_keypackage_claims c \
+              ON c.outcome #>> '{claims,0,claim_id}' \
+                 =fan.payload_json::jsonb #>> '{replications,0,welcomes,0,keypackage_claim_ref}' \
+            WHERE fan.endpoint='/_arkret/peer/events' AND fan.state='delivered' \
+              AND fan.payload_json::jsonb #>> '{replications,0,source_commit,event_ref}'=$1 \
+              AND fan.payload_json::jsonb #> '{replications,0,welcomes,0,recipient_actor_id}'=$2 \
+              AND fan.peer_id=c.outcome #>> '{claim_receipt,destination_id}' \
+              AND c.state='consumed' \
+              AND c.consume_receipt #>> '{recipient_durable_receipt,welcome_ref}' \
+                  =fan.payload_json::jsonb #>> '{replications,0,welcomes,0,welcome_id}') \
+         ) AS present",
     )
     .bind::<Text, _>(group_state_ref.as_str())
     .bind::<Jsonb, _>(serde_json::to_value(&founding.peer).map_err(PersistenceError::database)?)

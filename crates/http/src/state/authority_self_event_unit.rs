@@ -24,6 +24,57 @@ use soland_storage::SelfProducerCommitGuard;
 
 use super::AppState;
 
+/// Refresh the already registered remote claim's durable consume receipt
+/// before evaluating a Direct Conversation completion cut. The peer read and
+/// signature checks happen before the accepting database transaction.
+async fn refresh_direct_conversation_peer_claim(
+    state: &AppState,
+    event: &Event,
+) -> ServiceResult<()> {
+    let Some(pending) = state
+        .authority_commits()
+        .direct_conversation_pending_peer_claim_query(&event.realm_id)
+        .await?
+    else {
+        return Ok(());
+    };
+    let query = serde_json::json!({
+        "claim_request_id": pending.claim_request_id,
+        "request_digest": pending.request_digest,
+    });
+    let body = arkret_canonical::canonical_json_bytes(&query)
+        .map_err(|error| ServiceError::internal(error.to_string()))?;
+    let response = crate::routing::federation::outbox::signed_peer_request(
+        state,
+        &pending.peer_id,
+        "/_arkret/peer/keys/keypackages/claims/query",
+        &body,
+        64 * 1024,
+    )
+    .await
+    .map_err(|_| ServiceError::Conflict("temporarily_unavailable: peer claim read unavailable".into()))?;
+    if response.status != 200 {
+        return Err(ServiceError::Conflict(
+            "temporarily_unavailable: peer claim read was refused".into(),
+        ));
+    }
+    let outcome: arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome =
+        serde_json::from_slice(&response.body)
+            .map_err(|_| ServiceError::internal("peer claim query response is invalid"))?;
+    outcome
+        .validate_shape()
+        .map_err(|_| ServiceError::internal("peer claim query shape is invalid"))?;
+    crate::routing::mls::capture_relayed_keypackage_claim_query(
+        state,
+        &pending.peer_id,
+        &pending.original_request_body,
+        &outcome,
+    )
+    .await
+    .map_err(|_| ServiceError::Conflict("temporarily_unavailable: peer claim receipt unavailable".into()))?;
+    Ok(())
+}
+
 /// How the Event's human-device or Agent producer was resolved
 /// (device-lifecycle §8.2.2): locally at this Station's PCR, or from the
 /// evidence an `authority_forward` carried from the producer's Station.
@@ -123,6 +174,7 @@ pub(super) async fn commit_event_unit(
         arkret_canonical::DigestSuite::Sha256,
     )
     .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    refresh_direct_conversation_peer_claim(state, event).await?;
     // contact-and-direct-conversation.md section 8.4: a Direct Conversation
     // Realm's profile table precedes every other authority, so its Events
     // skip the reducer preflight; the accepting transaction evaluates the
