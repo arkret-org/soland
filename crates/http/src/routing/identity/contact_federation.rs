@@ -21,13 +21,14 @@ use arkret_models_collaboration::contact_operations::{
     BilateralContinuityCheckpoint, BilateralContinuityCheckpointCore,
     BilateralContinuityCheckpointProposal, BilateralContinuityCheckpointSignature,
     CONTACT_CONTINUITY_CONTEXT, ContactContinuityEvidence, ContactCurrentProof, ContactPeer,
-    ContactRound, ContactRoundEvidenceBundle, ContactScope, ContactScopeUpdatePayload,
-    GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt, PeerContactControlKind,
-    PeerContactControlReceipt, PeerContactControlReceiptDomain, PeerContactControlSubmitOutcome,
-    PeerContactEventSubmitOutcome, PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain,
-    PeerContactOutcome, PeerContactSubmitOutcome, PeerContactSubmitRequestBody,
-    RejectAcceptanceReceipt, RequestAcceptanceReceipt, bilateral_checkpoint_digest,
-    bilateral_continuity_root_basis_digest, bilateral_prefix_accumulator,
+    ContactProducerSigner, ContactRound, ContactRoundEvidenceBundle, ContactScope,
+    ContactScopeUpdatePayload, GlareConcurrencyAttestation, NormalResponseAcceptanceReceipt,
+    PeerContactControlKind, PeerContactControlReceipt, PeerContactControlReceiptDomain,
+    PeerContactControlSubmitOutcome, PeerContactEventSubmitOutcome, PeerContactMirrorReceipt,
+    PeerContactMirrorReceiptDomain, PeerContactOutcome, PeerContactSubmitOutcome,
+    PeerContactSubmitRequestBody, RejectAcceptanceReceipt, RequestAcceptanceReceipt,
+    bilateral_checkpoint_digest, bilateral_continuity_root_basis_digest,
+    bilateral_prefix_accumulator,
 };
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
@@ -54,6 +55,131 @@ fn event_digest_for_frozen_claim(event: &Event, claim: &Hash) -> Result<Hash, Ap
             .map_err(|error| AppError::internal(format!("Contact Event digest: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))
+}
+
+/// The source-signed receipt freezes the exact producer method and public key
+/// that passed its authority admission. The receiving Station must still
+/// verify the original Event proof with that key before projecting the fact.
+fn verify_peer_contact_event_producer(
+    delivery: &PeerContactSubmitRequestBody,
+    event: &Event,
+    source_id: &str,
+) -> Result<(), AppError> {
+    let (holder, signer): (&ContactPeer, &ContactProducerSigner) = match delivery {
+        PeerContactSubmitRequestBody::Request {
+            request_receipt, ..
+        } => (
+            &request_receipt.core.holder,
+            &request_receipt.core.producer_signer,
+        ),
+        PeerContactSubmitRequestBody::Response {
+            response_receipt, ..
+        } => (
+            &response_receipt.request_receipt.core.peer,
+            &response_receipt.producer_signer,
+        ),
+        PeerContactSubmitRequestBody::Reject { reject_receipt, .. } => (
+            &reject_receipt.request_receipt.core.peer,
+            &reject_receipt.producer_signer,
+        ),
+        PeerContactSubmitRequestBody::ScopeUpdate { lineage, .. }
+        | PeerContactSubmitRequestBody::Tombstone { lineage, .. } => {
+            (&lineage.issuer, &lineage.producer_signer)
+        }
+        _ => {
+            return Err(super::super::events::peer::schema_violation(
+                "Contact control carrier has no original Event producer",
+            ));
+        }
+    };
+    verify_exact_contact_event_producer(event, holder, signer, source_id)
+}
+
+fn verify_exact_contact_event_producer(
+    event: &Event,
+    holder: &ContactPeer,
+    signer: &ContactProducerSigner,
+    source_id: &str,
+) -> Result<(), AppError> {
+    signer.validate_for_event(event, holder).map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "Contact producer descriptor does not bind Event: {error}"
+        ))
+    })?;
+    if holder.delivery_station_id().as_str() != source_id
+        || event.actor_id.route_service_id().as_str() != source_id
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact producer holder is hosted by another Station",
+        ));
+    }
+    // Agent native identity/controller history needs the registered delegated
+    // holder verifier. Until that branch is wired, it cannot inherit the human
+    // key path merely because a source Station asserted a key in a receipt.
+    if matches!(holder, ContactPeer::Agent { .. }) {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "Agent Contact producer history is unavailable",
+        ));
+    }
+    event
+        .validate_for_contact_history_structural()
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    arkret_schema::validate_event_wire_schema(event)
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    let suite = event
+        .event_id
+        .event_digest()
+        .digest_suite()
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    event
+        .verify_event_id_matches_content_with_digest_suite(suite)
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    let proof = event.producer_proof.as_ref().ok_or_else(|| {
+        super::super::events::peer::schema_violation("Contact Event has no producer proof")
+    })?;
+    proof
+        .validate_production()
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    if proof.created_at != event.created_at
+        || &proof.verification_method != signer.verification_method()
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact producer method or time differs from source descriptor",
+        ));
+    }
+    let producer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+    let did = arkret_identity::verification_method_did(signer.verification_method().as_str())
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    if arkret_wire::project_did_to_core_id(&did)
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?
+        != *producer.signing_principal_id()
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact producer method belongs to another principal",
+        ));
+    }
+    let key = arkret_signatures::proof::PublicKeyMaterial::Ed25519Raw {
+        bytes: signer
+            .public_key_bytes()
+            .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?
+            .to_vec(),
+    };
+    let bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &bytes,
+        &event.actor_id,
+        &key,
+        suite,
+    )
+    .map_err(|error| {
+        super::super::events::peer::schema_violation(format!(
+            "Contact original Event producer proof is invalid: {error}"
+        ))
+    })
 }
 
 use super::now;
@@ -419,6 +545,7 @@ async fn peer_contacts_submit(
             "Contact carrier issuer does not match signed_event.actor_id",
         ));
     }
+    verify_peer_contact_event_producer(&delivery, signed_event, &source_id)?;
     let issuer = issuer_core_id.signing_principal_id().to_string();
     let recipient_id = contact_address.delivery_station_id().as_str();
     if recipient_id != state.service_id() {
@@ -4330,6 +4457,106 @@ mod tests {
                 .unwrap(),
             ..AppConfig::test_default()
         }
+    }
+
+    #[test]
+    fn peer_contact_producer_requires_the_exact_source_signed_event_key() {
+        let holder = ContactPeer::Human {
+            account_id: arkret_wire::AccountId::new(
+                DidCoreId::new(ALICE).unwrap(),
+                DidCoreId::new(ALICE_SERVICE).unwrap(),
+            ),
+        };
+        let peer = ContactPeer::Human {
+            account_id: arkret_wire::AccountId::new(
+                DidCoreId::new(BOB).unwrap(),
+                DidCoreId::new(BOB_SERVICE).unwrap(),
+            ),
+        };
+        let method = arkret_wire::DidUrl::new(format!("{}#device", web_did(ALICE))).unwrap();
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[29; 32]);
+        let signer = ContactProducerSigner::direct(
+            method.clone(),
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                signing_key.verifying_key().to_bytes(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let realm_id =
+            arkret_wire::RealmId::new("ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M")
+                .unwrap();
+        let mut event = Event {
+            event_id: arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0; 32],
+            ),
+            kind: arkret_wire::EventKind::ContactRequested,
+            realm_id: realm_id.clone(),
+            scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
+            actor_id: holder.contact_actor_id(),
+            executed_by: None,
+            authorization_ref: None,
+            applet_id: None,
+            external_ref: None,
+            created_at: chrono::Utc::now(),
+            semantic_refs: Vec::new(),
+            payload: serde_json::from_value(json!({
+                "peer": peer,
+                "granted_to_peer_scopes": ["direct_message"],
+                "introduction_evidence_digest": format!("sha256:{}", "a".repeat(64)),
+            }))
+            .unwrap(),
+            producer_proof: None,
+        };
+        let digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        event.event_id = arkret_wire::EventId::from_event_digest(&digest).unwrap();
+        let mut proof = arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.into(),
+            verification_method: method,
+            event_digest: digest,
+            created_at: event.created_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: String::new(),
+        };
+        proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+            &proof.canonical_binding_bytes(&event.actor_id).unwrap(),
+            &signing_key,
+        )
+        .unwrap();
+        event.producer_proof = Some(proof);
+        verify_exact_contact_event_producer(&event, &holder, &signer, ALICE_SERVICE).unwrap();
+
+        let wrong_key = ContactProducerSigner::direct(
+            signer.verification_method().clone(),
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(&[30; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            verify_exact_contact_event_producer(&event, &holder, &wrong_key, ALICE_SERVICE)
+                .is_err()
+        );
+        assert!(
+            verify_exact_contact_event_producer(&event, &holder, &signer, BOB_SERVICE).is_err()
+        );
+        let mut tampered = event;
+        tampered.producer_proof.as_mut().unwrap().jws.push('x');
+        assert!(
+            verify_exact_contact_event_producer(&tampered, &holder, &signer, ALICE_SERVICE)
+                .is_err()
+        );
     }
 
     fn signed_request_receipt(
