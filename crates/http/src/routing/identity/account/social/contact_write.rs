@@ -165,9 +165,9 @@ pub(crate) fn verify_contact_service_signature_bytes(
             format!("{evidence_field}.signature.verification_method controller is invalid"),
         )
     })?;
-    // A source signs receipts with the assertion method its DID history held
-    // at the evidence time, and lineage / current proofs with its federation
-    // method; both name the issuer Station as controller.
+    // Every Contact source assertion names the issuer Station as controller.
+    // Callers must also establish this method as a historical assertionMethod
+    // at signature.created_at before treating the cached key as authoritative.
     if controller_core.as_str() != expected_service_id || fragment.is_empty() {
         return Err(crate::app_error!(
             FailedPrecondition,
@@ -1107,6 +1107,7 @@ fn contact_direction_version(event: &Event) -> Result<u64, AppError> {
     }
 }
 
+#[cfg(test)]
 fn sign_contact_transcript(state: &AppState, bytes: &[u8]) -> Result<ProtocolSignature, AppError> {
     Ok(ProtocolSignature {
         verification_method: DidUrl::new(
