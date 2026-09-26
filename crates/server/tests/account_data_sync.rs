@@ -2,14 +2,20 @@
 //! PCR. The fixture never inserts an uncommitted Event as accepted state.
 
 use arkret_wire::{EventKind, ScopeRef};
+use ed25519_dalek::SigningKey;
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use soland_http::config::AppConfig;
 use soland_http::service;
 use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 use soland_test_support::pcr_genesis::PcrGenesisFixture;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const ACCOUNT_DATA_PATH: &str = "/_arkret/self/account_data/ak.push_rules";
+const INTROSPECTION_PATH: &str = "/_coauth/internal/session-grants/introspect";
 
 fn test_config() -> AppConfig {
     AppConfig {
@@ -89,6 +95,291 @@ fn signed_account_data_event(
         fixture.history.founding_device_id.as_str(),
         fixture.history.founding_device_signing_seed,
     )
+}
+
+fn signed_account_data_tombstone(
+    state: &AppState,
+    fixture: &PcrGenesisFixture,
+    key: &str,
+    expected_revision: u64,
+) -> arkret_wire::Event {
+    let event = arkret_wire::test_support::raw_event_at(
+        EventKind::AccountDataSet.as_str(),
+        ScopeRef::Realm {
+            realm_id: fixture.unit.transactions[0].event.realm_id.clone(),
+        },
+        fixture.history.account.principal_id.clone(),
+        state.service_core_id(),
+        json!({
+            "key": key,
+            "expected_server_revision": expected_revision,
+            "tombstone": true,
+        }),
+        chrono::Utc::now(),
+    )
+    .expect("typed account data tombstone Event");
+    soland_test_support::signed_event::sign_fixture_event(
+        event,
+        fixture.history.did.as_str(),
+        fixture.history.founding_device_id.as_str(),
+        fixture.history.founding_device_signing_seed,
+    )
+}
+
+async fn spawn_introspection_mock(outcome: Value) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("introspection mock binds");
+    let address = listener.local_addr().expect("introspection mock address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let body = serde_json::to_vec(&outcome).expect("serialize introspection outcome");
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut expected = None;
+                loop {
+                    let mut chunk = [0_u8; 2048];
+                    let read = stream
+                        .read(&mut chunk)
+                        .await
+                        .expect("read introspection request");
+                    assert!(read > 0, "introspection request ended early");
+                    request.extend_from_slice(&chunk[..read]);
+                    if expected.is_none()
+                        && let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                    {
+                        let headers = String::from_utf8_lossy(&request[..index]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|value| value.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        expected = Some(index + 4 + length);
+                    }
+                    if expected.is_some_and(|total| request.len() >= total) {
+                        break;
+                    }
+                }
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            });
+        }
+    });
+    format!("http://{address}")
+}
+
+struct GrantSession {
+    state: AppState,
+    token: String,
+    holder_key: SigningKey,
+}
+
+async fn account_grant_session(fixture: &PcrGenesisFixture) -> GrantSession {
+    let holder_key = SigningKey::from_bytes(&Sha256::digest(b"account-data-sync").into());
+    let token = format!("account-data-grant.{}", uuid::Uuid::now_v7().simple());
+    let holder_jwk =
+        arkret_signatures::JsonWebKey::from_ed25519_verifying_key(&holder_key.verifying_key());
+    let cnf_jkt = arkret_signatures::dpop::dpop_jwk_thumbprint(&holder_jwk).expect("holder jkt");
+    let device_id = fixture.history.founding_device_id.clone();
+    let origin = spawn_introspection_mock(json!({
+        "active": true,
+        "status": "active",
+        "proof_required": false,
+        "one_time_use_consumed": false,
+        "grant": {
+            "id": arkret_identifiers::SessionGrantId::from_issuance_digest(
+                Sha256::digest(token.as_bytes()).into(),
+            ),
+            "issuer_id": "ak:did_core:web:coauth.example",
+            "account_id": fixture.history.account,
+            "device_id": device_id,
+            "audience_id": fixture.history.account.station_id,
+            "scopes": [
+                arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
+                arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_GET_V1,
+                arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
+            ],
+            "expires_at": arkret_canonical::format_timestamp_canonical(
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            ),
+            "revocation_ref": format!("ak:session:{}", uuid::Uuid::now_v7().simple()),
+            "session_public_key": format!(
+                "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+                arkret_canonical::base64url_encode(holder_key.verifying_key().to_bytes()),
+            ),
+            "cnf_jkt": cnf_jkt,
+            "credential_class": "standard",
+            "holder_binding": {"kind": "human_device", "device_binding": device_id},
+            "device_binding": {
+                "device_id": device_id,
+                "authorization_event_id": fixture.history.events[1].event_id,
+                "model_generation_ref": 1,
+            },
+        }
+    }))
+    .await;
+    let mut config = test_config();
+    config.session_grant_introspection_url = Some(format!("{origin}{INTROSPECTION_PATH}"));
+    config.account_authority_url = Some(origin);
+    config.register_test_internal_authority_channel("account-data-sync".to_owned());
+    let state = soland_test_support::app_state(config);
+    fixture.admit(&state).await.expect("accepted PCR genesis");
+    state
+        .test_persistence()
+        .accounts()
+        .put(&soland_storage::AccountRecord {
+            pk: soland_storage::AccountPk(0),
+            principal_id: fixture.history.account.principal_id.clone(),
+            station_id: state.service_core_id(),
+            localpart: format!("account-data-{}", uuid::Uuid::now_v7().simple()),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("seed Account for grant lookup");
+    GrantSession {
+        state,
+        token,
+        holder_key,
+    }
+}
+
+impl GrantSession {
+    async fn request(
+        &self,
+        method: &str,
+        operation: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let htu = format!(
+            "{}{}",
+            self.state.config().public_base_url.trim_end_matches('/'),
+            ACCOUNT_DATA_PATH
+        );
+        let proof = arkret_signatures::dpop::build_dpop_proof(
+            &arkret_signatures::dpop::DpopProofRequest::new(method, htu)
+                .access_token(self.token.clone()),
+            &self.holder_key,
+        )
+        .expect("DPoP proof builds");
+        let url = format!("http://server{ACCOUNT_DATA_PATH}");
+        let request = match method {
+            "PUT" => TestClient::put(url),
+            "DELETE" => TestClient::delete(url),
+            "GET" => TestClient::get(url),
+            _ => panic!("unexpected method"),
+        }
+        .add_header("authorization", format!("DPoP {}", self.token), true)
+        .add_header("dpop", proof.header_value, true)
+        .add_header("Arkret-Operation", operation, true);
+        let request = if let Some(body) = body {
+            request.json(&body)
+        } else {
+            request
+        };
+        let mut response = request.send(&service(self.state.clone())).await;
+        let status = response.status_code.expect("HTTP status");
+        let body = response.take_json().await.expect("JSON body");
+        (status, body)
+    }
+}
+
+/// The PCR genesis is admitted as a two-Event/two-RealmCommit authority unit;
+/// only its authorized founding device signs these actor-private Events.
+/// The resource handlers must preserve the exact retry, revision CAS and
+/// tombstone visibility rules over that accepted producer history.
+#[tokio::test]
+async fn signed_account_data_round_trip_enforces_cas_and_tombstone() {
+    let service_did = soland_test_support::fixture_service_identity(&test_config())
+        .identity()
+        .expect("fixture Station identity")
+        .did
+        .clone();
+    let fixture = PcrGenesisFixture::new(service_did);
+    let session = account_grant_session(&fixture).await;
+    let key = arkret_wire::AccountDataKey::PUSH_RULES;
+    let set = signed_account_data_event(&session.state, &fixture, key);
+    let body = json!({"set_event": set});
+    let (status, created) = session
+        .request(
+            "PUT",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["revision"], 1, "{created}");
+    assert_eq!(created["content"], set.payload["body"], "{created}");
+
+    let (status, replay) = session
+        .request(
+            "PUT",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
+            Some(body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay["revision"], 1, "{replay}");
+    assert_eq!(replay["content"], created["content"], "{replay}");
+
+    let stale = signed_account_data_event(&session.state, &fixture, key);
+    let (status, conflict) = session
+        .request(
+            "PUT",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
+            Some(json!({"set_event": stale})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    assert_eq!(
+        conflict["type"].as_str().and_then(|v| v.rsplit('/').next()),
+        Some("cas_conflict"),
+        "{conflict}"
+    );
+
+    let (status, read) = session
+        .request(
+            "GET",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_GET_V1,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["revision"], 1, "{read}");
+    assert_eq!(read["content"], created["content"], "{read}");
+
+    let tombstone = signed_account_data_tombstone(&session.state, &fixture, key, 1);
+    let (status, deleted) = session
+        .request(
+            "DELETE",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
+            Some(json!({"set_event": tombstone})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["revision"], 2, "{deleted}");
+
+    let (status, missing) = session
+        .request(
+            "GET",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_GET_V1,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(missing["current_revision"], 2, "{missing}");
 }
 
 /// `device-lifecycle.md` §10.1: a verified device_summary's provenance is
