@@ -115,6 +115,30 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         .execute(&mut conn)
         .await
         .unwrap();
+    let sidecar_id = arkret_wire::SidecarId::from_event_id(&unit.transactions[0].event.event_id);
+    diesel::sql_query(
+        "INSERT INTO sidecar_current_results \
+         (realm_id,sidecar_id,controller_account_id,create_event_id,current_commit_id,current_stream_position,source_stream_ref,value,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,0,$6,$7,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(sidecar_id.as_str())
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::to_value(&creator).unwrap())
+    .bind::<Text, _>(unit.transactions[0].event.event_id.as_str())
+    .bind::<Text, _>(unit.transactions[0].commit.commit_id.as_str())
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"kind":"realm","realm_id":realm_id}))
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"id":sidecar_id,"realm_id":realm_id,"controller_account_id":creator}))
+    .execute(&mut conn).await.unwrap();
+    assert!(
+        account_snapshot_material(&pool, &realm_id, &creator)
+            .await
+            .is_err()
+    );
+    diesel::sql_query("DELETE FROM sidecar_current_results WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
     drop(conn);
 
     // Every accepted cut is disclosed, not a closed chain of fixed length:

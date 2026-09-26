@@ -91,10 +91,11 @@ const AUDITED_FAMILIES: &[&str] = &[
     "mimi_room_binding_current_results",
     "realm_link_current_results",
     "member_state_current_results",
-    // Circle rows are not in the Realm snapshot disclosure subset. Audit the
-    // installed tables, then refuse only cuts that actually hold Circle rows.
+    // Private child-stream rows are not in the Realm snapshot disclosure
+    // subset. Audit the installed tables, then refuse cuts that hold them.
     "circle_current_results",
     "circle_member_state_current_results",
+    "sidecar_current_results",
     "strand_current_results",
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
@@ -365,6 +366,7 @@ async fn disclosure_facts_in_connection(
         "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM circle_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM circle_member_state_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
