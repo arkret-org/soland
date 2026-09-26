@@ -540,6 +540,24 @@ pub(crate) async fn event_visible_to_session(
             return true;
         }
     }
+    // An ordinary Realm's Realm stream is decided by this Station's typed
+    // current alone, governing or held as an anchored replica.
+    let Ok(event_id) = arkret_wire::EventId::new(record.event_id.clone()) else {
+        return false;
+    };
+    match state
+        .authority_commits()
+        .committed_event_for_member(&event_id, &session_actor, &state.service_core_id())
+        .await
+    {
+        Ok(soland_storage::MemberCommittedEventRead::Read(_)) => return true,
+        Ok(soland_storage::MemberCommittedEventRead::OutsideOrdinaryRealmStream) => {}
+        Ok(
+            soland_storage::MemberCommittedEventRead::NotVisible
+            | soland_storage::MemberCommittedEventRead::PendingAnchor,
+        )
+        | Err(_) => return false,
+    }
     match canonical_realm_id_for_record(record) {
         Some(realm_id) => {
             // Agent PCR Events are authored as the Agent Actor, while the

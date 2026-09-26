@@ -1781,6 +1781,41 @@ impl PgAuthorityCommitStore {
     }
 }
 
+/// Whether `member` is a current joined member of `realm_id` in this
+/// Station's accepted state (see
+/// [`AuthorityCommitStore::accepted_current_member_joined`]).
+pub(crate) async fn accepted_current_member_joined_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    member: &arkret_wire::ActorId,
+) -> PersistenceResult<bool> {
+    let row = sql_query(
+        // A row is backed by the Realm-stream Commit that installed it,
+        // held here, or -- on a member Station -- by the verified
+        // bootstrap snapshot the held replica is anchored on, whose rows
+        // name Commits below the replica's floor (decision 0116).
+        "SELECT EXISTS (\
+            SELECT 1 FROM member_state_current_results m \
+            WHERE m.realm_id = $1 AND m.member_id = $2 AND m.membership = 'join' \
+              AND (EXISTS (SELECT 1 FROM realm_commits c \
+                           WHERE c.commit_id = m.current_commit_id \
+                             AND c.realm_id = m.realm_id \
+                             AND c.stream_position = m.current_stream_position \
+                             AND c.stream_ref->>'kind' = 'realm' \
+                             AND c.stream_ref->>'realm_id' = m.realm_id) \
+                   OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
+                              WHERE a.realm_id = m.realm_id \
+                                AND a.anchor_stream_position >= m.current_stream_position))\
+         ) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .get_result::<PresenceRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(row.present)
+}
+
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn admit_accepted_device_authorization(
@@ -2279,42 +2314,6 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .transpose()
     }
 
-    async fn realm_member_joined(
-        &self,
-        realm_id: &arkret_wire::RealmId,
-        member: &arkret_wire::ActorId,
-    ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool).await?;
-        Ok(sql_query(
-            "SELECT EXISTS (SELECT 1 FROM member_state_current_results \
-             WHERE realm_id=$1 AND member_id=$2 AND membership='join') AS present",
-        )
-        .bind::<Text, _>(realm_id.as_str())
-        .bind::<Text, _>(member.to_string())
-        .get_result::<PresenceRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?
-        .present)
-    }
-
-    async fn committed_chain_node(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<Option<arkret_wire::RealmCommit>> {
-        let mut conn = pg_conn(&self.pool).await?;
-        sql_query(
-            "SELECT commit_json FROM realm_commits \
-             WHERE event_pk IS NULL AND commit_json->>'event_ref' = $1",
-        )
-        .bind::<Text, _>(event_id.as_str())
-        .get_result::<CommitRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?
-        .map(|row| decode_json(row.commit_json, "chain node Commit"))
-        .transpose()
-    }
-
     async fn current_authority(
         &self,
         realm_id: &arkret_wire::RealmId,
@@ -2367,31 +2366,34 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         member: &arkret_wire::ActorId,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool).await?;
-        let row = sql_query(
-            // A row is backed by the Realm-stream Commit that installed it,
-            // held here, or -- on a member Station -- by the verified
-            // bootstrap snapshot the held replica is anchored on, whose rows
-            // name Commits below the replica's floor (decision 0116).
-            "SELECT EXISTS (\
-                SELECT 1 FROM member_state_current_results m \
-                WHERE m.realm_id = $1 AND m.member_id = $2 AND m.membership = 'join' \
-                  AND (EXISTS (SELECT 1 FROM realm_commits c \
-                               WHERE c.commit_id = m.current_commit_id \
-                                 AND c.realm_id = m.realm_id \
-                                 AND c.stream_position = m.current_stream_position \
-                                 AND c.stream_ref->>'kind' = 'realm' \
-                                 AND c.stream_ref->>'realm_id' = m.realm_id) \
-                       OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
-                                  WHERE a.realm_id = m.realm_id \
-                                    AND a.anchor_stream_position >= m.current_stream_position))\
-             ) AS present",
+        accepted_current_member_joined_in_connection(&mut conn, realm_id, member).await
+    }
+
+    async fn accepted_realm_reader(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        if accepted_current_member_joined_in_connection(&mut conn, realm_id, actor).await? {
+            return Ok(true);
+        }
+        let Some(account) = actor.as_account_id() else {
+            return Ok(false);
+        };
+        // The owner Account's principal-control Realm, recorded in the same
+        // transaction as its PCR genesis.
+        Ok(sql_query(
+            "SELECT EXISTS (SELECT 1 FROM principal_resolutions \
+             WHERE pcr_realm_id = $1 AND principal_id = $2 AND station_id = $3) AS present",
         )
         .bind::<Text, _>(realm_id.as_str())
-        .bind::<Text, _>(member.to_string())
+        .bind::<Text, _>(account.principal_id.as_str())
+        .bind::<Text, _>(account.station_id.as_str())
         .get_result::<PresenceRow>(&mut *conn)
         .await
-        .map_err(PersistenceError::database)?;
-        Ok(row.present)
+        .map_err(PersistenceError::database)?
+        .present)
     }
 
     async fn queue_event(
@@ -2818,6 +2820,16 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<Option<arkret_wire::CommittedEventFullView>> {
         crate::account_stream_scan::committed_event_for_peer(&self.pool, event_id, peer, issuer)
+            .await
+    }
+
+    async fn committed_event_for_member(
+        &self,
+        event_id: &arkret_wire::EventId,
+        caller: &arkret_wire::ActorId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::MemberCommittedEventRead> {
+        crate::account_stream_scan::committed_event_for_member(&self.pool, event_id, caller, issuer)
             .await
     }
 

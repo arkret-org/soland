@@ -658,6 +658,191 @@ pub(crate) async fn committed_event_for_peer(
     .map_err(PgTransactionError::into_persistence)
 }
 
+#[derive(QueryableByName)]
+struct ChainNodeRow {
+    #[diesel(sql_type = Jsonb)]
+    commit_json: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct AnchorStateRow {
+    #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]
+    anchor_commit_id: Option<String>,
+}
+
+/// The single disclosed row of a one-row disclosure.
+fn single_row(mut rows: Vec<CommittedEventView>) -> PersistenceResult<CommittedEventView> {
+    match (rows.pop(), rows.is_empty()) {
+        (Some(row), true) => Ok(row),
+        _ => Err(PersistenceError::Internal(
+            "disclosure of one committed row returned another count".to_owned(),
+        )),
+    }
+}
+
+/// `ak.self.committed_event.resource.get.v1` for `caller` on an ordinary
+/// Realm's Realm stream at one read cut of this Station, governing or holding
+/// the stream as an anchored replica. The readable floor is the one the self
+/// scan proves (`history-visibility.md` §3.1); on a member Station the
+/// caller's current join row -- a held Commit or a row the anchored snapshot
+/// covers -- gives it under `since_join`, and every held position is inside
+/// it under `all_history_for_current_members`.
+pub(crate) async fn committed_event_for_member(
+    pool: &PgPool,
+    event_id: &arkret_wire::EventId,
+    caller: &ActorId,
+    issuer: &DidCoreId,
+) -> PersistenceResult<soland_storage::MemberCommittedEventRead> {
+    use soland_storage::MemberCommittedEventRead as Read;
+
+    let Some(token) = crate::ids::parse_event_id(event_id.as_str()) else {
+        return Ok(Read::NotVisible);
+    };
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let invalid = |what: &str, error: serde_json::Error| {
+            PgTransactionError::from(PersistenceError::Internal(format!(
+                "stored committed {what} is invalid: {error}"
+            )))
+        };
+        let (commit, event) = if let Some(row) = sql_query(
+            "SELECT c.commit_json, e.envelope FROM canonical_events e \
+             JOIN realm_commits c ON c.event_pk=e.pk WHERE e.id=$1 AND e.state='committed'",
+        )
+        .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+        .get_result::<CommittedRow>(&mut *conn)
+        .await
+        .optional()?
+        {
+            let commit: arkret_wire::RealmCommit = serde_json::from_value(row.commit_json)
+                .map_err(|error| invalid("Commit", error))?;
+            let event: arkret_wire::Event =
+                serde_json::from_value(row.envelope).map_err(|error| invalid("Event", error))?;
+            (commit, Some(event))
+        } else if let Some(row) = sql_query(
+            "SELECT commit_json FROM realm_commits \
+             WHERE event_pk IS NULL AND commit_json->>'event_ref'=$1",
+        )
+        .bind::<Text, _>(event_id.as_str())
+        .get_result::<ChainNodeRow>(&mut *conn)
+        .await
+        .optional()?
+        {
+            let commit: arkret_wire::RealmCommit = serde_json::from_value(row.commit_json)
+                .map_err(|error| invalid("chain node Commit", error))?;
+            (commit, None)
+        } else {
+            return Ok(Read::NotVisible);
+        };
+        let realm_id = commit.realm_id.clone();
+        let anchor =
+            sql_query("SELECT anchor_commit_id FROM replica_stream_anchors WHERE realm_id=$1")
+                .bind::<Text, _>(realm_id.as_str())
+                .get_result::<AnchorStateRow>(&mut *conn)
+                .await
+                .optional()?;
+        if anchor
+            .as_ref()
+            .is_some_and(|row| row.anchor_commit_id.is_none())
+        {
+            return Ok(Read::PendingAnchor);
+        }
+        if commit.stream_ref
+            != (CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            })
+        {
+            return Ok(Read::OutsideOrdinaryRealmStream);
+        }
+        let Some(history) = realm_history_access(conn, &realm_id).await? else {
+            return Ok(Read::OutsideOrdinaryRealmStream);
+        };
+        if let Some(event) = &event
+            && &event.actor_id == caller
+        {
+            let full = arkret_wire::CommittedEventFullView {
+                commit,
+                event: event.clone(),
+            };
+            return Ok(Read::Read(single_row(
+                crate::committed_disclosure::disclose_in_connection(conn, vec![full]).await?,
+            )?));
+        }
+        let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
+            .bind::<Text, _>(realm_id.as_str())
+            .get_result::<TenureRow>(&mut *conn)
+            .await
+            .optional()?
+        else {
+            return Ok(Read::NotVisible);
+        };
+        let governs = tenure.service_id == issuer.as_str();
+        if (!governs && anchor.is_none())
+            || !crate::authority_commit::accepted_current_member_joined_in_connection(
+                conn, &realm_id, caller,
+            )
+            .await?
+        {
+            return Ok(Read::NotVisible);
+        }
+        // The genesis is a member of the Realm's authority bundle: every
+        // current member resolves it.
+        let genesis = commit.stream_position == 0
+            && event
+                .as_ref()
+                .is_some_and(|event| event.kind == arkret_wire::EventKind::RealmCreate);
+        if !genesis {
+            let floor = if governs {
+                match caller_realm_floor_in_connection(conn, &realm_id, caller).await? {
+                    Some(floor) => floor.oldest_position,
+                    None => return Ok(Read::NotVisible),
+                }
+            } else {
+                match history.as_str() {
+                    "all_history_for_current_members" => 0,
+                    "since_join" => {
+                        let Some(join) = current_join(conn, &realm_id, caller).await? else {
+                            return Ok(Read::NotVisible);
+                        };
+                        u64::try_from(join.current_stream_position).map_err(|_| {
+                            PersistenceError::Internal(
+                                "stored join position is negative".to_owned(),
+                            )
+                        })?
+                    }
+                    _ => return Ok(Read::NotVisible),
+                }
+            };
+            if commit.stream_position < floor {
+                return Ok(Read::NotVisible);
+            }
+        }
+        let Some(event) = event else {
+            return Ok(Read::Read(CommittedEventView::Withheld(
+                arkret_wire::CommittedEventWithheldView {
+                    commit,
+                    event_disclosure: arkret_wire::EventDisclosure {
+                        status: arkret_wire::EventDisclosureStatus::Withheld,
+                    },
+                },
+            )));
+        };
+        Ok(Read::Read(single_row(
+            crate::committed_disclosure::disclose_to_member_in_connection(
+                conn,
+                vec![arkret_wire::CommittedEventFullView { commit, event }],
+                caller,
+            )
+            .await?,
+        )?))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
 pub(crate) async fn scan_stream_for_peer(
     pool: &PgPool,
     request: &StreamScanRequest,

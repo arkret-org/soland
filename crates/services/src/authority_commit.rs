@@ -431,6 +431,17 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Whether `actor` reads `realm_id` here: a current joined member in this
+    /// service's accepted state, or the owner of its principal-control Realm.
+    /// Grants no Event authority by itself.
+    pub async fn accepted_realm_reader(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> ServiceResult<bool> {
+        Ok(self.store().accepted_realm_reader(realm_id, actor).await?)
+    }
+
     pub async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> ServiceResult<()> {
         event.validate_for_submit_structural().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
@@ -1116,21 +1127,6 @@ impl AuthorityCommitApplication {
         Ok(self.store().held_stream_head_commit(stream_ref).await?)
     }
 
-    pub async fn realm_member_joined(
-        &self,
-        realm_id: &arkret_wire::RealmId,
-        member: &arkret_wire::ActorId,
-    ) -> ServiceResult<bool> {
-        Ok(self.store().realm_member_joined(realm_id, member).await?)
-    }
-
-    pub async fn committed_chain_node(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> ServiceResult<Option<arkret_wire::RealmCommit>> {
-        Ok(self.store().committed_chain_node(event_id).await?)
-    }
-
     pub async fn member_station_bootstrap_material(
         &self,
         realm_id: &arkret_wire::RealmId,
@@ -1353,6 +1349,21 @@ impl AuthorityCommitApplication {
         Ok(self
             .store()
             .committed_event_for_peer(event_id, peer, issuer)
+            .await?)
+    }
+
+    /// `ak.self.committed_event.resource.get.v1` on an ordinary Realm's Realm
+    /// stream. See
+    /// [`soland_storage::AuthorityCommitStore::committed_event_for_member`].
+    pub async fn committed_event_for_member(
+        &self,
+        event_id: &arkret_wire::EventId,
+        caller: &arkret_wire::ActorId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::MemberCommittedEventRead> {
+        Ok(self
+            .store()
+            .committed_event_for_member(event_id, caller, issuer)
             .await?)
     }
 

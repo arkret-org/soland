@@ -35,7 +35,7 @@ use subtle::ConstantTimeEq as _;
 use super::{
     append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
     is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
-    realm_has_member, render_error, sha256_hex,
+    render_error, sha256_hex,
 };
 use crate::state::AppState;
 
@@ -53,7 +53,14 @@ pub(super) async fn blob_session_has_realm_membership(
 ) -> Result<bool, AppError> {
     let actor =
         crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
-    Ok(realm_has_member(state, realm_id, &actor.to_string()).await)
+    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
+        return Ok(false);
+    };
+    state
+        .authority_commits()
+        .accepted_realm_reader(&realm_id, &actor)
+        .await
+        .map_err(|error| AppError::internal(format!("Realm membership lookup failed: {error}")))
 }
 
 pub(super) fn blob_upload_outcome(
@@ -1504,7 +1511,14 @@ async fn blob_visible_to_session(
     if requested_realm_id.is_some_and(|requested| requested != realm_id) {
         return false;
     }
-    realm_has_member(state, realm_id, &actor.to_string()).await
+    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
+        return false;
+    };
+    state
+        .authority_commits()
+        .accepted_realm_reader(&realm_id, &actor)
+        .await
+        .unwrap_or(false)
 }
 
 async fn realm_presign_policy_block(
@@ -1702,41 +1716,22 @@ mod presign_block_tests {
 mod tests {
     use super::*;
 
+    /// Realm membership itself is the durable accepted reader of the Realm
+    /// (PostgreSQL `accepted_realm_reader`); a session bound to another
+    /// Station never reaches it.
     #[tokio::test]
-    async fn blob_membership_uses_the_exact_authenticated_account() {
+    async fn blob_membership_needs_a_session_of_this_station() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
         let principal = DidCoreId::new("ak:did_core:web:blob-owner.example").unwrap();
-        let account = arkret_wire::AccountId::new(principal.clone(), state.service_core_id());
-        state
-            .identities()
-            .save_account(soland_services::identity::AccountProfileState {
-                pk: soland_storage::AccountPk(0),
-                principal_id: principal.clone(),
-                account_id: account.clone(),
-                localpart: "blob-owner".to_owned(),
-                display_name: None,
-                bio: None,
-                avatar_blob_ref: None,
-                created_at: now(),
-            })
-            .await
-            .unwrap();
-        let account_pk = state
-            .identities()
-            .account(&account)
-            .await
-            .expect("account lookup")
-            .expect("account was just saved")
-            .pk;
-        let mut session = SessionRecord {
+        let session = SessionRecord {
             token_hash: "blob-membership-fixture".to_owned(),
-            account_pk: Some(account_pk),
+            account_pk: None,
             actor: principal.to_string(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000071".to_owned(),
-            audience: state.service_id().clone(),
+            audience: "ak:did_core:web:other-station.example".to_owned(),
             session_public_key: None,
             agent_session: None,
             session_grant: None,
@@ -1745,45 +1740,7 @@ mod tests {
             revoked_at: None,
         };
         let realm_id = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
-        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal,
-            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        ));
-        let mut membership = soland_domain::reducer::SolandMembershipState {
-            member: foreign.to_string(),
-            realm_id: realm_id.to_owned(),
-            state: "join".to_owned(),
-            role: "member".to_owned(),
-            membership_event_ref: None,
-            invited_at: None,
-            joined_at: now(),
-            updated_at: now(),
-            reason: None,
-        };
-        state.test_projection().lock().members.insert(
-            (realm_id.to_owned(), membership.member.clone()),
-            membership.clone(),
-        );
-        assert!(
-            !blob_session_has_realm_membership(&state, realm_id, &session)
-                .await
-                .unwrap()
-        );
         let mut blob = blob_record("text/plain", None);
-        assert!(!blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
-        membership.member = arkret_wire::ActorId::account(account).to_string();
-        state
-            .test_projection()
-            .lock()
-            .members
-            .insert((realm_id.to_owned(), membership.member.clone()), membership);
-        assert!(
-            blob_session_has_realm_membership(&state, realm_id, &session)
-                .await
-                .unwrap()
-        );
-        assert!(blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
-        session.audience = foreign.route_service_id().to_string();
         assert!(!blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
         blob.uploaded_by = session.actor.clone();
         assert!(!blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);

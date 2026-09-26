@@ -1484,6 +1484,32 @@ fn rows(page: &arkret_wire::StreamScanOutcome) -> Vec<(u64, bool)> {
         .collect()
 }
 
+/// `ak.self.committed_event.resource.get.v1` for `caller` on `store`'s
+/// Station `issuer`.
+async fn member_read(
+    store: &PgAuthorityCommitStore,
+    event_id: &arkret_wire::EventId,
+    caller: &arkret_wire::ActorId,
+    issuer: &arkret_wire::DidCoreId,
+) -> soland_storage::MemberCommittedEventRead {
+    store
+        .committed_event_for_member(event_id, caller, issuer)
+        .await
+        .unwrap()
+}
+
+/// Whether a single read is disclosed in full (`Some(true)`), withheld
+/// (`Some(false)`) or not visible (`None`).
+fn read_shape(read: soland_storage::MemberCommittedEventRead) -> Option<bool> {
+    match read {
+        soland_storage::MemberCommittedEventRead::Read(view) => {
+            Some(matches!(view, arkret_wire::CommittedEventView::Full(_)))
+        }
+        soland_storage::MemberCommittedEventRead::NotVisible => None,
+        other => panic!("expected a decided read, got {other:?}"),
+    }
+}
+
 /// Real PostgreSQL: under `since_join` a second member's readable interval
 /// starts at its own join Commit (`membership_join`, decision 0108 §1045),
 /// with the founder still reading from genesis (`stream_start`); pages stop
@@ -1654,6 +1680,135 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
     assert_eq!(streams.len(), 1);
     assert_eq!(streams[0].readable_floor.as_ref(), Some(&floor));
 
+    // A single committed-event read applies the same floor and disclosure:
+    // another actor's Event from the join on, the genesis for every current
+    // member, nothing before the join and nothing for an outsider.
+    let station = arkret_wire::DidCoreId::new(STATION).unwrap();
+    let outsider = remote_member("scan-outsider");
+    let genesis_id = unit.transactions[0].event.event_id.clone();
+    assert_eq!(
+        read_shape(member_read(&store, &genesis_id, &bob, &station).await),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &strand.authority_commit.event.event_id,
+                &bob,
+                &station
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &bob_message.authority_commit.event.event_id,
+                &founder_actor(),
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &grant.authority_commit.event.event_id,
+                &bob,
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &founder_message.authority_commit.event.event_id,
+                &bob,
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &bob_message.authority_commit.event.event_id,
+                &bob,
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &founder_message.authority_commit.event.event_id,
+                &outsider,
+                &station
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        read_shape(member_read(&store, &genesis_id, &outsider, &station).await),
+        None
+    );
+    assert!(store.accepted_realm_reader(&realm_id, &bob).await.unwrap());
+    assert!(
+        !store
+            .accepted_realm_reader(&realm_id, &outsider)
+            .await
+            .unwrap()
+    );
+    // The owner Account reads its principal-control Realm; the same principal
+    // at another Station does not.
+    let pcr_realm =
+        arkret_wire::RealmId::new("ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1").unwrap();
+    let owner = outsider.as_account_id().unwrap().clone();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO principal_resolutions \
+         (principal_id,station_id,pcr_realm_id,genesis_event_id,current_event_id,projection,updated_at) \
+         VALUES($1,$2,$3,$4,$4,'{}'::jsonb,now())",
+    )
+    .bind::<Text, _>(owner.principal_id.as_str())
+    .bind::<Text, _>(owner.station_id.as_str())
+    .bind::<Text, _>(pcr_realm.as_str())
+    .bind::<Text, _>(genesis_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(
+        store
+            .accepted_realm_reader(&pcr_realm, &outsider)
+            .await
+            .unwrap()
+    );
+    let elsewhere = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        owner.principal_id.clone(),
+        station.clone(),
+    ));
+    assert!(
+        !store
+            .accepted_realm_reader(&pcr_realm, &elsewhere)
+            .await
+            .unwrap()
+    );
+
     // A member who left has no readable interval; a rejoin reads only from
     // the new join.
     let leave = membership_request(
@@ -1667,6 +1822,32 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await,
         soland_storage::AccountStreamScan::NotAuthorized
     );
+    // After the leave only Bob's own Events stay readable to him.
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &founder_message.authority_commit.event.event_id,
+                &bob,
+                &station
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &bob_message.authority_commit.event.event_id,
+                &bob,
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert!(!store.accepted_realm_reader(&realm_id, &bob).await.unwrap());
     let rejoin = membership_request(&leave.authority_commit, bob.clone(), &bob, "join");
     uow.commit_event(rejoin.clone()).await.unwrap();
     let rejoined = page(scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await);
@@ -2584,6 +2765,16 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         matches!(pending_scan, AccountStreamScan::Unproved(_)),
         "{pending_scan:?}"
     );
+    assert_eq!(
+        member_read(
+            &member,
+            &join.authority_commit.event.event_id,
+            &alice,
+            &member_station(),
+        )
+        .await,
+        soland_storage::MemberCommittedEventRead::PendingAnchor
+    );
     assert_eq!(summary_title(&member_pool, &realm_id, &alice).await, None);
 
     // The bootstrap material floors the Realm stream at Alice's join, and
@@ -2692,11 +2883,21 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         CommittedReplicaOutcome::Duplicate
     );
     assert_eq!(
-        member
-            .committed_chain_node(&message.authority_commit.event.event_id)
-            .await
-            .unwrap(),
-        Some(message.authority_commit.commit.clone())
+        member_read(
+            &member,
+            &message.authority_commit.event.event_id,
+            &alice,
+            &member_station(),
+        )
+        .await,
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
+            arkret_wire::CommittedEventWithheldView {
+                commit: message.authority_commit.commit.clone(),
+                event_disclosure: arkret_wire::EventDisclosure {
+                    status: arkret_wire::EventDisclosureStatus::Withheld,
+                },
+            },
+        ))
     );
     assert!(
         member
@@ -2768,6 +2969,98 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
             (join_position + 3, false),
             (join_position + 4, true),
         ]
+    );
+
+    // A single read on the member Station follows the same held interval:
+    // another actor's Event from the hosted member's join on, the chain node
+    // as withheld, nothing before a join and nothing for an outsider.
+    let station = member_station();
+    let outsider = remote_member("member-anchor-outsider");
+    let strand_event = &strand.authority_commit.event.event_id;
+    assert_eq!(
+        read_shape(member_read(&member, strand_event, &alice, &station).await),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &member,
+                &default.authority_commit.event.event_id,
+                &alice,
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &member,
+                &message.authority_commit.event.event_id,
+                &alice,
+                &station
+            )
+            .await
+        ),
+        Some(false)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &member,
+                &bob_join.authority_commit.event.event_id,
+                &alice,
+                &station
+            )
+            .await
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &member,
+                &forged.authority_commit.event.event_id,
+                &alice,
+                &station
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        read_shape(
+            member_read(
+                &member,
+                &unit.transactions[0].event.event_id,
+                &alice,
+                &station
+            )
+            .await
+        ),
+        None
+    );
+    assert_eq!(
+        read_shape(member_read(&member, strand_event, &bob, &station).await),
+        None
+    );
+    assert_eq!(
+        read_shape(member_read(&member, strand_event, &outsider, &station).await),
+        None
+    );
+    assert!(
+        member
+            .accepted_realm_reader(&realm_id, &alice)
+            .await
+            .unwrap()
+    );
+    assert!(member.accepted_realm_reader(&realm_id, &bob).await.unwrap());
+    assert!(
+        !member
+            .accepted_realm_reader(&realm_id, &outsider)
+            .await
+            .unwrap()
     );
 }
 

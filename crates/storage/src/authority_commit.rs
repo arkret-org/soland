@@ -42,6 +42,24 @@ pub enum AccountRealmStreamList {
     Unproved(&'static str),
 }
 
+/// Result of `ak.self.committed_event.resource.get.v1` for one caller on an
+/// ordinary Realm's Realm stream, decided from typed current at one read cut.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MemberCommittedEventRead {
+    /// The Commit lies in the caller's readable interval; the Event is
+    /// disclosed in full or as the withheld branch.
+    Read(arkret_wire::CommittedEventView),
+    /// Unknown, or outside the caller's readable interval: indistinguishable.
+    NotVisible,
+    /// The held Realm stream is pending its bootstrap anchor
+    /// (`federation.md` §4.1.1): no local read is served.
+    PendingAnchor,
+    /// The Commit is not on the Realm stream of an ordinary Realm, whose
+    /// visibility this typed current decides (a principal-control Realm, or a
+    /// Circle or Sidecar stream).
+    OutsideOrdinaryRealmStream,
+}
+
 /// Result of an exact, non-enumerating self current read at one governing
 /// read cut (`ak.self.current_results.read.exact.v1`,
 /// `ak.self.strand.watch.read.current.v1`).
@@ -1133,20 +1151,6 @@ pub trait AuthorityCommitStore: Send + Sync {
         stream_ref: &CommitStreamRef,
     ) -> PersistenceResult<Option<arkret_wire::RealmCommit>>;
 
-    /// Whether `member` is joined in `realm_id` at this Station's typed
-    /// current, governing or replica.
-    async fn realm_member_joined(
-        &self,
-        realm_id: &arkret_wire::RealmId,
-        member: &arkret_wire::ActorId,
-    ) -> PersistenceResult<bool>;
-
-    /// The withheld chain node this member Station holds for `event_id`.
-    async fn committed_chain_node(
-        &self,
-        event_id: &arkret_wire::EventId,
-    ) -> PersistenceResult<Option<arkret_wire::RealmCommit>>;
-
     async fn current_authority(
         &self,
         realm_id: &arkret_wire::RealmId,
@@ -1172,6 +1176,15 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
         member: &arkret_wire::ActorId,
+    ) -> PersistenceResult<bool>;
+
+    /// Whether `actor` reads `realm_id` on this Station: a current joined
+    /// member by [`Self::accepted_current_member_joined`], or the Account
+    /// that owns it as its principal-control Realm.
+    async fn accepted_realm_reader(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
     ) -> PersistenceResult<bool>;
 
     async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> PersistenceResult<()>;
@@ -1463,6 +1476,21 @@ pub trait AuthorityCommitStore: Send + Sync {
         peer: &arkret_wire::DidCoreId,
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<Option<arkret_wire::CommittedEventFullView>>;
+
+    /// `ak.self.committed_event.resource.get.v1` for `caller` on an ordinary
+    /// Realm's Realm stream, at one read cut of this Station -- governing, or
+    /// holding the stream as an anchored replica. The caller's own Event is
+    /// read in full; another actor's Event only by a current joined member
+    /// whose readable floor (`history-visibility.md` §3.1) covers its
+    /// position, and the genesis by every current member. Each is disclosed
+    /// by the member committed-event decision; a held chain node is the
+    /// withheld branch.
+    async fn committed_event_for_member(
+        &self,
+        event_id: &arkret_wire::EventId,
+        caller: &arkret_wire::ActorId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<MemberCommittedEventRead>;
 
     /// `ak.self.realm.read.streams.v1` for one authenticated Account. The
     /// stream set, each head and each readable floor come from one read cut at

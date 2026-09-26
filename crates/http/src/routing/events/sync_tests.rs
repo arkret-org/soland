@@ -635,13 +635,7 @@ async fn sync_snapshot_excludes_public_realms_without_exact_account_membership()
         Some(not_found.clone()),
         "a public Realm is not readable without exact account membership"
     );
-    assert!(!realm_id_accessible(&state, ROSTER_REALM, Some(&session)).await);
-
-    insert_projected_membership(&state, ROSTER_CALLER, "join");
-    assert!(realm_id_accessible(&state, ROSTER_REALM, Some(&session)).await);
-
     insert_projected_membership(&state, ROSTER_CALLER, "leave");
-    assert!(!realm_id_accessible(&state, ROSTER_REALM, Some(&session)).await);
     let left = build_sync_snapshot(&state, Some(&session), &selected, &SyncCursor::default()).await;
     assert_eq!(detail(left), Some(not_found));
 }

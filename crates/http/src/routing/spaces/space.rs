@@ -506,13 +506,13 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     true
 }
 
-// `realm_id_accessible_for_id` is the visibility path with looser semantics
-// for the backfill / subscribe edge.
-
 /// Check if a Realm is accessible for backfill/subscribe.
 ///
-/// Data-plane backfill and subscription require current Realm membership.
-/// Discoverability and the history range ratchet never grant timeline access.
+/// Data-plane backfill and subscription require the session's actor to read
+/// the Realm in this Station's accepted typed current -- a current joined
+/// member, governed here or held as a verified replica, or the owner of its
+/// principal-control Realm. Discoverability and the history range ratchet
+/// never grant timeline access.
 pub async fn realm_id_accessible_for_id(
     state: &AppState,
     realm_id: &str,
@@ -526,7 +526,14 @@ pub async fn realm_id_accessible_for_id(
     else {
         return false;
     };
-    realm_has_member_by_id(state, realm_id, &actor.to_string()).await
+    let Ok(realm_id) = RealmId::new(realm_id.to_owned()) else {
+        return false;
+    };
+    state
+        .authority_commits()
+        .accepted_realm_reader(&realm_id, &actor)
+        .await
+        .unwrap_or(false)
 }
 
 /// Look up the current one-way `history_access` ratchet value. Missing or
