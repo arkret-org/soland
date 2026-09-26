@@ -29,6 +29,7 @@ use soland_services::committed_receipt::{CommitContinuity, verify_committed_even
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
     CommittedReplica, CommittedReplicaOutcome, CommittedReplicaRole, ConflictCode,
+    VerifiedMlsWelcome,
 };
 
 use super::AppState;
@@ -112,6 +113,44 @@ fn hosted_member_join(
     }
 }
 
+/// encryption-and-audit.md §2.2 "跨站 recipient": the Welcomes of a
+/// replicated `ak.mls.commit` whose recipients this Station hosts and whose
+/// claims, as this Station's own claim destination, it re-verifies against
+/// its ledger exactly as the governance Station verifies a local recipient's
+/// claim (device-lifecycle.md §9.2.3). A Welcome that fails is dropped with a
+/// restricted log line and never judges the Commit replica.
+async fn verified_replicated_welcomes(
+    state: &AppState,
+    item: &CommittedEventSubmission,
+) -> ServiceResult<Vec<VerifiedMlsWelcome>> {
+    let event = &item.event_submission.event;
+    let mut verified = Vec::new();
+    for welcome in item.welcomes.iter().flatten() {
+        let refused = |detail: &dyn std::fmt::Display| {
+            tracing::warn!(
+                welcome_id = %welcome.welcome_id.as_str(),
+                %detail,
+                "replicated MLS Welcome refused by its claim destination"
+            );
+        };
+        if welcome.recipient_actor_id.route_service_id() != &state.service_core_id() {
+            refused(&"the recipient is not hosted here");
+            continue;
+        }
+        match super::authority_mls_unit::resolve_claim(state, event, welcome).await {
+            Ok((claim, _)) => verified.push(VerifiedMlsWelcome {
+                delivery: welcome.clone(),
+                claim: Some(claim),
+            }),
+            Err(error @ (ServiceError::Database(_) | ServiceError::Internal(_))) => {
+                return Err(error);
+            }
+            Err(error) => refused(&error),
+        }
+    }
+    Ok(verified)
+}
+
 async fn replicate_one(
     state: &AppState,
     peer: &AuthenticatedPeerContext,
@@ -128,13 +167,22 @@ async fn replicate_one(
             "Circle and Sidecar replicas need their own scope membership basis".to_owned(),
         ));
     }
+    let welcomes = verified_replicated_welcomes(state, item).await?;
     if let Some(existing) = state
         .authority_commits()
         .committed_event_by_commit_id(&commit.commit_id)
         .await?
     {
         if existing.commit == *commit && existing.event == *event {
-            return Ok(CommittedReplicaOutcome::Duplicate);
+            if welcomes.is_empty() {
+                return Ok(CommittedReplicaOutcome::Duplicate);
+            }
+            // Held through scan or an earlier attempt: the replay still
+            // queues the Welcomes not queued yet, in one transaction.
+            return state
+                .authority_commits()
+                .queue_replicated_welcomes(event, commit, &welcomes, crate::wire::now())
+                .await;
         }
         return Err(ServiceError::Conflict(format!(
             "{}: the Commit id is held with different content",
@@ -223,6 +271,7 @@ async fn replicate_one(
             commit: commit.clone(),
             role,
             received_at: crate::wire::now(),
+            welcomes,
         })
         .await
 }

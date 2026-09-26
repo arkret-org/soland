@@ -290,13 +290,116 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             &welcome.delivery,
             event_pk,
             commit.committed_at,
-            transaction.recipient_queue_capacity,
+            Some(transaction.recipient_queue_capacity),
         )
         .await
         .map_err(crate::PgTransactionError::into_persistence)?;
         bind_claim_welcome_in_connection(conn, claim, &welcome.delivery).await?;
     }
     Ok(())
+}
+
+/// encryption-and-audit.md §2.2 "跨站 recipient" and decision 0121: in the
+/// replica transaction of an `ak.mls.commit`, queue each Welcome whose claim
+/// the serving layer re-verified against this Station's own ledger, and bind
+/// the claim to it. Each Welcome stands alone: one whose recipient is no
+/// joined member here, whose claim is no longer live or already bound to
+/// another Welcome, or whose endpoint cannot receive it is not queued, only
+/// logged, and never blocks the replica. A Welcome already queued and bound
+/// by an earlier attempt is left as it is. Replicated Welcomes count toward
+/// but are never refused by the endpoint capacity.
+pub(crate) async fn queue_replicated_welcomes_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    welcomes: &[soland_storage::VerifiedMlsWelcome],
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    if welcomes.is_empty() {
+        return Ok(());
+    }
+    if event.kind != EventKind::MlsCommit {
+        return Err(PersistenceError::SchemaViolation(
+            "replicated Welcomes accompany only an ak.mls.commit".to_owned(),
+        ));
+    }
+    let token = ids::parse_event_id(event.event_id.as_str()).ok_or_else(|| {
+        PersistenceError::SchemaViolation("MLS Commit Event id is not canonical".to_owned())
+    })?;
+    let event_pk = sql_query("SELECT pk FROM canonical_events WHERE id=$1")
+        .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+        .get_result::<EventPkRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(|| {
+            PersistenceError::Internal("a replicated Commit holds no Event bytes".to_owned())
+        })?
+        .pk;
+    for welcome in welcomes {
+        match queue_one_replicated_welcome(conn, event, event_pk, welcome, at).await {
+            Ok(()) => {}
+            Err(PersistenceError::Conflict(detail) | PersistenceError::SchemaViolation(detail)) => {
+                tracing::warn!(
+                    welcome_id = %welcome.delivery.welcome_id.as_str(),
+                    %detail,
+                    "replicated MLS Welcome not queued"
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+async fn queue_one_replicated_welcome(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    event_pk: i64,
+    welcome: &soland_storage::VerifiedMlsWelcome,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let delivery = &welcome.delivery;
+    let claim = welcome.claim.as_ref().ok_or_else(|| {
+        PersistenceError::Internal("a replicated Welcome carries its local claim".to_owned())
+    })?;
+    if delivery.commit_event_ref != event.event_id || delivery.realm_id != event.realm_id {
+        return Err(PersistenceError::SchemaViolation(
+            "a replicated Welcome names another Commit".to_owned(),
+        ));
+    }
+    require_joined_recipient(conn, &event.realm_id, &delivery.recipient_actor_id).await?;
+    if claim_welcome_binding_in_connection(conn, delivery.keypackage_claim_ref.as_str())
+        .await?
+        .is_some()
+    {
+        return bind_claim_welcome_in_connection(conn, claim, delivery).await;
+    }
+    require_live_claim(conn, claim, at).await?;
+    crate::devices::enqueue_mls_welcome_in_connection(conn, delivery, event_pk, at, None)
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)?;
+    bind_claim_welcome_in_connection(conn, claim, delivery).await
+}
+
+/// The Welcome id a claim is bound to, if its Welcome was queued.
+async fn claim_welcome_binding_in_connection(
+    conn: &mut AsyncPgConnection,
+    claim_id: &str,
+) -> PersistenceResult<Option<String>> {
+    #[derive(QueryableByName)]
+    struct BoundRow {
+        #[diesel(sql_type = Text)]
+        welcome_id: String,
+    }
+    Ok(
+        sql_query("SELECT welcome_id FROM keypackage_claim_welcome_bindings WHERE claim_id=$1")
+            .bind::<Text, _>(claim_id)
+            .get_result::<BoundRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(|row| row.welcome_id),
+    )
 }
 
 /// device-lifecycle.md §9.2.3 (decision 0121): record, in the transaction

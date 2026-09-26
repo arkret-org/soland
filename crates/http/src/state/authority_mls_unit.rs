@@ -486,8 +486,10 @@ fn verify_welcome_proof(
 
 /// device-lifecycle.md claim ledger rules: resolve `keypackage_claim_ref` to
 /// the exact durable ledger row, verify its destination-signed receipt and
-/// bind every coordinate it covers to the Welcome and its Commit.
-async fn resolve_claim(
+/// bind every coordinate it covers to the Welcome and its Commit. The claim
+/// destination runs it: the governance Station for a recipient it hosts, the
+/// recipient's Account Station for a replicated Welcome (§9.2.3).
+pub(super) async fn resolve_claim(
     state: &AppState,
     event: &Event,
     welcome: &MlsWelcomeDelivery,

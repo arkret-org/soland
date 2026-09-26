@@ -1534,23 +1534,6 @@ pub(in crate::routing) async fn authenticated_peer_context(
     Ok(soland_services::authority_commit::AuthenticatedPeerContext { source_service_id })
 }
 
-/// Apply the same accepted-Event history and current membership policy used by
-/// peer Event reads to one exact record. This keeps reference-based endpoints
-/// from turning an otherwise invisible Event into an object-disclosure oracle.
-pub(in crate::routing) async fn peer_event_visibility(
-    state: &AppState,
-    source_id: &str,
-    record: &AcceptedEvent,
-) -> Result<bool, AppError> {
-    let records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(format!("peer Event visibility: {error}")))?;
-    let authz = PeerReadAuthz::build(state, source_id, &records).await?;
-    Ok(authz.record_visible(record))
-}
-
 /// Freeze the producer's caller-visible policy on the same accepted snapshot
 /// used for reduction. Actor routing retains the complete account/station key.
 pub(in crate::routing) async fn frontier_disclosure_snapshot(

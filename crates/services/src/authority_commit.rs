@@ -1067,6 +1067,20 @@ impl AuthorityCommitApplication {
         Ok(self.store().install_committed_replica(replica).await?)
     }
 
+    /// Queue the re-verified Welcomes of an exactly held replica Commit.
+    pub async fn queue_replicated_welcomes(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        welcomes: &[soland_storage::VerifiedMlsWelcome],
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<soland_storage::CommittedReplicaOutcome> {
+        Ok(self
+            .store()
+            .queue_replicated_welcomes(event, commit, welcomes, at)
+            .await?)
+    }
+
     /// Store one verified withheld Commit as a continuity-only chain node.
     pub async fn install_committed_chain_node(
         &self,
@@ -1328,6 +1342,20 @@ impl AuthorityCommitApplication {
     /// `ak.peer.committed_event.read.scan.v1`: the authenticated peer's
     /// replication right, interval, and page at one governing read cut. See
     /// [`soland_storage::AuthorityCommitStore::scan_stream_for_peer`].
+    /// The committed Event `event_id` when `peer` holds the replication right
+    /// on it at this governing cut (`federation.md` §4.1.1).
+    pub async fn committed_event_for_peer(
+        &self,
+        event_id: &arkret_wire::EventId,
+        peer: &DidCoreId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<Option<arkret_wire::CommittedEventFullView>> {
+        Ok(self
+            .store()
+            .committed_event_for_peer(event_id, peer, issuer)
+            .await?)
+    }
+
     pub async fn scan_stream_for_peer(
         &self,
         request: &StreamScanRequest,

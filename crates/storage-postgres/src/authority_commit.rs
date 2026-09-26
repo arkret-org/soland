@@ -2191,6 +2191,22 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn queue_replicated_welcomes(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        welcomes: &[soland_storage::VerifiedMlsWelcome],
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::CommittedReplicaOutcome> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            replica::queue_welcomes_of_held_replica_in_connection(conn, event, commit, welcomes, at)
+                .await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn install_committed_chain_node(
         &self,
         node: &soland_storage::CommittedChainNode,
@@ -2784,6 +2800,16 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<soland_storage::AccountStreamScan> {
         crate::account_stream_scan::scan_stream_for_account(&self.pool, request, account, issuer)
+            .await
+    }
+
+    async fn committed_event_for_peer(
+        &self,
+        event_id: &arkret_wire::EventId,
+        peer: &arkret_wire::DidCoreId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<Option<arkret_wire::CommittedEventFullView>> {
+        crate::account_stream_scan::committed_event_for_peer(&self.pool, event_id, peer, issuer)
             .await
     }
 

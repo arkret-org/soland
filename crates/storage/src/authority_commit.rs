@@ -1010,6 +1010,11 @@ pub struct CommittedReplica {
     pub commit: arkret_wire::RealmCommit,
     pub role: CommittedReplicaRole,
     pub received_at: chrono::DateTime<chrono::Utc>,
+    /// The Welcomes the item carried for recipients this Station hosts whose
+    /// claims the serving layer re-verified against this Station's ledger
+    /// (encryption-and-audit.md §2.2 "跨站 recipient"); queued in the same
+    /// transaction as the replica, each on its own.
+    pub welcomes: Vec<VerifiedMlsWelcome>,
 }
 
 /// One verified RealmCommit whose Event the peer scan withheld, kept by a
@@ -1087,6 +1092,17 @@ pub trait AuthorityCommitStore: Send + Sync {
     async fn install_committed_replica(
         &self,
         replica: &CommittedReplica,
+    ) -> PersistenceResult<CommittedReplicaOutcome>;
+
+    /// Queue, in one transaction, the re-verified Welcomes of a Commit this
+    /// Station already holds as the exact replica (a replay after scan
+    /// stored it). The held Commit and Event must equal the item.
+    async fn queue_replicated_welcomes(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        welcomes: &[VerifiedMlsWelcome],
+        at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<CommittedReplicaOutcome>;
 
     /// Store one verified withheld RealmCommit as a continuity-only chain node
@@ -1433,6 +1449,18 @@ pub trait AuthorityCommitStore: Send + Sync {
         peer: &arkret_wire::DidCoreId,
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<AccountStreamScan>;
+
+    /// The committed Event `event_id` with its RealmCommit when `peer` may
+    /// read it at one governing read cut of `issuer`: its Realm-stream
+    /// position lies in one of the peer's replication intervals and the peer
+    /// may hold its complete canonical bytes -- the rule a peer stream scan
+    /// applies (`federation.md` §4.1.1). `None` for every other case.
+    async fn committed_event_for_peer(
+        &self,
+        event_id: &arkret_wire::EventId,
+        peer: &arkret_wire::DidCoreId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<Option<arkret_wire::CommittedEventFullView>>;
 
     /// `ak.self.realm.read.streams.v1` for one authenticated Account. The
     /// stream set, each head and each readable floor come from one read cut at

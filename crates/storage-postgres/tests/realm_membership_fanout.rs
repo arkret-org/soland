@@ -8,8 +8,14 @@
 //!   its held Realm stream, later Commits must directly follow it, and gaps, forks and unheld
 //!   streams are refused with zero writes.
 
+#[path = "../../test-support/src/device_authorization_history.rs"]
+#[allow(dead_code)]
+mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
 mod ordinary_realm;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 
 use arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest;
 use diesel::sql_types::{BigInt, Jsonb, Text};
@@ -899,6 +905,7 @@ fn replica(
         commit: request.authority_commit.commit.clone(),
         role,
         received_at: request.authority_commit.commit.committed_at,
+        welcomes: Vec::new(),
     }
 }
 
@@ -2762,4 +2769,263 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
             (join_position + 4, true),
         ]
     );
+}
+
+/// One ledger row of a claim this member Station issued as claim
+/// destination, in `state`.
+async fn member_claim(
+    pool: &PgPool,
+    claim_id: &str,
+    state: &str,
+) -> soland_storage::MlsWelcomeClaimLedgerKey {
+    let key = soland_storage::MlsWelcomeClaimLedgerKey {
+        source_id: STATION.to_owned(),
+        claim_request_id: uuid::Uuid::now_v7().simple().to_string(),
+        request_digest: format!("sha256:{}", "6".repeat(64)),
+    };
+    let now = chrono::Utc::now();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO peer_keypackage_claims \
+         (source_id,claim_request_id,request_digest,key_package_use,keypackage_id,outcome, \
+          terminal_receipt,consume_receipt,claim_expires_at_unix_ms,expires_at,state,updated_at) \
+         VALUES ($1,$2,$3,'single_use',NULL,$4,NULL,NULL,$5,$6,$7,$8)",
+    )
+    .bind::<Text, _>(&key.source_id)
+    .bind::<Text, _>(&key.claim_request_id)
+    .bind::<Text, _>(&key.request_digest)
+    .bind::<Jsonb, _>(serde_json::json!({"claims": [{"claim_id": claim_id}]}))
+    .bind::<BigInt, _>(now.timestamp_millis() + 3_600_000)
+    .bind::<BigInt, _>(now.timestamp() + 86_400)
+    .bind::<Text, _>(state)
+    .bind::<BigInt, _>(now.timestamp())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    key
+}
+
+/// A Welcome of `commit` for `device` of `recipient`, verified by this member
+/// Station against its ledger entry `claim`.
+fn replicated_welcome(
+    commit: &EventCommitRequest,
+    recipient: &arkret_wire::ActorId,
+    device: &str,
+    claim_id: &str,
+    claim: soland_storage::MlsWelcomeClaimLedgerKey,
+) -> soland_storage::VerifiedMlsWelcome {
+    let event = &commit.authority_commit.event;
+    soland_storage::VerifiedMlsWelcome {
+        delivery: arkret_wire::MlsWelcomeDelivery {
+            welcome_id: arkret_wire::MlsWelcomeDeliveryId::new(format!(
+                "ak:mls_welcome_delivery:{}",
+                uuid::Uuid::now_v7()
+            ))
+            .unwrap(),
+            realm_id: event.realm_id.clone(),
+            effective_scope: event.scope_ref.clone(),
+            commit_event_ref: event.event_id.clone(),
+            recipient_actor_id: recipient.clone(),
+            recipient_endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+                device_id: arkret_wire::DeviceId::new(device.to_owned()).unwrap(),
+            },
+            keypackage_claim_ref: arkret_wire::KeypackageClaimId::new(claim_id.to_owned()).unwrap(),
+            ciphertext_b64: arkret_wire::Base64UrlString::new("V2VsY29tZQ".to_owned()).unwrap(),
+            producer_proof: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::MlsWelcomeDelivery,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: event
+                    .producer_proof
+                    .as_ref()
+                    .unwrap()
+                    .verification_method
+                    .clone(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "5".repeat(64)))
+                    .unwrap(),
+                created_at: commit.authority_commit.commit.committed_at,
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+            },
+        },
+        claim: Some(claim),
+    }
+}
+
+/// The `ak.mls.commit` payload of a Commit over `base` at `previous_epoch`.
+fn mls_commit_payload(
+    realm_id: &arkret_wire::RealmId,
+    base: &arkret_wire::EventId,
+    previous_epoch: u64,
+    commit_bytes: &[u8],
+) -> serde_json::Value {
+    let binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+        realm_id.clone(),
+        Some(base.clone()),
+        previous_epoch,
+        previous_epoch + 1,
+        0,
+    )
+    .unwrap();
+    let envelope = arkret_models_crypto::MlsCommitEnvelope {
+        group_id: binding.mls_group_id().unwrap(),
+        epoch: previous_epoch + 1,
+        commit: arkret_wire::base64url::base64url_encode(commit_bytes),
+        commit_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(commit_bytes))
+            .unwrap(),
+        ratchet_tree: None,
+    };
+    serde_json::to_value(
+        arkret_models_crypto::MlsCommitPayload::new(base.clone(), 0, &envelope, binding).unwrap(),
+    )
+    .unwrap()
+}
+
+async fn queued_welcomes(pool: &PgPool) -> Vec<String> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        welcome_id: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT welcome_id FROM mls_welcome_deliveries ORDER BY welcome_id")
+        .load::<Row>(&mut *conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.welcome_id)
+        .collect()
+}
+
+/// encryption-and-audit.md §2.2 "跨站 recipient" and decision 0121 on the
+/// member Station, which is the claim destination of its hosted recipients:
+/// the re-verified Welcomes of a replicated `ak.mls.commit` are queued and
+/// their claims bound in the replica transaction; a Welcome whose claim is no
+/// longer live or whose recipient is no joined member is not queued and does
+/// not block the replica; a replay of a Commit held through scan still queues
+/// the Welcome not queued yet and answers `duplicate`; a second replay queues
+/// nothing twice.
+#[tokio::test]
+async fn replicated_welcomes_queue_with_their_commit_replica_or_on_replay() {
+    use soland_storage::MlsKeyPackageStore as _;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)",
+        )
+        .bind::<Text, _>(MEMBER_STATION)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    let device = pcr_genesis::PcrGenesisFixture::new(
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .admit_founding_device(&persistence)
+    .await
+    .expect("accepted hosted recipient device");
+    let bob = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        device.principal_id.clone(),
+        member_station(),
+    ));
+    let unit = bootstrap_unit_with_join_rule("replica-welcomes", "public");
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let last = unit.transactions.last().unwrap();
+    let join = membership_request(last, bob.clone(), &bob, "join");
+    store
+        .install_committed_replica(&replica(&unit, &join, true))
+        .await
+        .unwrap();
+    anchor_at_join(&store, &join, vec![joined_row(&join, &bob)]).await;
+    let genesis_ref = join.authority_commit.event.event_id.clone();
+
+    // A Commit carrying three Welcomes: one passes, one names a claim that is
+    // no longer live, one names a recipient that is no joined member here.
+    let commit = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::MlsCommit,
+        &founder(),
+        mls_commit_payload(&realm_id, &genesis_ref, 0, b"cross-station add"),
+        last.commit.committed_at,
+    ));
+    let claim =
+        |label: u8| format!("ak:keypackage_claim:01904100-0000-7000-8000-0000000c1a{label:02x}");
+    let live = member_claim(&pool, &claim(1), "claimed").await;
+    let expired = member_claim(&pool, &claim(2), "expired").await;
+    let stranger_claim = member_claim(&pool, &claim(3), "claimed").await;
+    let passing = replicated_welcome(&commit, &bob, &device.device_id, &claim(1), live);
+    let welcomes = vec![
+        passing.clone(),
+        replicated_welcome(&commit, &bob, &device.device_id, &claim(2), expired),
+        replicated_welcome(
+            &commit,
+            &remote_member("replica-stranger"),
+            &device.device_id,
+            &claim(3),
+            stranger_claim,
+        ),
+    ];
+    let mut item = replica(&unit, &commit, false);
+    item.welcomes = welcomes.clone();
+    assert_eq!(
+        store.install_committed_replica(&item).await.unwrap(),
+        CommittedReplicaOutcome::Stored,
+        "failing Welcomes never block the Commit replica"
+    );
+    assert_eq!(
+        queued_welcomes(&pool).await,
+        vec![passing.delivery.welcome_id.to_string()]
+    );
+    assert_eq!(
+        soland_storage_postgres::PgMlsKeyPackageStore { pool: pool.clone() }
+            .get_claim_welcome_binding(&claim(1))
+            .await
+            .unwrap()
+            .map(|binding| binding.welcome_id),
+        Some(passing.delivery.welcome_id.to_string())
+    );
+
+    // The next Commit arrives through scan, without its Welcome; the item's
+    // replay queues the Welcome and answers duplicate, once.
+    let second = sourced(next_request(
+        &commit.authority_commit,
+        arkret_wire::EventKind::MlsCommit,
+        &founder(),
+        mls_commit_payload(
+            &realm_id,
+            &commit.authority_commit.event.event_id,
+            1,
+            b"second add",
+        ),
+        last.commit.committed_at,
+    ));
+    store
+        .install_committed_replica(&replica(&unit, &second, false))
+        .await
+        .unwrap();
+    let later = member_claim(&pool, &claim(4), "claimed").await;
+    let late = replicated_welcome(&second, &bob, &device.device_id, &claim(4), later);
+    for _ in 0..2 {
+        assert_eq!(
+            store
+                .queue_replicated_welcomes(
+                    &second.authority_commit.event,
+                    &second.authority_commit.commit,
+                    std::slice::from_ref(&late),
+                    second.authority_commit.commit.committed_at,
+                )
+                .await
+                .unwrap(),
+            CommittedReplicaOutcome::Duplicate
+        );
+    }
+    let mut expected = vec![
+        passing.delivery.welcome_id.to_string(),
+        late.delivery.welcome_id.to_string(),
+    ];
+    expected.sort();
+    assert_eq!(queued_welcomes(&pool).await, expected);
 }

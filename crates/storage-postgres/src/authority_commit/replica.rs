@@ -426,7 +426,50 @@ fn require_realm_stream(commit: &arkret_wire::RealmCommit) -> Result<(), PgTrans
 }
 
 /// Store one verified replica in the caller's transaction.
+/// Store one replica and, in the same transaction, queue the re-verified
+/// Welcomes it carried (encryption-and-audit.md §2.2 "跨站 recipient"): a
+/// Welcome that fails its own checks is not queued and never blocks the
+/// replica, and a replay of an already held Commit still queues the Welcomes
+/// that are not queued yet.
 pub(super) async fn install_committed_replica_in_connection(
+    conn: &mut AsyncPgConnection,
+    replica: &CommittedReplica,
+) -> Result<CommittedReplicaOutcome, PgTransactionError> {
+    let outcome = install_replica_commit_in_connection(conn, replica).await?;
+    crate::mls_group_current_results::queue_replicated_welcomes_in_connection(
+        conn,
+        &replica.event,
+        &replica.welcomes,
+        replica.received_at,
+    )
+    .await?;
+    Ok(outcome)
+}
+
+/// Queue the re-verified Welcomes of a Commit this Station already holds as
+/// the exact replica, and answer `duplicate`.
+pub(super) async fn queue_welcomes_of_held_replica_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    welcomes: &[soland_storage::VerifiedMlsWelcome],
+    at: chrono::DateTime<chrono::Utc>,
+) -> Result<CommittedReplicaOutcome, PgTransactionError> {
+    if held_duplicate(conn, commit, Some(event)).await? != Some(CommittedReplicaOutcome::Duplicate)
+    {
+        return Err(conflict(
+            ConflictCode::DependencyMissing,
+            "the replicated Commit is not held",
+        ));
+    }
+    crate::mls_group_current_results::queue_replicated_welcomes_in_connection(
+        conn, event, welcomes, at,
+    )
+    .await?;
+    Ok(CommittedReplicaOutcome::Duplicate)
+}
+
+async fn install_replica_commit_in_connection(
     conn: &mut AsyncPgConnection,
     replica: &CommittedReplica,
 ) -> Result<CommittedReplicaOutcome, PgTransactionError> {

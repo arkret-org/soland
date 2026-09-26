@@ -64,12 +64,17 @@ pub(super) async fn lock_delivery_order_in_transaction(
 /// Enqueue the original signed Welcome on the caller's accepted MLS Commit
 /// transaction. The outbox row is also the recipient queue row: it gets the
 /// same durable position sequence used by ordinary device messages.
+/// Queue one Welcome for its exact recipient endpoint.
+///
+/// `recipient_queue_capacity` is the endpoint bound of a first admission; a
+/// Welcome replicated with its accepted Commit passes `None`: it counts
+/// toward the bound but is never refused by it (client-sync.md §10.1).
 pub(crate) async fn enqueue_mls_welcome_in_connection(
     conn: &mut AsyncPgConnection,
     welcome: &MlsWelcomeDelivery,
     commit_event_pk: i64,
     queued_at: chrono::DateTime<Utc>,
-    recipient_queue_capacity: usize,
+    recipient_queue_capacity: Option<usize>,
 ) -> Result<(), PgTransactionError> {
     welcome.validate_shape().map_err(|error| {
         PersistenceError::SchemaViolation(format!("invalid MLS Welcome: {error}"))
@@ -196,6 +201,21 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
         ))
         .into());
     }
+    let Some(recipient_queue_capacity) = recipient_queue_capacity else {
+        return insert_mls_welcome(
+            conn,
+            welcome,
+            commit_event_pk,
+            queued_at,
+            endpoint_kind,
+            device_id,
+            verification_method,
+            authorization_event_ref,
+            device_gate,
+            delivery_json,
+        )
+        .await;
+    };
     if recipient_queue_capacity == 0 {
         return Err(PersistenceError::SchemaViolation(
             "MLS Welcome transaction omitted recipient queue capacity".into(),
@@ -251,6 +271,34 @@ pub(crate) async fn enqueue_mls_welcome_in_connection(
         ))
         .into());
     }
+    insert_mls_welcome(
+        conn,
+        welcome,
+        commit_event_pk,
+        queued_at,
+        endpoint_kind,
+        device_id,
+        verification_method,
+        authorization_event_ref,
+        device_gate,
+        delivery_json,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_mls_welcome(
+    conn: &mut AsyncPgConnection,
+    welcome: &MlsWelcomeDelivery,
+    commit_event_pk: i64,
+    queued_at: chrono::DateTime<Utc>,
+    endpoint_kind: &str,
+    device_id: Option<String>,
+    verification_method: Option<String>,
+    authorization_event_ref: String,
+    device_gate: Option<Value>,
+    delivery_json: Value,
+) -> Result<(), PgTransactionError> {
     sql_query(
         "INSERT INTO mls_welcome_deliveries \
          (welcome_id, realm_id, commit_event_pk, recipient, recipient_endpoint_kind, \

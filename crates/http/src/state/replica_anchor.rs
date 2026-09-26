@@ -384,6 +384,9 @@ async fn store_scanned(
                     commit: commit.clone(),
                     role: CommittedReplicaRole::HeldStream,
                     received_at: crate::wire::now(),
+                    // A scanned item carries no Welcome; its item's
+                    // committed replication queues them.
+                    welcomes: Vec::new(),
                 })
                 .await
                 .map_err(temporary)?;

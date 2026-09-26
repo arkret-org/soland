@@ -586,6 +586,78 @@ async fn peer_holds_full_event(
     Ok(true)
 }
 
+#[derive(QueryableByName)]
+struct CommittedRow {
+    #[diesel(sql_type = Jsonb)]
+    commit_json: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    envelope: serde_json::Value,
+}
+
+/// The committed Event `event_id` when `peer` may read it at this governing
+/// cut: its Realm-stream Commit lies in one of the peer's replication
+/// intervals and the peer may hold its complete canonical bytes.
+pub(crate) async fn committed_event_for_peer(
+    pool: &PgPool,
+    event_id: &arkret_wire::EventId,
+    peer: &DidCoreId,
+    issuer: &DidCoreId,
+) -> PersistenceResult<Option<arkret_wire::CommittedEventFullView>> {
+    let token = crate::ids::parse_event_id(event_id.as_str())
+        .ok_or_else(|| PersistenceError::SchemaViolation("Event id is not canonical".to_owned()))?;
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let Some(row) = sql_query(
+            "SELECT c.commit_json, e.envelope FROM canonical_events e \
+             JOIN realm_commits c ON c.event_pk=e.pk WHERE e.id=$1 AND e.state='committed'",
+        )
+        .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+        .get_result::<CommittedRow>(&mut *conn)
+        .await
+        .optional()?
+        else {
+            return Ok(None);
+        };
+        let invalid = |what: &str, error: serde_json::Error| {
+            PgTransactionError::from(PersistenceError::Internal(format!(
+                "stored committed {what} is invalid: {error}"
+            )))
+        };
+        let commit: arkret_wire::RealmCommit =
+            serde_json::from_value(row.commit_json).map_err(|error| invalid("Commit", error))?;
+        let event: arkret_wire::Event =
+            serde_json::from_value(row.envelope).map_err(|error| invalid("Event", error))?;
+        let governs = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
+            .bind::<Text, _>(event.realm_id.as_str())
+            .get_result::<TenureRow>(&mut *conn)
+            .await
+            .optional()?
+            .is_some_and(|tenure| tenure.service_id == issuer.as_str());
+        if !governs
+            || commit.stream_ref
+                != (CommitStreamRef::Realm {
+                    realm_id: event.realm_id.clone(),
+                })
+        {
+            return Ok(None);
+        }
+        let (intervals, joined) = peer_intervals(conn, &event.realm_id, peer).await?;
+        if !intervals
+            .iter()
+            .any(|interval| interval.covers(commit.stream_position))
+            || !peer_holds_full_event(conn, &event, peer, &joined, chrono::Utc::now()).await?
+        {
+            return Ok(None);
+        }
+        Ok(Some(arkret_wire::CommittedEventFullView { commit, event }))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
 pub(crate) async fn scan_stream_for_peer(
     pool: &PgPool,
     request: &StreamScanRequest,

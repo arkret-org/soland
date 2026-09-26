@@ -313,25 +313,30 @@ async fn resolve_peer_mls_group_state_material(
         .validate()
         .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
 
+    // federation.md §4.1.1: the Genesis is served only to a peer whose
+    // replication right on the Realm stream covers its Commit at this
+    // governing cut, the rule a peer stream scan applies.
+    let source = arkret_wire::DidCoreId::new(source_id.clone())
+        .map_err(|_| mls_group_state_material_not_found())?;
     let event = state
-        .event_queries()
-        .accepted_event(request.group_state_event_id.as_str())
+        .authority_commits()
+        .committed_event_for_peer(
+            &request.group_state_event_id,
+            &source,
+            &state.service_core_id(),
+        )
         .await
-        .map_err(|error| AppError::internal(format!("accepted MLS genesis lookup: {error}")))?
-        .ok_or_else(mls_group_state_material_not_found)?;
-    if event.event_id != request.group_state_event_id.as_str()
-        || event.kind != arkret_wire::EventKind::MlsGenesis.as_str()
-        || event.realm_id.as_deref() != Some(request.realm_id.as_str())
-        || !super::events::peer::peer_event_visibility(state, &source_id, &event).await?
-    {
+        .map_err(|error| AppError::internal(format!("peer MLS Genesis read: {error}")))?
+        .ok_or_else(mls_group_state_material_not_found)?
+        .event;
+    if event.kind != arkret_wire::EventKind::MlsGenesis || event.realm_id != request.realm_id {
         return Err(mls_group_state_material_not_found());
     }
-    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload = event
-        .envelope
-        .get("payload")
-        .cloned()
-        .and_then(|payload| serde_json::from_value(payload).ok())
-        .ok_or_else(mls_group_state_material_not_found)?;
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::to_value(&event.payload)
+            .ok()
+            .and_then(|payload| serde_json::from_value(payload).ok())
+            .ok_or_else(mls_group_state_material_not_found)?;
     if payload.effective_scope() != &request.effective_scope
         || payload.mls_group_id().ok().as_ref() != Some(&request.mls_group_id)
         || payload.group_info_ref != request.group_info_ref
