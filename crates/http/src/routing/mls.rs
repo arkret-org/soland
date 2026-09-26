@@ -1565,15 +1565,18 @@ async fn verify_local_claim_participant_authorization(
         .map_err(|error| {
             AppError::internal(format!("peer claim authorization transcript: {error}"))
         })?;
-        let key =
-            crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method.as_str())
-                .await
-                .map_err(|error| AppError::internal(format!("Agent signing key: {error}")))?;
-        return Ok(crate::routing::identity::device_signing::ed25519_verify(
-            &key,
+        return match verify_agent_keypackage_batch(
+            state,
+            requester_agent_id,
+            agent_key_authorize_event_id.as_str(),
+            signature,
             &signing_bytes,
-            signature.sig.as_str(),
-        ));
+        )
+        .await
+        {
+            Ok(()) => Ok(true),
+            Err(_) => reject("agent_signature_invalid"),
+        };
     }
     let (verification_method, signature, requester_device_id, device_authorize_event_id) =
         match authorization {
