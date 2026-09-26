@@ -4446,6 +4446,50 @@ CREATE TABLE strand_current_results (
 );
 CREATE INDEX strand_current_results_realm ON strand_current_results(realm_id,strand_id);
 
+-- Event-derived Space metadata and its two sibling registered current
+-- families. The parent and policy must exist from genesis, including explicit
+-- JSON null values for an undeclared parent/policy. They advance with the
+-- covering RealmCommit in one authority transaction.
+CREATE TABLE space_current_results (
+ realm_id TEXT NOT NULL,
+ space_id TEXT NOT NULL PRIMARY KEY,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'id'=space_id),
+ CHECK(value->>'realm_id'=realm_id),
+ CHECK(NOT value ? 'parent_space_id'),
+ CHECK(NOT value ? 'child_scope_policy')
+);
+CREATE INDEX space_current_results_realm ON space_current_results(realm_id,space_id);
+
+CREATE TABLE space_parent_current_results (
+ realm_id TEXT NOT NULL,
+ space_id TEXT NOT NULL PRIMARY KEY REFERENCES space_current_results(space_id) DEFERRABLE INITIALLY DEFERRED,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value ? 'parent_space_id'),
+ CHECK(value=jsonb_build_object('parent_space_id',value->'parent_space_id')),
+ CHECK(jsonb_typeof(value->'parent_space_id') IN ('null','string'))
+);
+CREATE INDEX space_parent_current_results_realm ON space_parent_current_results(realm_id,space_id);
+
+CREATE TABLE space_child_scope_policy_current_results (
+ realm_id TEXT NOT NULL,
+ space_id TEXT NOT NULL PRIMARY KEY REFERENCES space_current_results(space_id) DEFERRABLE INITIALLY DEFERRED,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value) IN ('null','object'))
+);
+CREATE INDEX space_child_scope_policy_current_results_realm ON space_child_scope_policy_current_results(realm_id,space_id);
+
 -- The whole accepted RSVP entry per exact Calendar Strand, occurrence and
 -- accountable Actor. JSONB scalars preserve an explicit null series key and
 -- JSONB ActorId preserves the complete signed identity in the subject.

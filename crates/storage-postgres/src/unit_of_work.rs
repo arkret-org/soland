@@ -2518,6 +2518,10 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::space_current_results::commit_space_create_current_results_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit)
             .await?;
         crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(

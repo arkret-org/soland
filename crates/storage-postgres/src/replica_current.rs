@@ -11,8 +11,9 @@
 //!
 //! The member Station keeps the families its recipient re-verification and
 //! local reads consume: the Realm singletons (history access, plaintext
-//! services, profile), the policy bundle, `member_state`, `strand`, the
-//! default Strand pointer, `message_revision` and `object_redaction`. The
+//! services, profile), the policy bundle, `member_state`, `strand`, the three
+//! Space families, the default Strand pointer, `message_revision` and
+//! `object_redaction`. The
 //! authority root, capability grants, Invite registers and MLS group state
 //! are governing admission inputs whose rows hold Station-private material a
 //! snapshot row does not carry (the authority Event ref, the accepting
@@ -26,6 +27,9 @@ use soland_storage::{PersistenceError, PersistenceResult};
 
 /// Every table a member Station projects a replica Realm into.
 const MEMBER_STATION_FAMILIES: &[&str] = &[
+    "space_parent_current_results",
+    "space_child_scope_policy_current_results",
+    "space_current_results",
     "realm_bootstrap_current_results",
     "realm_policy_bundle_current_results",
     "realm_link_current_results",
@@ -98,6 +102,9 @@ async fn upsert_keyed(
              value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
             conflict = match table {
                 "strand_current_results" => "strand_id",
+                "space_current_results"
+                | "space_parent_current_results"
+                | "space_child_scope_policy_current_results" => "space_id",
                 "message_revision_current_results" => "message_id",
                 _ => "realm_id,target_ref",
             },
@@ -245,6 +252,25 @@ pub(crate) async fn install_snapshot_in_connection(
                 )
                 .await?;
             }
+            S::Space { space_id }
+            | S::SpaceParent { space_id }
+            | S::SpaceChildScopePolicy { space_id } => {
+                let table = match selector {
+                    S::Space { .. } => "space_current_results",
+                    S::SpaceParent { .. } => "space_parent_current_results",
+                    S::SpaceChildScopePolicy { .. } => "space_child_scope_policy_current_results",
+                    _ => unreachable!(),
+                };
+                upsert_keyed(
+                    conn,
+                    realm_id,
+                    table,
+                    Some(("space_id", space_id.as_str())),
+                    &row,
+                    value,
+                )
+                .await?;
+            }
             S::RealmSetDefaultStrand => {
                 upsert_keyed(
                     conn,
@@ -330,6 +356,27 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::SpaceCreate => {
+            let values = crate::space_current_results::space_create_current_values(event)?;
+            for (table, value) in [
+                ("space_current_results", &values.space),
+                ("space_parent_current_results", &values.parent),
+                (
+                    "space_child_scope_policy_current_results",
+                    &values.child_scope_policy,
+                ),
+            ] {
+                upsert_keyed(
+                    conn,
+                    &event.realm_id,
+                    table,
+                    Some(("space_id", values.space_id.as_str())),
+                    &row,
+                    value,
+                )
+                .await?;
+            }
+        }
         arkret_wire::EventKind::RealmSetDefaultStrand => {
             let payload: arkret_models_collaboration::events_payloads::strand::RealmSetDefaultStrandPayload =
                 serde_json::from_value(payload()?)
@@ -396,4 +443,206 @@ pub(crate) async fn advance_in_connection(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+    use serde_json::json;
+
+    use super::*;
+    use crate::test_database::TestDatabase;
+
+    #[derive(diesel::QueryableByName)]
+    struct ValueRow {
+        #[diesel(sql_type = Jsonb)]
+        value: Value,
+    }
+
+    #[tokio::test]
+    async fn space_families_snapshot_install_keeps_registered_values() {
+        let database = TestDatabase::lease().await;
+        let realm_id =
+            arkret_wire::RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let space_id =
+            arkret_wire::SpaceId::new("ak:space:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let commit_id = arkret_wire::RealmCommitId::from_digest([7u8; 32]);
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: commit_id.clone(),
+        };
+        let revision = arkret_wire::CurrentRevision {
+            commit_id,
+            stream_position: 7,
+        };
+        let metadata = json!({
+            "id":space_id,
+            "realm_id":realm_id,
+            "schema":"ak.schema.space.v1",
+            "kind":"board",
+            "title":"Replica board",
+            "state":"active"
+        });
+        let parent = json!({"parent_space_id":null});
+        let policy = Value::Null;
+        let entry = |selector, value| arkret_wire::TypedCurrentResult::Value {
+            selector,
+            source_stream_ref: stream.clone(),
+            revision: revision.clone(),
+            value,
+        };
+        // Deliberately put the sibling families before Space metadata. The
+        // deferred FK must be satisfied by the complete snapshot transaction.
+        let entries = vec![
+            entry(
+                arkret_wire::CurrentSelector::SpaceParent {
+                    space_id: space_id.clone(),
+                },
+                parent.clone(),
+            ),
+            entry(
+                arkret_wire::CurrentSelector::SpaceChildScopePolicy {
+                    space_id: space_id.clone(),
+                },
+                policy.clone(),
+            ),
+            entry(
+                arkret_wire::CurrentSelector::Space {
+                    space_id: space_id.clone(),
+                },
+                metadata.clone(),
+            ),
+        ];
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        for _ in 0..2 {
+            diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+            install_snapshot_in_connection(
+                &mut conn,
+                &realm_id,
+                &head,
+                &entries,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            diesel::sql_query("COMMIT")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        for (table, expected) in [
+            ("space_current_results", metadata),
+            ("space_parent_current_results", parent),
+            ("space_child_scope_policy_current_results", policy),
+        ] {
+            let row: ValueRow = diesel::sql_query(format!(
+                "SELECT value FROM {table} WHERE realm_id=$1 AND space_id=$2"
+            ))
+            .bind::<Text, _>(realm_id.as_str())
+            .bind::<Text, _>(space_id.as_str())
+            .get_result(&mut conn)
+            .await
+            .unwrap();
+            assert_eq!(row.value, expected);
+        }
+
+        let at =
+            chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
+        let author = arkret_wire::DidCoreId::new("ak:did_core:web:replica-author.example").unwrap();
+        let station =
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-station.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(author, station));
+        let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.space.create",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor.clone(),
+            json!({"object":{
+                "schema":"ak.schema.space.v1",
+                "realm_id":realm_id,
+                "parent_space_id":space_id,
+                "kind":"list",
+                "title":"Replicated list",
+                "created_by":actor,
+                "created_at":at
+            }}),
+            at,
+        )
+        .unwrap();
+        let digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        event.producer_proof = Some(arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new("did:web:replica-author.example#key")
+                .unwrap(),
+            event_digest: digest.clone(),
+            created_at: arkret_canonical::normalize_timestamp_canonical(at),
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: arkret_wire::test_support::structural_only_detached_jws(&digest),
+        });
+        let next_id = arkret_wire::SpaceId::from_event_id(&event.event_id);
+        let next_commit = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest([8u8; 32]),
+            realm_id: realm_id.clone(),
+            stream_ref: stream,
+            stream_position: 8,
+            previous_commit_ref: Some(head.commit_id),
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                event.event_id.clone(),
+            ),
+            committed_at: at,
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:replica-station.example#authority",
+                )
+                .unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                    .unwrap(),
+                created_at: at,
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+            },
+        };
+        diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        advance_in_connection(&mut conn, &event, &next_commit)
+            .await
+            .unwrap();
+        diesel::sql_query("COMMIT")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let next_parent: ValueRow =
+            diesel::sql_query("SELECT value FROM space_parent_current_results WHERE space_id=$1")
+                .bind::<Text, _>(next_id.as_str())
+                .get_result(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(next_parent.value, json!({"parent_space_id":space_id}));
+        let next_policy: ValueRow = diesel::sql_query(
+            "SELECT value FROM space_child_scope_policy_current_results WHERE space_id=$1",
+        )
+        .bind::<Text, _>(next_id.as_str())
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(next_policy.value, Value::Null);
+    }
 }

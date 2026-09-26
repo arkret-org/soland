@@ -701,6 +701,18 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'space'::text AS selector_kind, to_jsonb(space_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM space_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'space_parent'::text AS selector_kind, to_jsonb(space_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM space_parent_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'space_child_scope_policy'::text AS selector_kind, to_jsonb(space_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM space_child_scope_policy_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'realm_set_default_strand'::text AS selector_kind, NULL::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM realm_set_default_strand_current_results WHERE realm_id = $1 \
@@ -793,6 +805,29 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         ))
                     })?,
                 },
+                ("space", Some(space_id)) => arkret_wire::CurrentSelector::Space {
+                    space_id: serde_json::from_value(space_id).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Space selector identity is invalid: {error}"
+                        ))
+                    })?,
+                },
+                ("space_parent", Some(space_id)) => arkret_wire::CurrentSelector::SpaceParent {
+                    space_id: serde_json::from_value(space_id).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Space parent selector identity is invalid: {error}"
+                        ))
+                    })?,
+                },
+                ("space_child_scope_policy", Some(space_id)) => {
+                    arkret_wire::CurrentSelector::SpaceChildScopePolicy {
+                        space_id: serde_json::from_value(space_id).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored Space policy selector identity is invalid: {error}"
+                            ))
+                        })?,
+                    }
+                }
                 ("message_revision", Some(message_id)) => {
                     arkret_wire::CurrentSelector::MessageRevision {
                         message_id: serde_json::from_value(message_id).map_err(|error| {

@@ -52,6 +52,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::IdentityAccountabilityGrant => Ok(SelfEventRoute::AccountabilityGrant),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::StrandCreate
+        | EventKind::SpaceCreate
         | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
         | EventKind::MessageCreate
@@ -527,6 +528,7 @@ mod tests {
         }
         for kind in [
             EventKind::StrandCreate,
+            EventKind::SpaceCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
             EventKind::MemberState,
@@ -536,6 +538,7 @@ mod tests {
             EventKind::ModerationDecision,
             EventKind::ModerationDecisionLift,
             EventKind::InviteCreate,
+            EventKind::InviteThirdParty,
             EventKind::InviteRevoke,
             EventKind::InviteCancel,
             EventKind::InviteAccept,
@@ -557,6 +560,7 @@ mod tests {
             EventKind::MlsGenesis,
             EventKind::MlsCommit,
             EventKind::StrandCreate,
+            EventKind::SpaceCreate,
             EventKind::DirectConversationBound,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
@@ -567,6 +571,7 @@ mod tests {
             EventKind::ModerationDecision,
             EventKind::ModerationDecisionLift,
             EventKind::InviteCreate,
+            EventKind::InviteThirdParty,
             EventKind::InviteRevoke,
             EventKind::InviteCancel,
             EventKind::InviteAccept,

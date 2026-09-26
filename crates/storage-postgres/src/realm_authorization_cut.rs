@@ -615,6 +615,14 @@ impl RealmAuthorizationCut {
             circle_id: payload_id("circle_id"),
             ..OperationFacts::default()
         };
+        if event.kind == EventKind::SpaceCreate {
+            facts.space_kind = event
+                .payload
+                .get("object")
+                .and_then(|object| object.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+        }
         if event.kind == EventKind::RsvpSet {
             facts.object_kind = Some("strand".to_owned());
             facts.strand_id = payload_id("event_ref");
