@@ -3,8 +3,6 @@
 //! Surfaces:
 //! - `POST /_soland/gate/auth/dev-login` — dev-mode session credential issue
 //! - `POST /_arkret/gate/account/session-grants` — coauth session-grant bridge
-//! - `POST /_arkret/gate/account/session-grants/revoke` — spec
-//!   `ak.gate.account.command.revoke_session.v1`
 //! - `POST /_arkret/gate/account/logout` — spec `ak.gate.account.command.logout.v1`: revoke the
 //!   presented session credential + queued to-device while preserving device authorization
 //!
@@ -14,10 +12,6 @@
 //! - `authenticated_session` — the underlying session-lookup pipeline
 //! - `session_credential_hash` / `token_for` — credential derivation primitives
 
-use arkret_identifiers::DeviceId;
-use arkret_models_collaboration::account_lifecycle::{
-    SessionRevokeOutcome, SessionRevokeRequestBody,
-};
 use arkret_models_identity::AccountLogoutOutcome;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -55,7 +49,6 @@ mod sessions;
 // submodule's `use super::*;` glob can see them.
 pub(super) use login::account_existing_session_error;
 use login::dev_login;
-use logout::session_revoke;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
     active_delegated_sessions_for_actor, revoke_devices_for_actor, revoke_sessions_for_actor,
@@ -71,17 +64,6 @@ pub(super) fn router() -> Router {
 
 pub(super) fn protocol_account_router() -> Router {
     Router::with_path("account")
-        .push(
-            // ② (api-conventions.md §3.3): the Station no longer issues
-            // a local credential from the session grant. The client presents the
-            // ak.session.grant directly to `/_arkret/self/*` with a DPoP proof,
-            // so there is no `session-grants .post(...)` mount here — only `revoke`.
-            //
-            // Spec `account_auth` surface group: `ak.gate.account.command.revoke_session.v1`
-            // binds to `POST /_arkret/gate/account/session-grants/revoke`.
-            Router::with_path("session-grants")
-                .push(Router::with_path("revoke").post(session_revoke)),
-        )
         // Spec `ak.gate.account.command.logout.v1` — Station device
         // logout (account-lifecycle §4.1): revoke this session credential and
         // drop the device's queued to-device while preserving its durable
