@@ -51,6 +51,23 @@ struct CountRow {
     count: i64,
 }
 
+async fn device_list_position(
+    pool: &PgPool,
+    recipient: &arkret_wire::AccountId,
+    owner: &arkret_wire::AccountId,
+) -> i64 {
+    let recipient = arkret_wire::ActorId::account(recipient.clone())
+        .canonical_key()
+        .unwrap();
+    let owner = arkret_wire::ActorId::account(owner.clone())
+        .canonical_key()
+        .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COALESCE(MAX(channel_position),0) AS count FROM account_global_versions WHERE actor_key=$1 AND channel='device_lists' AND item_key=$2")
+        .bind::<Text,_>(recipient).bind::<Text,_>(owner)
+        .get_result::<CountRow>(&mut conn).await.unwrap().count
+}
+
 #[derive(diesel::QueryableByName)]
 struct DeviceCurrentRow {
     #[diesel(sql_type = Text)]
@@ -1361,10 +1378,16 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
         transaction: rejected,
         step_outcome: None,
     };
+    let before_rejected_list = device_list_position(&pool, &account, &account).await;
     let rejected_result = transactions
         .commit_revoke_command_terminal(rejected_write.clone())
         .await
         .unwrap();
+    assert_eq!(
+        device_list_position(&pool, &account, &account).await,
+        before_rejected_list,
+        "rejected revoke terminal does not publish a device-list change"
+    );
     assert_eq!(
         rejected_result
             .resource
@@ -1381,6 +1404,11 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .unwrap()
             .resource,
         rejected_result.resource
+    );
+    assert_eq!(
+        device_list_position(&pool, &account, &account).await,
+        before_rejected_list,
+        "rejected terminal replay does not publish a device-list change"
     );
     let mut changed_terminal = rejected_write;
     changed_terminal
@@ -2384,6 +2412,11 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         method: DidUrl::new(format!("{did}#{device_b}")).unwrap(),
         seed: seed_b,
     };
+    let before_proposal_list = device_list_position(&pool, &account, &account).await;
+    assert!(
+        before_proposal_list >= 2,
+        "genesis and accepted-device each publish once"
+    );
 
     // B, as an active device, may select the first series at this cut.
     let series_one =
@@ -2525,6 +2558,12 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         .await
         .unwrap();
 
+    assert_eq!(
+        device_list_position(&pool, &account, &account).await,
+        before_proposal_list,
+        "a pending proposal does not publish a revoked device list"
+    );
+
     // Pending: B stops authenticating and cannot move the pointer; A goes on.
     let pending_at = covering.committed_at;
     assert!(
@@ -2618,19 +2657,34 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
         result: SecurityRotationRevokeCommandResult::Accepted,
         decided_at,
     });
+    let terminal = RevokeCommandTerminalWrite {
+        step_outcome: Some(SecurityTransactionStepOutcomeRecord {
+            transaction_id: transaction_id.to_string(),
+            step: SecurityTransactionStep::Revoke,
+            canonical_request: b"revoke-worker-request".to_vec(),
+            response: serde_json::to_value(&accepted.resource).unwrap(),
+            participant_outcome: None,
+        }),
+        transaction: accepted,
+    };
     transactions
-        .commit_revoke_command_terminal(RevokeCommandTerminalWrite {
-            step_outcome: Some(SecurityTransactionStepOutcomeRecord {
-                transaction_id: transaction_id.to_string(),
-                step: SecurityTransactionStep::Revoke,
-                canonical_request: b"revoke-worker-request".to_vec(),
-                response: serde_json::to_value(&accepted.resource).unwrap(),
-                participant_outcome: None,
-            }),
-            transaction: accepted,
-        })
+        .commit_revoke_command_terminal(terminal.clone())
         .await
         .unwrap();
+    assert_eq!(
+        device_list_position(&pool, &account, &account).await,
+        before_proposal_list + 1,
+        "the accepted terminal publishes exactly one device-list change"
+    );
+    transactions
+        .commit_revoke_command_terminal(terminal)
+        .await
+        .unwrap();
+    assert_eq!(
+        device_list_position(&pool, &account, &account).await,
+        before_proposal_list + 1,
+        "exact terminal replay does not republish the device list"
+    );
     assert!(
         status
             .pcr_device_admission(&account, &device_b, decided_at)

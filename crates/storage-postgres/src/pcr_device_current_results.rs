@@ -3,7 +3,7 @@
 use arkret_models_collaboration::events_payloads::{
     DeviceAuthorizationBindingKind, DeviceAuthorizePayload, DeviceReanchorPayload,
 };
-use arkret_wire::{AccountId, CommitStreamRef, Event, EventKind, RealmCommit};
+use arkret_wire::{AccountId, ActorId, CommitStreamRef, Event, EventKind, RealmCommit};
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
@@ -25,6 +25,21 @@ struct PcrRow {
 
 fn invalid(message: impl Into<String>) -> PersistenceError {
     PersistenceError::SchemaViolation(message.into())
+}
+
+pub(crate) async fn publish_device_list_change_in_connection(
+    conn: &mut AsyncPgConnection,
+    account: &AccountId,
+) -> PersistenceResult<()> {
+    let owner = ActorId::account(account.clone())
+        .canonical_key()
+        .map_err(PersistenceError::database)?;
+    sql_query("CALL publish_pcr_device_list_change($1)")
+        .bind::<Text, _>(owner)
+        .execute(conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    Ok(())
 }
 
 async fn require_pcr(
@@ -241,6 +256,7 @@ pub(crate) async fn project_pcr_device_current_in_connection(
         }
         _ => unreachable!(),
     }
+    publish_device_list_change_in_connection(conn, account).await?;
     Ok(())
 }
 

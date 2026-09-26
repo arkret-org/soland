@@ -166,6 +166,11 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
                 StepAttemptSource::CoCommittedWithOutcome,
             )
             .await?;
+            crate::pcr_device_current_results::publish_device_list_change_in_connection(
+                conn,
+                &resource.account_id,
+            )
+            .await?;
         }
         SecurityRotationRevokeCommandResult::Rejected => {
             soland_storage::validate_security_transaction_update(&existing, &write.transaction)?;

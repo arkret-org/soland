@@ -54,7 +54,7 @@ DROP FUNCTION IF EXISTS account_device_interest_visible(TEXT,TEXT) CASCADE;
 DROP FUNCTION IF EXISTS immutable_device_inventory_station() CASCADE;
 DROP FUNCTION IF EXISTS current_device_inventory_station() CASCADE;
 DROP FUNCTION IF EXISTS project_account_global_membership() CASCADE;
-DROP FUNCTION IF EXISTS project_account_global_devices() CASCADE;
+DROP PROCEDURE IF EXISTS publish_pcr_device_list_change(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS refresh_account_device_interest(TEXT,TEXT) CASCADE;
 DROP FUNCTION IF EXISTS project_account_global_cas() CASCADE;
 DROP FUNCTION IF EXISTS project_account_global_notification() CASCADE;

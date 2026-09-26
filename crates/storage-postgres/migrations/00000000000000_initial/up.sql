@@ -4122,21 +4122,21 @@ BEGIN
         NOT COALESCE(account_device_interest_visible(recipient,owner),FALSE));
 END;
 $$;
-CREATE FUNCTION project_account_global_devices() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE owner TEXT; recipient TEXT;
+-- PCR typed current writes and an accepted revoke terminal call this once in
+-- their authority transaction. The devices inventory is not an authority for
+-- device-list changes.
+CREATE PROCEDURE publish_pcr_device_list_change(owner TEXT) LANGUAGE plpgsql AS $$
+DECLARE recipient TEXT;
 BEGIN
-    owner := '{"account_id":{"principal_id":'||to_json(NEW.actor_id)::TEXT||',"station_id":'||to_json(NEW.station_id)::TEXT||'},"kind":"account"}';
     PERFORM refresh_account_device_interest(owner,owner);
     FOR recipient IN SELECT DISTINCT a.actor_key FROM account_summary_current a JOIN account_summary_current b USING(realm_id) WHERE b.actor_key=owner LOOP
         IF recipient<>owner THEN PERFORM refresh_account_device_interest(recipient,owner); END IF;
     END LOOP;
-    RETURN NEW;
 END;
 $$;
-CREATE TRIGGER account_global_devices AFTER INSERT OR UPDATE ON devices FOR EACH ROW EXECUTE FUNCTION project_account_global_devices();
 -- Membership moves only the visibility of an owner's device list, so it
 -- publishes a change or removal only when that visibility flips. A device
--- change itself is published by refresh_account_device_interest.
+-- change itself is published by publish_pcr_device_list_change.
 CREATE FUNCTION reconcile_account_device_interest(recipient TEXT, owner TEXT) RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE hidden BOOLEAN := NOT COALESCE(account_device_interest_visible(recipient,owner),FALSE);
 DECLARE published BOOLEAN;

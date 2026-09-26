@@ -890,10 +890,216 @@ impl CommittedRealm {
     }
 }
 
-/// Device-list interest is derived from the account summary the authority
-/// transaction writes: both principals are admitted through their PCR
-/// genesis, share a committed ordinary Realm, and a committed leave removes
-/// the peer from the tracked set.
+/// Admit a signed PCR revoke proposal and its accepted SecurityRotation result.
+async fn admit_sync_revoke_terminal(
+    state: &AppState,
+    store: &dyn soland_storage::PersistenceStore,
+    fixture: &mut soland_test_support::pcr_genesis::PcrGenesisFixture,
+    target_device_id: &str,
+) {
+    use arkret_models_collaboration::events_payloads::{
+        ControllerBackupTrustAnchor, UnsignedKeyBackupActiveSeries,
+    };
+    use arkret_models_crypto::{
+        AcceptedSecurityTransactionStep, BackupObjectRef, BackupRotationBinding,
+        BackupRotationKind, BackupRotationPlan, PreparedEventBatchRequest, PreparedEventUnit,
+        SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+        SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
+        SecurityTransactionAcceptor, SecurityTransactionCreateRequest,
+        SecurityTransactionPreparedPlan, SecurityTransactionStep,
+    };
+    use arkret_wire::{
+        BackupId, BackupSeriesId, Base64UrlString, DeviceId, EventKind, Hash, TransactionId,
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    use soland_storage::{
+        AuthorityCommitTransaction, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
+        SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
+    };
+
+    let account = fixture.history.account.clone();
+    let authorizer = fixture.history.founding_device_id.clone();
+    let target = DeviceId::new(target_device_id.to_owned()).unwrap();
+    let at = fixture.history.commits.last().unwrap().committed_at;
+    let revoke = fixture.history.event(
+        EventKind::DeviceRevoke,
+        json!({
+            "device_id": target,
+            "revoked_by": authorizer,
+            "revoked_at": at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "reason": "security_rotation"
+        }),
+    );
+    fixture.history.append(vec![revoke.clone()]);
+    let covering = fixture.history.commits.last().unwrap().clone();
+    let old_series =
+        BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let new_series =
+        BackupSeriesId::new(format!("ak:backup_series:{}", uuid::Uuid::now_v7())).unwrap();
+    let backup_id = BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7())).unwrap();
+    let old_backup = BackupId::new(format!("ak:backup:{}", uuid::Uuid::now_v7())).unwrap();
+    let mut backup: arkret_models_crypto::KeyBackup = serde_json::from_value(json!({
+        "backup_id": backup_id, "actor_id": arkret_wire::ActorId::account(account.clone()),
+        "backup_kind": "secret_storage", "backup_version": "kb_1",
+        "created_at": "2026-09-09T00:00:00.000Z", "series_id": new_series, "series_seq": 0,
+        "encryption": {"recipient_method":"secret_storage_key","recipient_key_ref":"backup-key","aead":{"name":"xchacha20_poly1305","nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+        "domain_separation":{"subdomain":"secret_storage"},
+        "contents":[{"item_kind":"recovery_key_share","secret_id":"share"}],
+        "ciphertext":"AAAA", "ciphertext_digest":"sha256:709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+        "auth_data": {"device_id": authorizer, "verification_method": fixture.history.device_verification_method,
+            "signature_algorithm":"Ed25519", "signature":"AAAA", "device_authorize_event_id":fixture.history.events[1].event_id}
+    })).unwrap();
+    let signer = SigningKey::from_bytes(&fixture.history.founding_device_signing_seed);
+    backup.auth_data.signature =
+        Base64UrlString::new(arkret_canonical::base64url::base64url_encode(
+            signer
+                .sign(&backup.signing_payload_bytes().unwrap())
+                .to_bytes(),
+        ))
+        .unwrap();
+    let unsigned = UnsignedKeyBackupActiveSeries::new(
+        arkret_wire::ActorId::account(account.clone()),
+        arkret_models_crypto::BackupKind::SecretStorage,
+        new_series.clone(),
+        2,
+        vec![old_series.clone()],
+        covering.commit_id.clone(),
+        at,
+        fixture.history.device_verification_method.clone(),
+        ControllerBackupTrustAnchor {
+            authorize_event_id: fixture.history.events[1].event_id.clone(),
+            generation_ref: 1,
+        },
+    )
+    .unwrap();
+    let pointer_signature = signer
+        .sign(&unsigned.signing_payload_bytes().unwrap())
+        .to_bytes();
+    let pointer = unsigned
+        .attach_signature(
+            Base64UrlString::new(arkret_canonical::base64url::base64url_encode(
+                pointer_signature,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+    let pointer_event = fixture.history.event(
+        EventKind::KeyBackupActiveSeries,
+        serde_json::to_value(pointer).unwrap(),
+    );
+    let request = SecurityRotationTransactionCreateRequest::from_prepared_rotations(
+        TransactionId::new(format!("ak:transaction:{}", uuid::Uuid::now_v7())).unwrap(),
+        account.clone(),
+        authorizer.clone(),
+        at + chrono::TimeDelta::hours(1),
+        PreparedEventUnit::new(
+            arkret_canonical::DigestSuite::Sha256,
+            PreparedEventBatchRequest {
+                events: vec![revoke.clone()],
+            },
+        )
+        .unwrap(),
+        Hash::new(arkret_canonical::sha256_digest(b"sync-revoke-secret")).unwrap(),
+        vec![BackupRotationPlan {
+            binding: BackupRotationBinding {
+                backup_kind: BackupRotationKind::SecretStorage,
+                previous_series_id: old_series,
+                new_series_id: new_series,
+                new_backups: vec![BackupObjectRef {
+                    backup_id: backup.backup_id.clone(),
+                    ciphertext_digest: backup.ciphertext_digest.clone(),
+                }],
+                active_series_event_id: pointer_event.event_id.clone(),
+                old_backups: vec![BackupObjectRef {
+                    backup_id: old_backup,
+                    ciphertext_digest: Hash::new(arkret_canonical::sha256_digest(b"old-backup"))
+                        .unwrap(),
+                }],
+            },
+            new_backup_envelopes: vec![backup],
+            active_series_unit: PreparedEventUnit::new(
+                arkret_canonical::DigestSuite::Sha256,
+                PreparedEventBatchRequest {
+                    events: vec![pointer_event],
+                },
+            )
+            .unwrap(),
+        }],
+    )
+    .unwrap();
+    let plan = SecurityTransactionPreparedPlan::SecurityRotation(request.prepared_plan.clone());
+    let (initial, canonical_request) = SecurityTransactionCreateRequest::SecurityRotation(request)
+        .into_initial_resource(plan, at)
+        .unwrap();
+    let transaction_id = initial.transaction_id.clone();
+    let transactions = store.security_transactions();
+    transactions
+        .create(SecurityTransactionRecord {
+            resource: initial.clone(),
+            canonical_request: canonical_request.clone(),
+        })
+        .await
+        .unwrap();
+    let mut proposed = initial;
+    proposed.revoke_proposal = Some(SecurityRotationRevokeProposal {
+        proposal_event_id: revoke.event_id.clone(),
+        covering_commit_id: covering.commit_id.clone(),
+    });
+    transactions
+        .commit_revoke_proposal(RevokeProposalCommitWrite {
+            transaction: SecurityTransactionRecord {
+                resource: proposed,
+                canonical_request,
+            },
+            commit: AuthorityCommitTransaction {
+                expected_authority: fixture.unit.transactions[1].expected_authority.clone(),
+                event: revoke.clone(),
+                commit: covering.clone(),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: at,
+        })
+        .await
+        .unwrap();
+    let mut accepted = transactions
+        .get(transaction_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let decided_at = at + chrono::TimeDelta::seconds(1);
+    accepted
+        .resource
+        .accepted_steps
+        .push(AcceptedSecurityTransactionStep {
+            acceptor: SecurityTransactionAcceptor::Principal {
+                principal_id: state.service_core_id(),
+            },
+            accepted_at: decided_at,
+        });
+    accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
+        proposal_event_id: revoke.event_id,
+        covering_commit_id: covering.commit_id,
+        result: SecurityRotationRevokeCommandResult::Accepted,
+        decided_at,
+    });
+    transactions
+        .commit_revoke_command_terminal(RevokeCommandTerminalWrite {
+            step_outcome: Some(SecurityTransactionStepOutcomeRecord {
+                transaction_id: accepted.resource.transaction_id.to_string(),
+                step: SecurityTransactionStep::Revoke,
+                canonical_request: b"sync-revoke-terminal".to_vec(),
+                response: serde_json::to_value(&accepted.resource).unwrap(),
+                participant_outcome: None,
+            }),
+            transaction: accepted,
+        })
+        .await
+        .unwrap();
+}
+
+/// The PCR terminal updates the joined peer's device-list interest before leave.
 #[tokio::test]
 async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() {
     use soland_test_support::pcr_genesis::PcrGenesisFixture;
@@ -907,7 +1113,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         .admit_into(store.as_ref())
         .await
         .expect("caller PCR genesis admitted");
-    let actor_genesis = PcrGenesisFixture::new(state.service_did());
+    let mut actor_genesis = PcrGenesisFixture::new(state.service_did());
     actor_genesis
         .admit_into(store.as_ref())
         .await
@@ -949,13 +1155,58 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .await
     .expect("initial cursor parses");
 
+    let target = actor_genesis
+        .admit_accepted_device(store.as_ref(), [97; 32])
+        .await
+        .expect("second device admitted through PCR authority");
+    let mut incremental_body = body.clone();
+    incremental_body.after = initial.cursor.clone();
+    let after_authorize =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
+    assert_eq!(
+        serde_json::to_value(&after_authorize.device_lists).unwrap(),
+        json!({"changed_ids": [arkret_wire::ActorId::account(actor.clone())], "left_ids": []})
+    );
+    let authorize_cursor = parse_and_validate_sync_cursor(
+        after_authorize.cursor.as_deref().unwrap(),
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("authorize cursor parses");
+    admit_sync_revoke_terminal(
+        &state,
+        store.as_ref(),
+        &mut actor_genesis,
+        &target.authorization.device_id,
+    )
+    .await;
+    incremental_body.after = after_authorize.cursor.clone();
+    let after_revoke =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &authorize_cursor).await;
+    assert_eq!(
+        serde_json::to_value(&after_revoke.device_lists).unwrap(),
+        json!({"changed_ids": [arkret_wire::ActorId::account(actor.clone())], "left_ids": []}),
+        "an accepted PCR revoke terminal changes the visible owner's device list"
+    );
+    let revoke_cursor = parse_and_validate_sync_cursor(
+        after_revoke.cursor.as_deref().unwrap(),
+        &state,
+        Some(&session),
+        filter_value.as_ref(),
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .expect("revoke cursor parses");
+
     realm
         .member_state(store.as_ref(), &caller, &caller, "leave")
         .await;
-    let mut incremental_body = body.clone();
-    incremental_body.after = initial.cursor.clone();
+    incremental_body.after = after_revoke.cursor.clone();
     let after_scope_loss =
-        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &revoke_cursor).await;
     assert_eq!(
         serde_json::to_value(&after_scope_loss.device_lists).unwrap(),
         json!({"changed_ids": [], "left_ids": [arkret_wire::ActorId::account(actor)]}),
