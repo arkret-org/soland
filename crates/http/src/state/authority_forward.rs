@@ -313,6 +313,13 @@ pub(super) async fn forward_self_event(
     governance: &DidCoreId,
     submission: EventAdmissionSubmission,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    // Retain the producer's exact signed Event before any forwarding attempt.
+    // A transport failure leaves this row queued for an exact replay or a
+    // later committed replica; neither path makes it visible as accepted.
+    state
+        .authority_commits()
+        .queue_event(&submission.event, crate::wire::now())
+        .await?;
     let material = forwarded_genesis_material(state, &submission.event).await?;
     let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
     let request = PeerAuthorityForwardEventRequest::new(submission, material, evidence)
@@ -332,6 +339,10 @@ pub(super) async fn forward_self_mls(
     governance: &DidCoreId,
     submission: MlsCommitSubmission,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    state
+        .authority_commits()
+        .queue_event(&submission.commit_event, crate::wire::now())
+        .await?;
     let evidence = fresh_producer_device_evidence(state, &submission.commit_event).await?;
     let request =
         PeerAuthorityForwardMlsRequest::new(submission, evidence).map_err(wire_refusal)?;
@@ -357,7 +368,64 @@ async fn send_forward(
     )
     .await
     .map_err(temporarily_unavailable)?;
-    relay_governance_response(&request, response)
+    let outcome = relay_governance_response(&request, response)?;
+    if let AuthoritySubmitOutcome::Accepted { commit, .. } = &outcome {
+        let event = match &request {
+            PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
+                &request.event_submission.event
+            }
+            PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
+                &request.mls_submission.commit_event
+            }
+            _ => unreachable!("only authority forwards reach send_forward"),
+        };
+        verify_forwarded_commit(state, governance, event, commit).await?;
+    }
+    Ok(outcome)
+}
+
+async fn verify_forwarded_commit(
+    state: &AppState,
+    governance: &DidCoreId,
+    event: &Event,
+    commit: &arkret_wire::RealmCommit,
+) -> ServiceResult<()> {
+    let mut located = crate::routing::realm_join::resolve_verified_authority_of_service(
+        state,
+        &event.realm_id,
+        governance,
+    )
+    .await
+    .map_err(|error| temporarily_unavailable(format!("Realm authority: {error}")))?;
+    if arkret_identity::RealmAuthorityKeyDirectory::public_key(
+        &located.keys,
+        &commit.signature.verification_method,
+    )
+    .is_none()
+    {
+        crate::routing::realm_join::insert_method_key(
+            state,
+            &mut located.keys,
+            &commit.signature.verification_method,
+        )
+        .await
+        .map_err(|error| temporarily_unavailable(format!("RealmCommit signing key: {error}")))?;
+    }
+    soland_services::committed_receipt::verify_committed_event_receipt(
+        state.persistence(),
+        event,
+        commit,
+        soland_services::committed_receipt::CommitContinuity::Standalone,
+        &located.authority,
+        &located.keys,
+        &state.service_core_id(),
+        state
+            .projections()
+            .realm_digest_suite(event.realm_id.as_str()),
+    )
+    .await
+    .map_err(|error| temporarily_unavailable(format!("RealmCommit verification: {error}")))?;
+    Ok(())
 }
 
 /// The governance Station's registered refusal of a forward, as this
