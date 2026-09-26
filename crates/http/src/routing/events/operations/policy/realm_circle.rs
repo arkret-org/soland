@@ -56,22 +56,16 @@ pub(super) async fn validate_circle_create_policy(
             return Err("sidecar_create_denied");
         }
         let realm_id = operation.realm_id.as_str();
-        let (owner, members) = realm_owner_and_members(state, realm_id).await;
-        let verdict =
-            state
-                .authorization()
-                .check(soland_services::authorization::AuthorizationCheck {
-                    actor,
-                    action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
-                    resource: realm_id,
-                    realm_id,
-                    owner: owner.as_deref(),
-                    members: &members,
-                    resource_facets: &[],
-                });
-        if verdict.allowed
-            || members.iter().any(|member| member == &actor.to_string())
-            || policy_realm_member_joined(state, realm_id, actor)
+        if policy_realm_member_joined(state, realm_id, actor)
+            || crate::authz::actor_may(
+                state,
+                realm_id,
+                actor,
+                &[arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1],
+                realm_id,
+                operation.created_at,
+            )
+            .await?
         {
             return Ok(());
         }
@@ -94,26 +88,15 @@ pub(super) async fn validate_circle_create_policy(
         return Ok(());
     };
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action: arkret_wire::CapabilityActionId::CIRCLE_CREATE,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        &[arkret_wire::CapabilityActionId::CIRCLE_CREATE],
+        realm_id,
+        operation.created_at,
+    )
+    .await?
     {
         return Ok(());
     }
@@ -177,26 +160,15 @@ pub(super) async fn validate_circle_management_policy(
         return Err("sidecar_create_denied");
     }
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action,
-            resource: circle_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        &[action],
+        circle_id,
+        operation.created_at,
+    )
+    .await?
     {
         return Ok(());
     }

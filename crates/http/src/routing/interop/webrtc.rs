@@ -548,7 +548,7 @@ async fn handle_rtc_token(
         &body.actor_id,
         CapabilityActionId::CALL_JOIN,
     )
-    .await
+    .await?
     {
         return Err(AppError::capability_denied(
             "actor does not hold the ak.call.join capability for this realm",
@@ -670,7 +670,7 @@ async fn handle_rtc_token(
         &body.actor_id,
         CapabilityActionId::CALL_SCREEN_SHARE,
     )
-    .await;
+    .await?;
     let issue_request = MediaTokenIssueRequestBody {
         focus,
         issuer_kid: &issuer_kid,
@@ -1348,55 +1348,22 @@ mod tests {
 // the truth source; the spec body and this server MUST use the `ak.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
 
-/// Resolve the (authority-root controller, members) authorization principals
-/// for a Realm so the shared [`SolandAuthzEngine`] evaluates owner aggregate
-/// actions from sealed protocol state. `RealmMetadata.owner` is only an audit
-/// mirror and must never be an authorization source.
-async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<String>, Vec<String>) {
-    let projection = state.projections().snapshot();
-    let owner = projection
-        .realm_authority_root(realm_id)
-        .and_then(|root| root.get("controller_actor_id"))
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
-        .map(|actor| actor.to_string());
-    let members = projection
-        .members_of_realm(realm_id)
-        .into_iter()
-        .map(|member| member.member.clone())
-        .collect();
-    (owner, members)
-}
-
-/// Whether `actor` holds `action` in `realm_id` per the projected capability
-/// grants (`ak.component.capability.grant.v1`) and the engine default rules.
-/// The realm itself is the capability resource scope (call capabilities are
-/// realm-scoped in §3; a call is not a separate grant resource in v1).
+/// Whether `actor` holds `action` over `realm_id` in the durable
+/// authorization cut: a covering Capability Grant, or the effective
+/// `ak.realm.owner` aggregate where it covers the action. The Realm itself is
+/// the capability resource scope (call capabilities are Realm-scoped in §3; a
+/// call is not a separate grant resource in v1).
 pub(crate) async fn actor_has_call_capability(
     state: &AppState,
     realm_id: &str,
     actor: &arkret_wire::ActorId,
     action: &str,
-) -> bool {
-    let (owner, members) = call_authz_principals(state, realm_id).await;
-    let actor_key = actor.to_string();
-    let root_controller_holds_action = owner.as_deref() == Some(actor_key.as_str())
-        && arkret_schema::capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
-            .is_some_and(|owner_action| owner_action.grant_authority_actions.contains(&action));
-    if root_controller_holds_action {
-        return true;
-    }
-    state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+) -> Result<bool, AppError> {
+    Ok(
+        crate::authz::authorize(state, realm_id, actor, &[action], realm_id, now())
+            .await?
+            .allowed(),
+    )
 }
 
 fn is_valid_webrtc_session_id(value: &str) -> bool {

@@ -489,51 +489,34 @@ pub(super) async fn admin_query_audit(
 // Capabilities
 // ---------------------------------------------------------------------------
 
-fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
-    CapabilitySummary {
-        grant_id: grant.grant_id.clone(),
-        realm_id: (!grant.realm_id.is_empty()).then(|| grant.realm_id.clone()),
+/// The operator row of one durable Capability Grant current result. A grant
+/// whose subject is a claim condition names no single principal and has no
+/// row in this principal-keyed summary.
+fn capability_summary(
+    record: &soland_storage::CapabilityGrantCurrentResultRecord,
+) -> Option<CapabilitySummary> {
+    use arkret_models_collaboration::governance::grant_constraint::CapabilitySubject;
+    let grant = &record.value;
+    let CapabilitySubject::Actor(subject) = &grant.subject else {
+        return None;
+    };
+    let resource = (!grant.resources.is_empty())
+        .then(|| arkret_canonical::canonical_json_bytes(&grant.resources).ok())
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    Some(CapabilitySummary {
+        grant_id: record.grant_id.to_string(),
+        realm_id: Some(record.realm_id.to_string()),
         issuer_id: grant.issuer_id.signing_principal_id().clone(),
-        subject_id: grant.subject_id.signing_principal_id().clone(),
-        resource: (!grant.resource.is_empty()).then(|| grant.resource.clone()),
+        subject_id: subject.signing_principal_id().clone(),
+        resource,
         actions: grant.actions.clone(),
-        constraints: grant
-            .constraints
-            .iter()
-            .filter_map(|constraint| {
-                serde_json::to_value(constraint)
-                    .ok()
-                    .and_then(|value| serde_json::from_value(value).ok())
-            })
-            .collect(),
-        revoked: grant.revoked,
-        created_at: Some(grant.created_at),
-        // The admin summary reports the wire shape, so the runtime refs are
-        // mapped back to their typed form rather than surfaced as strings.
-        issuer_authority_refs: grant
-            .issuer_authority_refs
-            .iter()
-            .filter_map(|entry| match entry {
-                arkret_policy::authz::authority::IssuerAuthorityRef::Grant { grant_id } => {
-                    arkret_identifiers::GrantId::new(grant_id.clone()).ok().map(|grant_id| {
-                        arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
-                    })
-                }
-                arkret_policy::authz::authority::IssuerAuthorityRef::RealmRoot {
-                    realm_id,
-                    authority_event_ref,
-                    authority_generation,
-                } => Some(
-                    arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
-                        realm_id: realm_id.clone(),
-                        authority_event_ref: authority_event_ref.clone(),
-                        authority_generation: *authority_generation,
-                    },
-                ),
-            })
-            .collect(),
-        expires_at: arkret_policy::authz::authority::grant_effective_expiry(grant),
-    }
+        constraints: grant.constraints.clone(),
+        revoked: record.status != soland_storage::CapabilityGrantCurrentStatus::Active,
+        created_at: Some(grant.issued_at),
+        issuer_authority_refs: grant.issuer_authority_refs.clone(),
+        expires_at: soland_storage::capability_grant_expires_at(grant),
+    })
 }
 
 #[salvo::oapi::endpoint(
@@ -581,10 +564,12 @@ pub(super) async fn admin_list_capabilities(
     };
 
     let mut rows: Vec<CapabilitySummary> = state
-        .authorization()
-        .grants_snapshot()
+        .persistence()
+        .all_capability_grant_current_results()
+        .await
+        .map_err(|error| AppError::internal(format!("capability grant read failed: {error}")))?
         .iter()
-        .map(capability_summary)
+        .filter_map(capability_summary)
         .collect();
     if let Some(realm) = &realm_filter {
         rows.retain(|summary| summary.realm_id.as_deref() == Some(realm.as_str()));

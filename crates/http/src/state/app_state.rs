@@ -22,9 +22,6 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use soland_domain::reducer::ProjectionState;
 use soland_services::authority_commit::AuthorityCommitApplication;
-use soland_services::authorization::{
-    AuthorizationCheck, AuthorizationDecision, AuthorizationPort, AuthorizationService,
-};
 use soland_services::delivery::{DeliveryService, ObjectStoragePort};
 use soland_services::events::{
     EventQueryService, EventService, MlsGroupQueryService, MlsKeyPackageService,
@@ -58,7 +55,6 @@ use super::{
     AccountAuthorityDevicePairingPort, PrivateAccountAuthorityDevicePairing,
     VerifiedBindingRouteFetcher, did_resolver_chain,
 };
-use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
 use crate::verified_profiles::VerifiedProfileArtifactEntry;
 
@@ -157,7 +153,6 @@ pub struct AppState {
             >,
         >,
     >,
-    authorization: AuthorizationService,
     realm_directory: RealmDirectoryService,
     /// Deployment-local account registration policy. It uses the canonical
     /// account-operation DTO so the HTTP handler, audit payload, tests, and a
@@ -1079,7 +1074,6 @@ impl AppState {
             crate::runtime_settings::RuntimeSettings::from_config(&config),
         ));
 
-        let authorization = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
         let authority_commits =
             AuthorityCommitApplication::new(persistence.clone(), config.to_device_queue_capacity);
         let PersistenceEventServices {
@@ -1140,7 +1134,6 @@ impl AppState {
             service_identity,
             service_resolution_commitment,
             settings: initial_settings,
-            authorization,
             storage_mode,
             persistence,
             authority_commits,
@@ -1988,26 +1981,6 @@ impl AppState {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_authz(&self) -> &AuthorizationService {
-        &self.authorization
-    }
-
-    /// Fixture-only: publish a grant into the authz index the way accepting a
-    /// capability Event does. A test that seals a governance basis directly
-    /// never runs the accept path, so without this the authz surface denies
-    /// actions the sealed basis grants.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn upsert_projected_grant_for_test(&self, grant: arkret_policy::authz::authority::Grant) {
-        self.authorization().upsert_projected_grant(grant);
-    }
-
-    pub(crate) fn authorization(&self) -> &AuthorizationService {
-        &self.authorization
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
     pub fn test_object_key_for_sha256(&self, sha256: &str) -> String {
         self.deliveries.object_key_for_sha256(sha256)
     }
@@ -2118,79 +2091,6 @@ impl HydrationProjectionAdapter for RuntimeHydrationProjectionAdapter {
         record: &soland_services::events::AcceptedEvent,
     ) -> Option<arkret_event_draft::ProjectedEventOperation> {
         crate::routing::events::event_log::projection_operation_from_canonical_record(record)
-    }
-}
-
-impl AuthorizationPort for SolandAuthzEngine {
-    fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision {
-        let AuthorizationCheck {
-            actor,
-            action,
-            resource,
-            realm_id,
-            owner,
-            members,
-            resource_facets,
-        } = request;
-        let decision = self.check_for_authority(
-            actor,
-            action,
-            resource,
-            realm_id,
-            owner,
-            members,
-            resource_facets,
-        );
-        AuthorizationDecision {
-            allowed: decision.allowed,
-            reason: decision.reason,
-            reason_detail: decision.reason_detail,
-            grants: decision.grants,
-        }
-    }
-
-    fn upsert_projected_grant(&self, grant: arkret_policy::authz::authority::Grant) {
-        self.upsert_projected_grant(grant);
-    }
-
-    fn mark_projected_grant_revoked(&self, grant_id: &str) {
-        self.mark_projected_grant_revoked(grant_id);
-    }
-
-    fn mark_projected_grants_revoked_for_subject(&self, subject: &arkret_wire::ActorId) -> usize {
-        self.mark_projected_grants_revoked_for_subject(subject)
-    }
-
-    fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::authority::Grant> {
-        self.get_grant(grant_id)
-    }
-
-    fn grants_for_subject(
-        &self,
-        subject: &arkret_wire::ActorId,
-        realm_id: &str,
-    ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject(subject, realm_id)
-    }
-
-    fn grants_for_subject_at(
-        &self,
-        subject: &arkret_wire::ActorId,
-        realm_id: &str,
-        evaluated_at: chrono::DateTime<chrono::Utc>,
-    ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_at(subject, realm_id, evaluated_at)
-    }
-
-    fn grants_for_subject_all_realms(
-        &self,
-        subject: &arkret_wire::ActorId,
-    ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_all_realms(subject)
-    }
-
-    fn grants_snapshot(&self) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_snapshot()
     }
 }
 

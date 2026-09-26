@@ -70,6 +70,7 @@ pub struct PgPersistenceStore {
     morph_projections: PgMorphProjectionStore,
     relation_current_results: PgRelationCurrentResultStore,
     capability_grant_current_results: PgCapabilityGrantCurrentResultStore,
+    invite_current_results: crate::invite_current_results::PgInviteCurrentResultStore,
     publication_evidence: PgPublicationEvidenceStore,
     projection_events: PgProjectionEventStore,
     applets: PgAppletStore,
@@ -155,6 +156,9 @@ impl PgPersistenceStore {
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
             relation_current_results: PgRelationCurrentResultStore { pool: pool.clone() },
             capability_grant_current_results: PgCapabilityGrantCurrentResultStore {
+                pool: pool.clone(),
+            },
+            invite_current_results: crate::invite_current_results::PgInviteCurrentResultStore {
                 pool: pool.clone(),
             },
             publication_evidence: PgPublicationEvidenceStore { pool: pool.clone() },
@@ -429,6 +433,10 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 
     fn capability_grant_current_results(&self) -> &dyn CapabilityGrantCurrentResultStore {
         &self.capability_grant_current_results
+    }
+
+    fn invite_current_results(&self) -> &dyn soland_storage::InviteCurrentResultStore {
+        &self.invite_current_results
     }
 
     fn publication_evidence(&self) -> &dyn PublicationEvidenceStore {

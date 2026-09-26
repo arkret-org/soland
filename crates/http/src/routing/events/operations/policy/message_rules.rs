@@ -194,8 +194,9 @@ pub(super) fn validate_circle_scope_membership(
 
 /// applet-integration.md §4 / §4b — installing an Applet into a Realm is gated
 /// by the machine-readable `ak.realm.admin` capability: the actor submitting a
-/// `ak.applet.registration` MUST hold an active `ak.realm.admin` grant
-/// covering it, else reject `applet_registration_unauthorized`.
+/// `ak.applet.registration` MUST hold `ak.realm.admin` over the Realm in the
+/// durable authorization cut (a covering grant or the effective
+/// `ak.realm.owner` aggregate), else reject `applet_registration_unauthorized`.
 ///
 /// The dedicated install aggregate (`POST /_arkret/self/applets/install`)
 /// validates and submits the caller-signed registration Event through the same
@@ -212,26 +213,15 @@ pub(super) async fn validate_applet_registration_authz(
     }
     let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action: arkret_wire::CapabilityActionId::REALM_ADMIN,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        &[arkret_wire::CapabilityActionId::REALM_ADMIN],
+        realm_id,
+        operation.created_at,
+    )
+    .await?
     {
         return Ok(());
     }

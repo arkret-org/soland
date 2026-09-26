@@ -1011,37 +1011,26 @@ pub(super) async fn get_agent(
     // operation, so no response carries it.
     let mut view = agent_view_from_record(state, &record).await?;
 
-    // Surface every durable, unrevoked grant so terminal deactivation can
-    // author complete revocation coverage. The effective authz index supplies
-    // optional display metadata, but pending or expired grants must not
-    // disappear from the controller's revocation surface.
+    // Surface every durable `active` grant so terminal deactivation can
+    // author complete revocation coverage. Lifecycle alone decides the row:
+    // a grant whose window has not opened or has elapsed is still active and
+    // must not disappear from the controller's revocation surface.
     let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(agent_id.clone())
             .map_err(|error| AppError::internal(format!("invalid agent id: {error}")))?,
         state.service_core_id().clone(),
     ));
-    let effective_grants = state
-        .authorization()
-        .grants_for_subject_all_realms(&agent_actor)
-        .into_iter()
-        .map(|grant| {
-            let expires_at = arkret_policy::authz::authority::grant_effective_expiry(&grant);
-            ((grant.grant_id, grant.realm_id), expires_at)
-        })
-        .collect::<BTreeMap<_, _>>();
     view.grants = state
-        .projections()
-        .snapshot()
-        .unrevoked_grant_locations_for_subject(&agent_actor)
+        .persistence()
+        .active_capability_grants_for_subject(&agent_actor)
+        .await
+        .map_err(|error| AppError::internal(format!("agent grant read failed: {error}")))?
         .into_iter()
-        .filter_map(|(grant_id, realm_id)| {
-            let expires_at = effective_grants.get(&(grant_id.clone(), realm_id.clone()));
-            Some(GrantSnapshot {
-                grant_id: GrantId::new(grant_id).ok()?,
-                realm_id: RealmId::new(realm_id).ok()?,
-                grant_digest: None,
-                expires_at: expires_at.copied().flatten(),
-            })
+        .map(|record| GrantSnapshot {
+            expires_at: soland_storage::capability_grant_expires_at(&record.value),
+            grant_id: record.grant_id,
+            realm_id: record.realm_id,
+            grant_digest: None,
         })
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()

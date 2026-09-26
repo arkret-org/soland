@@ -134,12 +134,13 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
 
-    let grants = state
-        .authorization()
-        .grants_for_subject(&executed_by_actor, realm_id);
-    let grant = grants
+    let authorization =
+        applet_grant_holder_authorization(state, realm_id, &executed_by_actor).await?;
+    let grant = authorization
+        .grants
         .iter()
-        .find(|grant| grant.grant_id.as_str() == authorization_ref.as_str())
+        .map(|effective| &effective.grant)
+        .find(|grant| grant.id.as_str() == authorization_ref.as_str())
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -156,10 +157,10 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     }
     let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
     let resources =
-        delegated_applet_resource_candidates(state, object, realm_id, actor_id, &event_id);
+        delegated_applet_resource_candidates(&authorization.realm_id, object, &event_id);
     if !resources
         .iter()
-        .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
+        .any(|resource| soland_storage::grant_names_target(grant, &[kind], resource))
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -361,14 +362,16 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             continue;
         }
         selected_scope_live = true;
-        let installation_grants = state.authorization().grants_for_subject(
-            &arkret_wire::ActorId::service(record.package.service_id.clone()),
-            record.portal_realm_id.as_str(),
-        );
         if !bot_match
-            && !installation_grants
-                .iter()
-                .any(|grant| grant.grant_id.as_str() == expected_authorization)
+            && !applet_grant_holder_authorization(
+                state,
+                record.portal_realm_id.as_str(),
+                &arkret_wire::ActorId::service(record.package.service_id.clone()),
+            )
+            .await?
+            .grants
+            .iter()
+            .any(|effective| effective.grant.id.as_str() == expected_authorization)
         {
             continue;
         }
@@ -396,23 +399,29 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                     format!("invalid Applet producer ActorId: {error}"),
                 )
             })?;
-            let grants = state
-                .authorization()
-                .grants_for_subject(&producer, record.portal_realm_id.as_str());
+            let authorization = applet_grant_holder_authorization(
+                state,
+                record.portal_realm_id.as_str(),
+                &producer,
+            )
+            .await?;
             let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
             let resources =
-                delegated_applet_resource_candidates(state, object, realm_id, actor_id, &event_id);
-            let grant = grants.iter().find(|grant| {
-                authorization_ref.as_deref() == Some(grant.grant_id.as_str())
-                    && grant.actions.iter().any(|action| action == kind)
-                    && resources
-                        .iter()
-                        .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
-            });
+                delegated_applet_resource_candidates(&authorization.realm_id, object, &event_id);
+            let grant = authorization
+                .grants
+                .iter()
+                .map(|effective| &effective.grant)
+                .find(|grant| {
+                    authorization_ref.as_deref() == Some(grant.id.as_str())
+                        && resources.iter().any(|resource| {
+                            soland_storage::grant_names_target(grant, &[kind], resource)
+                        })
+                });
             let Some(grant) = grant else {
                 continue;
             };
-            crate::authz::validate_applet_authority_binding(
+            validate_applet_authority_binding(
                 grant,
                 record.applet_id.as_str(),
                 &producer,
@@ -544,11 +553,11 @@ pub(super) async fn validate_applet_registration_epoch_binding(
     object: &serde_json::Map<String, Value>,
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     package: &arkret_models_integration::AppletPackage,
-    grant: &crate::authz::Grant,
+    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
     applet_id: &str,
     executed_by: &arkret_wire::ActorId,
 ) -> Result<(), EventValidationError> {
-    crate::authz::validate_applet_authority_binding(
+    validate_applet_authority_binding(
         grant,
         applet_id,
         executed_by,
@@ -605,23 +614,67 @@ pub(super) async fn validate_applet_registration_epoch_binding(
     Ok(())
 }
 
-pub(super) fn applet_delegation_binding_reason(
-    error: crate::authz::AppletAuthorityBindingError,
-) -> &'static str {
+pub(super) fn applet_delegation_binding_reason(error: AppletAuthorityBindingError) -> &'static str {
     match error {
-        crate::authz::AppletAuthorityBindingError::Missing => {
-            "applet_registration_epoch_binding_missing"
-        }
-        crate::authz::AppletAuthorityBindingError::AppletIdMismatch => {
+        AppletAuthorityBindingError::Missing => "applet_registration_epoch_binding_missing",
+        AppletAuthorityBindingError::AppletIdMismatch => {
             "applet_registration_epoch_binding_mismatch"
         }
-        crate::authz::AppletAuthorityBindingError::ExecutedByMismatch => {
+        AppletAuthorityBindingError::ExecutedByMismatch => {
             "applet_registration_epoch_binding_mismatch"
         }
-        crate::authz::AppletAuthorityBindingError::RegistrationEpochMismatch => {
+        AppletAuthorityBindingError::RegistrationEpochMismatch => {
             "applet_registration_epoch_mismatch"
         }
     }
+}
+
+/// Why an Applet-delegated grant does not bind the executing Applet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AppletAuthorityBindingError {
+    Missing,
+    AppletIdMismatch,
+    ExecutedByMismatch,
+    RegistrationEpochMismatch,
+}
+
+/// `constraint-schema.md` §7.3: an Applet install grant carries exactly one
+/// `authority_control`/`applet_authority` binding naming the Applet, its
+/// executing actor and the registration epoch it was issued under.
+pub(super) fn validate_applet_authority_binding(
+    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+    applet_id: &str,
+    executed_by: &arkret_wire::ActorId,
+    registration_epoch: &str,
+) -> Result<(), AppletAuthorityBindingError> {
+    use arkret_models_collaboration::governance::grant_constraint::{
+        GrantConstraintKind, GrantConstraintSubkind,
+    };
+    let binding = grant
+        .constraints
+        .iter()
+        .find(|constraint| {
+            constraint.constraint_kind == GrantConstraintKind::AuthorityControl
+                && constraint.constraint_subkind == Some(GrantConstraintSubkind::AppletAuthority)
+        })
+        .ok_or(AppletAuthorityBindingError::Missing)?;
+    let (Some(binding_applet_id), Some(binding_executed_by), Some(binding_epoch)) = (
+        binding.applet_id.as_ref(),
+        binding.executed_by.as_ref(),
+        binding.registration_epoch.as_ref(),
+    ) else {
+        return Err(AppletAuthorityBindingError::Missing);
+    };
+    if binding_applet_id.as_str() != applet_id {
+        return Err(AppletAuthorityBindingError::AppletIdMismatch);
+    }
+    if binding_executed_by != executed_by {
+        return Err(AppletAuthorityBindingError::ExecutedByMismatch);
+    }
+    if binding_epoch.as_str() != registration_epoch {
+        return Err(AppletAuthorityBindingError::RegistrationEpochMismatch);
+    }
+    Ok(())
 }
 
 pub(super) fn applet_executor_in_subject_set(
@@ -671,33 +724,49 @@ pub(super) fn applet_namespace_pattern_is_wildcard(pattern: &str) -> bool {
     pattern.contains('*') || pattern.ends_with(':') || pattern.ends_with('/')
 }
 
+/// The resources an Applet-delegated Event acts on inside `realm_id`: the
+/// Realm, the Event itself, and every Realm object its payload targets.
 pub(super) fn delegated_applet_resource_candidates(
-    state: &AppState,
+    realm_id: &arkret_wire::RealmId,
     object: &serde_json::Map<String, Value>,
-    realm_id: &str,
-    actor_id: &str,
     event_id: &str,
-) -> Vec<String> {
-    let mut resources = Vec::new();
-    let projection = state.projections().snapshot();
-    append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, realm_id);
-    append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, actor_id);
-    append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, event_id);
+) -> Vec<arkret_wire::WireResourceSelector> {
+    let mut resources = vec![arkret_wire::WireResourceSelector::realm(realm_id.clone())];
+    resources.extend(crate::authz::resource_selector(realm_id, event_id));
     if let Some(payload) = object.get("payload").and_then(Value::as_object) {
         for field in ["strand_id", "message_id", "object_id", "target_ref"] {
             if let Some(value) = event_string_field(payload, &[field]) {
-                append_authz_resource_candidates(
-                    &mut resources,
-                    Some(&projection),
-                    realm_id,
-                    &value,
-                );
+                resources.extend(crate::authz::resource_selector(realm_id, &value));
             }
         }
     }
-    resources.sort();
-    resources.dedup();
     resources
+}
+
+/// The durable authorization of an Applet grant holder in `realm_id`, read at
+/// this instant.
+async fn applet_grant_holder_authorization(
+    state: &AppState,
+    realm_id: &str,
+    holder: &arkret_wire::ActorId,
+) -> Result<soland_storage::ActorRealmAuthorization, EventValidationError> {
+    let realm_id = arkret_wire::RealmId::new(realm_id.to_owned()).map_err(|_| {
+        event_validation_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            "Applet Event realm_id is invalid",
+        )
+    })?;
+    crate::authz::actor_realm_authorization(state, &realm_id, holder, chrono::Utc::now())
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, %realm_id, "applet grant read failed");
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "applet authorization store unavailable",
+            )
+        })
 }
 
 pub(super) fn event_proof_verification_method(

@@ -309,7 +309,7 @@ pub(super) fn agent_participation_action(operation: &Operation) -> Option<arkret
     kinds::canonical_kind_for_operation(operation)
 }
 
-pub(super) fn validate_agent_act_on_behalf_authorization_ref(
+pub(super) async fn validate_agent_act_on_behalf_authorization_ref(
     state: &AppState,
     operation: &Operation,
     agent_id: &str,
@@ -326,37 +326,70 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
     let Some(action) = agent_participation_action(operation) else {
         return Err("agent_act_on_behalf_authorization_action_unsupported");
     };
+    agent_grant_covers_operation(
+        state,
+        operation,
+        agent_id,
+        authorization_ref,
+        action.as_str(),
+        AgentGrantRefReasons {
+            actor_invalid: "agent_act_on_behalf_actor_id_invalid",
+            inactive: "agent_act_on_behalf_authorization_ref_inactive",
+            scope: "agent_act_on_behalf_authorization_ref_scope",
+        },
+    )
+    .await?;
+    Ok(authorization_ref.to_owned())
+}
+
+/// The refusal reasons of one Agent grant-reference check.
+struct AgentGrantRefReasons {
+    actor_invalid: &'static str,
+    inactive: &'static str,
+    scope: &'static str,
+}
+
+/// `authorization_ref` names a grant that is effective for the Agent Account
+/// in the operation's Realm at the durable authorization cut, names `action`,
+/// and has a resource covering the operation's target.
+async fn agent_grant_covers_operation(
+    state: &AppState,
+    operation: &Operation,
+    agent_id: &str,
+    authorization_ref: &str,
+    action: &str,
+    reasons: AgentGrantRefReasons,
+) -> Result<(), &'static str> {
+    let agent = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(agent_id.to_owned()).map_err(|_| reasons.actor_invalid)?,
+        operation.context.sender.route_service_id().clone(),
+    ));
+    let authorization = crate::authz::actor_realm_authorization(
+        state,
+        &operation.realm_id,
+        &agent,
+        operation.created_at,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(?error, realm_id = %operation.realm_id, "agent grant read failed");
+        arkret_wire::ErrorCode::INTERNAL_ERROR
+    })?;
+    let grant = authorization
+        .grants
+        .iter()
+        .find(|effective| effective.grant.id.as_str() == authorization_ref)
+        .ok_or(reasons.inactive)?;
     let resource = operation
         .object_id
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
-    let agent = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(agent_id.to_owned())
-            .map_err(|_| "agent_act_on_behalf_actor_id_invalid")?,
-        operation.context.sender.route_service_id().clone(),
-    ));
-    let grants = state
-        .authorization()
-        .grants_for_subject(&agent, operation.realm_id.as_str());
-    let Some(grant) = grants
-        .iter()
-        .find(|grant| grant.grant_id == authorization_ref)
-    else {
-        return Err("agent_act_on_behalf_authorization_ref_inactive");
-    };
-    let action_allowed = grant
-        .actions
-        .iter()
-        .any(|candidate| candidate == action.as_str());
-    let resource_expr = {
-        let projection = state.projections().snapshot();
-        Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
+    let target =
+        crate::authz::resource_selector(&operation.realm_id, resource).ok_or(reasons.scope)?;
+    if !soland_storage::grant_names_target(&grant.grant, &[action], &target) {
+        return Err(reasons.scope);
     }
-    .unwrap_or_else(|| resource.to_owned());
-    if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
-        return Err("agent_act_on_behalf_authorization_ref_scope");
-    }
-    Ok(authorization_ref.to_owned())
+    Ok(())
 }
 
 /// Authorize one act-on-behalf Operation by its controller confirmation.
@@ -666,7 +699,7 @@ async fn operation_agent_write_context(
     Ok(None)
 }
 
-pub(super) fn validate_agent_context_authorization_ref(
+pub(super) async fn validate_agent_context_authorization_ref(
     state: &AppState,
     operation: &Operation,
     agent_id: &str,
@@ -705,40 +738,22 @@ pub(super) fn validate_agent_context_authorization_ref(
     let Some(action) = agent_participation_action(operation) else {
         return Err("agent_context_authorization_action_unsupported");
     };
-    let resource = operation
-        .object_id
-        .as_deref()
-        .unwrap_or_else(|| operation.realm_id.as_str());
-    let agent = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(agent_id.to_owned())
-            .map_err(|_| "agent_context_actor_id_invalid")?,
-        operation.context.sender.route_service_id().clone(),
-    ));
-    let grants = state
-        .authorization()
-        .grants_for_subject(&agent, operation.realm_id.as_str());
-    let Some(grant) = grants
-        .iter()
-        .find(|grant| grant.grant_id == authorization_ref)
-    else {
-        return Err("agent_context_authorization_ref_inactive");
-    };
-    let action_allowed = grant
-        .actions
-        .iter()
-        .any(|candidate| candidate == action.as_str());
-    let resource_expr = {
-        let projection = state.projections().snapshot();
-        Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
-    }
-    .unwrap_or_else(|| resource.to_owned());
-    if !action_allowed || !crate::authz::resource_matches(&grant.resource, &resource_expr) {
-        return Err("agent_context_authorization_ref_scope");
-    }
-    Ok(())
+    agent_grant_covers_operation(
+        state,
+        operation,
+        agent_id,
+        authorization_ref,
+        action.as_str(),
+        AgentGrantRefReasons {
+            actor_invalid: "agent_context_actor_id_invalid",
+            inactive: "agent_context_authorization_ref_inactive",
+            scope: "agent_context_authorization_ref_scope",
+        },
+    )
+    .await
 }
 
-pub(super) fn validate_agent_context(
+pub(super) async fn validate_agent_context(
     state: &AppState,
     operation: &Operation,
     expected_agent_id: &str,
@@ -764,12 +779,8 @@ pub(super) fn validate_agent_context(
         "authorization_ref",
         "agent_context_authorization_ref_missing",
     )?;
-    validate_agent_context_authorization_ref(
-        state,
-        operation,
-        agent_id,
-        context_authorization_ref,
-    )?;
+    validate_agent_context_authorization_ref(state, operation, agent_id, context_authorization_ref)
+        .await?;
     if let Some(envelope_authorization_ref) = envelope_authorization_ref
         && context_authorization_ref != envelope_authorization_ref
     {
@@ -797,13 +808,11 @@ pub async fn validate_agent_reply_participation(
             return Err(reason);
         }
         let authorization_ref = if mode == AgentParticipationMode::ActOnBehalf {
-            Some(validate_agent_act_on_behalf_authorization_ref(
-                state, operation, &agent_id,
-            )?)
+            Some(validate_agent_act_on_behalf_authorization_ref(state, operation, &agent_id).await?)
         } else {
             None
         };
-        validate_agent_context(state, operation, &agent_id, authorization_ref.as_deref())?;
+        validate_agent_context(state, operation, &agent_id, authorization_ref.as_deref()).await?;
         let strand_id = operation.payload.get("strand_id").and_then(Value::as_str);
         let Some(scope_keys) = crate::routing::agent_participation::scope_keys_for_message(
             state,

@@ -532,6 +532,10 @@ impl soland_storage::EventProjectionStoreRegistry for FaultInjectingStore {
     ) -> &dyn soland_storage::CapabilityGrantCurrentResultStore {
         self.inner.capability_grant_current_results()
     }
+
+    fn invite_current_results(&self) -> &dyn soland_storage::InviteCurrentResultStore {
+        self.inner.invite_current_results()
+    }
     fn publication_evidence(&self) -> &dyn soland_storage::PublicationEvidenceStore {
         self.inner.publication_evidence()
     }

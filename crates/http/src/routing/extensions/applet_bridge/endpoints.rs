@@ -367,9 +367,8 @@ async fn install_endpoint(
 
     // Governance gate: the canonical install write projects a
     // `ak.realm.admin`-scoped registration onto the effective_scope realm.
-    // Authentication alone is insufficient â€” the actor MUST hold realm admin
-    // over that realm. P1 projected capability grants into the authz index, so
-    // `state.authorization().check` is authoritative here. fail-closed.
+    // Authentication alone is insufficient: the actor MUST hold realm admin
+    // over that realm in the durable authorization cut. fail-closed.
     require_realm_admin(state, &session, &basis.effective_scope).await?;
 
     let response = register_package_install(

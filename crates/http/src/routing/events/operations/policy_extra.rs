@@ -59,25 +59,43 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .or_else(|| operation.payload.get("target_ref"))
         .and_then(Value::as_str)
         .unwrap_or(realm_id);
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    let authz = state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action: arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
-            resource,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        });
-    if !authz.allowed {
+    let members = realm_members(state, realm_id);
+    // `ak.message.mention.broadcast` registers `max_operations`/`period` as
+    // required constraints, so only a grant that carries its quota beside a
+    // bounded temporal window may broadcast. The owner aggregate is not such
+    // a grant.
+    let Some(target) = arkret_wire::RealmId::new(realm_id.to_owned())
+        .ok()
+        .and_then(|realm| {
+            crate::authz::resource_selector(&realm, resource).map(|target| (realm, target))
+        })
+    else {
         return Err("ak.message.mention.broadcast required for audience_mention");
-    }
-    if !authz
+    };
+    let authorization =
+        crate::authz::actor_realm_authorization(state, &target.0, actor, operation.created_at)
+            .await
+            .map_err(|error| {
+                tracing::error!(?error, %realm_id, "capability authorization read failed");
+                arkret_wire::ErrorCode::INTERNAL_ERROR
+            })?;
+    let named = authorization
         .grants
         .iter()
-        .any(grant_has_broadcast_safety_constraints)
+        .filter(|effective| {
+            soland_storage::grant_names_target(
+                &effective.grant,
+                &[arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST],
+                &target.1,
+            )
+        })
+        .collect::<Vec<_>>();
+    if named.is_empty() {
+        return Err("ak.message.mention.broadcast required for audience_mention");
+    }
+    if !named
+        .iter()
+        .any(|effective| grant_has_broadcast_safety_constraints(&effective.grant))
     {
         return Err(
             "ak.message.mention.broadcast grant requires temporal and rate_limiting constraints",
@@ -147,14 +165,12 @@ async fn validate_sidecar_mention_subjects(
     }
 }
 
-pub(crate) async fn realm_owner_and_members(
-    state: &AppState,
-    realm_id: &str,
-) -> (Option<String>, Vec<String>) {
-    let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
-    let owner = meta.map(|meta| meta.owner);
+/// The joined Actor members of `realm_id` in the event-policy projection,
+/// excluding Agents whose membership base has lapsed. Used to size audience
+/// fanout; never an authorization source.
+pub(crate) fn realm_members(state: &AppState, realm_id: &str) -> Vec<String> {
     let projection = state.projections().snapshot();
-    let members = projection
+    projection
         .members_of_realm(realm_id)
         .into_iter()
         .filter(|member| serde_json::from_str::<arkret_wire::ActorId>(&member.member).is_ok())
@@ -165,78 +181,50 @@ pub(crate) async fn realm_owner_and_members(
                 || projection.effective_agent_membership_base(realm_id, &member.member)
         })
         .map(|member| member.member.clone())
-        .collect();
-    (owner, members)
+        .collect()
 }
 
-/// The single Realm-governance issuer predicate every review surface uses.
-///
-/// `authz/capabilities.md` section 3.2 makes the Realm owner aggregate an
-/// authorization source in its own right, so a governance decision is allowed
-/// when either of two independent, revocable-by-governance sources holds:
-///
-/// 1. `actor` speaks for the owner aggregate - it is the controller of the registered
-///    `ak.component.realm.authority_root.v1` cell, or it holds a live `ak.realm.owner` co-owner
-///    grant;
-/// 2. `actor` holds one of `actions` verbatim, through the projected capability-grant cells or the
-///    engine read index over them.
-///
-/// Realm membership and the discardable `realm_states[..].owner` presentation
-/// mirror are never inputs. Every caller goes through this function so the two
-/// legs cannot drift apart per surface.
+/// The single Realm-governance predicate every review surface uses: `actor`
+/// holds one of `actions` over the whole Realm in the durable authorization
+/// cut, through a covering grant or the effective `ak.realm.owner` aggregate
+/// (`authz/capabilities.md` §3.2). Realm membership and the discardable
+/// `realm_states[..].owner` presentation mirror are never inputs.
 pub(crate) async fn actor_governs_realm(
     state: &AppState,
     realm_id: &str,
     actor: &arkret_wire::ActorId,
     actions: &[&str],
     evaluation_basis: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    if state.projections().snapshot().actor_governs_realm(
-        realm_id,
-        actor,
-        actions,
-        evaluation_basis,
-    ) {
-        return true;
-    }
-    // The engine grant map is a read index over the same projected cells; it is
-    // still consulted so an index entry that has not been re-projected yet does
-    // not silently drop a governance capability.
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    actions.iter().any(|action| {
-        state
-            .authorization()
-            .check(soland_services::authorization::AuthorizationCheck {
-                actor,
-                action,
-                resource: realm_id,
-                realm_id,
-                owner: owner.as_deref(),
-                members: &members,
-                resource_facets: &[],
-            })
-            .allowed
-    })
+) -> Result<bool, &'static str> {
+    crate::authz::actor_may(state, realm_id, actor, actions, realm_id, evaluation_basis).await
 }
 
-pub(crate) fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant) -> bool {
+/// The registered broadcast floor of one grant: a temporal constraint with an
+/// expiry, a quota of positive `max_operations` per `period`, and no other
+/// constraint family.
+pub(crate) fn grant_has_broadcast_safety_constraints(
+    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+) -> bool {
+    use arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind;
     let has_temporal = grant.constraints.iter().any(|constraint| {
+        constraint.constraint_kind == GrantConstraintKind::Temporal
+            && constraint.expires_at.is_some()
+    });
+    let has_quota = grant.constraints.iter().any(|constraint| {
+        constraint.constraint_kind == GrantConstraintKind::Quota
+            && constraint.max_operations.is_some_and(|value| value > 0)
+            && constraint
+                .period
+                .as_deref()
+                .is_some_and(|period| !period.trim().is_empty())
+    });
+    let closed = grant.constraints.iter().all(|constraint| {
         matches!(
-            constraint,
-            crate::authz::GrantConstraint::Temporal {
-                expires_at: Some(_),
-                ..
-            }
+            constraint.constraint_kind,
+            GrantConstraintKind::Temporal | GrantConstraintKind::Quota
         )
     });
-    let has_rate_limit = grant.constraints.iter().any(|constraint| {
-        matches!(
-            constraint,
-            crate::authz::GrantConstraint::RateLimiting { max_operations, period }
-                if *max_operations > 0 && !period.trim().is_empty()
-        )
-    });
-    has_temporal && has_rate_limit
+    has_temporal && has_quota && closed
 }
 
 pub(crate) async fn effective_audience_mention_policy_for_realm(
@@ -387,7 +375,7 @@ mod actor_membership_context_tests {
         );
         directory.members.insert(principal);
         state.realm_directory().upsert(directory);
-        assert!(realm_owner_and_members(&state, realm_id).await.1.is_empty());
+        assert!(realm_members(&state, realm_id).is_empty());
         let now = chrono::Utc::now();
         state.test_projection().lock().members.insert(
             (realm_id.to_owned(), actor.to_string()),
@@ -403,9 +391,6 @@ mod actor_membership_context_tests {
                 reason: None,
             },
         );
-        assert_eq!(
-            realm_owner_and_members(&state, realm_id).await.1,
-            vec![actor.to_string()]
-        );
+        assert_eq!(realm_members(&state, realm_id), vec![actor.to_string()]);
     }
 }

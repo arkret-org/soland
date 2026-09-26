@@ -5,14 +5,14 @@
 //! - `GET  /_arkret/self/authz/effective-grants`  — direct grants visible to a subject
 //! - `GET  /_arkret/self/authz/invites`           — pending invites visible to the actor
 //!
-//! The actual authorisation engine lives in `src/authz.rs` (the
-//! `state.authorization()` field is shared). This surface is a local preflight/read
-//! projection; canonical Event admission remains authoritative.
+//! Grants and invites are read from their durable typed current results at one
+//! cut (`src/authz.rs`, the Invite typed current store). This surface is a
+//! local preflight/read; canonical Event admission remains authoritative.
 
-use std::collections::BTreeSet;
-
-use arkret_identifiers::{Hash, InviteId, RealmId};
-use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
+use arkret_identifiers::RealmId;
+use arkret_models_collaboration::governance::authorization::{
+    AuthzInviteList, EffectiveCapabilityGrantRow, GrantList,
+};
 use arkret_models_collaboration::governance::invite_addressing::InviteDelivery;
 use arkret_models_collaboration::governance::operation_wire::Invite;
 use arkret_wire::{AccountDataKey, AccountId, ActorId, AuthzDecision, DidCoreId, InviteState};
@@ -20,12 +20,12 @@ use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
-use crate::routing::spaces::space::realm_has_member_by_id;
+use crate::authz::CapabilityVerdict;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{AuthzCheckOutcome, AuthzCheckRequestBody};
@@ -59,103 +59,70 @@ async fn authz_check(
             "authorization checks may only target the authenticated actor",
         ));
     }
-    let resource = serde_json::to_value(&body.resource)
-        .map_err(|error| AppError::internal(format!("resource encode failed: {error}")))?;
-    let ParsedAuthzResource {
-        resource: resource_str,
-        realm_id,
-        facets: resource_facets,
-    } = parse_authz_resource(&resource);
-    // Look up Realm owner and members.
-    let (owner, members) = {
-        let owner = state
-            .realms()
-            .realm_metadata(&realm_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|m| m.owner);
-        let realms = state.realm_directory().snapshot();
-        let members = arkret_identifiers::RealmId::new(realm_id.clone())
-            .ok()
-            .and_then(|realm_id| realms.get(&realm_id))
-            .map(|realm| {
-                realm
-                    .members
-                    .iter()
-                    .map(|member| member.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        (owner, members)
+    let now = now();
+    let verdict = match body.resource.as_ref() {
+        _ if crate::authz::validate_runtime_capability_action(&body.action).is_err() => None,
+        Some(target) => match target.realm_id.as_ref() {
+            Some(realm_id) => {
+                let authorization =
+                    crate::authz::actor_realm_authorization(state, realm_id, &body.actor_id, now)
+                        .await?;
+                Some(soland_services::authorization::evaluate(
+                    &authorization,
+                    &[body.action.as_str()],
+                    target,
+                ))
+            }
+            None => None,
+        },
+        None => None,
     };
-    let resource_expr = {
-        let projection = state.projections().snapshot();
-        Some(projection.authz_resource_expr(&realm_id, &resource_str))
-    }
-    .unwrap_or_else(|| resource_str.clone());
-    let result = state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor: &body.actor_id,
-            action: &body.action,
-            resource: &resource_expr,
-            realm_id: &realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &resource_facets,
-        });
-    // The capability-engine map is an index over ordinary grant cells. Realm
-    // genesis deliberately does not mint a synthetic self-grant: the current
-    // controller instead holds effective `ak.realm.owner` through the
-    // registered authority-root cell. Fold that independent operational
-    // source into this local preflight, using the root's registry basis so an
-    // old Realm is never reinterpreted under today's aggregate coverage.
-    // Non-Event and root-control-only actions remain fail-closed.
-    let owner_aggregate_allowed = state
-        .projections()
-        .snapshot()
-        .realm_owner_operationally_covers_action(&realm_id, &body.actor_id, &body.action, now());
-    let allowed = result.allowed || owner_aggregate_allowed;
-    let matched_grants = result
-        .grants
-        .iter()
-        .map(|g| {
-            json!({
-                "grant_id": g.grant_id,
-                "subject": g.subject_id,
-                "actions": g.actions,
-                "resource": g.resource
+    let reason_code = match &verdict {
+        Some(verdict) if verdict.allowed() => None,
+        Some(CapabilityVerdict::ConstraintsNotSatisfied) => Some("constraints_not_satisfied"),
+        _ => Some(
+            crate::authz::validate_runtime_capability_action(&body.action)
+                .err()
+                .unwrap_or_else(|| crate::authz::default_deny_reason(&body.action)),
+        ),
+    };
+    let matched_grants = match &verdict {
+        Some(CapabilityVerdict::Granted(grants)) => grants
+            .iter()
+            .map(|effective| {
+                json!({
+                    "grant_id": effective.grant.id,
+                    "subject": effective.grant.subject,
+                    "actions": effective.grant.actions,
+                    "resources": effective.grant.resources,
+                })
             })
-        })
-        .collect::<Vec<_>>();
-    // The local authz engine yields a binary allow/deny verdict. spec §18 models
-    // the decision as a five-valued enum where `quarantine`/`require_review` are
-    // local moderation soft outcomes (not produced by this engine);
-    // a local refusal maps to the conservative terminal `hard_deny`.
-    let decision = if allowed {
+            .collect(),
+        _ => Vec::new(),
+    };
+    // The local preflight yields a binary allow/deny verdict. spec §18 models
+    // the decision as a five-valued enum where `quarantine`/`require_review`
+    // are local moderation soft outcomes (not produced here); a local refusal
+    // maps to the conservative terminal `hard_deny`.
+    let decision = if reason_code.is_none() {
         AuthzDecision::Allow
     } else {
         AuthzDecision::HardDeny
     };
-    let reason_code = (!allowed).then(|| result.reason.clone());
-    // Trace/diagnostic data lives in the spec-allowed `policy_results` array
-    // rather than a private `decision_trace` field.
     let policy_results = vec![json!({
         "actor_id": body.actor_id,
         "action": body.action,
-        "resource": resource_expr,
-        "realm_id": realm_id,
-        "reason_detail": if owner_aggregate_allowed {
-            Some("realm_owner_aggregate")
-        } else {
-            result.reason_detail.as_deref()
+        "resource": body.resource,
+        "reason_detail": match &verdict {
+            Some(CapabilityVerdict::RealmOwner) => Some("realm_owner_aggregate"),
+            Some(CapabilityVerdict::Granted(_)) => Some("explicit_grant"),
+            _ => None,
         },
         "constraints": [],
         "missing_proofs": [],
         "cache": {
-            "mode": "in_memory",
-            "frontier": Value::Null
+            "mode": "durable_current",
+            "evaluated_at": arkret_canonical::format_timestamp_canonical(now),
         }
     })];
     json_ok(AuthzCheckOutcome {
@@ -169,110 +136,15 @@ async fn authz_check(
         last_known_checkpoint_age_ms: None,
         authority_status: None,
         cache_expires_at: None,
-        reason_code: reason_code.map(|code| arkret_wire::ReasonCode::from_wire(&code)),
+        reason_code: reason_code.map(arkret_wire::ReasonCode::from_wire),
         retry_after_ms: None,
         obligations: Vec::new(),
     })
 }
 
-fn facet_names_from_value(value: Option<&serde_json::Value>) -> Vec<String> {
-    match value {
-        Some(serde_json::Value::Array(values)) => values
-            .iter()
-            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-            .collect(),
-        Some(serde_json::Value::Object(values)) => values.keys().cloned().collect(),
-        Some(serde_json::Value::String(value)) => vec![value.clone()],
-        _ => Vec::new(),
-    }
-}
-
-struct ParsedAuthzResource {
-    resource: String,
-    realm_id: String,
-    facets: Vec<String>,
-}
-
-fn parse_authz_resource(resource: &Value) -> ParsedAuthzResource {
-    if let Some(s) = resource.as_str() {
-        return ParsedAuthzResource {
-            resource: s.to_owned(),
-            realm_id: s.to_owned(),
-            facets: Vec::new(),
-        };
-    }
-    let Some(obj) = resource.as_object() else {
-        return ParsedAuthzResource {
-            resource: String::new(),
-            realm_id: String::new(),
-            facets: Vec::new(),
-        };
-    };
-    let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("realm");
-    let realm_id = obj
-        .get("realm_id")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            (kind == "realm")
-                .then(|| {
-                    obj.get("id")
-                        .and_then(|v| v.as_str())
-                        .map(ToOwned::to_owned)
-                })
-                .flatten()
-        })
-        .unwrap_or_default();
-    let resource = selector_resource_id(obj, kind, &realm_id);
-    ParsedAuthzResource {
-        resource,
-        realm_id,
-        facets: facet_names_from_value(obj.get("facets")),
-    }
-}
-
-fn selector_resource_id(
-    obj: &serde_json::Map<String, Value>,
-    kind: &str,
-    realm_id: &str,
-) -> String {
-    if kind == "realm" {
-        return obj
-            .get("id")
-            .and_then(Value::as_str)
-            .or_else(|| obj.get("realm_id").and_then(Value::as_str))
-            .unwrap_or(realm_id)
-            .to_owned();
-    }
-    let kind_specific = match kind {
-        "space" => "space_id",
-        "circle" => "circle_id",
-        "strand" => "strand_id",
-        "message" => "message_id",
-        "morph" => "morph_id",
-        "relation" => "relation_id",
-        "view" => "view_id",
-        "event" => "event_id",
-        "actor" => "actor_id",
-        "schema" => "schema_ref",
-        "policy" => "policy_id",
-        "invite" => "invite_id",
-        "blob" => "blob_ref",
-        "object" => "object_ref",
-        _ => "id",
-    };
-    obj.get("id")
-        .and_then(Value::as_str)
-        .or_else(|| obj.get(kind_specific).and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{kind}:{realm_id}"))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-
-    use super::{capability_resource_selector, parse_authz_resource};
 
     #[test]
     fn effective_grants_query_preserves_explicit_actor_id_variant_and_credential_default() {
@@ -377,100 +249,6 @@ mod tests {
             .is_err()
         );
     }
-
-    #[test]
-    fn invite_account_comparison_rejects_principal_and_other_station() {
-        let account = super::AccountId::new(
-            super::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        );
-        assert!(super::stored_invite_account_matches(
-            &account.to_string(),
-            &account
-        ));
-        assert!(!super::stored_invite_account_matches(
-            account.principal_id.as_str(),
-            &account
-        ));
-        let foreign = super::AccountId::new(
-            account.principal_id.clone(),
-            super::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
-        );
-        assert!(!super::stored_invite_account_matches(
-            &foreign.to_string(),
-            &account
-        ));
-    }
-
-    #[test]
-    fn realm_selector_uses_realm_id_as_resource() {
-        let parsed = parse_authz_resource(&json!({
-            "kind": "realm",
-            "realm_id": "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy"
-        }));
-        assert_eq!(
-            parsed.realm_id,
-            "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy"
-        );
-        assert_eq!(
-            parsed.resource,
-            "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy"
-        );
-    }
-
-    #[test]
-    fn object_selector_uses_kind_specific_typed_id() {
-        let parsed = parse_authz_resource(&json!({
-            "kind": "strand",
-            "realm_id": "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy",
-            "strand_id": "ak:strand:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M"
-        }));
-        assert_eq!(
-            parsed.realm_id,
-            "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy"
-        );
-        assert_eq!(
-            parsed.resource,
-            "ak:strand:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M"
-        );
-    }
-
-    #[test]
-    fn persisted_resource_is_reencoded_with_closed_selector_fields() {
-        const REALM: &str = "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy";
-        const CIRCLE: &str = "ak:circle:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M";
-        const STRAND: &str = "ak:strand:AZ6GqZWWvnQ2KFwbBD-MenomzWNz-31MUAuKzBXIP0zv";
-
-        let realm =
-            serde_json::to_value(capability_resource_selector(REALM, REALM).unwrap()).unwrap();
-        assert_eq!(realm, json!({"kind": "realm", "realm_id": REALM}));
-
-        let circle =
-            serde_json::to_value(capability_resource_selector(REALM, CIRCLE).unwrap()).unwrap();
-        assert_eq!(
-            circle,
-            json!({"kind": "circle", "realm_id": REALM, "circle_id": CIRCLE})
-        );
-
-        let strand =
-            serde_json::to_value(capability_resource_selector(REALM, STRAND).unwrap()).unwrap();
-        assert_eq!(
-            strand,
-            json!({"kind": "strand", "realm_id": REALM, "strand_id": STRAND})
-        );
-
-        let object =
-            serde_json::to_value(capability_resource_selector(REALM, "document:summary").unwrap())
-                .unwrap();
-        assert_eq!(
-            object,
-            json!({
-                "kind": "object",
-                "realm_id": REALM,
-                "object_ref": "document:summary"
-            })
-        );
-    }
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.authz.grants.read.effective", tags("access"))]
@@ -508,31 +286,21 @@ async fn effective_grants(
     let caller_can_query_subject = effective_grants_subject_allowed(
         &subject_actor,
         &session_actor,
-        session_owns_realm(state, &session_actor, realm_id.as_str()).await,
+        session_owns_realm(state, &session_actor, &realm_id).await?,
     );
     if !caller_can_query_subject {
         return Err(AppError::capability_denied(
             "effective-grants subject requires self or realm owner scope",
         ));
     }
-    let effective_grant_ids = state
-        .authorization()
-        .grants_for_subject_at(&subject_actor, realm_id.as_str(), evaluated_at)
+    let authorization =
+        crate::authz::actor_realm_authorization(state, &realm_id, &subject_actor, evaluated_at)
+            .await?;
+    let grants = authorization
+        .grants
         .into_iter()
-        .map(|grant| grant.grant_id)
-        .collect::<BTreeSet<_>>();
-    let snapshot = state
-        .persistence()
-        .capability_grant_current_results(&realm_id)
-        .await
-        .map_err(|error| AppError::internal(format!("effective grant snapshot failed: {error}")))?;
-    let grants = soland_storage::effective_capability_grant_rows(
-        snapshot,
-        &effective_grant_ids,
-        &subject_actor,
-        &realm_id,
-    )
-    .map_err(|error| AppError::internal(format!("effective grant projection failed: {error}")))?;
+        .map(EffectiveCapabilityGrantRow::from)
+        .collect::<Vec<_>>();
     let state_digest = soland_storage::effective_capability_grant_state_digest(&grants)
         .map_err(|error| AppError::internal(format!("effective grant digest failed: {error}")))?;
     soland_http::result::json_ok(GrantList {
@@ -567,11 +335,18 @@ fn effective_grants_subject_allowed(
     subject == session_actor || session_owns_realm
 }
 
-async fn session_owns_realm(state: &AppState, actor: &ActorId, realm_id: &str) -> bool {
-    state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, now())
+/// Whether `actor` holds the effective `ak.realm.owner` aggregate of
+/// `realm_id` at this instant, read from the durable authorization cut.
+async fn session_owns_realm(
+    state: &AppState,
+    actor: &ActorId,
+    realm_id: &RealmId,
+) -> Result<bool, AppError> {
+    Ok(
+        crate::authz::actor_realm_authorization(state, realm_id, actor, now())
+            .await?
+            .holds_realm_owner(),
+    )
 }
 
 fn invite_subject_account(
@@ -595,47 +370,6 @@ fn invite_subject_account(
     }
 }
 
-fn stored_invite_account_matches(stored: &str, account: &AccountId) -> bool {
-    serde_json::from_str::<AccountId>(stored).is_ok_and(|stored| &stored == account)
-}
-
-fn capability_resource_selector(
-    realm_id: &str,
-    resource: &str,
-) -> Result<arkret_wire::resource_selector::WireResourceSelector, AppError> {
-    let value = if resource == "*" {
-        json!({
-            "kind": "realm",
-            "realm_id": realm_id,
-        })
-    } else if resource == realm_id || resource.starts_with("ak:realm:") {
-        json!({
-            "kind": "realm",
-            "realm_id": resource,
-        })
-    } else if resource.starts_with("ak:circle:") {
-        json!({
-            "kind": "circle",
-            "realm_id": realm_id,
-            "circle_id": resource,
-        })
-    } else if resource.starts_with("ak:strand:") {
-        json!({
-            "kind": "strand",
-            "realm_id": realm_id,
-            "strand_id": resource,
-        })
-    } else {
-        json!({
-            "kind": "object",
-            "realm_id": realm_id,
-            "object_ref": resource,
-        })
-    };
-    serde_json::from_value(value)
-        .map_err(|error| AppError::internal(format!("resource selector encode failed: {error}")))
-}
-
 #[salvo::oapi::endpoint(operation_id = "ak.self.authz.invites.read.list", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.invites.read.list.v1"))]
 async fn invites(
@@ -653,14 +387,17 @@ async fn invites(
         &session_actor,
     )?;
     let subject_actor = ActorId::account(subject.clone());
-    let realm_filter = query_param(req, "realm_id");
+    let realm_filter = query_param(req, "realm_id")
+        .map(|value| {
+            RealmId::new(value).map_err(|_| AppError::param_invalid("realm_id is invalid"))
+        })
+        .transpose()?;
     let subject_is_self = subject_actor == session_actor;
-    let caller_owns_realm = if subject_is_self {
-        false
-    } else if let Some(realm_id) = realm_filter.as_deref() {
-        session_owns_realm(state, &session_actor, realm_id).await
-    } else {
-        false
+    let caller_owns_realm = match realm_filter.as_ref() {
+        Some(realm_id) if !subject_is_self => {
+            session_owns_realm(state, &session_actor, realm_id).await?
+        }
+        _ => false,
     };
     // invite-addressing.md §7: the accepted Realm Event establishes the
     // shared Invite lifecycle, but only the notify branch materializes the
@@ -685,48 +422,28 @@ async fn invites(
             delivery
                 .into_iter()
                 .flat_map(|delivery| delivery.delivery_entries)
-                .map(|entry| entry.invite_id.to_string())
+                .map(|entry| entry.invite_id)
                 .collect::<std::collections::BTreeSet<_>>(),
         )
     } else {
         None
     };
     let now = now();
-    let mut invite_list = Vec::new();
-    for invite in state
-        .realm_invites()
-        .snapshot_all()
+    let invite_list = state
+        .persistence()
+        .open_directed_invites_for_invitee(&subject, realm_filter.as_ref())
         .await
-        .map_err(|error| AppError::internal(format!("invite projection read failed: {error}")))?
+        .map_err(|error| AppError::internal(format!("invite current read failed: {error}")))?
         .into_iter()
-    {
-        if !matches!(invite.status.as_str(), "pending" | "claimed")
-            || realm_filter
-                .as_deref()
-                .is_some_and(|realm_id| invite.realm_id.as_str() != realm_id)
-            || !invite
-                .invitee_id
-                .as_deref()
-                .is_some_and(|stored| stored_invite_account_matches(stored, &subject))
-            || holder_delivery_ids.as_ref().is_some_and(|ids| {
-                invite.third_party_invite.is_none() && !ids.contains(&invite.invite_id)
-            })
-            || (!subject_is_self
-                && !session_actor.as_account_id().is_some_and(|account| {
-                    stored_invite_account_matches(&invite.inviter_id, account)
-                })
-                && !caller_owns_realm)
-            || invite
-                .expires_at
-                .is_some_and(|expires_at| expires_at <= now)
-        {
-            continue;
-        }
-        if realm_has_member_by_id(state, &invite.realm_id, &subject_actor.to_string()).await {
-            continue;
-        }
-        invite_list.push(invite_record_to_sdk(invite)?);
-    }
+        .filter(|invite| {
+            invite.expires_at > now
+                && holder_delivery_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&invite.invite_id))
+                && (subject_is_self || invite.inviter == session_actor || caller_owns_realm)
+        })
+        .map(directed_invite_to_sdk)
+        .collect::<Result<Vec<_>, _>>()?;
     soland_http::result::json_ok(AuthzInviteList {
         invites: invite_list,
         next_cursor: None,
@@ -734,47 +451,28 @@ async fn invites(
     })
 }
 
-fn invite_record_to_sdk(
-    invite: soland_services::events::RealmInviteState,
+fn directed_invite_to_sdk(
+    invite: soland_storage::DirectedInviteCurrent,
 ) -> Result<Invite, AppError> {
-    let introduction_evidence_digest = invite
-        .introduction_evidence_digest
-        .clone()
-        .and_then(|digest| Hash::new(digest).ok());
-    let expires_at = invite
-        .expires_at
-        .unwrap_or_else(|| invite.created_at + chrono::Duration::days(7));
+    let inviter_account_id = invite
+        .inviter
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| AppError::internal("stored Invite inviter is not an Account"))?;
+    let pending = invite.state == InviteState::Pending;
     Ok(Invite {
         schema: arkret_wire::SchemaId::INVITE_V1.to_owned(),
-        id: InviteId::new(invite.invite_id.clone())
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        realm_id: RealmId::new(invite.realm_id.clone())
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        inviter_account_id: serde_json::from_str(&invite.inviter_id)
-            .map_err(|error| AppError::internal(format!("stored inviter account id: {error}")))?,
-        invitee_account_id: invite
-            .invitee_id
-            .map(|value| serde_json::from_str(&value))
-            .transpose()
-            .map_err(|error| AppError::internal(format!("stored invitee account id: {error}")))?,
-        introduction_evidence_digest,
-        third_party_invite: invite.third_party_invite,
+        id: invite.invite_id,
+        realm_id: invite.realm_id,
+        inviter_account_id,
+        invitee_account_id: Some(invite.invitee_account_id),
+        introduction_evidence_digest: Some(invite.introduction_evidence_digest),
+        third_party_invite: None,
         capability_grant_refs: Vec::new(),
-        expires_at,
-        state: invite_state_from_record(&invite.status),
+        expires_at: invite.expires_at,
+        state: invite.state,
         created_at: invite.created_at,
         updated_by: None,
-        updated_at: invite.updated_at,
+        updated_at: (!pending).then_some(invite.state_updated_at),
     })
-}
-
-fn invite_state_from_record(status: &str) -> InviteState {
-    match status {
-        "accepted" => InviteState::Accepted,
-        "claimed" => InviteState::Claimed,
-        "rejected" => InviteState::Rejected,
-        "revoked" => InviteState::Revoked,
-        "expired" => InviteState::Expired,
-        _ => InviteState::Pending,
-    }
 }

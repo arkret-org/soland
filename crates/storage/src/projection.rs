@@ -217,53 +217,183 @@ impl std::str::FromStr for CapabilityGrantCurrentStatus {
     }
 }
 
-/// Join one atomic durable current-result snapshot with the current
-/// authorization projection. Rows absent from either side, terminal rows, and
-/// rows for another exact ActorId are omitted uniformly.
-pub fn effective_capability_grant_rows(
-    snapshot: Vec<CapabilityGrantCurrentResultRecord>,
-    effective_grant_ids: &std::collections::BTreeSet<String>,
-    subject_actor: &arkret_wire::ActorId,
-    realm_id: &arkret_wire::RealmId,
-) -> PersistenceResult<
-    Vec<arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow>,
-> {
-    use arkret_models_collaboration::governance::grant_constraint::{
-        CapabilityGrantStatus, CapabilitySubject,
-    };
+/// One Capability Grant effective for one exact actor, paired with the exact
+/// revision of the same `capability_grant` current-result row.
+#[derive(Clone, Debug)]
+pub struct EffectiveActorGrant {
+    pub grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+    pub revision: arkret_wire::CurrentRevision,
+}
 
-    let mut rows = Vec::new();
-    for record in snapshot {
-        if record.status != CapabilityGrantCurrentStatus::Active {
-            continue;
-        }
-        let grant = record.value;
-        if grant.id != record.grant_id
-            || grant.realm_id.as_ref() != Some(realm_id)
-            || grant.status != CapabilityGrantStatus::Active
-        {
-            return Err(PersistenceError::Database(
-                "stored active Capability Grant disagrees with its current-result row".to_owned(),
-            ));
-        }
-        let subject_matches = match &grant.subject {
-            CapabilitySubject::Actor(actor) => actor == subject_actor,
-            // The authorization projection evaluated the selector for this exact
-            // actor. Its effective-id set is therefore the subject proof for a
-            // condition grant; do not try to evaluate the selector a second time.
-            CapabilitySubject::Condition(_) => true,
-        };
-        if !subject_matches || !effective_grant_ids.contains(grant.id.as_str()) {
-            continue;
-        }
-        rows.push(
-            arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow {
-                grant,
-                revision: record.revision,
-            },
-        );
+/// The Realm authorization inputs of one exact actor, derived from one storage
+/// cut of the Realm-stream typed current results (`realm_authority_root` and
+/// every `capability_grant` of the Realm).
+///
+/// `grants` holds every active grant whose subject is exactly `actor`, whose
+/// temporal window contains `evaluated_at`, and whose issuer chain descends
+/// intact from the current authority root. Membership is never an input.
+#[derive(Clone, Debug)]
+pub struct ActorRealmAuthorization {
+    pub realm_id: arkret_wire::RealmId,
+    pub actor: arkret_wire::ActorId,
+    pub evaluated_at: chrono::DateTime<chrono::Utc>,
+    pub root_controller: bool,
+    pub grants: Vec<EffectiveActorGrant>,
+}
+
+impl ActorRealmAuthorization {
+    /// The effective grants that alone authorize one of `actions` on
+    /// `target`: they name the action, one of their resources covers the
+    /// target, and every constraint they carry is discharged by the temporal
+    /// window already applied (see [`grant_covers`]).
+    pub fn covering_grants<'a>(
+        &'a self,
+        actions: &'a [&'a str],
+        target: &'a arkret_wire::WireResourceSelector,
+    ) -> impl Iterator<Item = &'a EffectiveActorGrant> + 'a {
+        self.grants
+            .iter()
+            .filter(move |effective| grant_covers(&effective.grant, actions, target))
     }
-    Ok(rows)
+
+    /// Whether an effective grant names one of `actions` on `target` but
+    /// carries a constraint this evaluator cannot discharge.
+    pub fn has_constrained_grant(
+        &self,
+        actions: &[&str],
+        target: &arkret_wire::WireResourceSelector,
+    ) -> bool {
+        self.grants
+            .iter()
+            .any(|effective| grant_names_target(&effective.grant, actions, target))
+    }
+
+    /// Whether the actor holds the effective `ak.realm.owner` aggregate: it is
+    /// the current root controller, or an effective grant of
+    /// `ak.realm.owner` covers the whole Realm (`authz/capabilities.md` §3.2).
+    pub fn holds_realm_owner(&self) -> bool {
+        let realm = arkret_wire::WireResourceSelector::realm(self.realm_id.clone());
+        self.root_controller
+            || self
+                .covering_grants(&[arkret_wire::CapabilityActionId::REALM_OWNER], &realm)
+                .next()
+                .is_some()
+    }
+}
+
+/// The instant a grant's temporal constraints close it: the earliest
+/// `expires_at` among them, or `None` when no temporal constraint bounds it.
+pub fn capability_grant_expires_at(
+    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind;
+    grant
+        .constraints
+        .iter()
+        .filter(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
+        .filter_map(|constraint| constraint.expires_at)
+        .min()
+}
+
+/// Whether `grant` names one of `actions` on a resource selector covering
+/// `target`, ignoring its constraints.
+pub fn grant_names_target(
+    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+    actions: &[&str],
+    target: &arkret_wire::WireResourceSelector,
+) -> bool {
+    grant
+        .actions
+        .iter()
+        .any(|action| actions.contains(&action.as_str()))
+        && grant
+            .resources
+            .iter()
+            .any(|resource| resource_selector_covers(resource, target))
+}
+
+/// Whether `grant` alone authorizes one of `actions` on `target`. Only a
+/// grant whose constraints are all temporal qualifies: its window is decided
+/// by the effective-at check, while every other constraint family fails
+/// closed until its evaluator exists.
+pub fn grant_covers(
+    grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
+    actions: &[&str],
+    target: &arkret_wire::WireResourceSelector,
+) -> bool {
+    use arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind;
+    grant
+        .constraints
+        .iter()
+        .all(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
+        && grant_names_target(grant, actions, target)
+}
+
+/// Whether resource selector `parent` covers `child`: the same kind with every
+/// identifying member of `parent` equal in `child`, or a Realm selector over a
+/// Realm-contained resource of the same Realm. The `*` selector covers nothing.
+pub fn resource_selector_covers(
+    parent: &arkret_wire::WireResourceSelector,
+    child: &arkret_wire::WireResourceSelector,
+) -> bool {
+    use arkret_wire::ResourceSelectorKind;
+    if parent.kind == ResourceSelectorKind::All {
+        return false;
+    }
+    let parent_value = match serde_json::to_value(parent) {
+        Ok(Value::Object(value)) => value,
+        _ => return false,
+    };
+    let child_value = match serde_json::to_value(child) {
+        Ok(Value::Object(value)) => value,
+        _ => return false,
+    };
+    let same_kind = parent.kind == child.kind;
+    let realm_parent = parent.kind == ResourceSelectorKind::Realm
+        && matches!(
+            child.kind,
+            ResourceSelectorKind::Realm
+                | ResourceSelectorKind::Space
+                | ResourceSelectorKind::Circle
+                | ResourceSelectorKind::Strand
+                | ResourceSelectorKind::Message
+                | ResourceSelectorKind::Morph
+                | ResourceSelectorKind::Object
+                | ResourceSelectorKind::Relation
+                | ResourceSelectorKind::View
+                | ResourceSelectorKind::Event
+                | ResourceSelectorKind::Policy
+                | ResourceSelectorKind::Invite
+                | ResourceSelectorKind::Notification
+                | ResourceSelectorKind::ReadCursor
+                | ResourceSelectorKind::Blob
+        );
+    if !same_kind && !realm_parent {
+        return false;
+    }
+    if let Some(parent_realm) = parent_value.get("realm_id")
+        && child_value.get("realm_id") != Some(parent_realm)
+    {
+        return false;
+    }
+    if realm_parent {
+        return true;
+    }
+    parent_value.iter().all(|(key, value)| {
+        matches!(key.as_str(), "kind" | "match_scope" | "realm_id")
+            || child_value.get(key) == Some(value)
+    })
+}
+
+impl From<EffectiveActorGrant>
+    for arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow
+{
+    fn from(effective: EffectiveActorGrant) -> Self {
+        Self {
+            grant: effective.grant,
+            revision: effective.revision,
+        }
+    }
 }
 
 /// Canonical digest of the complete effective-list rows. This binds the list
@@ -290,6 +420,69 @@ pub trait CapabilityGrantCurrentResultStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>>;
+
+    /// Every current grant of every Realm, ordered by Realm and grant id.
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>>;
+
+    /// Every `active` current grant whose subject is exactly `subject`, in
+    /// any Realm. Lifecycle only: temporal windows and issuer chains are not
+    /// evaluated.
+    async fn active_for_subject(
+        &self,
+        subject: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>>;
+
+    /// Read the authorization inputs of `actor` in `realm_id` from one
+    /// snapshot and evaluate its effective grants at `at`.
+    async fn actor_authorization(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<ActorRealmAuthorization>;
+
+    /// Fixture-only: make `controller` the Realm's current authority root
+    /// controller, keeping an existing root's generation and Event ref.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    async fn seed_test_realm_root(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        controller: &arkret_wire::ActorId,
+    ) -> PersistenceResult<()>;
+
+    /// Fixture-only: install one `active` grant issued by the Realm's current
+    /// root controller under the current root, as the accepting RealmCommit
+    /// would have materialized it. The Realm must already have a root.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    async fn seed_test_grant(
+        &self,
+        grant: &TestCapabilityGrant,
+    ) -> PersistenceResult<arkret_wire::GrantId>;
+
+    /// Fixture-only: move a seeded grant to a terminal lifecycle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    async fn seed_test_grant_status(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        grant_id: &arkret_wire::GrantId,
+        status: CapabilityGrantCurrentStatus,
+    ) -> PersistenceResult<()>;
+}
+
+/// Fixture-only description of one root-issued Capability Grant.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct TestCapabilityGrant {
+    pub realm_id: arkret_wire::RealmId,
+    pub subject: arkret_wire::ActorId,
+    pub actions: Vec<String>,
+    pub resources: Vec<arkret_wire::WireResourceSelector>,
+    pub constraints:
+        Vec<arkret_models_collaboration::governance::grant_constraint::GrantConstraint>,
 }
 
 #[cfg(test)]
@@ -390,57 +583,115 @@ mod capability_grant_current_result_tests {
     }
 
     #[test]
-    fn effective_rows_pair_active_value_with_its_exact_revision() {
+    fn effective_row_digest_binds_the_listed_rows() {
         let active = complete_record(CapabilityGrantCurrentStatus::Active);
-        let terminal = complete_record(CapabilityGrantCurrentStatus::Revoked);
-        let effective = std::collections::BTreeSet::from([GRANT_ID.to_owned()]);
-        let realm_id = REALM_ID.parse().unwrap();
-
-        let rows = effective_capability_grant_rows(
-            vec![active.clone(), terminal],
-            &effective,
-            &subject(),
-            &realm_id,
-        )
-        .unwrap();
-        assert_eq!(rows.len(), 1);
+        let rows = vec![
+            arkret_models_collaboration::governance::authorization::EffectiveCapabilityGrantRow::from(
+                EffectiveActorGrant {
+                    grant: active.value.clone(),
+                    revision: active.revision.clone(),
+                },
+            ),
+        ];
         assert_eq!(rows[0].grant.id, active.grant_id);
         assert_eq!(rows[0].revision, active.revision);
         assert_ne!(
-            effective_capability_grant_state_digest(&rows)
-                .unwrap()
-                .as_str(),
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            effective_capability_grant_state_digest(&rows).unwrap(),
+            effective_capability_grant_state_digest(&[]).unwrap()
         );
     }
 
+    fn realm() -> arkret_wire::RealmId {
+        REALM_ID.parse().unwrap()
+    }
+
+    fn authorization(
+        grants: Vec<arkret_models_collaboration::governance::grant_constraint::CapabilityGrant>,
+    ) -> ActorRealmAuthorization {
+        ActorRealmAuthorization {
+            realm_id: realm(),
+            actor: subject(),
+            evaluated_at: chrono::Utc::now(),
+            root_controller: false,
+            grants: grants
+                .into_iter()
+                .map(|grant| EffectiveActorGrant {
+                    grant,
+                    revision: arkret_wire::CurrentRevision {
+                        commit_id: COMMIT_ID.parse().unwrap(),
+                        stream_position: 41,
+                    },
+                })
+                .collect(),
+        }
+    }
+
     #[test]
-    fn absent_effective_projection_and_foreign_subject_are_non_enumerating() {
-        let active = complete_record(CapabilityGrantCurrentStatus::Active);
-        let realm_id = REALM_ID.parse().unwrap();
-        assert!(
-            effective_capability_grant_rows(
-                vec![active.clone()],
-                &std::collections::BTreeSet::new(),
-                &subject(),
-                &realm_id,
-            )
-            .unwrap()
-            .is_empty()
-        );
-        let foreign = arkret_wire::ActorId::service(
-            arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
+    fn realm_grant_covers_contained_resources_and_only_its_actions() {
+        let authorization = authorization(vec![grant(CapabilityGrantCurrentStatus::Active)]);
+        let strand = arkret_wire::WireResourceSelector::strand(
+            realm(),
+            arkret_wire::StrandId::from_event_id(&arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0x51; 32],
+            )),
         );
         assert!(
-            effective_capability_grant_rows(
-                vec![active],
-                &std::collections::BTreeSet::from([GRANT_ID.to_owned()]),
-                &foreign,
-                &realm_id,
-            )
-            .unwrap()
-            .is_empty()
+            authorization
+                .covering_grants(&["ak.message.create"], &strand)
+                .next()
+                .is_some()
         );
+        assert!(
+            authorization
+                .covering_grants(&["ak.realm.admin"], &strand)
+                .next()
+                .is_none()
+        );
+        let other = arkret_wire::WireResourceSelector::realm(
+            "ak:realm:ASm71QhtF54BxHBvRFcIhmLfPFYTrXhTcLnVAEMmqZ5t"
+                .parse()
+                .unwrap(),
+        );
+        assert!(
+            authorization
+                .covering_grants(&["ak.message.create"], &other)
+                .next()
+                .is_none()
+        );
+        assert!(!authorization.holds_realm_owner());
+    }
+
+    #[test]
+    fn a_non_temporal_constraint_names_the_target_but_never_covers_it() {
+        use arkret_models_collaboration::governance::grant_constraint::{
+            GrantConstraint, GrantConstraintEffect, GrantConstraintKind,
+        };
+        let mut constrained = grant(CapabilityGrantCurrentStatus::Active);
+        constrained.constraints = vec![GrantConstraint::new(
+            GrantConstraintKind::Quota,
+            GrantConstraintEffect::Allow,
+        )];
+        let authorization = authorization(vec![constrained]);
+        let target = arkret_wire::WireResourceSelector::realm(realm());
+        assert!(
+            authorization
+                .covering_grants(&["ak.message.create"], &target)
+                .next()
+                .is_none()
+        );
+        assert!(authorization.has_constrained_grant(&["ak.message.create"], &target));
+    }
+
+    #[test]
+    fn owner_aggregate_is_the_root_controller_or_a_realm_owner_grant() {
+        let mut owner = grant(CapabilityGrantCurrentStatus::Active);
+        owner.actions = vec![arkret_wire::CapabilityActionId::REALM_OWNER.to_owned()];
+        assert!(authorization(vec![owner]).holds_realm_owner());
+        let mut root = authorization(Vec::new());
+        assert!(!root.holds_realm_owner());
+        root.root_controller = true;
+        assert!(root.holds_realm_owner());
     }
 }
 /// Wire / persistence record for a Space-container projection. Mirrors fields on

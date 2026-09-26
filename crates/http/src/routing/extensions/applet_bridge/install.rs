@@ -1564,9 +1564,9 @@ pub(super) fn effective_scope_realm_id(scope: &ScopeRef) -> String {
 ///
 /// An authenticated session is not enough to register or revoke a realm-scoped
 /// applet install: the actor MUST hold `ak.realm.admin` over the install's
-/// effective_scope realm. P1 projected capability grants into the authz index,
-/// so [`SolandAuthzEngine::check`] is authoritative here. Mirrors the ban gate
-/// in `routing/events/operations/policy.rs::validate_member_state_policy`.
+/// effective_scope realm in the durable authorization cut (a covering grant,
+/// or the effective `ak.realm.owner` aggregate). Mirrors the ban gate in
+/// `routing/events/operations/policy.rs::validate_member_state_policy`.
 /// fail-closed: anything other than an explicit allow is rejected with
 /// `applet_registration_unauthorized`.
 pub(super) async fn require_realm_admin(
@@ -1575,21 +1575,18 @@ pub(super) async fn require_realm_admin(
     scope: &ScopeRef,
 ) -> Result<(), AppError> {
     let realm_id = effective_scope_realm_id(scope);
-    let (owner, members) = realm_owner_and_members(state, &realm_id).await;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor: &actor,
-            action: arkret_wire::CapabilityActionId::REALM_ADMIN,
-            resource: &realm_id,
-            realm_id: &realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if crate::authz::authorize(
+        state,
+        &realm_id,
+        &actor,
+        &[arkret_wire::CapabilityActionId::REALM_ADMIN],
+        &realm_id,
+        chrono::Utc::now(),
+    )
+    .await?
+    .allowed()
     {
         return Ok(());
     }
@@ -1597,16 +1594,6 @@ pub(super) async fn require_realm_admin(
         AppError::capability_denied("actor lacks ak.realm.admin over the applet install realm")
             .with_wire_code("applet_registration_unauthorized"),
     )
-}
-
-/// Resolve the realm owner and member set, matching
-/// The shared event-policy projection supplies exact Actor membership context;
-/// request context alone does not imply a capability.
-async fn realm_owner_and_members(
-    state: &AppState,
-    realm_id: &str,
-) -> (Option<String>, Vec<String>) {
-    crate::routing::events::operations::realm_owner_and_members(state, realm_id).await
 }
 
 pub(super) fn ghost_actors_allowed_for_install(

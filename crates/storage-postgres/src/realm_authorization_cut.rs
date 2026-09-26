@@ -36,7 +36,10 @@ use arkret_models_collaboration::governance::grant_constraint::{
     CapabilityGrant, CapabilitySubject, GrantConstraint, GrantConstraintEffect,
     GrantConstraintKind, GrantConstraintSubkind, IssuerAuthorityRef,
 };
-use arkret_wire::{ActorId, CapabilityActionId, EventKind, GrantId, RealmId, WireResourceSelector};
+use arkret_wire::{
+    ActorId, CapabilityActionId, CurrentRevision, EventKind, GrantId, RealmId, WireResourceSelector,
+};
+use soland_storage::{ActorRealmAuthorization, EffectiveActorGrant, grant_covers};
 
 use super::{
     AsyncPgConnection, Jsonb, OptionalExtension, PersistenceError, PersistenceResult,
@@ -44,8 +47,7 @@ use super::{
 };
 use crate::capability_grant_current_results::{
     CapabilityGrantCurrentResultReadRow, RealmAuthorityRootCurrent, RealmAuthorityRootReadRow,
-    decode_authority_root, decode_row, grant_is_active_at, selector_covers,
-    validate_ancestor_graph,
+    decode_authority_root, decode_row, grant_is_active_at, validate_ancestor_graph,
 };
 use crate::direct_conversation_admission::ProfileAuthority;
 
@@ -77,6 +79,7 @@ pub(crate) struct RealmAuthorizationCut {
     actor: ActorId,
     root: Option<RealmAuthorityRootCurrent>,
     grants: BTreeMap<GrantId, CapabilityGrant>,
+    revisions: BTreeMap<GrantId, CurrentRevision>,
     policy_bundle: Option<RealmPolicyBundlePayload>,
     actor_membership: Option<String>,
     /// The Direct Conversation profile's verdict for the Event this cut was
@@ -116,8 +119,10 @@ impl RealmAuthorizationCut {
         .await
         .map_err(PersistenceError::database)?;
         let mut grants = BTreeMap::new();
+        let mut revisions = BTreeMap::new();
         for row in stored {
             let record = decode_row(row)?;
+            revisions.insert(record.grant_id.clone(), record.revision);
             grants.insert(record.grant_id, record.value);
         }
         let policy_bundle =
@@ -152,6 +157,7 @@ impl RealmAuthorizationCut {
             actor: actor.clone(),
             root,
             grants,
+            revisions,
             policy_bundle,
             actor_membership,
             direct_conversation: None,
@@ -212,26 +218,28 @@ impl RealmAuthorizationCut {
         actions: &'a [&'a str],
         at: chrono::DateTime<chrono::Utc>,
     ) -> impl Iterator<Item = &'a CapabilityGrant> + 'a {
-        let root = self.root.as_ref();
         let realm = WireResourceSelector::realm(self.realm_id.clone());
-        self.grants.iter().filter_map(move |(grant_id, grant)| {
-            let root = root?;
-            let covers = matches!(&grant.subject, CapabilitySubject::Actor(subject) if subject == &self.actor)
+        self.effective_grants(at)
+            .filter(move |(_, grant)| grant_covers(grant, actions, &realm))
+            .map(|(_, grant)| grant)
+    }
+
+    /// Every active grant whose subject is exactly the actor, whose temporal
+    /// window contains `at`, and whose issuer chain descends intact from the
+    /// current authority root. Actions, resources and non-temporal
+    /// constraints are not decided here.
+    fn effective_grants(
+        &self,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> impl Iterator<Item = (&GrantId, &CapabilityGrant)> + '_ {
+        let root = self.root.as_ref();
+        self.grants.iter().filter(move |(grant_id, grant)| {
+            let Some(root) = root else {
+                return false;
+            };
+            matches!(&grant.subject, CapabilitySubject::Actor(subject) if subject == &self.actor)
                 && grant.realm_id.as_ref() == Some(&self.realm_id)
                 && grant_is_active_at(grant, at)
-                && grant
-                    .constraints
-                    .iter()
-                    .all(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
-                && grant
-                    .actions
-                    .iter()
-                    .any(|action| actions.contains(&action.as_str()))
-                && grant
-                    .resources
-                    .iter()
-                    .any(|resource| selector_covers(resource, &realm));
-            (covers
                 && !grant.issuer_authority_refs.is_empty()
                 && grant
                     .issuer_authority_refs
@@ -263,8 +271,37 @@ impl RealmAuthorizationCut {
                             )
                             .is_ok()
                         }
-                    }))
-                .then_some(grant)
+                    })
+        })
+    }
+
+    /// The actor's authorization at `at` as a backend-neutral value: whether
+    /// it is the root controller, and every effective grant with the exact
+    /// revision of its current result.
+    pub(crate) fn actor_authorization(
+        &self,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<ActorRealmAuthorization> {
+        let grants = self
+            .effective_grants(at)
+            .map(|(grant_id, grant)| {
+                let revision = self.revisions.get(grant_id).cloned().ok_or_else(|| {
+                    PersistenceError::Database(
+                        "Capability Grant current revision is missing from its cut".to_owned(),
+                    )
+                })?;
+                Ok(EffectiveActorGrant {
+                    grant: grant.clone(),
+                    revision,
+                })
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        Ok(ActorRealmAuthorization {
+            realm_id: self.realm_id.clone(),
+            actor: self.actor.clone(),
+            evaluated_at: at,
+            root_controller: self.actor_is_root_controller(),
+            grants,
         })
     }
 

@@ -161,7 +161,6 @@ mod event_derived_id_tests {
 
 mod applet;
 mod capability_grant;
-mod capability_refs;
 mod control_move;
 mod envelope_core;
 mod features_schema;
@@ -171,7 +170,6 @@ mod proofs;
 mod realm_authority_root;
 
 use applet::*;
-use capability_refs::*;
 use control_move::*;
 pub(in crate::routing) use envelope_core::{
     PrivateInviteEnvelope, validate_private_invite_envelope,

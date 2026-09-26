@@ -35,7 +35,6 @@ pub(crate) struct AccountLifecycleChange {
     pub push_routes_revoked: usize,
     pub to_device_messages_dropped: usize,
     pub identity_link_cache_invalidated: usize,
-    pub capability_cache_invalidated: usize,
 }
 
 pub(crate) async fn set_account_lifecycle_state(
@@ -93,7 +92,6 @@ pub(crate) async fn set_account_lifecycle_state(
     let mut push_routes_revoked = 0;
     let mut to_device_messages_dropped = 0;
     let mut identity_link_cache_invalidated = 0;
-    let mut capability_cache_invalidated = 0;
     if previous_state != next_state {
         let record = AccountLifecycleState {
             state: next_state.to_owned(),
@@ -115,7 +113,6 @@ pub(crate) async fn set_account_lifecycle_state(
             push_routes_revoked = fanout.push_routes_revoked;
             to_device_messages_dropped = fanout.to_device_messages_dropped;
             identity_link_cache_invalidated = fanout.identity_link_cache_invalidated;
-            capability_cache_invalidated = fanout.capability_cache_invalidated;
         } else if next_state == "locked" {
             sessions_revoked = revoke_sessions_for_actor(state, principal_id_value)
                 .await
@@ -139,7 +136,6 @@ pub(crate) async fn set_account_lifecycle_state(
             push_routes_revoked,
             to_device_messages_dropped,
             identity_link_cache_invalidated,
-            capability_cache_invalidated,
         )
         .await;
     }
@@ -158,7 +154,6 @@ pub(crate) async fn set_account_lifecycle_state(
         push_routes_revoked,
         to_device_messages_dropped,
         identity_link_cache_invalidated,
-        capability_cache_invalidated,
     })
 }
 
@@ -185,7 +180,6 @@ struct AccountDeactivationFanout {
     push_routes_revoked: usize,
     to_device_messages_dropped: usize,
     identity_link_cache_invalidated: usize,
-    capability_cache_invalidated: usize,
 }
 
 async fn run_account_deactivation_fanout(
@@ -219,15 +213,6 @@ async fn run_account_deactivation_fanout(
     let identity_link_cache_invalidated = state
         .invalidate_cached_handle_claims_for_subject(principal_id)
         .await;
-    let account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
-            AppError::internal(format!("invalid account principal id: {error}"))
-        })?,
-        state.service_core_id().clone(),
-    ));
-    let capability_cache_invalidated = state
-        .authorization()
-        .mark_projected_grants_revoked_for_subject(&account_actor);
     // §7.1 Push-route completion criterion: when a push gateway independently
     // holds registration/delivery state, the local purge above does NOT
     // complete the Push-route row — the gateway must be notified over the
@@ -243,7 +228,6 @@ async fn run_account_deactivation_fanout(
         push_routes_revoked,
         to_device_messages_dropped,
         identity_link_cache_invalidated,
-        capability_cache_invalidated,
     })
 }
 
@@ -293,7 +277,6 @@ async fn append_account_state_change_audit(
     push_routes_revoked: usize,
     to_device_messages_dropped: usize,
     identity_link_cache_invalidated: usize,
-    capability_cache_invalidated: usize,
 ) {
     // Product-private audit actions must not occupy the protocol `ak.` prefix.
     let payload = json!({
@@ -312,7 +295,6 @@ async fn append_account_state_change_audit(
         "push_routes_revoked": push_routes_revoked,
         "to_device_messages_dropped": to_device_messages_dropped,
         "identity_link_cache_invalidated": identity_link_cache_invalidated,
-        "capability_cache_invalidated": capability_cache_invalidated,
         "fanout_domains": [
             "bearer_sessions",
             "applet_delegated_sessions",
@@ -320,8 +302,7 @@ async fn append_account_state_change_audit(
             "keypackages",
             "push_routes",
             "to_device_queue",
-            "identity_link_cache",
-            "capability_cache"
+            "identity_link_cache"
         ],
     });
     append_audit_log(

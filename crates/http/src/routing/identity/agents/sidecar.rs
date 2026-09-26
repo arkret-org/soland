@@ -70,14 +70,6 @@ async fn authorize_sidecar_ensure(
     session: &SessionRecord,
     realm_id: &str,
 ) -> Result<(), AppError> {
-    let owner = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|meta| meta.owner);
-    let members = realm_members_for_authz(state, realm_id);
     let controller_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     if controller_actor.as_account_id().is_none() {
@@ -85,27 +77,23 @@ async fn authorize_sidecar_ensure(
             "Sidecar controller must be an Account",
         ));
     }
-    let verdict = state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor: &controller_actor,
-            action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        });
-    if verdict.allowed {
-        return Ok(());
-    }
-    if matches!(
-        verdict.reason.as_str(),
-        "explicit_deny" | "quarantine" | "require_review" | "constraints_not_satisfied"
-    ) {
-        return Err(sidecar_create_denied(
-            "ak.self.agent.sidecar.command.ensure.v1 denied by policy",
-        ));
+    match crate::authz::authorize(
+        state,
+        realm_id,
+        &controller_actor,
+        &[arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1],
+        realm_id,
+        chrono::Utc::now(),
+    )
+    .await?
+    {
+        verdict if verdict.allowed() => return Ok(()),
+        crate::authz::CapabilityVerdict::ConstraintsNotSatisfied => {
+            return Err(sidecar_create_denied(
+                "ak.self.agent.sidecar.command.ensure.v1 denied by policy",
+            ));
+        }
+        _ => {}
     }
     if realm_member_joined(state, realm_id, &controller_actor.to_string()) {
         return Ok(());
@@ -113,17 +101,6 @@ async fn authorize_sidecar_ensure(
     Err(sidecar_create_denied(
         "ak.self.agent.sidecar.command.ensure.v1 requires a Realm member controller",
     ))
-}
-
-fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
-    state
-        .projections()
-        .snapshot()
-        .members_of_realm(realm_id)
-        .into_iter()
-        .map(|member| member.member.clone())
-        .filter(|actor| realm_member_joined(state, realm_id, actor))
-        .collect()
 }
 
 pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
@@ -1491,10 +1468,6 @@ mod tests {
             &foreign_actor.to_string()
         ));
         assert!(!realm_member_joined(&state, realm_id, principal.as_str()));
-        assert_eq!(
-            realm_members_for_authz(&state, realm_id),
-            vec![local_actor.to_string()]
-        );
     }
 
     #[test]

@@ -698,22 +698,28 @@ async fn applet_registration_requires_realm_admin() {
         .unwrap_err();
     assert_eq!(err, "applet_registration_unauthorized");
 
-    state
-        .authorization()
-        .upsert_projected_grant(arkret_policy::authz::authority::Grant {
-            grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
-            realm_id: realm_id.to_owned(),
-            issuer_id: projected_fixture_actor(owner),
-            subject_id: projected_fixture_actor(owner),
-            resource: realm_id.to_owned(),
-            actions: vec!["ak.realm.admin".to_owned()],
+    // A separate root controller issues the owner an explicit grant: the
+    // metadata owner mirror is never the authority root.
+    let realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
+    let store = state.test_persistence();
+    let grants = store.capability_grant_current_results();
+    grants
+        .seed_test_realm_root(
+            &realm,
+            &projected_fixture_actor("ak:did_core:web:root-controller.example"),
+        )
+        .await
+        .unwrap();
+    grants
+        .seed_test_grant(&soland_storage::TestCapabilityGrant {
+            realm_id: realm.clone(),
+            subject: projected_fixture_actor(owner),
+            actions: vec![arkret_wire::CapabilityActionId::REALM_ADMIN.to_owned()],
+            resources: vec![arkret_wire::WireResourceSelector::realm(realm)],
             constraints: Vec::new(),
-            revoked: false,
-            created_at: now,
-            issuer_authority_refs: Vec::new(),
-            authority_depth: 0,
-            authority_root_refs: Vec::new(),
-        });
+        })
+        .await
+        .unwrap();
     validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
         .await
         .unwrap();

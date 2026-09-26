@@ -596,6 +596,7 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
     fn relation_current_results(&self) -> &dyn RelationCurrentResultStore;
     fn capability_grant_current_results(&self) -> &dyn CapabilityGrantCurrentResultStore;
+    fn invite_current_results(&self) -> &dyn InviteCurrentResultStore;
     /// Publication evidence (lease + minted ingress receipt) per accepted
     /// Event digest (`authz/offline-publication.md` §2.1).
     fn publication_evidence(&self) -> &dyn PublicationEvidenceStore;

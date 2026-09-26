@@ -623,3 +623,121 @@ pub(crate) async fn commit_invite_current_results_in_connection(
         _ => Ok(()),
     }
 }
+
+#[derive(diesel::QueryableByName)]
+struct OpenDirectedInviteRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    invite_id: String,
+    #[diesel(sql_type = Jsonb)]
+    lifecycle: Value,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    invitee: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct EnvelopeRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+}
+
+/// Invite typed current reads outside any accepting transaction.
+pub struct PgInviteCurrentResultStore {
+    pub pool: crate::PgPool,
+}
+
+#[async_trait::async_trait]
+impl soland_storage::InviteCurrentResultStore for PgInviteCurrentResultStore {
+    async fn open_directed_invites_for_invitee(
+        &self,
+        invitee: &AccountId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> PersistenceResult<Vec<soland_storage::DirectedInviteCurrent>> {
+        use diesel_async::AsyncConnection as _;
+
+        let invitee_value = serde_json::to_value(invitee).map_err(schema_violation)?;
+        let realm_filter = realm_id.map(|realm_id| realm_id.as_str().to_owned());
+        let mut conn = crate::pg_conn(&self.pool).await?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async |conn| {
+            diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let rows = diesel::sql_query(
+                "SELECT d.realm_id, d.invite_id, l.value AS lifecycle, l.updated_at, \
+                        d.value->'invitee_account_id' AS invitee \
+                 FROM invite_directed_invitee_current_results d \
+                 JOIN invite_lifecycle_current_results l \
+                   ON l.realm_id=d.realm_id AND l.invite_id=d.invite_id \
+                 WHERE d.value->'invitee_account_id'=$1 \
+                   AND (l.value #>> '{}') IN ('pending','claimed') \
+                   AND ($2::text IS NULL OR d.realm_id=$2) \
+                 ORDER BY d.realm_id ASC, d.invite_id ASC",
+            )
+            .bind::<Jsonb, _>(&invitee_value)
+            .bind::<diesel::sql_types::Nullable<Text>, _>(realm_filter.as_deref())
+            .load::<OpenDirectedInviteRow>(&mut *conn)
+            .await?;
+            let mut invites = Vec::with_capacity(rows.len());
+            for row in rows {
+                invites.push(open_directed_invite(conn, row).await?);
+            }
+            Ok(invites)
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
+    }
+}
+
+async fn open_directed_invite(
+    conn: &mut AsyncPgConnection,
+    row: OpenDirectedInviteRow,
+) -> PersistenceResult<soland_storage::DirectedInviteCurrent> {
+    let realm_id = row
+        .realm_id
+        .parse::<arkret_wire::RealmId>()
+        .map_err(corrupt)?;
+    let invite_id = row.invite_id.parse::<InviteId>().map_err(corrupt)?;
+    let state = row
+        .lifecycle
+        .as_str()
+        .and_then(InviteState::from_wire)
+        .ok_or_else(|| corrupt("invite_lifecycle value is not a registered state"))?;
+    let invitee_account_id = serde_json::from_value::<AccountId>(row.invitee).map_err(corrupt)?;
+    let create_event_id = invite_id.event_id();
+    let token = crate::ids::parse_event_id(create_event_id.as_str())
+        .ok_or_else(|| corrupt("InviteId does not retype to a canonical Event token"))?;
+    let envelope = diesel::sql_query(
+        "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.realm_id=$2 AND e.kind=$3 AND e.state='committed'",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(EventKind::InviteCreate.as_str())
+    .get_result::<EnvelopeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| corrupt("invite_lifecycle has no committed ak.invite.create"))?
+    .envelope;
+    let event = serde_json::from_value::<arkret_wire::Event>(envelope).map_err(corrupt)?;
+    let create = typed_payload::<InviteCreatePayload>(&event)?;
+    if create.invitee_account_id != invitee_account_id {
+        return Err(corrupt(
+            "invite_directed_invitee disagrees with its ak.invite.create",
+        ));
+    }
+    Ok(soland_storage::DirectedInviteCurrent {
+        realm_id,
+        invite_id,
+        state,
+        state_updated_at: row.updated_at,
+        inviter: event.actor_id,
+        invitee_account_id,
+        introduction_evidence_digest: create.introduction_evidence_digest,
+        expires_at: create.expires_at,
+        created_at: event.created_at,
+    })
+}

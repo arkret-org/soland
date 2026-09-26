@@ -184,6 +184,54 @@ impl PersistenceHandle {
             .await
     }
 
+    /// Every current Capability Grant of every Realm.
+    pub async fn all_capability_grant_current_results(
+        &self,
+    ) -> PersistenceResult<Vec<soland_storage::CapabilityGrantCurrentResultRecord>> {
+        self.persistence
+            .capability_grant_current_results()
+            .snapshot_all()
+            .await
+    }
+
+    /// Every `active` current Capability Grant naming exactly `subject`.
+    pub async fn active_capability_grants_for_subject(
+        &self,
+        subject: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<soland_storage::CapabilityGrantCurrentResultRecord>> {
+        self.persistence
+            .capability_grant_current_results()
+            .active_for_subject(subject)
+            .await
+    }
+
+    /// Every open directed Invite addressed to exactly `invitee`, read from
+    /// the Invite typed current results at one cut.
+    pub async fn open_directed_invites_for_invitee(
+        &self,
+        invitee: &arkret_wire::AccountId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> PersistenceResult<Vec<soland_storage::DirectedInviteCurrent>> {
+        self.persistence
+            .invite_current_results()
+            .open_directed_invites_for_invitee(invitee, realm_id)
+            .await
+    }
+
+    /// The authorization inputs of `actor` in `realm_id`, read from one
+    /// snapshot and evaluated at `at`.
+    pub async fn actor_realm_authorization(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::ActorRealmAuthorization> {
+        self.persistence
+            .capability_grant_current_results()
+            .actor_authorization(realm_id, actor, at)
+            .await
+    }
+
     pub async fn append_account_status_record(
         &self,
         record: &arkret_models_collaboration::account_status::AccountStatusRecord,

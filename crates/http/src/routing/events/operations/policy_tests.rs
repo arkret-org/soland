@@ -249,27 +249,43 @@ fn install_collaboration_realm(state: &AppState, realm_id: &arkret_identifiers::
     );
 }
 
-fn install_projected_grant(
-    authorization: &soland_services::authorization::AuthorizationService,
+/// A grant the fixture materialized as a durable `capability_grant` current
+/// result.
+struct SeededGrant {
+    grant_id: String,
+}
+
+/// Materialize one active grant from the Realm root controller `issuer` to
+/// `subject` over `resource`, exactly as the accepting RealmCommit would.
+async fn install_projected_grant(
+    state: &AppState,
     realm_id: String,
     issuer: String,
     subject: String,
     resource: String,
     actions: Vec<String>,
-    constraints: Vec<crate::authz::GrantConstraint>,
-) -> crate::authz::Grant {
-    let mut grant = crate::authz::projected_grant_fixture(
-        realm_id,
-        issuer.clone(),
-        subject.clone(),
-        resource,
-        actions,
-        constraints,
-    );
-    grant.issuer_id = fixture_actor(&issuer);
-    grant.subject_id = fixture_actor(&subject);
-    authorization.upsert_projected_grant(grant.clone());
-    grant
+) -> SeededGrant {
+    let realm_id = arkret_identifiers::RealmId::new(realm_id).expect("fixture Realm id");
+    let store = state.test_persistence();
+    let grants = store.capability_grant_current_results();
+    grants
+        .seed_test_realm_root(&realm_id, &fixture_actor(&issuer))
+        .await
+        .expect("fixture Realm root");
+    let resource = crate::authz::resource_selector(&realm_id, &resource).expect("fixture resource");
+    let grant_id = grants
+        .seed_test_grant(&soland_storage::TestCapabilityGrant {
+            realm_id,
+            subject: fixture_actor(&subject),
+            actions,
+            resources: vec![resource],
+            constraints: Vec::new(),
+        })
+        .await
+        .expect("fixture grant");
+    SeededGrant {
+        grant_id: grant_id.to_string(),
+    }
 }
 
 fn signed_device_authorize_payload(
@@ -366,7 +382,9 @@ fn device_authorize_rejects_signature_from_wrong_device_key() {
     );
 }
 
-fn grant_circle_action(
+/// A grant whose only resource is the one Circle: the selector is the
+/// narrowing, so no constraint is needed to keep it off other Circles.
+async fn grant_circle_action(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
     circle_id: &str,
@@ -374,18 +392,14 @@ fn grant_circle_action(
     action: &str,
 ) {
     install_projected_grant(
-        state.authorization(),
+        state,
         realm_id.to_string(),
         "ak:did_core:web:owner.example".to_owned(),
         actor.to_owned(),
         circle_id.to_owned(),
         vec![action.to_owned()],
-        vec![crate::authz::GrantConstraint::AllowedCircleIds {
-            allowed_circle_ids: std::collections::BTreeSet::from([
-                arkret_identifiers::CircleId::new(circle_id.to_owned()).expect("valid circle id"),
-            ]),
-        }],
-    );
+    )
+    .await;
 }
 
 fn insert_joined_realm_member(
@@ -412,41 +426,37 @@ fn insert_joined_realm_member(
     );
 }
 
-fn grant_moderation_decision(
+async fn grant_moderation_decision(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
     actor: &str,
 ) {
     install_projected_grant(
-        state.authorization(),
+        state,
         realm_id.to_string(),
         "ak:did_core:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
-        vec![
-            arkret_wire::EventKind::ModerationDecision
-                .as_str()
-                .to_owned(),
-        ],
-        Vec::new(),
-    );
+        vec![arkret_wire::CapabilityActionId::MODERATION_DECISION.to_owned()],
+    )
+    .await;
 }
 
-fn grant_call_action(
+async fn grant_call_action(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
     actor: &str,
     action: &str,
 ) {
     install_projected_grant(
-        state.authorization(),
+        state,
         realm_id.to_string(),
         "ak:did_core:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
         vec![action.to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
 }
 
 async fn put_agent_participation_ceiling(
@@ -828,14 +838,14 @@ async fn act_on_behalf_agent_requires_participation_bit() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, false).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let message = act_on_behalf_message(
         realm_id,
         "000000000701",
@@ -862,14 +872,14 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::ReactionAdd.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let message = act_on_behalf_message(
         realm_id,
         "000000000702",
@@ -927,14 +937,14 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::StrandCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let operation = op(
         realm_id,
         "0000000007c1",
@@ -994,23 +1004,23 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let envelope_grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::RelationCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let context_grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::RelationCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let operation = op(
         realm_id,
         "0000000007c2",
@@ -1076,14 +1086,14 @@ async fn act_on_behalf_private_approval_cannot_replace_exact_consumption() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::ViewCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let grant_id = grant.grant_id.clone();
     let operation = op(
         realm_id,
@@ -1132,14 +1142,14 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec!["*".to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let grant_id = grant.grant_id.clone();
     let operation = op(
         realm_id,
@@ -1171,14 +1181,14 @@ async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec!["*".to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let grant_id = grant.grant_id.clone();
     let operation = op(
         realm_id,
@@ -1208,14 +1218,14 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, false).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let mut record = state
         .agent_pairings()
         .agent(agent)
@@ -1248,14 +1258,14 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, false).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let operation = reply_message(realm_id, "0000000007c8", agent, grant.grant_id.as_str());
     state.test_projection().lock().agent_lifecycles.insert(
         operation.context.sender.canonical_key().unwrap(),
@@ -1597,7 +1607,8 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         circle_id,
         ALICE_CORE_ID,
         "ak.circle.member.manage",
-    );
+    )
+    .await;
     let member_add = op(
         realm_id,
         "000000000882",
@@ -1647,7 +1658,8 @@ async fn circle_lifecycle_requires_circle_manage_grant() {
         circle_id,
         ALICE_CORE_ID,
         "ak.circle.manage",
-    );
+    )
+    .await;
     validate_operation_policy(&state, &[tombstone])
         .await
         .expect("circle-scoped manage grant authorizes lifecycle");
@@ -1663,14 +1675,14 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let message = act_on_behalf_message(
         realm_id,
         "000000000703",
@@ -1842,14 +1854,14 @@ async fn act_on_behalf_covered_at(
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let message = act_on_behalf_message(
         realm_id.clone(),
         seed,
@@ -2016,14 +2028,14 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
     let agent = AGENT_CORE_ID;
     register_agent_selection(&state, &realm_id, agent, true, true).await;
     let grant = install_projected_grant(
-        state.authorization(),
+        &state,
         realm_id.to_string(),
         "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
-        Vec::new(),
-    );
+    )
+    .await;
     let message = act_on_behalf_message(
         realm_id,
         "000000000704",
@@ -2158,7 +2170,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     )
     .unwrap();
     install_collaboration_realm(&state, &realm_id);
-    grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example");
+    grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example").await;
     let decision = op(
         realm_id,
         "000000000901",
@@ -2189,7 +2201,7 @@ async fn moderation_decision_allows_authorized_issuer() {
     )
     .unwrap();
     install_collaboration_realm(&state, &realm_id);
-    grant_moderation_decision(&state, &realm_id, MODERATOR);
+    grant_moderation_decision(&state, &realm_id, MODERATOR).await;
     let decision = op(
         realm_id,
         "000000000902",
@@ -2217,7 +2229,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
     )
     .unwrap();
     install_collaboration_realm(&state, &realm_id);
-    grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example");
+    grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example").await;
     let decision = op(
         realm_id,
         "000000000903",
@@ -2251,7 +2263,8 @@ async fn call_recording_start_defaults_to_record_capability() {
         &realm_id,
         "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_RECORD,
-    );
+    )
+    .await;
     let start = op(
         realm_id,
         "000000000904",
@@ -2288,7 +2301,8 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
         &realm_id,
         "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_RECORD,
-    );
+    )
+    .await;
     let start = op(
         realm_id,
         "000000000905",
@@ -2335,7 +2349,8 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
         &realm_id,
         "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_TRANSCRIBE,
-    );
+    )
+    .await;
     let start = op(
         realm_id,
         "000000000906",
@@ -2372,7 +2387,8 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         &realm_id,
         "ak:did_core:web:recorder.example",
         arkret_wire::CapabilityActionId::CALL_RECORD,
-    );
+    )
+    .await;
     let payload = json!({
         "sender": "ak:did_core:web:recorder.example",
         "call_id": "ak:call:ATruBVw3F7e6GxSCTOAQ52Yh0RbzPwJS39bQb-Jz3JJt",

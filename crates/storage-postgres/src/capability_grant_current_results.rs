@@ -7,14 +7,15 @@ use arkret_models_collaboration::governance::grant_constraint::{
 };
 use arkret_wire::{
     ActorId, CommitStreamRef, CommittedEventRef, CurrentRevision, EventId, GrantId, RealmCommitId,
-    RealmId, ResourceSelectorKind, WireResourceSelector,
+    RealmId, WireResourceSelector,
 };
+use soland_storage::{ActorRealmAuthorization, resource_selector_covers};
 
 use super::{
-    AsyncPgConnection, BigInt, CapabilityGrantCurrentResultRecord,
+    AsyncConnection, AsyncPgConnection, BigInt, CapabilityGrantCurrentResultRecord,
     CapabilityGrantCurrentResultStore, CapabilityGrantCurrentStatus, Jsonb, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
-    async_trait, pg_conn, sql_query,
+    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
+    Text, Timestamptz, async_trait, pg_conn, sql_query,
 };
 
 pub struct PgCapabilityGrantCurrentResultStore {
@@ -310,15 +311,6 @@ fn effective_not_before(grant: &CapabilityGrant) -> Option<chrono::DateTime<chro
         .max()
 }
 
-fn effective_expires_at(grant: &CapabilityGrant) -> Option<chrono::DateTime<chrono::Utc>> {
-    grant
-        .constraints
-        .iter()
-        .filter(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
-        .filter_map(|constraint| constraint.expires_at)
-        .min()
-}
-
 fn ordinary_authority_control(
     grant: &CapabilityGrant,
 ) -> Option<&arkret_models_collaboration::governance::grant_constraint::GrantConstraint> {
@@ -328,64 +320,14 @@ fn ordinary_authority_control(
     })
 }
 
-pub(crate) fn selector_covers(parent: &WireResourceSelector, child: &WireResourceSelector) -> bool {
-    if parent.kind == ResourceSelectorKind::All {
-        return false;
-    }
-    let parent_value = match serde_json::to_value(parent) {
-        Ok(serde_json::Value::Object(value)) => value,
-        _ => return false,
-    };
-    let child_value = match serde_json::to_value(child) {
-        Ok(serde_json::Value::Object(value)) => value,
-        _ => return false,
-    };
-    let same_kind = parent.kind == child.kind;
-    let realm_parent = parent.kind == ResourceSelectorKind::Realm
-        && matches!(
-            child.kind,
-            ResourceSelectorKind::Realm
-                | ResourceSelectorKind::Space
-                | ResourceSelectorKind::Circle
-                | ResourceSelectorKind::Strand
-                | ResourceSelectorKind::Message
-                | ResourceSelectorKind::Morph
-                | ResourceSelectorKind::Object
-                | ResourceSelectorKind::Relation
-                | ResourceSelectorKind::View
-                | ResourceSelectorKind::Event
-                | ResourceSelectorKind::Policy
-                | ResourceSelectorKind::Invite
-                | ResourceSelectorKind::Notification
-                | ResourceSelectorKind::ReadCursor
-                | ResourceSelectorKind::Blob
-        );
-    if !same_kind && !realm_parent {
-        return false;
-    }
-    if let Some(parent_realm) = parent_value.get("realm_id")
-        && child_value.get("realm_id") != Some(parent_realm)
-        && !(child.kind == ResourceSelectorKind::Realm
-            && child_value.get("realm_id") == Some(parent_realm))
-    {
-        return false;
-    }
-    if realm_parent {
-        return true;
-    }
-    parent_value.iter().all(|(key, value)| {
-        matches!(key.as_str(), "kind" | "match_scope" | "realm_id")
-            || child_value.get(key) == Some(value)
-    })
-}
-
 pub(crate) fn grant_is_active_at(
     grant: &CapabilityGrant,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     grant.status == CapabilityGrantStatus::Active
         && effective_not_before(grant).is_none_or(|value| value <= accepted_at)
-        && effective_expires_at(grant).is_none_or(|value| value > accepted_at)
+        && soland_storage::capability_grant_expires_at(grant)
+            .is_none_or(|value| value > accepted_at)
 }
 
 /// Whether `actor` may exercise one of `actions` over the whole Realm at this
@@ -493,7 +435,7 @@ fn parent_covers(
     }) && parent
         .resources
         .iter()
-        .any(|resource| selector_covers(resource, child_resource))
+        .any(|resource| resource_selector_covers(resource, child_resource))
 }
 
 fn validate_parent_constraints(
@@ -529,7 +471,7 @@ fn validate_parent_constraints(
             return Err(conflict("authority_depth_exceeded"));
         }
     }
-    if let Some(parent_expiry) = effective_expires_at(parent) {
+    if let Some(parent_expiry) = soland_storage::capability_grant_expires_at(parent) {
         let child_expiry = child
             .constraints
             .iter()
@@ -1023,6 +965,188 @@ impl CapabilityGrantCurrentResultStore for PgCapabilityGrantCurrentResultStore {
         .map(decode_row)
         .collect()
     }
+
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value \
+             FROM capability_grant_current_results ORDER BY realm_id ASC,grant_id ASC",
+        )
+        .load::<CapabilityGrantCurrentResultReadRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(decode_row)
+        .collect()
+    }
+
+    async fn active_for_subject(
+        &self,
+        subject: &ActorId,
+    ) -> PersistenceResult<Vec<CapabilityGrantCurrentResultRecord>> {
+        let subject = serde_json::to_value(subject).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value \
+             FROM capability_grant_current_results WHERE status='active' AND value->'subject'=$1 \
+             ORDER BY realm_id ASC,grant_id ASC",
+        )
+        .bind::<Jsonb, _>(&subject)
+        .load::<CapabilityGrantCurrentResultReadRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(decode_row)
+        .collect()
+    }
+
+    async fn actor_authorization(
+        &self,
+        realm_id: &RealmId,
+        actor: &ActorId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<ActorRealmAuthorization> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<ActorRealmAuthorization, PgTransactionError, _>(async |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let cut =
+                crate::realm_authorization_cut::RealmAuthorizationCut::read(conn, realm_id, actor)
+                    .await?;
+            Ok(cut.actor_authorization(at)?)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    async fn seed_test_realm_root(
+        &self,
+        realm_id: &RealmId,
+        controller: &ActorId,
+    ) -> PersistenceResult<()> {
+        let authority_event_ref = EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(format!("fixture-root:{realm_id}").as_bytes()),
+        );
+        let commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            format!("fixture-root-commit:{realm_id}").as_bytes(),
+        ));
+        let controller = serde_json::to_value(controller).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "INSERT INTO realm_authority_root_current_results \
+             (realm_id,controller_actor_id,controller_epoch,authority_generation,authority_event_ref,\
+              current_commit_id,current_stream_position,updated_at) \
+             VALUES($1,$2,0,0,$3,$4,0,now()) \
+             ON CONFLICT(realm_id) DO UPDATE SET controller_actor_id=EXCLUDED.controller_actor_id",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Jsonb, _>(&controller)
+        .bind::<Text, _>(authority_event_ref.as_str())
+        .bind::<Text, _>(commit_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    async fn seed_test_grant(
+        &self,
+        grant: &soland_storage::TestCapabilityGrant,
+    ) -> PersistenceResult<GrantId> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let root = sql_query(
+            "SELECT realm_id,controller_actor_id,controller_epoch,authority_generation,\
+             authority_event_ref FROM realm_authority_root_current_results WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(grant.realm_id.as_str())
+        .get_result::<RealmAuthorityRootReadRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)
+        .and_then(decode_authority_root)?;
+        let event_id = EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(uuid::Uuid::new_v4().as_bytes()),
+        );
+        let grant_id = GrantId::from_event_id(&event_id);
+        let commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            event_id.as_str().as_bytes(),
+        ));
+        let root_ref = IssuerAuthorityRef::RealmRoot {
+            realm_id: grant.realm_id.clone(),
+            authority_event_ref: root.authority_event_ref.clone(),
+            authority_generation: root.authority_generation,
+        };
+        let value = CapabilityGrant {
+            id: grant_id.clone(),
+            schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
+            realm_id: Some(grant.realm_id.clone()),
+            issuer_id: root.controller_actor_id.clone(),
+            subject: CapabilitySubject::Actor(grant.subject.clone()),
+            actions: grant.actions.clone(),
+            resources: grant.resources.clone(),
+            constraints: grant.constraints.clone(),
+            issuer_authority_refs: vec![root_ref],
+            authority_depth: 1,
+            authority_root_refs: vec![AuthorityRootRef::RealmRoot {
+                realm_id: grant.realm_id.clone(),
+                authority_event_ref: root.authority_event_ref,
+                authority_generation: root.authority_generation,
+            }],
+            issued_at: chrono::Utc::now(),
+            status: CapabilityGrantStatus::Active,
+            updated_by: None,
+            updated_at: None,
+            revoked_by: None,
+            revoked_at: None,
+        };
+        let value = serde_json::to_value(&value).map_err(PersistenceError::database)?;
+        let stream_ref = serde_json::to_value(CommitStreamRef::Realm {
+            realm_id: grant.realm_id.clone(),
+        })
+        .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO capability_grant_current_results \
+             (realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,\
+              current_stream_position,value,updated_at) \
+             VALUES($1,$2,'active',$3,$4,$5,0,$6,now())",
+        )
+        .bind::<Text, _>(grant.realm_id.as_str())
+        .bind::<Text, _>(grant_id.as_str())
+        .bind::<Text, _>(event_id.as_str())
+        .bind::<Text, _>(commit_id.as_str())
+        .bind::<Jsonb, _>(&stream_ref)
+        .bind::<Jsonb, _>(&value)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(grant_id)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    async fn seed_test_grant_status(
+        &self,
+        realm_id: &RealmId,
+        grant_id: &GrantId,
+        status: CapabilityGrantCurrentStatus,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query(
+            "UPDATE capability_grant_current_results \
+             SET status=$3,value=jsonb_set(value,'{status}',to_jsonb($3::text)) \
+             WHERE realm_id=$1 AND grant_id=$2",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(grant_id.as_str())
+        .bind::<Text, _>(status.as_str())
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1045,8 +1169,8 @@ mod tests {
             "kind":"realm",
             "realm_id":"ak:realm:ASm71QhtF54BxHBvRFcIhmLfPFYTrXhTcLnVAEMmqZ5t"
         }));
-        assert!(selector_covers(&realm, &exact_realm));
-        assert!(!selector_covers(&realm, &other_realm));
+        assert!(resource_selector_covers(&realm, &exact_realm));
+        assert!(!resource_selector_covers(&realm, &other_realm));
 
         let any_strand = selector(serde_json::json!({"kind":"strand","realm_id":REALM_ID}));
         let exact_strand = selector(serde_json::json!({
@@ -1058,8 +1182,8 @@ mod tests {
                 [0x51; 32],
             )),
         }));
-        assert!(selector_covers(&any_strand, &exact_strand));
-        assert!(!selector_covers(&exact_strand, &any_strand));
+        assert!(resource_selector_covers(&any_strand, &exact_strand));
+        assert!(!resource_selector_covers(&exact_strand, &any_strand));
     }
 
     fn row(status: &str) -> CapabilityGrantCurrentResultReadRow {

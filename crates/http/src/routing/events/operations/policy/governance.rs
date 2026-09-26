@@ -131,7 +131,7 @@ pub(super) async fn validate_member_state_policy(
             REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
-        .await
+        .await?
         {
             return Ok(());
         }
@@ -153,7 +153,7 @@ pub(super) async fn validate_member_state_policy(
             REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
-        .await
+        .await?
         {
             return Ok(());
         }
@@ -175,7 +175,7 @@ pub(super) async fn validate_member_state_policy(
         &[arkret_wire::CapabilityActionId::REALM_ADMIN],
         operation.created_at,
     )
-    .await
+    .await?
     {
         return Ok(());
     }
@@ -293,36 +293,23 @@ pub(super) async fn validate_set_default_strand_policy(
     }
     let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ak.realm.admin` aggregates Realm governance, so
     // an admin holder need not also hold the narrow set_default_strand action.
-    for action in [
-        arkret_wire::CapabilityActionId::REALM_SET_DEFAULT_STRAND,
-        arkret_wire::CapabilityActionId::REALM_ADMIN,
-    ] {
-        if state
-            .authorization()
-            .check(soland_services::authorization::AuthorizationCheck {
-                actor,
-                action,
-                resource: realm_id,
-                realm_id,
-                owner: owner.as_deref(),
-                members: &members,
-                resource_facets: &[],
-            })
-            .allowed
-        {
-            return Ok(());
-        }
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        &[
+            arkret_wire::CapabilityActionId::REALM_SET_DEFAULT_STRAND,
+            arkret_wire::CapabilityActionId::REALM_ADMIN,
+        ],
+        realm_id,
+        operation.created_at,
+    )
+    .await?
+    {
+        return Ok(());
     }
     Err("missing_capability")
 }
@@ -429,26 +416,15 @@ pub(super) async fn validate_realm_organization_policy(
     // not sufficient on its own.
     let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action: arkret_wire::CapabilityActionId::REALM_ADMIN,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        &[arkret_wire::CapabilityActionId::REALM_ADMIN],
+        realm_id,
+        operation.created_at,
+    )
+    .await?
     {
         return Ok(());
     }
@@ -531,28 +507,16 @@ pub(super) async fn validate_moderation_event_policy(
     };
 
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        actions,
+        realm_id,
+        operation.created_at,
+    )
+    .await?
     {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if actions.iter().any(|action| {
-        state
-            .authorization()
-            .check(soland_services::authorization::AuthorizationCheck {
-                actor,
-                action,
-                resource: realm_id,
-                realm_id,
-                owner: owner.as_deref(),
-                members: &members,
-                resource_facets: &[],
-            })
-            .allowed
-    }) {
         return Ok(());
     }
     Err("missing_capability")
@@ -569,26 +533,15 @@ pub(super) async fn validate_call_recording_start_policy(
     let action = call_recording_start_required_action(&payload);
     let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if crate::authz::actor_may(
+        state,
+        realm_id,
+        actor,
+        &[action],
+        realm_id,
+        operation.created_at,
+    )
+    .await?
     {
         return Ok(());
     }
