@@ -4884,6 +4884,217 @@ async fn third_party_invite_create_reads_from_committed_event_and_lifecycle() {
     assert_eq!(index_after.count, 1);
 }
 
+fn circle_self_member_request(
+    previous: &EventCommitRequest,
+    creator: &arkret_wire::AccountId,
+    circle_id: &arkret_wire::CircleId,
+    membership: &str,
+    expected: Option<serde_json::Value>,
+) -> EventCommitRequest {
+    let mut request = previous.clone();
+    let realm_id = previous.authority_commit.event.realm_id.clone();
+    let mut payload = serde_json::json!({
+        "circle_id": circle_id,
+        "member_id": arkret_wire::ActorId::account(creator.clone()),
+        "membership": membership,
+    });
+    if let Some(expected) = expected {
+        payload["expected_membership"] = expected;
+    }
+    let event = event(
+        arkret_wire::EventKind::CircleMemberState,
+        arkret_wire::ScopeRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: circle_id.clone(),
+        },
+        &creator.principal_id,
+        &creator.station_id,
+        payload,
+        previous.authority_commit.commit.committed_at,
+    );
+    request.authority_commit.event = event.clone();
+    request.authority_commit.commit.event_ref = event.event_id.clone();
+    request.authority_commit.commit.commit_id = arkret_wire::RealmCommitId::from_digest(
+        arkret_canonical::sha256_bytes(format!("circle-member:{}", event.event_id).as_bytes()),
+    );
+    request.authority_commit.commit.stream_ref = arkret_wire::CommitStreamRef::Circle {
+        realm_id,
+        circle_id: circle_id.clone(),
+    };
+    if matches!(&previous.authority_commit.commit.stream_ref,
+        arkret_wire::CommitStreamRef::Circle { circle_id: prior, .. } if prior == circle_id)
+    {
+        request.authority_commit.commit.stream_position =
+            previous.authority_commit.commit.stream_position + 1;
+        request.authority_commit.commit.previous_commit_ref =
+            Some(previous.authority_commit.commit.commit_id.clone());
+    } else {
+        request.authority_commit.commit.stream_position = 0;
+        request.authority_commit.commit.previous_commit_ref = None;
+    }
+    request.event.event_id = event.event_id.to_string();
+    request.event.actor_id = event.actor_id.to_string();
+    request.event.kind = event.kind.as_str().to_owned();
+    request.event.envelope = serde_json::to_value(&event).unwrap();
+    request.event.canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    request.event.canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    request.projections[0].event_id = event.event_id.to_string();
+    request.projections[0].event_kind = event.kind.as_str().to_owned();
+    request.projections[0].sender = Some(event.actor_id.to_string());
+    request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request
+}
+
+#[tokio::test]
+async fn circle_create_and_self_join_write_same_cut_current() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    let at = unit.transactions[0].commit.committed_at;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let creator = creator_account(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let object = serde_json::json!({
+        "schema": arkret_wire::SchemaId::CIRCLE_V1,
+        "realm_id": realm_id,
+        "title": "Project Circle",
+        "display": {"short_name":"Project", "color_token":"blue", "symbol":{"glyph":"lock"}},
+        "directory_visibility":"members",
+        "join_rule":"public",
+        "history_access":"since_join",
+        "state":"active",
+        "created_by":arkret_wire::ActorId::account(creator.clone()),
+        "created_at":arkret_canonical::format_timestamp_canonical(at)
+    });
+    let create = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::CircleCreate,
+        serde_json::json!({"object":object.clone()}),
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let circle_id = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
+    let mut conn = pool.get().await.unwrap();
+    let created = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM circle_current_results WHERE realm_id=$1 AND circle_id=$2 \
+         AND current_commit_id=$3 AND source_stream_ref->>'kind'='realm'",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(create.authority_commit.commit.commit_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(created.count, 1);
+    drop(conn);
+    let mut duplicate_object = object.clone();
+    duplicate_object["title"] = serde_json::json!("Another Project Circle");
+    duplicate_object["display"]["short_name"] = serde_json::json!("PROJECT");
+    let duplicate = realm_event_request_as(
+        &create,
+        &creator,
+        arkret_wire::EventKind::CircleCreate,
+        serde_json::json!({"object": duplicate_object}),
+    );
+    let refusal = uow.commit_event(duplicate.clone()).await.unwrap_err();
+    assert_eq!(
+        refusal.conflict_code(),
+        Some(soland_storage::ConflictCode::FailedPrecondition)
+    );
+    assert!(
+        store
+            .committed_event(&duplicate.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let outsider = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:circle-outsider.example").unwrap(),
+        creator.station_id.clone(),
+    );
+    let outsider_join = circle_self_member_request(
+        &create,
+        &outsider,
+        &circle_id,
+        "join",
+        Some(serde_json::Value::Null),
+    );
+    let refused = uow.commit_event(outsider_join.clone()).await.unwrap_err();
+    assert_eq!(
+        refused.conflict_code(),
+        Some(soland_storage::ConflictCode::FailedPrecondition)
+    );
+    assert!(
+        store
+            .committed_event(&outsider_join.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let join = circle_self_member_request(
+        &create,
+        &creator,
+        &circle_id,
+        "join",
+        Some(serde_json::Value::Null),
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let joined = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM circle_member_state_current_results \
+         WHERE circle_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3 \
+         AND current_stream_position=0 AND source_stream_ref->>'kind'='circle'",
+    )
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(arkret_wire::ActorId::account(creator.clone()).to_string())
+    .bind::<Text, _>(join.authority_commit.commit.commit_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(joined.count, 1);
+    drop(conn);
+
+    let stale = circle_self_member_request(
+        &join,
+        &creator,
+        &circle_id,
+        "leave",
+        Some(serde_json::json!("leave")),
+    );
+    let refused = uow.commit_event(stale.clone()).await.unwrap_err();
+    assert_eq!(
+        refused.conflict_code(),
+        Some(soland_storage::ConflictCode::FailedPrecondition)
+    );
+    assert!(
+        store
+            .committed_event(&stale.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut conn = pool.get().await.unwrap();
+    let unchanged = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM circle_member_state_current_results \
+         WHERE circle_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3",
+    )
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(arkret_wire::ActorId::account(creator.clone()).to_string())
+    .bind::<Text, _>(join.authority_commit.commit.commit_id.as_str())
+    .get_result::<CountRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(unchanged.count, 1);
+}
+
 /// Real PostgreSQL: the same-cut evaluator refuses an actor without an
 /// authorizing action (and a non-member) with `capability_denied` and zero
 /// writes, admits a joined member once the root grants `ak.invite.create`,

@@ -2444,6 +2444,13 @@ async fn commit_one_in_connection(
         &request.authority_commit.commit,
     )
     .await?;
+    crate::circle_current_results::admit_in_connection(
+        conn,
+        event,
+        &request.authority_commit.commit,
+        &request.authority_commit.expected_authority.service_id,
+    )
+    .await?;
 
     if let Some(selector) = request.device_revocation_gate.as_ref() {
         ensure_gate_allowed_in_transaction(conn, selector).await?;
@@ -2473,6 +2480,7 @@ async fn commit_one_in_connection(
             .await?;
         }
         commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
+        crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
         // An accepted Invite decides its accepting actor's `leave -> join`

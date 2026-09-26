@@ -4353,6 +4353,43 @@ CREATE TABLE member_state_current_results (
 CREATE INDEX member_state_current_result_membership
  ON member_state_current_results(realm_id,membership,member_id);
 
+-- Circle create is a Realm-stream Event; membership writes are on that
+-- Circle's own Commit stream. These rows are derived only in the accepting
+-- transaction and carry the exact accepted revision.
+CREATE TABLE circle_current_results (
+ realm_id TEXT NOT NULL,
+ circle_id TEXT NOT NULL PRIMARY KEY,
+ create_event_id TEXT NOT NULL UNIQUE,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ source_stream_ref JSONB NOT NULL,
+ short_name_folded TEXT NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ UNIQUE(realm_id,short_name_folded),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(source_stream_ref->>'kind'='realm'),
+ CHECK(value->>'id'=circle_id),
+ CHECK(value->>'realm_id'=realm_id)
+);
+CREATE TABLE circle_member_state_current_results (
+ realm_id TEXT NOT NULL,
+ circle_id TEXT NOT NULL REFERENCES circle_current_results(circle_id),
+ member_id TEXT NOT NULL,
+ membership TEXT NOT NULL CHECK(membership IN ('join','knock','leave','ban')),
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ source_stream_ref JSONB NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(circle_id,member_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(source_stream_ref->>'kind'='circle'),
+ CHECK(value->>'membership'=membership)
+);
+CREATE INDEX circle_member_state_current_result_membership
+ ON circle_member_state_current_results(circle_id,membership,member_id);
+
 -- Event-derived Strand identity and its complete registered current value.
 CREATE TABLE strand_current_results (
  realm_id TEXT NOT NULL,

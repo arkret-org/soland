@@ -70,6 +70,7 @@ mod key_backup_current_results;
 mod key_backup_unlock;
 mod member_identity;
 mod member_state_admission;
+mod circle_current_results;
 mod message_revision_current_results;
 mod mls;
 mod mls_group_current_results;
