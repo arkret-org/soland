@@ -2509,6 +2509,52 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         accepted_current_member_joined_in_connection(&mut conn, realm_id, member).await
     }
 
+    async fn accepted_effective_agent_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        agent: &arkret_wire::ActorId,
+        controller: &arkret_wire::AccountId,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let controller_actor = arkret_wire::ActorId::account(controller.clone());
+        let controller_value = serde_json::to_value(controller)
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(
+            "SELECT EXISTS (\
+               SELECT 1 FROM member_state_current_results agent_member \
+               JOIN realm_commits agent_commit \
+                 ON agent_commit.commit_id=agent_member.current_commit_id \
+                AND agent_commit.realm_id=agent_member.realm_id \
+                AND agent_commit.stream_position=agent_member.current_stream_position \
+                AND agent_commit.stream_ref->>'kind'='realm' \
+               JOIN canonical_events agent_event ON agent_event.pk=agent_commit.event_pk \
+               JOIN member_state_current_results controller_member \
+                 ON controller_member.realm_id=agent_member.realm_id \
+               JOIN realm_commits controller_commit \
+                 ON controller_commit.commit_id=controller_member.current_commit_id \
+                AND controller_commit.realm_id=controller_member.realm_id \
+                AND controller_commit.stream_position=controller_member.current_stream_position \
+                AND controller_commit.stream_ref->>'kind'='realm' \
+               JOIN canonical_events controller_event ON controller_event.pk=controller_commit.event_pk \
+               WHERE agent_member.realm_id=$1 AND agent_member.member_id=$2 \
+                 AND agent_member.membership='join' \
+                 AND controller_member.member_id=$3 AND controller_member.membership='join' \
+                 AND agent_event.envelope->'payload'->'agent_controller_binding'->'controller_account_id'=$4 \
+                 AND agent_event.envelope->'payload'->'agent_controller_binding'->>'controller_membership_generation_ref' \
+                     =controller_event.envelope->>'event_id' \
+                 AND agent_event.kind='ak.member.state' \
+             ) AS present",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(agent.to_string())
+        .bind::<Text, _>(controller_actor.to_string())
+        .bind::<Jsonb, _>(controller_value)
+        .get_result::<PresenceRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(row.present)
+    }
+
     async fn accepted_realm_reader(
         &self,
         realm_id: &arkret_wire::RealmId,

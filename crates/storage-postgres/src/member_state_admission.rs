@@ -49,6 +49,14 @@ struct MembershipRow {
     membership: String,
 }
 
+#[derive(diesel::QueryableByName)]
+struct ControllerJoinRow {
+    #[diesel(sql_type = Text)]
+    membership: String,
+    #[diesel(sql_type = Text)]
+    event_id: String,
+}
+
 fn failed_precondition(detail: &str) -> PersistenceError {
     PersistenceError::Conflict(format!("{}: {detail}", ConflictCode::FailedPrecondition))
 }
@@ -131,20 +139,7 @@ pub(crate) async fn require_ordinary_member(
     realm_id: &arkret_wire::RealmId,
     member: &arkret_wire::ActorId,
 ) -> PersistenceResult<()> {
-    let ordinary = sql_query(
-        "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
-         WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
-           AND e.state='committed' AND e.envelope->'payload'->'object'->>'purpose'='collaboration') AS present",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .get_result::<PresentRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if !ordinary.present {
-        return Err(unsupported(
-            "membership of this Realm role is governed by its own profile",
-        ));
-    }
+    require_ordinary_realm(conn, realm_id).await?;
     if let Some(account) = member.as_account_id() {
         let agent = sql_query(
             "SELECT EXISTS (SELECT 1 FROM agent_status_current_results WHERE agent_id=$1) AS present",
@@ -158,6 +153,27 @@ pub(crate) async fn require_ordinary_member(
                 "Agent membership needs its controller binding admission",
             ));
         }
+    }
+    Ok(())
+}
+
+async fn require_ordinary_realm(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<()> {
+    let ordinary = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
+           AND e.state='committed' AND e.envelope->'payload'->'object'->>'purpose'='collaboration') AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if !ordinary.present {
+        return Err(unsupported(
+            "membership of this Realm role is governed by its own profile",
+        ));
     }
     Ok(())
 }
@@ -279,6 +295,140 @@ async fn check_self_entry(
     Ok(())
 }
 
+/// The ordinary-Realm controller carve-out is a caller-signed Agent join.
+/// Every input that authorizes it is read under this RealmCommit transaction.
+async fn check_agent_controller_join(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    payload: &MembershipPayload,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::agent::AgentProvisioningValue;
+    use arkret_models_collaboration::governance::accountability::AccountabilityProjection;
+
+    let binding = payload
+        .agent_controller_binding
+        .as_ref()
+        .ok_or_else(|| failed_precondition("Agent join lacks its controller binding"))?;
+    let controller = event
+        .actor_id
+        .as_account_id()
+        .ok_or_else(|| capability_denied("Agent controller must be an Account"))?;
+    let agent = payload
+        .member_id
+        .as_account_id()
+        .ok_or_else(|| capability_denied("Agent target must be an Account"))?;
+    if controller != &binding.controller_account_id
+        || controller == agent
+        || controller.station_id != agent.station_id
+        || binding.controller_terminal_event_ref.is_some()
+        || payload.membership_cause.is_some()
+    {
+        return Err(capability_denied(
+            "Agent controller binding is not the exact writer/target pair",
+        ));
+    }
+    let current = sql_query(
+        "SELECT m.membership, e.envelope->>'event_id' AS event_id FROM member_state_current_results m \
+         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
+         JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE m.realm_id=$1 AND m.member_id=$2 \
+           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
+           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id \
+         FOR SHARE OF m",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(event.actor_id.to_string())
+    .get_result::<ControllerJoinRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if !current.is_some_and(|row| {
+        row.membership == "join"
+            && row.event_id == binding.controller_membership_generation_ref.as_str()
+    }) {
+        return Err(failed_precondition(
+            "controller is not in its bound joined generation",
+        ));
+    }
+
+    let provisioning = sql_query(
+        "SELECT value FROM agent_provisioning_current_results \
+         WHERE agent_id=$1 FOR SHARE",
+    )
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .get_result::<CurrentValueRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| failed_precondition("Agent has no accepted provision"))?;
+    let provisioning: AgentProvisioningValue =
+        serde_json::from_value(provisioning.value).map_err(|error| {
+            PersistenceError::Internal(format!("Agent provision current invalid: {error}"))
+        })?;
+    if provisioning.controller_principal_id != controller.principal_id {
+        return Err(capability_denied("writer did not provision the Agent"));
+    }
+    let status = sql_query(
+        "SELECT value FROM agent_status_current_results \
+         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
+    )
+    .bind::<Text, _>(provisioning.principal_control_realm_id.as_str())
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .get_result::<CurrentValueRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if !status.is_some_and(|row| row.value.as_str() == Some("active")) {
+        return Err(failed_precondition("Agent lifecycle is not active"));
+    }
+    let accountability = sql_query(
+        "SELECT value FROM identity_accountability_current_results \
+         WHERE subject_id=$1 AND issuer_id=$2 \
+         ORDER BY realm_id,scope_set_digest FOR SHARE",
+    )
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .bind::<Text, _>(controller.principal_id.as_str())
+    .get_results::<CurrentValueRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut accountable = false;
+    for row in accountability {
+        let value: AccountabilityProjection =
+            serde_json::from_value(row.value).map_err(|error| {
+                PersistenceError::Internal(format!("Agent accountability current invalid: {error}"))
+            })?;
+        accountable |= value.verifies_at(commit.committed_at);
+    }
+    if !accountable {
+        return Err(failed_precondition(
+            "Agent accountability grant is not active",
+        ));
+    }
+    // An activated MLS scope needs an accepted KeyPackage and a separate
+    // same-cut Add admission. Keep that branch closed until it is implemented.
+    let mls_active = sql_query(
+        "SELECT EXISTS(SELECT 1 FROM mls_group_current_results \
+         WHERE realm_id=$1 AND value->'effective_scope'->>'kind'='realm') AS present",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if mls_active.present {
+        return Err(unsupported(
+            "Agent join into an activated MLS Realm has no same-cut admission",
+        ));
+    }
+    check_self_entry(
+        conn,
+        &event.realm_id,
+        "join",
+        !payload.gate_proofs.is_empty(),
+    )
+    .await
+}
+
 /// Decide one ordinary `ak.member.state` Event at its accepting cut.
 async fn admit_member_state(
     conn: &mut AsyncPgConnection,
@@ -300,12 +450,26 @@ async fn admit_member_state(
     }
     if payload.strand_id.is_some()
         || payload.invite_ref.is_some()
-        || payload.agent_controller_binding.is_some()
         || payload.membership_cause.is_some()
     {
         return Err(unsupported(
-            "scoped, invited, Agent-bound or cascade membership has its own admission",
+            "scoped, invited or cascade membership has its own admission",
         ));
+    }
+    if payload.agent_controller_binding.is_some() {
+        if payload.membership != MembershipPayloadState::Join {
+            return Err(unsupported(
+                "Agent controller binding currently admits only join",
+            ));
+        }
+        require_ordinary_realm(conn, &event.realm_id).await?;
+        let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;
+        if from != "leave" {
+            return Err(failed_precondition(
+                "Agent controller join requires the leave state",
+            ));
+        }
+        return check_agent_controller_join(conn, event, commit, &payload).await;
     }
     require_ordinary_member(conn, &event.realm_id, &payload.member_id).await?;
     let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;

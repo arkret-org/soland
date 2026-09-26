@@ -4184,7 +4184,7 @@ async fn current_keypackage_claim_trust_selector(
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     crate::app_error!(FailedPrecondition, "Agent membership is unavailable",)
-                        .with_reason_code("claim_generation_mismatch")
+                        .with_internal_reason("claim_generation_mismatch")
                 })?;
             crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
                 state,
@@ -4197,7 +4197,7 @@ async fn current_keypackage_claim_trust_selector(
                 tracing::warn!(agent_id = %principal, %realm_id, error = %error,
                     "Agent KeyPackage claim rejected by effective membership");
                 crate::app_error!(FailedPrecondition, "Agent is not an effective Realm member",)
-                    .with_reason_code("claim_generation_mismatch")
+                    .with_internal_reason("claim_generation_mismatch")
             })?;
         }
         return Ok(KeyPackageTrustSelector::Principal(binding));
@@ -4514,15 +4514,32 @@ async fn keypackage_claim_record(
         .await
         .map_err(|error| AppError::internal(format!("KeyPackage owner lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("KeyPackage owner account is unavailable"))?;
-    if owner.principal_id != principal_id {
-        return Err(AppError::internal(
-            "KeyPackage principal differs from its durable owner account",
+    if record.agent_key_authorize_event_id.is_some() {
+        // Agent KeyPackages are stored under the controller's local Account
+        // row; the Agent has its own principal and no Human Account row.
+        // Recheck that exact controller relation before exposing the claim.
+        let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal_id.clone(),
+            owner.account_id.station_id.clone(),
         ));
-    }
-    if request
-        .target_account_id
-        .as_ref()
-        .is_some_and(|target| target != &owner.account_id)
+        let agent = crate::routing::identity::agent_pcr::agent_record_for_actor(state, &agent_actor)
+            .await?
+            .ok_or_else(|| AppError::capability_denied("target Agent is unavailable"))?;
+        let controller =
+            crate::routing::identity::agent_pcr::agent_controller_account(state, &agent).await?;
+        if controller != owner.account_id
+            || request.target_account_id.is_some()
+            || request.target_agent_id.as_ref() != Some(&principal_id)
+        {
+            return Err(AppError::capability_denied(
+                "Agent KeyPackage target differs from its durable controller binding",
+            ));
+        }
+    } else if owner.principal_id != principal_id
+        || request
+            .target_account_id
+            .as_ref()
+            .is_some_and(|target| target != &owner.account_id)
     {
         return Err(AppError::capability_denied(
             "KeyPackage claim target account differs from its durable owner",

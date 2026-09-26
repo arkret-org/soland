@@ -1221,6 +1221,19 @@ pub trait AuthorityCommitStore: Send + Sync {
         member: &arkret_wire::ActorId,
     ) -> PersistenceResult<bool>;
 
+    /// The Agent's joined member row and its controller's exact active join
+    /// generation, both from accepted durable current state. A stale binding
+    /// never becomes effective after the controller rejoins.
+    async fn accepted_effective_agent_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        agent: &arkret_wire::ActorId,
+        controller: &arkret_wire::AccountId,
+    ) -> PersistenceResult<bool> {
+        let _ = (realm_id, agent, controller);
+        Ok(false)
+    }
+
     /// Whether `actor` reads `realm_id` on this Station: a current joined
     /// member by [`Self::accepted_current_member_joined`], or the Account
     /// that owns it as its principal-control Realm.

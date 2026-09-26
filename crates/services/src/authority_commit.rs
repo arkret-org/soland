@@ -432,6 +432,19 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// The accepted Agent join and its controller's exact current generation.
+    pub async fn accepted_effective_agent_member_joined(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        agent: &arkret_wire::ActorId,
+        controller: &arkret_wire::AccountId,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .accepted_effective_agent_member_joined(realm_id, agent, controller)
+            .await?)
+    }
+
     /// Whether `actor` reads `realm_id` here: a current joined member in this
     /// service's accepted state, or the owner of its principal-control Realm.
     /// Grants no Event authority by itself.

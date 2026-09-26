@@ -401,25 +401,23 @@ pub(crate) async fn validate_effective_agent_realm_membership(
         ));
     }
     let controller_account = agent_controller_account(state, agent_record).await?;
-    let agent_actor = agent_actor_for_account(agent_record, &controller_account)?.to_string();
-    let projection = state.projections().snapshot();
-    let binding = projection
-        .agent_membership_binding(realm_id, &agent_actor)
-        .ok_or_else(|| {
-            failed_precondition(
-                "Agent membership has no controller-generation binding",
-                "agent_membership_inactive",
-            )
-        })?;
-    if binding.controller_account_id != controller_account
-        || !projection.effective_agent_membership_base(realm_id, &agent_actor)
-    {
+    let agent_actor = agent_actor_for_account(agent_record, &controller_account)?;
+    let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
+        .map_err(|_| schema_error("Agent membership Realm id is invalid"))?;
+    // MemberState is decided at the durable commit cut and deliberately does
+    // not advance the process-local projection. Read the accepted Agent row
+    // and controller's exact join generation together from durable current.
+    let joined = state
+        .authority_commits()
+        .accepted_effective_agent_member_joined(&realm_id, &agent_actor, &controller_account)
+        .await
+        .map_err(|error| AppError::internal(format!("Agent membership current lookup: {error}")))?;
+    if !joined {
         return Err(failed_precondition(
             "Agent membership controller authority or generation is no longer current",
             "agent_membership_inactive",
         ));
     }
-    drop(projection);
     validate_agent_controller_binding(state, agent_record, accepted_at).await
 }
 
