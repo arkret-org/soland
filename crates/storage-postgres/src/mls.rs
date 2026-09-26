@@ -356,6 +356,47 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         }
     }
 
+    async fn get_claim_welcome_binding(
+        &self,
+        claim_id: &str,
+    ) -> PersistenceResult<Option<soland_storage::MlsWelcomeClaimBinding>> {
+        #[derive(QueryableByName)]
+        struct BindingRow {
+            #[diesel(sql_type = Text)]
+            claim_id: String,
+            #[diesel(sql_type = Text)]
+            source_id: String,
+            #[diesel(sql_type = Text)]
+            claim_request_id: String,
+            #[diesel(sql_type = Text)]
+            welcome_id: String,
+            #[diesel(sql_type = Text)]
+            welcome_digest: String,
+            #[diesel(sql_type = Text)]
+            commit_event_ref: String,
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        Ok(sql_query(
+            "SELECT claim_id,source_id,claim_request_id,welcome_id,welcome_digest,commit_event_ref \
+             FROM keypackage_claim_welcome_bindings WHERE claim_id=$1",
+        )
+        .bind::<Text, _>(claim_id)
+        .get_result::<BindingRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| soland_storage::MlsWelcomeClaimBinding {
+            claim_id: row.claim_id,
+            source_id: row.source_id,
+            claim_request_id: row.claim_request_id,
+            welcome_id: row.welcome_id,
+            welcome_digest: row.welcome_digest,
+            commit_event_ref: row.commit_event_ref,
+        }))
+    }
+
     async fn get_peer_claim_by_keypackage_id(
         &self,
         keypackage_id: &str,

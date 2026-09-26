@@ -33,11 +33,11 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_crypto::{
     Failure as KeypackageFailure, KeyOperationSignature, KeyPackageClaimRecord,
     KeyPackageClaimTerminalReceipt, KeyPackageClaimTerminalState, KeyPackageConsumeReceipt,
-    KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
-    KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
-    KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody,
-    PeerKeyPackageClaimErrorCode, PeerKeyPackageClaimPurpose, PeerKeyPackageClaimReceipt,
-    PeerKeyPackageRequesterAuthorization, PeerKeyPackagesClaimOutcome,
+    KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimQueryRequestBody,
+    KeyPackagesClaimRequestBody, KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody,
+    KeyPackagesRevokeOutcome, KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome,
+    KeyPackagesUploadRequestBody, PeerKeyPackageClaimErrorCode, PeerKeyPackageClaimPurpose,
+    PeerKeyPackageClaimReceipt, PeerKeyPackageRequesterAuthorization, PeerKeyPackagesClaimOutcome,
     PeerKeyPackagesClaimQueryOutcome, PeerKeyPackagesClaimQueryRequestBody,
     PeerKeyPackagesClaimQueryState, PeerKeyPackagesClaimRequestBody,
     keypackage_claim_authorization_signing_bytes, peer_keypackage_claim_receipt_signing_bytes,
@@ -260,6 +260,7 @@ pub fn protocol_router() -> Router {
         Router::with_path("keypackages")
             .push(Router::with_path("upload").post(upload_keypackage))
             .push(Router::with_path("claim").post(claim_keypackage))
+            .push(Router::with_path("claims/query").post(query_own_keypackage_claim))
             .push(Router::with_path("consume").post(consume_keypackages))
             .push(Router::with_path("revoke").post(revoke_keypackages)),
     )
@@ -2167,6 +2168,138 @@ async fn claim_keypackage(
         .map(|Json(outcome)| Json(outcome.into()))
 }
 
+/// The one recipient endpoint a claim read is answered for
+/// (device-lifecycle.md §9 `claims/query`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaimReader {
+    /// A human device session: its complete AccountId and device.
+    Device {
+        actor: arkret_wire::ActorId,
+        device_id: String,
+    },
+    /// An Agent runtime session under its current key authorization.
+    Agent {
+        agent_id: String,
+        verification_method: String,
+        authorize_event_id: String,
+    },
+}
+
+/// Whether `record` is the claim of exactly `reader`'s endpoint.
+fn claim_record_names_reader(record: &KeyPackageClaimRecord, reader: &ClaimReader) -> bool {
+    match reader {
+        ClaimReader::Device { actor, device_id } => {
+            &record.actor_id == actor
+                && record.device_id.as_ref().map(|id| id.as_str()) == Some(device_id.as_str())
+                && record.agent_id.is_none()
+                && record.agent_verification_method.is_none()
+        }
+        ClaimReader::Agent {
+            agent_id,
+            verification_method,
+            authorize_event_id,
+        } => {
+            record.actor_id.signing_principal_id().as_str() == agent_id
+                && record.agent_id.as_ref().map(|id| id.as_str()) == Some(agent_id.as_str())
+                && record
+                    .agent_verification_method
+                    .as_ref()
+                    .map(|method| method.as_str())
+                    == Some(verification_method.as_str())
+                && record
+                    .agent_key_authorize_event_id
+                    .as_ref()
+                    .map(|event| event.as_str())
+                    == Some(authorize_event_id.as_str())
+                && record.device_id.is_none()
+        }
+    }
+}
+
+/// The endpoint an authenticated session reads claims as, or `None` when the
+/// session names no current endpoint.
+async fn claim_reader(state: &AppState, session: &SessionRecord) -> Option<ClaimReader> {
+    match crate::routing::identity::device_messages::recipient_queue_selector(session).ok()? {
+        soland_services::delivery::RecipientQueueSelector::HumanDevice { device_id, .. } => {
+            let actor =
+                crate::routing::identity::session_actor::validated_session_actor(state, session)
+                    .await
+                    .ok()?;
+            actor.as_account_id()?;
+            Some(ClaimReader::Device { actor, device_id })
+        }
+        soland_services::delivery::RecipientQueueSelector::AgentRuntime {
+            agent_id,
+            verification_method,
+            authorization_event_ref,
+        } => {
+            let principal = arkret_wire::DidCoreId::new(agent_id.clone()).ok()?;
+            current_agent_key_authorization_matches_method(
+                state,
+                &principal,
+                &authorization_event_ref,
+                &verification_method,
+            )
+            .await
+            .then_some(ClaimReader::Agent {
+                agent_id,
+                verification_method,
+                authorize_event_id: authorization_event_ref,
+            })
+        }
+    }
+}
+
+fn keypackage_claim_unknown() -> AppError {
+    crate::app_error!(KeypackageUnknown, "KeyPackage claim is unknown")
+}
+
+/// `ak.self.keys.keypackages.read.claim.v1`: the byte-identical outcome of
+/// the claim request that allocated `claim_id`, for that claim's own
+/// endpoint only (device-lifecycle.md §9 `claims/query`).
+///
+/// An unknown id, another endpoint's claim, a replaced Agent authorization,
+/// a failed claim without an outcome and a ledger row past its §9.2.3
+/// retention all answer the same `keypackage_unknown`. Nothing is written.
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.keypackages.read.claim", tags("mls.rs"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.read.claim.v1"))]
+async fn query_own_keypackage_claim(
+    aa: AuthArgs,
+    body: JsonBody<KeyPackagesClaimQueryRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<KeyPackagesClaimOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    let reader = claim_reader(state, &session)
+        .await
+        .ok_or_else(keypackage_claim_unknown)?;
+    let row = state
+        .mls_key_packages()
+        .peer_claim_by_claim_id(body.claim_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("claim read ledger: {error}")))?
+        .filter(|row| row.keypackage_id.is_some() && row.expires_at > now().timestamp())
+        .ok_or_else(keypackage_claim_unknown)?;
+    let outcome = row
+        .outcome
+        .map(serde_json::from_value::<PeerKeyPackagesClaimOutcome>)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored claim outcome invalid: {error}")))?
+        .ok_or_else(keypackage_claim_unknown)?;
+    let owned = outcome.claim_receipt.destination_id.as_str() == state.service_id()
+        && outcome
+            .claims
+            .iter()
+            .find(|record| record.claim_id == body.claim_id.as_str())
+            .is_some_and(|record| claim_record_names_reader(record, &reader));
+    if !owned {
+        return Err(keypackage_claim_unknown());
+    }
+    json_ok(outcome.into())
+}
+
 pub(crate) async fn capture_relayed_keypackage_claim_outcome(
     state: &AppState,
     destination_id: &str,
@@ -2741,8 +2874,7 @@ async fn validate_recipient_durable_receipt(
     if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
         || receipt.recipient_id.as_str() != state.service_id()
     {
-        return Err(crate::app_error!(
-            FailedPrecondition,
+        return Err(AppError::conflict(
             "recipient durable receipt differs from the consume coordinates",
         ));
     }
@@ -2763,10 +2895,106 @@ async fn validate_recipient_durable_receipt(
         cached_keypackage,
     )
     .await?;
-    Err(crate::app_error!(
-        FailedPrecondition,
-        "KeyPackage consume awaits the formal Welcome delivery current result",
-    ))
+    receipt_matches_welcome_binding(state, body).await
+}
+
+/// device-lifecycle.md §9 consume (decision 0121): the durable receipt must
+/// equal, value for value, the Welcome binding the claim destination recorded
+/// when it queued the Welcome and the exact claim record with its original
+/// request. The recipient queue is never read, so consume and ACK have no
+/// order. No binding or any difference is the universal `conflict`.
+async fn receipt_matches_welcome_binding(
+    state: &AppState,
+    body: &KeyPackagesConsumeRequestBody,
+) -> Result<(), AppError> {
+    let receipt = &body.recipient_durable_receipt;
+    let mismatch = |detail: &str| AppError::conflict(format!("KeyPackage consume: {detail}"));
+    let claim_id = body.claim_id.as_str();
+    let binding = state
+        .mls_key_packages()
+        .claim_welcome_binding(claim_id)
+        .await
+        .map_err(|error| AppError::internal(format!("claim Welcome binding: {error}")))?
+        .ok_or_else(|| mismatch("the claim has no queued Welcome"))?;
+    if receipt.welcome_ref.as_str() != binding.welcome_id
+        || receipt.welcome_digest.as_str() != binding.welcome_digest
+    {
+        return Err(mismatch(
+            "the receipt names another Welcome than the claim's",
+        ));
+    }
+    let commit_ref = arkret_wire::EventId::new(binding.commit_event_ref.clone())
+        .map_err(|error| AppError::internal(format!("stored Welcome Commit ref: {error}")))?;
+    let commit = state
+        .authority_commits()
+        .committed_event(&commit_ref)
+        .await
+        .map_err(|error| AppError::internal(format!("Welcome Commit lookup: {error}")))?
+        .ok_or_else(|| AppError::internal("the bound Welcome Commit is not committed"))?;
+    let payload: arkret_models_crypto::MlsCommitPayload =
+        serde_json::to_value(&commit.event.payload)
+            .and_then(serde_json::from_value)
+            .map_err(|error| {
+                AppError::internal(format!("bound Welcome Commit payload: {error}"))
+            })?;
+    if receipt.mls_epoch != payload.next_epoch() {
+        return Err(mismatch(
+            "the receipt epoch is not the Welcome Commit's epoch",
+        ));
+    }
+    let ledger = state
+        .mls_key_packages()
+        .peer_claim_by_claim_id(claim_id)
+        .await
+        .map_err(|error| AppError::internal(format!("consume claim ledger: {error}")))?
+        .filter(|ledger| {
+            ledger.source_id == binding.source_id
+                && ledger.claim_request_id == binding.claim_request_id
+        })
+        .ok_or_else(|| AppError::internal("the bound claim has no ledger row"))?;
+    let outcome = ledger
+        .outcome
+        .map(serde_json::from_value::<PeerKeyPackagesClaimOutcome>)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored claim outcome invalid: {error}")))?
+        .ok_or_else(|| AppError::internal("the bound claim has no success outcome"))?;
+    let record = outcome
+        .claims
+        .iter()
+        .find(|record| record.claim_id == claim_id)
+        .ok_or_else(|| AppError::internal("the bound claim is not in its outcome"))?;
+    let request = &outcome.claim_receipt.request;
+    let endpoint_matches = match &receipt.recipient {
+        arkret_models_crypto::RecipientMlsDurableSigner::Device {
+            recipient_account_id,
+            recipient_device_id,
+            ..
+        } => {
+            record.actor_id.as_account_id() == Some(recipient_account_id)
+                && record.device_id.as_ref() == Some(recipient_device_id)
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::Agent {
+            recipient_agent_id,
+            recipient_agent_verification_method,
+            agent_key_authorize_event_id,
+        } => {
+            record.agent_id.as_ref() == Some(recipient_agent_id)
+                && record.agent_verification_method.as_ref()
+                    == Some(recipient_agent_verification_method)
+                && record.agent_key_authorize_event_id.as_ref()
+                    == Some(agent_key_authorize_event_id)
+        }
+        arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise { .. } => false,
+    };
+    if receipt.claim_request_id != outcome.claim_request_id
+        || receipt.key_package_ref.as_str() != record.keypackage_ref
+        || !endpoint_matches
+        || receipt.realm_id != request.intended_realm_id
+        || receipt.mls_group_id != request.mls_group_id
+    {
+        return Err(mismatch("the receipt differs from the exact claim record"));
+    }
+    Ok(())
 }
 
 async fn verify_keypackage_consumer_signature(
@@ -4808,5 +5036,86 @@ mod trust_binding_tests {
             keypackage_reason_code("param_invalid: claim generation mismatch").as_str(),
             "key_package_invalid"
         );
+    }
+
+    /// device-lifecycle.md §9 `claims/query`: a claim is read only by its own
+    /// exact endpoint -- the complete AccountId and device, or the Agent with
+    /// its exact method and authorize Event -- never by the same principal on
+    /// another Station, another device or a replaced Agent authorization.
+    #[test]
+    fn a_claim_record_is_read_only_by_its_exact_endpoint() {
+        let station = "ak:did_core:web:claim-read-station.example";
+        let account = |station: &str| {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:claim-owner.example").unwrap(),
+                arkret_wire::DidCoreId::new(station).unwrap(),
+            ))
+        };
+        let device = "ak:device:01964137-0000-7000-8000-000000000021";
+        let record = KeyPackageClaimRecord {
+            claim_id: "ak:keypackage_claim:01964137-0000-7000-8000-000000000022".to_owned(),
+            keypackage_ref: format!("sha256:{}", "2".repeat(64)),
+            actor_id: account(station),
+            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:claim-owner.example")
+                .unwrap(),
+            device_id: Some(arkret_wire::DeviceId::new(device).unwrap()),
+            agent_id: None,
+            agent_verification_method: None,
+            pairwise_verification_method: None,
+            keypackage: "AA".to_owned(),
+            capabilities: Vec::new(),
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: None,
+            expires_at: now(),
+            revocation_status: None,
+            last_resort: None,
+        };
+        let owner = ClaimReader::Device {
+            actor: account(station),
+            device_id: device.to_owned(),
+        };
+        assert!(claim_record_names_reader(&record, &owner));
+        for other in [
+            ClaimReader::Device {
+                actor: account("ak:did_core:web:other-station.example"),
+                device_id: device.to_owned(),
+            },
+            ClaimReader::Device {
+                actor: account(station),
+                device_id: "ak:device:01964137-0000-7000-8000-000000000023".to_owned(),
+            },
+        ] {
+            assert!(!claim_record_names_reader(&record, &other), "{other:?}");
+        }
+
+        let agent = "ak:did_core:web:claim-agent.example";
+        let method = "did:web:claim-agent.example#runtime";
+        let authorize = "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM";
+        let agent_record = KeyPackageClaimRecord {
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(agent).unwrap(),
+                arkret_wire::DidCoreId::new(station).unwrap(),
+            )),
+            principal_id: arkret_wire::DidCoreId::new(agent).unwrap(),
+            device_id: None,
+            agent_id: Some(arkret_wire::DidCoreId::new(agent).unwrap()),
+            agent_verification_method: Some(arkret_wire::DidUrl::new(method).unwrap()),
+            agent_key_authorize_event_id: Some(arkret_wire::EventId::new(authorize).unwrap()),
+            ..record.clone()
+        };
+        let runtime = ClaimReader::Agent {
+            agent_id: agent.to_owned(),
+            verification_method: method.to_owned(),
+            authorize_event_id: authorize.to_owned(),
+        };
+        assert!(claim_record_names_reader(&agent_record, &runtime));
+        assert!(!claim_record_names_reader(&record, &runtime));
+        assert!(!claim_record_names_reader(&agent_record, &owner));
+        let replaced = ClaimReader::Agent {
+            agent_id: agent.to_owned(),
+            verification_method: method.to_owned(),
+            authorize_event_id: "ak:event:AQ3uiXLNG8rmS8ghzZ8LQ9xk2-NHOvG9AuFbl3QdMB0f".to_owned(),
+        };
+        assert!(!claim_record_names_reader(&agent_record, &replaced));
     }
 }

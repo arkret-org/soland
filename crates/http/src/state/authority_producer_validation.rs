@@ -128,18 +128,26 @@ pub(crate) async fn verify_self_event_producer_key(
                     "Agent grant authorization differs from accepted Event",
                 ));
             }
+            // encryption-and-audit.md §2.5.2: an Agent runtime whose authorize
+            // is revoked, replaced or expired is refused with the universal
+            // `capability_denied`.
+            let not_current = |detail: &str| {
+                ServiceError::protocol(arkret_wire::ErrorCode::CapabilityDenied, detail.to_owned())
+            };
             let (current, current_authorization) =
                 crate::routing::identity::current_signer_evidence::current_agent_producer_binding(
                     state, event,
                 )
                 .await
-                .map_err(rejected)?;
+                .map_err(|error| not_current(&error))?;
             if current_authorization.event_id != *agent_key_authorization_ref
                 || current_authorization.commit_id != committed.commit.commit_id
                 || current_authorization.stream_ref != committed.commit.stream_ref
                 || current_authorization.stream_position != committed.commit.stream_position
             {
-                return Err(rejected("Agent grant authorization is no longer current"));
+                return Err(not_current(
+                    "Agent grant authorization is no longer current",
+                ));
             }
             let accepted = arkret_signatures::agent::validate_agent_runtime_public_key(
                 &authorized.public_key,
@@ -147,7 +155,7 @@ pub(crate) async fn verify_self_event_producer_key(
             )
             .map_err(|error| rejected(error.to_string()))?;
             if current != accepted.raw_public_key {
-                return Err(rejected(
+                return Err(not_current(
                     "Agent grant key differs from current accepted key",
                 ));
             }

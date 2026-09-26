@@ -16,8 +16,8 @@
 //! Every refusal writes nothing.
 
 use arkret_models_collaboration::authority_commit::{
-    PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest, PeerAuthoritySubmitOutcome,
-    PeerAuthoritySubmitRequest,
+    MLS_GENESIS_MATERIAL_MAX_DECODED_BYTES, MlsGenesisMaterial, PeerAuthorityForwardEventRequest,
+    PeerAuthorityForwardMlsRequest, PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
 };
 use arkret_models_identity::AccountDeviceSignerEvidence;
 use arkret_wire::{
@@ -127,6 +127,7 @@ pub(crate) async fn admit_forwarded_event(
             state,
             event,
             &[],
+            request.mls_genesis_material.as_ref(),
             super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
             &key,
         )
@@ -173,6 +174,7 @@ pub(super) async fn admit_forwarded_mls(
         state,
         event,
         &request.mls_submission.welcomes,
+        None,
         super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
         &key,
     )
@@ -262,6 +264,45 @@ pub(crate) async fn fresh_producer_device_evidence(
     Ok(Some(evidence))
 }
 
+/// A: the raw GroupInfo and ratchet tree an `ak.mls.genesis` forward
+/// carries (encryption-and-audit.md §5.1.2), read from this Station's Blob
+/// store and proven to address the Genesis refs; `None` for every other kind.
+/// A Blob that is missing or does not address its ref is a bare
+/// `failed_precondition` before anything is forwarded.
+async fn forwarded_genesis_material(
+    state: &AppState,
+    event: &Event,
+) -> ServiceResult<Option<MlsGenesisMaterial>> {
+    if event.kind != arkret_wire::EventKind::MlsGenesis {
+        return Ok(None);
+    }
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::to_value(&event.payload)
+            .and_then(serde_json::from_value)
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let mut remaining = MLS_GENESIS_MATERIAL_MAX_DECODED_BYTES;
+    let mut blobs = Vec::with_capacity(2);
+    for blob_ref in [&payload.group_info_ref, &payload.ratchet_tree_ref] {
+        let unavailable = || {
+            ServiceError::Conflict(format!(
+                "{}: Genesis Blob {blob_ref} is not a local Blob addressing its bytes",
+                ConflictCode::FailedPrecondition
+            ))
+        };
+        let bytes = crate::routing::mls::load_mls_public_blob(state, blob_ref.as_str(), remaining)
+            .await
+            .map_err(|_| unavailable())?;
+        let digest = blob_ref
+            .as_str()
+            .strip_prefix("ak:blob:")
+            .ok_or_else(unavailable)?;
+        arkret_canonical::verify_digest(&bytes, digest).map_err(|_| unavailable())?;
+        remaining -= bytes.len();
+        blobs.push(bytes);
+    }
+    Ok(Some(MlsGenesisMaterial::from_bytes(&blobs[0], &blobs[1])))
+}
+
 /// A: forward one self-submitted Event to its current governance Station and
 /// relay that Station's outcome.
 pub(super) async fn forward_self_event(
@@ -269,9 +310,10 @@ pub(super) async fn forward_self_event(
     governance: &DidCoreId,
     submission: EventAdmissionSubmission,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    let material = forwarded_genesis_material(state, &submission.event).await?;
     let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
-    let request =
-        PeerAuthorityForwardEventRequest::new(submission, None, evidence).map_err(wire_refusal)?;
+    let request = PeerAuthorityForwardEventRequest::new(submission, material, evidence)
+        .map_err(wire_refusal)?;
     send_forward(
         state,
         governance,

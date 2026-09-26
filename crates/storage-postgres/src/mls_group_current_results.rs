@@ -263,6 +263,7 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         commit,
     )
     .await?;
+    store_genesis_blobs(conn, event, &installation.genesis_blobs, commit).await?;
     if transaction.welcomes.is_empty() {
         return Ok(());
     }
@@ -278,7 +279,12 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
     for welcome in &transaction.welcomes {
         require_joined_recipient(conn, &event.realm_id, &welcome.delivery.recipient_actor_id)
             .await?;
-        require_live_claim(conn, welcome, commit.committed_at).await?;
+        // A remote recipient's Welcome rides the Commit's committed
+        // replication; `crate::realm_fanout` writes it into that intent.
+        let Some(claim) = welcome.claim.as_ref() else {
+            continue;
+        };
+        require_live_claim(conn, claim, commit.committed_at).await?;
         crate::devices::enqueue_mls_welcome_in_connection(
             conn,
             &welcome.delivery,
@@ -288,6 +294,107 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         )
         .await
         .map_err(crate::PgTransactionError::into_persistence)?;
+        bind_claim_welcome_in_connection(conn, claim, &welcome.delivery).await?;
+    }
+    Ok(())
+}
+
+/// device-lifecycle.md §9.2.3 (decision 0121): record, in the transaction
+/// that queues `welcome`, the one Welcome binding of its claim on that
+/// claim's ledger row. The same delivery replayed leaves the binding as it
+/// is; any other delivery naming an already bound claim reuses the claim and
+/// is `duplicate_conflict`.
+pub(crate) async fn bind_claim_welcome_in_connection(
+    conn: &mut AsyncPgConnection,
+    claim: &soland_storage::MlsWelcomeClaimLedgerKey,
+    welcome: &arkret_wire::MlsWelcomeDelivery,
+) -> PersistenceResult<()> {
+    #[derive(QueryableByName)]
+    struct BindingRow {
+        #[diesel(sql_type = Text)]
+        source_id: String,
+        #[diesel(sql_type = Text)]
+        claim_request_id: String,
+        #[diesel(sql_type = Text)]
+        welcome_id: String,
+        #[diesel(sql_type = Text)]
+        welcome_digest: String,
+        #[diesel(sql_type = Text)]
+        commit_event_ref: String,
+    }
+    let digest = welcome
+        .durable_receipt_digest()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    sql_query(
+        "INSERT INTO keypackage_claim_welcome_bindings \
+         (claim_id,source_id,claim_request_id,welcome_id,welcome_digest,commit_event_ref) \
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(welcome.keypackage_claim_ref.as_str())
+    .bind::<Text, _>(&claim.source_id)
+    .bind::<Text, _>(&claim.claim_request_id)
+    .bind::<Text, _>(welcome.welcome_id.as_str())
+    .bind::<Text, _>(digest.as_str())
+    .bind::<Text, _>(welcome.commit_event_ref.as_str())
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let bound = sql_query(
+        "SELECT source_id,claim_request_id,welcome_id,welcome_digest,commit_event_ref \
+         FROM keypackage_claim_welcome_bindings WHERE claim_id=$1",
+    )
+    .bind::<Text, _>(welcome.keypackage_claim_ref.as_str())
+    .get_result::<BindingRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let same = bound.is_some_and(|row| {
+        row.source_id == claim.source_id
+            && row.claim_request_id == claim.claim_request_id
+            && row.welcome_id == welcome.welcome_id.as_str()
+            && row.welcome_digest == digest.as_str()
+            && row.commit_event_ref == welcome.commit_event_ref.as_str()
+    });
+    if !same {
+        return Err(refused(
+            ConflictCode::DuplicateConflict,
+            "the KeyPackage claim is already bound to another Welcome",
+        ));
+    }
+    Ok(())
+}
+
+/// encryption-and-audit.md §5.1.2: the GroupInfo and ratchet tree Blobs a
+/// forwarded Genesis carried become this Station's Realm-bound public MLS
+/// Blobs at the Genesis Commit, so `ak.peer.mls.read.group_state_material.v1`
+/// serves them. The bytes are content-addressed, so a Blob row already
+/// present under the same ref names the same bytes and is kept.
+async fn store_genesis_blobs(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    blobs: &[soland_storage::MlsGenesisBlob],
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    for blob in blobs {
+        sql_query(
+            "INSERT INTO blobs \
+             (id,sha256,media_type,filename,uploaded_by,realm_id,size_bytes, \
+              storage_backend,storage_key,payload,legal_hold,redacted,visibility,created_at) \
+             VALUES ($1,$2,'application/octet-stream',NULL,$3,$4,$5,$6,$7, \
+                     '{\"encryption\":null}'::jsonb,FALSE,FALSE,'realm_bound',$8) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(blob.blob_ref.as_str())
+        .bind::<Text, _>(&blob.sha256)
+        .bind::<Text, _>(event.actor_id.signing_principal_id().as_str())
+        .bind::<Text, _>(event.realm_id.as_str())
+        .bind::<BigInt, _>(blob.size_bytes)
+        .bind::<Text, _>(&blob.storage_backend)
+        .bind::<Text, _>(&blob.storage_key)
+        .bind::<Timestamptz, _>(commit.committed_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
     }
     Ok(())
 }
@@ -343,21 +450,21 @@ async fn require_joined_recipient(
 /// same request and a live claim (device-lifecycle.md, claim ledger rules).
 async fn require_live_claim(
     conn: &mut AsyncPgConnection,
-    welcome: &soland_storage::VerifiedMlsWelcome,
+    claim: &soland_storage::MlsWelcomeClaimLedgerKey,
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
     let row = sql_query(
         "SELECT request_digest,state,claim_expires_at_unix_ms FROM peer_keypackage_claims \
          WHERE source_id=$1 AND claim_request_id=$2 FOR UPDATE",
     )
-    .bind::<Text, _>(&welcome.claim.source_id)
-    .bind::<Text, _>(&welcome.claim.claim_request_id)
+    .bind::<Text, _>(&claim.source_id)
+    .bind::<Text, _>(&claim.claim_request_id)
     .get_result::<ClaimLedgerRow>(&mut *conn)
     .await
     .optional()
     .map_err(PersistenceError::database)?
     .ok_or_else(|| failed_precondition("the Welcome's KeyPackage claim is not in the ledger"))?;
-    if row.request_digest != welcome.claim.request_digest
+    if row.request_digest != claim.request_digest
         || !matches!(row.state.as_str(), "claimed" | "last_resort_claimed")
         || row
             .claim_expires_at_unix_ms
@@ -368,6 +475,43 @@ async fn require_live_claim(
         ));
     }
     Ok(())
+}
+
+/// encryption-and-audit.md §2.5.2: the current MLS send gate of one accepted
+/// `ak.message.create`, decided on the scope's `mls_group` row read in the
+/// accepting transaction. The unit already rechecked the actual signer's
+/// endpoint authorization at the top of this same transaction, so a revoked
+/// device or Agent is refused with its own code before any answer here, and
+/// a revocation never advances the key-access revision (§2.4.1).
+pub(crate) async fn require_mls_send_gate_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+) -> PersistenceResult<()> {
+    if event.kind != EventKind::MessageCreate {
+        return Ok(());
+    }
+    let envelopes = soland_storage::message_create_envelopes(&event.payload)
+        .map_err(PersistenceError::SchemaViolation)?;
+    let current = sql_query(
+        "SELECT realm_id,current_commit_id,current_stream_position,value,public_state \
+         FROM mls_group_current_results WHERE scope_key=$1 FOR SHARE",
+    )
+    .bind::<Text, _>(scope_key(&event.scope_ref)?)
+    .get_result::<GroupRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(decode_row)
+    .transpose()?;
+    let envelopes = envelopes
+        .as_ref()
+        .map(|envelopes| envelopes.iter().collect::<Vec<_>>());
+    soland_storage::decide_mls_send_gate(
+        current.as_ref().map(|current| &current.value),
+        &event.scope_ref,
+        envelopes.as_deref(),
+    )
+    .map_err(soland_storage::MlsSendGateRefusal::into_conflict)
 }
 
 /// encryption-and-audit.md §2.4.1: a membership change of the Realm scope

@@ -1064,6 +1064,10 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         &self,
         keypackage_id: &str,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
+    async fn claim_welcome_binding(
+        &self,
+        claim_id: &str,
+    ) -> ServiceResult<Option<soland_storage::MlsWelcomeClaimBinding>>;
     async fn claim_peer_key_package(
         &self,
         attempt: PeerKeyPackageClaimCommand<'_>,
@@ -1179,6 +1183,14 @@ impl MlsKeyPackageService {
         claim_id: &str,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages.peer_claim_by_claim_id(claim_id).await
+    }
+    /// The Welcome binding the claim destination recorded for `claim_id`
+    /// when it queued that claim's Welcome (decision 0121).
+    pub async fn claim_welcome_binding(
+        &self,
+        claim_id: &str,
+    ) -> ServiceResult<Option<soland_storage::MlsWelcomeClaimBinding>> {
+        self.key_packages.claim_welcome_binding(claim_id).await
     }
     pub async fn peer_claim_by_keypackage_id(
         &self,

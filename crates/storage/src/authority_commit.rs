@@ -671,6 +671,26 @@ pub struct MlsStateInstallation {
     /// Station-private public RFC 9420 tracker state at `epoch`. It holds no
     /// member secret and is never a wire value.
     pub public_state: Vec<u8>,
+    /// The GroupInfo and ratchet tree Blobs a forwarded `ak.mls.genesis`
+    /// carried (encryption-and-audit.md §5.1.2), stored with its Commit;
+    /// empty for a same-Station Genesis, whose Blobs are already local, and
+    /// for every Commit.
+    pub genesis_blobs: Vec<MlsGenesisBlob>,
+}
+
+/// One content-addressed public Blob of a forwarded Genesis. Its exact bytes
+/// are already in the object store under `storage_key`; the accepting
+/// transaction writes the Blob row that serves them to
+/// `ak.peer.mls.read.group_state_material.v1`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsGenesisBlob {
+    /// The Genesis payload ref the bytes were verified against.
+    pub blob_ref: arkret_wire::BlobRef,
+    /// Lower-case hex SHA-256 of the bytes, the object store's key input.
+    pub sha256: String,
+    pub size_bytes: i64,
+    pub storage_backend: String,
+    pub storage_key: String,
 }
 
 /// The current group coordinates a Commit transition was verified against.
@@ -680,12 +700,18 @@ pub struct MlsInstalledBase {
     pub epoch: u64,
 }
 
-/// One producer-signed Welcome the serving layer verified against its exact
-/// KeyPackage claim ledger entry (device-lifecycle.md, claim ledger rules).
+/// One producer-signed Welcome the serving layer verified.
+///
+/// A recipient this Station hosts carries the exact KeyPackage claim ledger
+/// entry its Welcome was verified against (device-lifecycle.md, claim ledger
+/// rules) and is queued here. A recipient another Station hosts carries no
+/// local claim: its Welcome rides the Commit's committed-replication intent
+/// to that Station, which re-verifies the claim (encryption-and-audit.md
+/// §2.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedMlsWelcome {
     pub delivery: MlsWelcomeDelivery,
-    pub claim: MlsWelcomeClaimLedgerKey,
+    pub claim: Option<MlsWelcomeClaimLedgerKey>,
 }
 
 /// The durable claim ledger row `keypackage_claim_ref` resolved to, with the
@@ -696,6 +722,109 @@ pub struct MlsWelcomeClaimLedgerKey {
     pub source_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
+}
+
+/// Why the current MLS send gate refuses one application body
+/// (encryption-and-audit.md §2.5.2, decision 0100).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MlsSendGateRefusal {
+    /// Plaintext into a scope with an accepted `ak.mls.genesis`.
+    ActivationRequired,
+    /// Ciphertext into a scope with no accepted MLS Genesis/current group.
+    NotActivated,
+    /// The scope's key-access revision still awaits a covering winning
+    /// Commit: the sender pauses instead of re-encrypting.
+    EpochUpdateRequired,
+    /// The frozen epoch or `group_state_ref` differs from the ready current
+    /// group: the sender refreshes the group and re-encrypts a new request.
+    EpochMismatch,
+}
+
+impl MlsSendGateRefusal {
+    /// The registered identity the refusal carries.
+    #[must_use]
+    pub const fn conflict_code(self) -> crate::ConflictCode {
+        match self {
+            Self::ActivationRequired => crate::ConflictCode::MlsActivationRequired,
+            Self::NotActivated => crate::ConflictCode::FailedPrecondition,
+            Self::EpochUpdateRequired => crate::ConflictCode::EpochUpdateRequired,
+            Self::EpochMismatch => crate::ConflictCode::EpochMismatch,
+        }
+    }
+
+    #[must_use]
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::ActivationRequired => "plaintext is not allowed after MLS activation",
+            Self::NotActivated => "scope has no accepted MLS group",
+            Self::EpochUpdateRequired => {
+                "the scope key-access revision is not yet covered by an accepted MLS Commit"
+            }
+            Self::EpochMismatch => "frozen message encryption context is no longer applicable",
+        }
+    }
+
+    /// The refusal as the persistence conflict its registered code parses
+    /// back from.
+    #[must_use]
+    pub fn into_conflict(self) -> crate::PersistenceError {
+        crate::PersistenceError::Conflict(format!("{}: {}", self.conflict_code(), self.detail()))
+    }
+}
+
+/// The encrypted envelopes one `ak.message.create` payload carries, content
+/// first: `None` for a plaintext body.
+pub fn message_create_envelopes(
+    payload: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<Option<Vec<arkret_models_crypto::EncryptedEnvelope>>, String> {
+    let envelope = |field: &str| {
+        payload
+            .get(field)
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|error| format!("message {field}: {error}"))
+    };
+    match (
+        envelope("encrypted_content")?,
+        envelope("encrypted_metadata")?,
+    ) {
+        (Some(content), metadata) => Ok(Some(std::iter::once(content).chain(metadata).collect())),
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err("message encrypted_metadata requires encrypted_content".to_owned()),
+    }
+}
+
+/// encryption-and-audit.md §2.5.2: decide the current MLS send gate of one
+/// application body against the scope's `current` group. `envelopes` is
+/// `None` for plaintext and otherwise every encrypted envelope of the body.
+/// An uncovered key-access revision wins over a stale frozen epoch; the
+/// sending endpoint's own authorization is decided by the caller first, at
+/// the same cut.
+pub fn decide_mls_send_gate(
+    current: Option<&arkret_wire::MlsGroupCurrent>,
+    scope: &arkret_wire::ScopeRef,
+    envelopes: Option<&[&arkret_models_crypto::EncryptedEnvelope]>,
+) -> Result<(), MlsSendGateRefusal> {
+    let Some(envelopes) = envelopes else {
+        return match current {
+            Some(_) => Err(MlsSendGateRefusal::ActivationRequired),
+            None => Ok(()),
+        };
+    };
+    let current = current.ok_or(MlsSendGateRefusal::NotActivated)?;
+    if current.covered_key_access_revision < current.current_key_access_revision {
+        return Err(MlsSendGateRefusal::EpochUpdateRequired);
+    }
+    if current.effective_scope != *scope
+        || envelopes.iter().any(|envelope| {
+            envelope.encryption_context.epoch() != current.epoch
+                || envelope.encryption_context.group_state_ref()
+                    != &current.current_mls_commit_event_ref
+        })
+    {
+        return Err(MlsSendGateRefusal::EpochMismatch);
+    }
+    Ok(())
 }
 
 impl AuthorityCommitTransaction {
@@ -785,6 +914,19 @@ fn validate_mls_installation(
             {
                 return Err(mismatch());
             }
+            let carried = state
+                .genesis_blobs
+                .iter()
+                .map(|blob| &blob.blob_ref)
+                .collect::<Vec<_>>();
+            if !carried.is_empty()
+                && carried != [&payload.group_info_ref, &payload.ratchet_tree_ref]
+            {
+                return Err(arkret_wire::WireError::Protocol(
+                    "a forwarded Genesis stores exactly its GroupInfo and ratchet tree Blobs"
+                        .to_owned(),
+                ));
+            }
         }
         _ => {
             let payload: arkret_models_crypto::MlsCommitPayload = serde_json::from_value(payload)
@@ -797,6 +939,9 @@ fn validate_mls_installation(
             let Some(base) = &state.base else {
                 return Err(mismatch());
             };
+            if !state.genesis_blobs.is_empty() {
+                return Err(mismatch());
+            }
             if binding.effective_scope() != &event.scope_ref
                 || base.current_mls_commit_event_ref != *payload.base_group_state_ref()
                 || base.epoch != payload.base_epoch()
@@ -1408,6 +1553,7 @@ mod mls_installation_tests {
             }),
             epoch: 1,
             public_state: vec![1],
+            genesis_blobs: Vec::new(),
         };
         assert!(validate_mls_installation(&event, &installed).is_ok());
 

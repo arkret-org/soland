@@ -36,8 +36,8 @@ use arkret_models_collaboration::device_messages::{
 };
 use arkret_models_collaboration::governance::membership_invite::MembershipPayload;
 use arkret_models_crypto::{
-    KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody, KeyPackagesUploadOutcome,
-    MlsCommitPayload, MlsGovernanceBindingPayload,
+    KeyPackagesClaimOutcome, KeyPackagesClaimQueryRequestBody, KeyPackagesClaimRequestBody,
+    KeyPackagesUploadOutcome, MlsCommitPayload, MlsGovernanceBindingPayload,
 };
 use arkret_wire::{AccountId, ActorId, EventKind, MlsWelcomeDelivery, RealmId, ScopeRef};
 use base64::Engine as _;
@@ -230,6 +230,19 @@ impl Member {
             .send(&service(state.clone()))
             .await;
         Response::take(&mut response).await
+    }
+
+    async fn claim_query(&self, state: &AppState, claim_id: &str) -> Response {
+        self.post(
+            state,
+            "/_arkret/self/keys/keypackages/claims/query",
+            arkret_wire::ServiceOperationId::SELF_KEYS_KEYPACKAGES_READ_CLAIM_V1,
+            &KeyPackagesClaimQueryRequestBody {
+                claim_id: arkret_wire::KeypackageClaimId::new(claim_id.to_owned())
+                    .expect("claim id"),
+            },
+        )
+        .await
     }
 
     async fn recipient_queue(&self, state: &AppState) -> DeviceMessagesGetOutcome {
@@ -661,6 +674,32 @@ async fn mls_lifecycle_body() {
     assert_eq!(conflict.status, StatusCode::CONFLICT);
     assert_eq!(conflict.problem(), "duplicate_conflict");
 
+    // Claim read (device-lifecycle §9 `claims/query`): Bob's own endpoint reads
+    // the byte-identical outcome; the requester and an unknown id read the
+    // same `keypackage_unknown`.
+    let read = bob.claim_query(&state, &claim.claim_id).await;
+    assert_eq!(
+        read.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&read.bytes)
+    );
+    assert_eq!(
+        read.bytes, claimed.bytes,
+        "the claim read is the stored outcome"
+    );
+    for refused in [
+        alice.claim_query(&state, &claim.claim_id).await,
+        bob.claim_query(
+            &state,
+            &format!("ak:keypackage_claim:{}", uuid::Uuid::now_v7()),
+        )
+        .await,
+    ] {
+        assert_eq!(refused.problem(), "keypackage_unknown");
+        assert_eq!(refused.status, StatusCode::NOT_FOUND);
+    }
+
     // Genesis: Alice's epoch-0 group with herself as the only leaf.
     let alice_identity = alice.mls_identity();
     let genesis_binding = MlsGovernanceBindingPayload::new(scope.clone(), None, 0, 0, 0).unwrap();
@@ -689,6 +728,7 @@ async fn mls_lifecycle_body() {
             base: None,
             epoch: 0,
             public_state: genesis_state.clone(),
+            genesis_blobs: Vec::new(),
         }),
         Vec::new(),
     )
@@ -786,14 +826,15 @@ async fn mls_lifecycle_body() {
         }),
         epoch: 1,
         public_state: public.export_state().unwrap(),
+        genesis_blobs: Vec::new(),
     });
     commit_request.authority_commit.welcomes = vec![VerifiedMlsWelcome {
         delivery: welcome.clone(),
-        claim: MlsWelcomeClaimLedgerKey {
+        claim: Some(MlsWelcomeClaimLedgerKey {
             source_id: ledger.source_id.clone(),
             claim_request_id: ledger.claim_request_id.clone(),
             request_digest: ledger.request_digest.clone(),
-        },
+        }),
     }];
     commit_request.authority_commit.recipient_queue_capacity = 16;
     uow.commit_event(commit_request.clone())
@@ -931,6 +972,11 @@ async fn mls_lifecycle_body() {
     );
     let conflict = alice.claim(&restarted, &conflicting).await;
     assert_eq!(conflict.problem(), "duplicate_conflict");
+    let read = bob.claim_query(&restarted, &claim.claim_id).await;
+    assert_eq!(
+        read.bytes, claimed.bytes,
+        "the claim read survives restart and stays read-only"
+    );
     let current = restarted_persistence
         .mls_groups()
         .current(&scope)

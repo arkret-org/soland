@@ -5,8 +5,9 @@
 //! the same transaction reads the accepted joined members of the Realm,
 //! projects each complete ActorId to its routing service, drops this Station
 //! and groups the rest by service. Every distinct remote Station gets one
-//! durable `committed_replication` intent that carries only the exact source
-//! submission and source RealmCommit, with the frozen
+//! durable `committed_replication` intent that carries the exact source
+//! submission and source RealmCommit -- and, for an `ak.mls.commit`, the
+//! Welcomes of the recipients that Station hosts -- with the frozen
 //! `(realm_id, member_id, membership_event_ref)` bases that authorized it kept
 //! in the sender's outbox metadata. The Event's acceptance, the complete
 //! target set and every intent therefore commit or roll back together.
@@ -325,14 +326,19 @@ pub(crate) async fn fanout_still_owed_in_connection(
 /// Plan and durably enqueue the Realm fanout of one just-committed Event.
 ///
 /// Must run after the Event's typed current results were written, so the
-/// joined set is the one the Event itself produced. Returns the number of
-/// intents this call inserted.
+/// joined set is the one the Event itself produced. `welcomes` are the
+/// verified Welcomes of an `ak.mls.commit` whose recipients other Stations
+/// host, in submission order: each rides the intent to its recipient's
+/// routing service (encryption-and-audit.md §2.2 "跨站 recipient"), and a
+/// service outside the target set refuses the whole Commit with a bare
+/// `failed_precondition`. Returns the number of intents this call inserted.
 pub(crate) async fn plan_realm_fanout_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
     authority_station: &arkret_wire::DidCoreId,
     source: Option<&arkret_wire::EventAdmissionSubmission>,
+    welcomes: &[&arkret_wire::MlsWelcomeDelivery],
     created_at: i64,
 ) -> Result<usize, PgTransactionError> {
     let realm_stream = arkret_wire::CommitStreamRef::Realm {
@@ -348,6 +354,22 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         return Ok(0);
     }
     let targets = remote_targets(conn, event, authority_station, commit.committed_at).await?;
+    let mut replicated_welcomes: BTreeMap<_, Vec<arkret_wire::MlsWelcomeDelivery>> =
+        BTreeMap::new();
+    for welcome in welcomes {
+        let service = welcome.recipient_actor_id.route_service_id();
+        if !targets.contains_key(service) {
+            return Err(PersistenceError::Conflict(format!(
+                "{}: the remote Welcome recipient's Station is not a replication target",
+                soland_storage::ConflictCode::FailedPrecondition
+            ))
+            .into());
+        }
+        replicated_welcomes
+            .entry(service.clone())
+            .or_default()
+            .push((*welcome).clone());
+    }
     if targets.is_empty() {
         return Ok(0);
     }
@@ -362,22 +384,6 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         )
         .into());
     }
-    let request =
-        PeerAuthoritySubmitRequest::CommittedReplication(PeerCommittedReplicationRequest {
-            branch: CommittedReplicationBranch::CommittedReplication,
-            replications: vec![CommittedEventSubmission {
-                event_submission: source.clone(),
-                source_commit: commit.clone(),
-                welcomes: None,
-            }],
-        });
-    request
-        .validate()
-        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    let payload_json = String::from_utf8(
-        arkret_canonical::canonical_json_bytes(&request).map_err(PersistenceError::database)?,
-    )
-    .map_err(internal)?;
     let event_token = ids::parse_event_id(event.event_id.as_str())
         .ok_or_else(|| PersistenceError::SchemaViolation("Event id is not canonical".into()))?;
     let event_pk = sql_query("SELECT pk FROM canonical_events WHERE id=$1")
@@ -389,6 +395,22 @@ pub(crate) async fn plan_realm_fanout_in_connection(
     let idempotency_key = fanout_idempotency_key(&commit.commit_id);
     let mut inserted = 0;
     for (station, authority_witnesses) in targets {
+        let request =
+            PeerAuthoritySubmitRequest::CommittedReplication(PeerCommittedReplicationRequest {
+                branch: CommittedReplicationBranch::CommittedReplication,
+                replications: vec![CommittedEventSubmission {
+                    event_submission: source.clone(),
+                    source_commit: commit.clone(),
+                    welcomes: replicated_welcomes.remove(&station),
+                }],
+            });
+        request
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let payload_json = String::from_utf8(
+            arkret_canonical::canonical_json_bytes(&request).map_err(PersistenceError::database)?,
+        )
+        .map_err(internal)?;
         let id = format!("{idempotency_key}:{station}");
         let record = FederationOutboxRecord::realm_fanout(RealmFanoutOutboxInput {
             id: id.clone(),
@@ -396,7 +418,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
             peer_url: None,
             endpoint: PEER_EVENTS_ENDPOINT.to_owned(),
             idempotency_key: idempotency_key.clone(),
-            payload_json: payload_json.clone(),
+            payload_json,
             binding: RealmFanoutBinding {
                 realm_id: event.realm_id.to_string(),
                 source_event_ids: vec![event.event_id.to_string()],

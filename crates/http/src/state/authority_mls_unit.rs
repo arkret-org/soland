@@ -12,11 +12,13 @@
 //!   with only the creator's leaf; a Commit is one member-sent `PublicMessage` processed by the
 //!   public tracker restored from the scope's current group. The GroupContext `0xF1C0` binding must
 //!   equal the Event payload binding and the current group field for field (§2.5.1).
-//! - every Welcome. It is producer-signed by the Commit's producer method (§2.6.1), addressed to a
-//!   recipient on this Station, and names a live claim of this Station's claim ledger whose
-//!   destination-signed receipt binds the requester, target, Realm, group, endpoint and KeyPackage
-//!   (device-lifecycle.md claim ledger rules). Each claimed KeyPackage is exactly one leaf the
-//!   Commit adds.
+//! - every Welcome. It is producer-signed by the Commit's producer method (§2.6.1) and names the
+//!   exact Commit. A recipient on this Station names a live claim of this Station's claim ledger
+//!   whose destination-signed receipt binds the requester, target, Realm, group, endpoint and
+//!   KeyPackage (device-lifecycle.md claim ledger rules), and its claimed KeyPackage is exactly one
+//!   leaf the Commit adds. A recipient another Station hosts owns one added leaf of its own; its
+//!   claim is that Station's, which re-verifies it when the Welcome arrives with the Commit's
+//!   committed replication (§2.2).
 //!
 //! The accepting transaction then re-decides everything that can change
 //! concurrently at one cut: same-cut authorization, the current group the
@@ -27,6 +29,7 @@
 use std::collections::BTreeMap;
 
 use arkret_mls::{MlsPublicEndpointLeaf, MlsPublicGroupTracker, MlsPublicHandshakeTransition};
+use arkret_models_collaboration::authority_commit::MlsGenesisMaterial;
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_collaboration::events_payloads::mls_proposal_admission::MlsProposalSenderClass;
 use arkret_models_crypto::{KeyPackageClaimRecord, MlsCommitPayload, PeerKeyPackagesClaimOutcome};
@@ -36,7 +39,7 @@ use arkret_wire::{
 };
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
-    ConflictCode, MlsInstalledBase, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
+    ConflictCode, MlsGenesisBlob, MlsInstalledBase, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
     VerifiedMlsWelcome,
 };
 
@@ -73,10 +76,15 @@ fn payload<T: serde::de::DeserializeOwned>(event: &Event) -> ServiceResult<T> {
 ///
 /// `producer_key` is the key the Event producer proof verified under; every
 /// Welcome must be sealed by the same method (§2.6.1).
+///
+/// `genesis_material` is the raw GroupInfo and ratchet tree an
+/// `authority_forward` of a cross-Station Genesis carried (§5.1.2); a
+/// same-Station Genesis reads its local Blobs and passes `None`.
 pub(super) async fn admit_mls_event(
     state: &AppState,
     event: &Event,
     welcomes: &[MlsWelcomeDelivery],
+    genesis_material: Option<&MlsGenesisMaterial>,
     producer: AdmittedProducer,
     producer_key: &arkret_signatures::PublicKeyMaterial,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
@@ -93,9 +101,12 @@ pub(super) async fn admit_mls_event(
             if !welcomes.is_empty() {
                 return Err(schema("an MLS Genesis carries no Welcome"));
             }
-            (verify_genesis(state, event).await?, Vec::new())
+            (
+                verify_genesis(state, event, genesis_material).await?,
+                Vec::new(),
+            )
         }
-        EventKind::MlsCommit => verify_commit(state, event).await?,
+        EventKind::MlsCommit if genesis_material.is_none() => verify_commit(state, event).await?,
         _ => {
             return Err(ServiceError::Internal(
                 "the MLS unit admits only ak.mls.genesis and ak.mls.commit".to_owned(),
@@ -120,8 +131,14 @@ pub(super) async fn admit_mls_event(
 
 /// §5.1: the Genesis GroupInfo and ratchet tree are content-addressed Blobs
 /// describing the scope's group at epoch 0 with the creator as its only leaf,
-/// under the exact `0 -> 0` binding the Event signs.
-async fn verify_genesis(state: &AppState, event: &Event) -> ServiceResult<MlsStateInstallation> {
+/// under the exact `0 -> 0` binding the Event signs. A cross-Station Genesis
+/// carries their raw bytes (§5.1.2): each must address its own ref before
+/// anything is written, and both are stored with the Genesis Commit.
+async fn verify_genesis(
+    state: &AppState,
+    event: &Event,
+    genesis_material: Option<&MlsGenesisMaterial>,
+) -> ServiceResult<MlsStateInstallation> {
     let payload: MlsGenesisPayload = payload(event)?;
     payload.validate().map_err(schema)?;
     if payload.effective_scope() != &event.scope_ref {
@@ -141,8 +158,25 @@ async fn verify_genesis(state: &AppState, event: &Event) -> ServiceResult<MlsSta
         ));
     }
     let group_id = payload.mls_group_id().map_err(schema)?;
-    let group_info = public_blob(state, payload.group_info_ref.as_str()).await?;
-    let tree = public_blob(state, payload.ratchet_tree_ref.as_str()).await?;
+    let (group_info, tree) = match genesis_material {
+        Some(material) => {
+            let (group_info, tree) = material.decode().map_err(|error| {
+                ServiceError::protocol(
+                    error
+                        .error_code()
+                        .unwrap_or(arkret_wire::ErrorCode::SchemaViolation),
+                    error,
+                )
+            })?;
+            carried_blob_addresses(&payload.group_info_ref, &group_info)?;
+            carried_blob_addresses(&payload.ratchet_tree_ref, &tree)?;
+            (group_info, tree)
+        }
+        None => (
+            public_blob(state, payload.group_info_ref.as_str()).await?,
+            public_blob(state, payload.ratchet_tree_ref.as_str()).await?,
+        ),
+    };
     let tracker = MlsPublicGroupTracker::from_external(&group_info, &tree, group_id.as_str(), 0)
         .map_err(|error| schema(format!("MLS Genesis public state is invalid: {error}")))?;
     let suite = tracker
@@ -169,13 +203,70 @@ async fn verify_genesis(state: &AppState, event: &Event) -> ServiceResult<MlsSta
             "an MLS Genesis roster is exactly the creator's own leaf",
         ));
     }
+    let public_state = tracker
+        .export_state()
+        .map_err(|error| ServiceError::Internal(error.to_string()))?;
+    let genesis_blobs = match genesis_material {
+        Some(_) => vec![
+            stage_genesis_blob(state, &payload.group_info_ref, group_info).await?,
+            stage_genesis_blob(state, &payload.ratchet_tree_ref, tree).await?,
+        ],
+        None => Vec::new(),
+    };
     Ok(MlsStateInstallation {
         effective_scope: event.scope_ref.clone(),
         base: None,
         epoch: 0,
-        public_state: tracker
-            .export_state()
-            .map_err(|error| ServiceError::Internal(error.to_string()))?,
+        public_state,
+        genesis_blobs,
+    })
+}
+
+/// §5.1.2: carried bytes address the Genesis ref under the ref's own digest
+/// suite, or the forward is `digest_mismatch`.
+fn carried_blob_addresses(blob_ref: &arkret_wire::BlobRef, bytes: &[u8]) -> ServiceResult<()> {
+    let digest = blob_ref
+        .as_str()
+        .strip_prefix("ak:blob:")
+        .ok_or_else(|| schema("MLS public Blob ref is not an ak:blob ref"))?;
+    arkret_canonical::verify_digest(bytes, digest).map_err(|_| {
+        ServiceError::protocol(
+            arkret_wire::ErrorCode::DigestMismatch,
+            format!("carried Genesis material does not address {blob_ref}"),
+        )
+    })
+}
+
+/// Put one verified carried Blob into the content-addressed object store
+/// ahead of the accepting transaction, which writes the Blob row serving it.
+async fn stage_genesis_blob(
+    state: &AppState,
+    blob_ref: &arkret_wire::BlobRef,
+    bytes: Vec<u8>,
+) -> ServiceResult<MlsGenesisBlob> {
+    let sha256 = arkret_canonical::sha256_digest(&bytes)
+        .strip_prefix("sha256:")
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| ServiceError::Internal("SHA-256 digest has no suite prefix".to_owned()))?;
+    let deliveries = state.deliveries();
+    let storage_key = deliveries.object_key_for_sha256(&sha256);
+    let size_bytes = i64::try_from(bytes.len())
+        .map_err(|_| ServiceError::Internal("Genesis Blob size exceeds BIGINT".to_owned()))?;
+    deliveries
+        .put_object(&storage_key, bytes)
+        .await
+        .map_err(|error| {
+            ServiceError::Conflict(format!(
+                "{}: Genesis Blob object store: {error}",
+                ConflictCode::TemporarilyUnavailable
+            ))
+        })?;
+    Ok(MlsGenesisBlob {
+        blob_ref: blob_ref.clone(),
+        sha256,
+        size_bytes,
+        storage_backend: deliveries.object_storage_backend_name(),
+        storage_key,
     })
 }
 
@@ -264,12 +355,21 @@ async fn verify_commit(
             public_state: tracker
                 .export_state()
                 .map_err(|error| ServiceError::Internal(error.to_string()))?,
+            genesis_blobs: Vec::new(),
         },
         added_leaves,
     ))
 }
 
 /// Every Welcome, and exactly one per leaf the Commit adds.
+///
+/// A recipient this Station hosts has its claim resolved in the local ledger
+/// and its claimed KeyPackage matched to the exact added leaf. A recipient
+/// another Station hosts is that Station's claim (encryption-and-audit.md
+/// §2.2 "跨站 recipient"): everything but the claim is verified here -- the
+/// producer proof, the exact Commit binding and one added leaf of the
+/// recipient -- and its Account Station re-verifies the claim when the
+/// Welcome arrives with the Commit's committed replication.
 async fn verify_welcomes(
     state: &AppState,
     event: &Event,
@@ -291,9 +391,25 @@ async fn verify_welcomes(
         .iter()
         .map(|leaf| (leaf.signature_key.as_str().to_owned(), leaf))
         .collect::<BTreeMap<_, _>>();
-    let mut verified = Vec::with_capacity(welcomes.len());
+    let local = state.service_core_id();
+    let mut claims = BTreeMap::new();
     for welcome in welcomes {
         verify_welcome_proof(welcome, producer_method, producer_key)?;
+        if welcome.realm_id != event.realm_id
+            || welcome.effective_scope != event.scope_ref
+            || welcome.commit_event_ref != event.event_id
+        {
+            return Err(failed_precondition(
+                "the Welcome does not name the exact Commit Event",
+            ));
+        }
+        let recipient_account = welcome
+            .recipient_actor_id
+            .as_account_id()
+            .ok_or_else(|| failed_precondition("a Welcome recipient is an Account actor"))?;
+        if recipient_account.station_id != local {
+            continue;
+        }
         let (claim, record) = resolve_claim(state, event, welcome).await?;
         let leaf = arkret_mls::author_leaf_from_key_package_bytes(
             &arkret_canonical::base64url_decode(&record.keypackage).map_err(schema)?,
@@ -310,6 +426,23 @@ async fn verify_welcomes(
             return Err(failed_precondition(
                 "the added leaf belongs to another actor than the Welcome recipient",
             ));
+        }
+        claims.insert(welcome.welcome_id.clone(), claim);
+    }
+    let mut verified = Vec::with_capacity(welcomes.len());
+    for welcome in welcomes {
+        let claim = claims.remove(&welcome.welcome_id);
+        if claim.is_none() {
+            let Some(key) = unmatched
+                .iter()
+                .find(|(_, leaf)| leaf.actor_id == welcome.recipient_actor_id)
+                .map(|(key, _)| key.clone())
+            else {
+                return Err(failed_precondition(
+                    "no leaf the Commit adds belongs to the remote Welcome recipient",
+                ));
+            };
+            unmatched.remove(&key);
         }
         verified.push(VerifiedMlsWelcome {
             delivery: welcome.clone(),
@@ -364,11 +497,6 @@ async fn resolve_claim(
         .recipient_actor_id
         .as_account_id()
         .ok_or_else(|| failed_precondition("a Welcome recipient is an Account actor"))?;
-    if recipient_account.station_id != local {
-        return Err(ServiceError::Internal(
-            "a Welcome to another Station's recipient has no delivery carrier".to_owned(),
-        ));
-    }
     let row = state
         .mls_key_packages()
         .peer_claim_by_claim_id(welcome.keypackage_claim_ref.as_str())

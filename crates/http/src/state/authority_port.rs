@@ -328,6 +328,7 @@ impl AuthorityProtocolPort for AppState {
                     self,
                     event,
                     &[],
+                    None,
                     super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
                     &producer_key,
                 )
@@ -378,6 +379,7 @@ impl AuthorityProtocolPort for AppState {
             self,
             event,
             &request.welcomes,
+            None,
             super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
             &producer_key,
         )

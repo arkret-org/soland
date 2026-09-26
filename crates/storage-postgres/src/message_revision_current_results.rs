@@ -1,9 +1,11 @@
 //! The bounded `message_revision` writers at the accepting RealmCommit cut.
 //!
-//! The supported create carrier is a Realm-scope plain text Message in an active
-//! local discussion Strand, by a joined author the same-cut evaluator admits
-//! for `ak.message.create` (the Realm root controller included). Other Message forms
-//! require their own source-scope and effect admission and remain closed.
+//! The supported create carriers are a Realm-scope plain text Message and a
+//! Realm-scope MLS ciphertext Message under the same-cut send gate, in an
+//! active local discussion Strand, by a joined author the same-cut evaluator
+//! admits for `ak.message.create` (the Realm root controller included). Other
+//! Message forms require their own source-scope and effect admission and
+//! remain closed.
 //!
 //! `ak.message.revise` replaces the chain's current carrier with the same plain
 //! body gate; the target, its creation history and the edit authority are read
@@ -73,6 +75,25 @@ fn supported_plain_text(payload: &Value) -> bool {
         && plain_text_content(object.get("content"))
 }
 
+/// The Realm-scope MLS carrier: the Strand, the discussion track and the
+/// encrypted content with its optional encrypted metadata. Its ciphertext is
+/// bound to the scope's current group by the same-cut send gate
+/// (`crate::mls_group_current_results::require_mls_send_gate_in_connection`),
+/// so no plaintext service policy applies.
+fn supported_mls_carrier(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    object.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "strand_id" | "track_name" | "encrypted_content" | "encrypted_metadata"
+        )
+    }) && object.contains_key("strand_id")
+        && object.contains_key("encrypted_content")
+        && object.get("track_name") == Some(&Value::String("discussion".to_owned()))
+}
+
 /// A revise carrier of the same plain body: the target, the body, and
 /// optionally the discussion track and a reason. Metadata, encrypted and MIMI
 /// carriers need their own authority cut.
@@ -125,7 +146,8 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         ));
     }
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
-    if !supported_plain_text(&payload) {
+    let mls_carrier = supported_mls_carrier(&payload);
+    if !mls_carrier && !supported_plain_text(&payload) {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
     let typed: arkret_models_collaboration::events_payloads::message::MessageCreatePayload =
@@ -182,7 +204,9 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     }
     require_open_realm(conn, &event.realm_id, commit).await?;
     require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id).await?;
-    require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    if !mls_carrier {
+        require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    }
     let message_id = arkret_wire::MessageId::from_event_id(&event.event_id);
     let inserted = diesel::sql_query(
         "INSERT INTO message_revision_current_results \

@@ -2384,6 +2384,7 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::mls_group_current_results::require_mls_send_gate_in_connection(conn, event).await?;
         crate::message_revision_current_results::commit_message_create_current_result_in_connection(
             conn, event, commit,
         )
@@ -2417,6 +2418,13 @@ async fn commit_one_in_connection(
             commit,
             &request.authority_commit.expected_authority.service_id,
             request.realm_fanout_source.as_ref(),
+            &request
+                .authority_commit
+                .welcomes
+                .iter()
+                .filter(|welcome| welcome.claim.is_none())
+                .map(|welcome| &welcome.delivery)
+                .collect::<Vec<_>>(),
             commit.committed_at.timestamp(),
         )
         .await?;

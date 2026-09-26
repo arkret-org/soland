@@ -114,7 +114,14 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
         );
     }
     if let ServiceError::Conflict(detail) = &error {
-        let detail = detail.split_once(": ").map_or("", |(_, detail)| detail);
+        let (token, detail) = detail.split_once(": ").unwrap_or(("", ""));
+        // encryption-and-audit.md §5.1.2: a forwarded Genesis whose carried
+        // material does not address its refs, or exceeds the material bound.
+        if let Some(code @ (ErrorCode::DigestMismatch | ErrorCode::TooLarge)) =
+            ErrorCode::from_wire(token)
+        {
+            return crate::error::render_error_code(code, res, detail);
+        }
         match error.conflict_code() {
             Some(soland_storage::ConflictCode::EpochMismatch) => {
                 return crate::error::render_error_code(

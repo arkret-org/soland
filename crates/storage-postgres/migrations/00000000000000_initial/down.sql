@@ -173,6 +173,7 @@ DROP TABLE IF EXISTS key_backup_delete_challenges CASCADE;
 DROP TABLE IF EXISTS key_backups CASCADE;
 DROP FUNCTION IF EXISTS key_backup_list_metadata(jsonb) CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
+DROP TABLE IF EXISTS keypackage_claim_welcome_bindings CASCADE;
 DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
 DROP TABLE IF EXISTS organization_registration_states CASCADE;

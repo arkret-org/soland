@@ -8,6 +8,9 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
+#[path = "support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
@@ -1056,4 +1059,113 @@ async fn postgres_paused_agent_sender_writes_nothing() {
             .unwrap(),
         DeviceMessageBatchInspection::Fresh { .. }
     ));
+}
+
+/// encryption-and-audit.md §2.5.2: an Agent runtime whose `ak.agent.key.authorize`
+/// is revoked is refused its own ciphertext Message with the universal
+/// `capability_denied` at the cut the accepting transaction reads the current
+/// `mls_group`, ahead of the stale-epoch answer the same body gets while the
+/// authorization is current, and the group is left unchanged.
+#[tokio::test]
+async fn postgres_agent_message_after_committed_key_revoke_is_capability_denied() {
+    use soland_storage::{
+        AuthorityCommitStore as _, EventCommitUnitOfWork as _, MlsGroupCurrentStore as _,
+    };
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (agent, _recipient) = CommittedAgent::provision(&pool).await;
+    let discussion = ordinary_realm::open_discussion(&pool, "agent-send-gate").await;
+    let realm_id = discussion.realm_id();
+    let scope = arkret_wire::ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let at = discussion.committed_at();
+    let uow = soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone());
+    let mut genesis = ordinary_realm::next_request(
+        &discussion.head.authority_commit,
+        arkret_wire::EventKind::MlsGenesis,
+        &ordinary_realm::founder(),
+        serde_json::json!({
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_ref": format!("ak:blob:sha256:{}", "3".repeat(64)),
+            "ratchet_tree_ref": format!("ak:blob:sha256:{}", "4".repeat(64)),
+            "governance_binding": arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+                realm_id.clone(),
+                None,
+                0,
+                0,
+                0,
+            )
+            .unwrap(),
+            "created_at": arkret_canonical::format_timestamp_canonical(at),
+        }),
+        at,
+    );
+    genesis.authority_commit.mls_state = Some(soland_storage::MlsStateInstallation {
+        effective_scope: scope.clone(),
+        base: None,
+        epoch: 0,
+        public_state: b"public-state-0".to_vec(),
+        genesis_blobs: Vec::new(),
+    });
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let groups = soland_storage_postgres::PgMlsGroupCurrentStore { pool: pool.clone() };
+    let before = groups.current(&scope).await.unwrap().unwrap();
+
+    // The Agent's ciphertext frozen at an epoch the scope never had.
+    let mut request = ordinary_realm::next_request_for_actor(
+        &genesis.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        arkret_wire::ActorId::account(agent.agent_account.clone()),
+        serde_json::json!({
+            "strand_id": discussion.strand_id,
+            "track_name": "discussion",
+            "encrypted_content": arkret_models_crypto::EncryptedEnvelope {
+                version: "1.0".to_owned(),
+                content_type: "application/vnd.arkret.message+json".to_owned(),
+                encryption_context:
+                    arkret_models_crypto::EncryptedEnvelopeEncryptionContext::standard(
+                        7,
+                        genesis.authority_commit.event.event_id.clone(),
+                    ),
+                ciphertext: "Y2lwaGVydGV4dA".to_owned(),
+            },
+        }),
+        at,
+    );
+    let event = &mut request.authority_commit.event;
+    event.producer_proof.as_mut().unwrap().verification_method = agent.verification_method.clone();
+    request.event.envelope = serde_json::to_value(&*event).unwrap();
+    request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::Agent {
+        pcr_realm_id: agent.pcr_realm_id.clone(),
+        agent_id: agent.agent_account.principal_id.clone(),
+        authorization_ref: agent.authorization_ref.clone(),
+        verification_method: agent.verification_method.clone(),
+    });
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        request.authority_commit.event.clone(),
+    ));
+
+    let current = uow.commit_event(request.clone()).await.unwrap_err();
+    assert_eq!(
+        current.conflict_code(),
+        Some(soland_storage::ConflictCode::EpochMismatch),
+        "{current}"
+    );
+    agent.revoke_key().await;
+    let revoked = uow.commit_event(request.clone()).await.unwrap_err();
+    assert_eq!(
+        revoked.conflict_code(),
+        Some(soland_storage::ConflictCode::CapabilityDenied),
+        "{revoked}"
+    );
+    assert!(
+        soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() }
+            .committed_event(&request.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(groups.current(&scope).await.unwrap().unwrap(), before);
 }

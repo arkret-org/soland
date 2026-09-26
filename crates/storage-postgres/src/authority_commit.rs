@@ -1457,6 +1457,9 @@ pub(crate) async fn check_self_producer_guard_in_connection(
                     "self Event Agent guard differs from producer".to_owned(),
                 ));
             }
+            // encryption-and-audit.md §2.5.2: an Agent runtime whose authorize
+            // is revoked, replaced or expired at this cut is refused with the
+            // universal `capability_denied`.
             check_agent_endpoint_current_in_connection(
                 conn,
                 pcr_realm_id,
@@ -1466,6 +1469,17 @@ pub(crate) async fn check_self_producer_guard_in_connection(
                 committed_at,
             )
             .await
+            .map_err(|error| match error {
+                PersistenceError::Conflict(detail)
+                    if soland_storage::ConflictCode::from_detail(&detail).is_none() =>
+                {
+                    PersistenceError::Conflict(format!(
+                        "{}: {detail}",
+                        soland_storage::ConflictCode::CapabilityDenied
+                    ))
+                }
+                other => other,
+            })
         }
     }
 }

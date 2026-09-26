@@ -597,6 +597,9 @@ pub fn describe(
             // Private invite dispatch is a mounted optional operation. It has
             // its own bundle so core tier no longer implies reachability.
             "ak.operation_bundle.station.invite_delivery.v1".to_owned(),
+            // The recipient's own read of the claim a Welcome names
+            // (device-lifecycle.md §9 `claims/query`, decision 0119).
+            "ak.operation_bundle.station.keypackage_claim_read.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
             "ak.operation_bundle.station.push.v1".to_owned(),
             // Exact by-ref read of a Snapshot this Station issued to the

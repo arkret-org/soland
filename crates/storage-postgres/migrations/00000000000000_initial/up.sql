@@ -2664,6 +2664,20 @@ CREATE TABLE public.peer_keypackage_claims (
 
 CREATE UNIQUE INDEX peer_keypackage_claims_single_use_keypackage_id_key ON public.peer_keypackage_claims USING btree (keypackage_id) WHERE key_package_use = 'single_use' AND keypackage_id IS NOT NULL;
 
+-- device-lifecycle.md §9.2.3 (decision 0121): the one Welcome binding of one
+-- claim of a ledger row, written by the claim destination in the transaction
+-- that queues the Welcome; consume is checked against it alone.
+CREATE TABLE public.keypackage_claim_welcome_bindings (
+    claim_id text PRIMARY KEY,
+    source_id text NOT NULL,
+    claim_request_id text NOT NULL,
+    welcome_id text NOT NULL UNIQUE,
+    welcome_digest text NOT NULL,
+    commit_event_ref text NOT NULL,
+    FOREIGN KEY (source_id, claim_request_id)
+        REFERENCES public.peer_keypackage_claims (source_id, claim_request_id) ON DELETE CASCADE
+);
+
 
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY CHECK (organization_id LIKE 'ak:did_core:%'),

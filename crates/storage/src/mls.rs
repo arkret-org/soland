@@ -290,6 +290,20 @@ pub struct PeerKeyPackageClaimLedgerRecord {
     pub updated_at: i64,
 }
 
+/// The one Welcome a claim destination queued for one claim, recorded on
+/// that claim's ledger row in the queueing transaction (device-lifecycle.md
+/// §9.2.3, decision 0121). Consume is checked against it alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsWelcomeClaimBinding {
+    pub claim_id: String,
+    pub source_id: String,
+    pub claim_request_id: String,
+    pub welcome_id: String,
+    /// `sha256` of the JCS bytes of the complete delivery, proof included.
+    pub welcome_digest: String,
+    pub commit_event_ref: String,
+}
+
 /// One candidate CAS attempt for a peer claim. The storage adapter must make
 /// the KeyPackage transition and terminal ledger insert atomic.
 pub struct PeerKeyPackageClaimAttempt<'a> {
@@ -592,6 +606,11 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         claim_id: &str,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
+    /// The Welcome binding recorded for `claim_id`, if its Welcome was queued.
+    async fn get_claim_welcome_binding(
+        &self,
+        claim_id: &str,
+    ) -> PersistenceResult<Option<MlsWelcomeClaimBinding>>;
     /// Resolve the unique durable ordinary single-use peer-claim fact that
     /// owns a KeyPackage. Reusable last-resort packages intentionally have
     /// multiple independent claim audit rows and are excluded.

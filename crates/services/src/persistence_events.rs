@@ -641,6 +641,16 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .get_peer_claim_by_claim_id(claim_id)
             .await?)
     }
+    async fn claim_welcome_binding(
+        &self,
+        claim_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::MlsWelcomeClaimBinding>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .get_claim_welcome_binding(claim_id)
+            .await?)
+    }
     async fn peer_claim_by_keypackage_id(
         &self,
         keypackage_id: &str,

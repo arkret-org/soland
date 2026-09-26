@@ -102,32 +102,17 @@ async fn visible_target_scope(
     }
 }
 
-/// Why the current MLS send gate refuses one application body.
-///
-/// The gate is shared by message prepare and self Event submit so both
-/// surfaces answer the same state with the same registered identity
-/// (encryption-and-audit §2.5.2, decision 0100).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MlsSendGateRefusal {
-    /// Plaintext into a scope with an accepted `ak.mls.genesis`.
-    ActivationRequired,
-    /// Ciphertext into a scope with no accepted MLS Genesis/current group.
-    /// Nothing was written; the scope needs activation or plaintext authoring.
-    NotActivated,
-    /// The scope's membership / policy / key-access checkpoint still awaits a
-    /// covering winning Commit: the sender pauses instead of re-encrypting.
-    EpochUpdateRequired,
-    /// The frozen epoch or `group_state_ref` differs from the ready current
-    /// group: the sender refreshes the group and re-encrypts a new request.
-    EpochMismatch,
-}
+/// Why the current MLS send gate refuses one application body; the gate is
+/// shared by message prepare, self Event submit and the accepting
+/// transaction, so every surface answers the same state with the same
+/// registered identity (encryption-and-audit §2.5.2, decision 0100).
+pub(crate) use soland_storage::MlsSendGateRefusal;
 
 /// Failure of the current MLS send gate.
 #[derive(Debug)]
 pub(crate) enum MlsSendGateError {
     Refused(MlsSendGateRefusal),
     CurrentUnavailable,
-    Internal(String),
 }
 
 /// Evaluate the current MLS send gate for one application body.
@@ -147,37 +132,16 @@ pub(crate) async fn mls_send_gate(
         .current(scope)
         .await
         .map_err(|_| MlsSendGateError::CurrentUnavailable)?;
-    let Some(envelopes) = envelopes else {
-        return match current {
-            Some(_) => Err(MlsSendGateError::Refused(
-                MlsSendGateRefusal::ActivationRequired,
-            )),
-            None => Ok(()),
-        };
-    };
-    let current = current
-        .ok_or(MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated))?
-        .value;
-    if current.covered_key_access_revision < current.current_key_access_revision {
-        return Err(MlsSendGateError::Refused(
-            MlsSendGateRefusal::EpochUpdateRequired,
-        ));
-    }
-    if current.effective_scope != *scope
-        || envelopes.iter().any(|envelope| {
-            envelope.encryption_context.epoch() != current.epoch
-                || envelope.encryption_context.group_state_ref()
-                    != &current.current_mls_commit_event_ref
-        })
-    {
-        return Err(MlsSendGateError::Refused(MlsSendGateRefusal::EpochMismatch));
-    }
-    Ok(())
+    soland_storage::decide_mls_send_gate(
+        current.as_ref().map(|current| &current.value),
+        scope,
+        envelopes,
+    )
+    .map_err(MlsSendGateError::Refused)
 }
 
 fn send_gate_problem(error: MlsSendGateError) -> AppError {
     match error {
-        MlsSendGateError::Internal(detail) => AppError::internal(detail),
         MlsSendGateError::CurrentUnavailable => {
             crate::app_error!(
                 TemporarilyUnavailable,
@@ -216,54 +180,21 @@ pub(crate) async fn message_create_send_gate(
 ) -> Result<(), soland_services::ServiceError> {
     use soland_services::ServiceError;
     use soland_storage::ConflictCode;
-    let envelope = |field: &str| {
-        event
-            .payload
-            .get(field)
-            .map(|value| serde_json::from_value::<EncryptedEnvelope>(value.clone()))
-            .transpose()
-            .map_err(|error| ServiceError::SchemaViolation(format!("message {field}: {error}")))
-    };
-    let content = envelope("encrypted_content")?;
-    let metadata = envelope("encrypted_metadata")?;
-    let envelopes: Option<Vec<&EncryptedEnvelope>> = match (&content, &metadata) {
-        (Some(content), metadata) => Some(std::iter::once(content).chain(metadata).collect()),
-        (None, None) => None,
-        (None, Some(_)) => {
-            return Err(ServiceError::SchemaViolation(
-                "message encrypted_metadata requires encrypted_content".to_owned(),
-            ));
-        }
-    };
+    let envelopes = soland_storage::message_create_envelopes(&event.payload)
+        .map_err(ServiceError::SchemaViolation)?;
+    let envelopes = envelopes
+        .as_ref()
+        .map(|envelopes| envelopes.iter().collect::<Vec<_>>());
     mls_send_gate(state, &event.scope_ref, envelopes.as_deref())
         .await
-        .map_err(|error| {
-            let (code, detail) = match error {
-                MlsSendGateError::Internal(detail) => return ServiceError::Internal(detail),
-                MlsSendGateError::CurrentUnavailable => {
-                    return ServiceError::Conflict(format!(
-                        "{}: current MLS group is temporarily unavailable",
-                        ConflictCode::TemporarilyUnavailable
-                    ));
-                }
-                MlsSendGateError::Refused(MlsSendGateRefusal::ActivationRequired) => (
-                    ConflictCode::MlsActivationRequired,
-                    "plaintext is not allowed after MLS activation",
-                ),
-                MlsSendGateError::Refused(MlsSendGateRefusal::NotActivated) => (
-                    ConflictCode::FailedPrecondition,
-                    "scope has no accepted MLS group",
-                ),
-                MlsSendGateError::Refused(MlsSendGateRefusal::EpochUpdateRequired) => (
-                    ConflictCode::EpochUpdateRequired,
-                    "the scope key-access revision is not yet covered by an accepted MLS Commit",
-                ),
-                MlsSendGateError::Refused(MlsSendGateRefusal::EpochMismatch) => (
-                    ConflictCode::EpochMismatch,
-                    "frozen message encryption context is no longer applicable",
-                ),
-            };
-            ServiceError::Conflict(format!("{code}: {detail}"))
+        .map_err(|error| match error {
+            MlsSendGateError::CurrentUnavailable => ServiceError::Conflict(format!(
+                "{}: current MLS group is temporarily unavailable",
+                ConflictCode::TemporarilyUnavailable
+            )),
+            MlsSendGateError::Refused(refusal) => {
+                ServiceError::Conflict(format!("{}: {}", refusal.conflict_code(), refusal.detail()))
+            }
         })
 }
 
