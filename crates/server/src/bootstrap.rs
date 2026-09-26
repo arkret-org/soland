@@ -240,6 +240,10 @@ async fn resolve_service_identity(
         .await?
     };
 
+    // A later successor needs the original receipt. Establish or verify its
+    // recoverable bundle before any public head can advance.
+    ensure_identity_bundle(persistence, bundle_backend, &stored).await?;
+
     let stored = ensure_account_authority_authorization(
         persistence,
         config,
@@ -250,6 +254,7 @@ async fn resolve_service_identity(
     .await?;
 
     let stored = ensure_service_endpoint(persistence, config, key_store, stored).await?;
+    let stored = ensure_service_assertion_signer(persistence, config, key_store, stored).await?;
     ensure_identity_bundle(persistence, bundle_backend, &stored).await?;
 
     if stored.identity.registration_key != configured_key {
@@ -1744,7 +1749,7 @@ async fn authorize_account_authority_key(
         assertions.push(json!(method_id));
     }
 
-    publish_service_document_successor(persistence, config, key_store, stored, state).await
+    publish_service_document_successor(persistence, config, key_store, stored, state, None).await
 }
 
 async fn ensure_service_endpoint(
@@ -1773,7 +1778,64 @@ async fn ensure_service_endpoint(
         return Ok(stored);
     }
     entry["serviceEndpoint"] = Value::String(desired.to_string());
-    publish_service_document_successor(persistence, config, key_store, stored, document).await
+    publish_service_document_successor(persistence, config, key_store, stored, document, None).await
+}
+
+/// An explicit signing seed is the operator's desired assertion key. The
+/// current key remains in KeyStore under its old ref, while the new seed is
+/// durably staged under a content-addressed ref before publication.
+async fn ensure_service_assertion_signer(
+    persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
+    stored: StoredDidCoreIdentity,
+) -> anyhow::Result<StoredDidCoreIdentity> {
+    let Some(desired_seed) = config.notary_signing_key_seed else {
+        return Ok(stored);
+    };
+    let current_seed =
+        load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
+    if current_seed == desired_seed {
+        return Ok(stored);
+    }
+    let key_store = required_key_store(key_store)?;
+    let new_ref = retained_signing_key_ref(&stored.identity.did, &desired_seed)?;
+    key_store
+        .store(new_ref.as_str(), &desired_seed)
+        .map_err(|error| {
+            anyhow::anyhow!("staging the next service assertion key failed: {error}")
+        })?;
+    let mut state = serde_json::to_value(&stored.did_document)?;
+    let method_id = format!("{}#notary-key", stored.identity.did);
+    let methods = state
+        .get_mut("verificationMethod")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("service DID document omits verificationMethod"))?;
+    let method = methods
+        .iter_mut()
+        .find(|method| method["id"] == method_id)
+        .ok_or_else(|| anyhow::anyhow!("service DID document omits its notary method"))?;
+    method["publicKeyMultibase"] =
+        Value::String(arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            SigningKey::from_bytes(&desired_seed)
+                .verifying_key()
+                .as_bytes(),
+        ));
+    if !state["assertionMethod"]
+        .as_array()
+        .is_some_and(|methods| methods.contains(&json!(method_id)))
+    {
+        anyhow::bail!("service DID document does not authorize its notary assertion method");
+    }
+    publish_service_document_successor(
+        persistence,
+        config,
+        Some(key_store),
+        stored,
+        state,
+        Some((&new_ref, &desired_seed)),
+    )
+    .await
 }
 
 async fn publish_service_document_successor(
@@ -1782,6 +1844,7 @@ async fn publish_service_document_successor(
     key_store: Option<&dyn KeyStore>,
     stored: StoredDidCoreIdentity,
     state: Value,
+    signer_successor: Option<(&DidCoreIdentityKeyRef, &[u8; 32])>,
 ) -> anyhow::Result<StoredDidCoreIdentity> {
     let did = stored.identity.did.clone();
     let entries = persistence.webvh_history(did.as_str()).await?;
@@ -1864,11 +1927,19 @@ async fn publish_service_document_successor(
         updated_at: now,
     };
     let mut updated = stored.clone();
-    let signing_seed = load_signing_seed(
-        config,
-        Some(key_store),
-        &updated.identity.active_signing_key_ref,
-    )?;
+    let signing_seed = if let Some((next_ref, next_seed)) = signer_successor {
+        if !updated.identity.signing_key_refs.contains(next_ref) {
+            updated.identity.signing_key_refs.push(next_ref.clone());
+        }
+        updated.identity.active_signing_key_ref = next_ref.clone();
+        *next_seed
+    } else {
+        load_signing_seed(
+            config,
+            Some(key_store),
+            &updated.identity.active_signing_key_ref,
+        )?
+    };
     updated.registration_receipt = reissue_registration_receipt(
         &updated,
         &rotation.version_id,
@@ -1884,6 +1955,8 @@ async fn publish_service_document_successor(
         anyhow::anyhow!("the rotated Station DID document is not a service document: {error}")
     })?;
     updated.stored_at = now;
+    validate_service_signing_binding(&updated, &signing_seed)?;
+    validate_registration_receipt_signature(&updated)?;
     let event = WebvhLogRecord {
         event_digest,
         did: did.to_string(),
@@ -1960,11 +2033,9 @@ async fn mint_local_service_identity(
     let service_did = Did::new(prepared.did.clone())
         .map_err(|error| anyhow::anyhow!("minted service DID is invalid: {error}"))?;
     let signing_ref = signing_key_ref(config, &service_did, Some(key_store))?;
-    if config.notary_signing_key_seed.is_none() {
-        key_store
-            .store(signing_ref.as_str(), &service_signing_seed)
-            .map_err(|error| anyhow::anyhow!("persisting service signing key failed: {error}"))?;
-    }
+    key_store
+        .store(signing_ref.as_str(), &service_signing_seed)
+        .map_err(|error| anyhow::anyhow!("persisting service signing key failed: {error}"))?;
     let current_control_ref = control_key_ref(&service_did, 1)?;
     let next_control_ref = next_control_key_ref(&current_control_ref)?;
     key_store
@@ -2115,13 +2186,27 @@ fn signing_key_ref(
     service_did: &Did,
     key_store: Option<&dyn KeyStore>,
 ) -> anyhow::Result<DidCoreIdentityKeyRef> {
-    if config.notary_signing_key_seed.is_some() {
-        return DidCoreIdentityKeyRef::new(CONFIGURED_SIGNING_KEY_REF.to_owned())
-            .map_err(|error| anyhow::anyhow!(error.to_string()));
-    }
     required_key_store(key_store)?;
+    if let Some(seed) = config.notary_signing_key_seed {
+        return retained_signing_key_ref(service_did, &seed);
+    }
     DidCoreIdentityKeyRef::new(format!("arkret:signer:soland-notary:{service_did}"))
         .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn retained_signing_key_ref(
+    service_did: &Did,
+    seed: &[u8; 32],
+) -> anyhow::Result<DidCoreIdentityKeyRef> {
+    let public = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        SigningKey::from_bytes(seed).verifying_key().as_bytes(),
+    );
+    let digest = Sha256::digest(public.as_bytes());
+    let suffix: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    DidCoreIdentityKeyRef::new(format!(
+        "arkret:signer:soland-notary:{service_did}:{suffix}"
+    ))
+    .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 fn control_key_ref(service_did: &Did, generation: u64) -> anyhow::Result<DidCoreIdentityKeyRef> {
@@ -2648,6 +2733,184 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assertion_signer_successor_retains_old_receipt_and_recovers_after_failure() {
+        let database = Arc::new(TestDatabase::lease().await);
+        let persistence_store = Arc::new(PgPersistenceStore::leased(database.clone()));
+        let persistence = PersistenceHandle::new(persistence_store.clone());
+        let key_store = TestKeyStore::default();
+        let bundle_dir = std::env::temp_dir().join(format!(
+            "soland-signing-rotation-bundle-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let bundle_backend = FileIdentityBundleBackend::new(&bundle_dir);
+        let original_config = bootstrap_config();
+        resolve_service_identity(
+            &persistence,
+            &original_config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            true,
+        )
+        .await
+        .expect("initial identity and bundle");
+        let before = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        let original_bundle = bundle_backend
+            .load(&before.identity.registration_key)
+            .unwrap()
+            .unwrap();
+        let old_ref = before.identity.active_signing_key_ref.clone();
+        let new_seed = [0x67; 32];
+        let rotated_config = AppConfig {
+            notary_signing_key_seed: Some(new_seed),
+            ..original_config
+        };
+
+        let (client, connection) = tokio_postgres::connect(database.url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        let connection_task = tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client.batch_execute(
+            "CREATE FUNCTION fail_signer_identity_successor() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN RAISE EXCEPTION 'injected signer identity failure'; END $$; \
+             CREATE TRIGGER fail_signer_identity_successor BEFORE UPDATE ON service_identity \
+             FOR EACH ROW EXECUTE FUNCTION fail_signer_identity_successor()",
+        ).await.unwrap();
+        let error = resolve_service_identity(
+            &persistence,
+            &rotated_config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect_err("identity write failure rolls back signer publication");
+        assert!(
+            error
+                .to_string()
+                .contains("injected signer identity failure"),
+            "{error}"
+        );
+        assert_eq!(
+            persistence_store.service_identity().get().await.unwrap(),
+            Some(before.clone())
+        );
+        assert_eq!(
+            persistence
+                .webvh_history(before.identity.did.as_str())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            bundle_backend
+                .load(&before.identity.registration_key)
+                .unwrap()
+                .unwrap(),
+            original_bundle
+        );
+        client.batch_execute("DROP TRIGGER fail_signer_identity_successor ON service_identity; DROP FUNCTION fail_signer_identity_successor()")
+            .await.unwrap();
+
+        resolve_service_identity(
+            &persistence,
+            &rotated_config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect("retry publishes the assertion signer successor");
+        let after = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(after.identity.active_signing_key_ref, old_ref);
+        assert!(after.identity.signing_key_refs.contains(&old_ref));
+        assert_eq!(
+            key_store.load(old_ref.as_str()).unwrap().as_slice(),
+            &[0x39; 32]
+        );
+        assert_eq!(
+            key_store
+                .load(after.identity.active_signing_key_ref.as_str())
+                .unwrap()
+                .as_slice(),
+            &new_seed
+        );
+        assert_eq!(
+            persistence
+                .webvh_history(after.identity.did.as_str())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        let rotated_bundle = bundle_backend
+            .load(&after.identity.registration_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rotated_bundle.receipt_chains.len(), 2);
+        assert_eq!(
+            rotated_bundle.receipt_chains[0],
+            original_bundle.receipt_chains[0]
+        );
+        assert_eq!(rotated_bundle.receipt_chains[1], after.registration_receipt);
+        arkret_signatures::service_identity::verify_registration_receipt_proof(
+            &rotated_bundle.receipt_chains[0],
+            &before.did_document,
+        )
+        .unwrap();
+        arkret_signatures::service_identity::verify_registration_receipt_proof(
+            &rotated_bundle.receipt_chains[1],
+            &after.did_document,
+        )
+        .unwrap();
+        assert!(
+            arkret_signatures::service_identity::verify_registration_receipt_proof(
+                &rotated_bundle.receipt_chains[0],
+                &after.did_document,
+            )
+            .is_err()
+        );
+        assert!(
+            arkret_signatures::service_identity::verify_registration_receipt_proof(
+                &rotated_bundle.receipt_chains[1],
+                &before.did_document,
+            )
+            .is_err()
+        );
+        resolve_service_identity(
+            &persistence,
+            &rotated_config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect("restart serves the new signer without another successor");
+        assert_eq!(
+            persistence
+                .webvh_history(after.identity.did.as_str())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        std::fs::remove_dir_all(bundle_dir).unwrap();
+        connection_task.abort();
+    }
+
+    #[tokio::test]
     async fn restart_fails_when_the_configured_account_authority_is_unreachable() {
         let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
@@ -3049,7 +3312,17 @@ mod tests {
         );
         assert_eq!(
             stored.identity.active_signing_key_ref.as_str(),
-            CONFIGURED_SIGNING_KEY_REF
+            retained_signing_key_ref(
+                &stored.identity.did,
+                &config.notary_signing_key_seed.unwrap()
+            )
+            .unwrap()
+            .as_str()
+        );
+        assert!(
+            key_store
+                .load(stored.identity.active_signing_key_ref.as_str())
+                .is_ok()
         );
         assert!(
             key_store
