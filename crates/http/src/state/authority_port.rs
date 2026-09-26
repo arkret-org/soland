@@ -429,6 +429,17 @@ impl AuthorityProtocolPort for AppState {
         super::committed_replication::receive(self, peer, request).await
     }
 
+    async fn submit_peer_direct_conversation_founding(
+        &self,
+        peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+        request: arkret_models_collaboration::authority_commit::DirectConversationFoundingFederationSubmission,
+    ) -> ServiceResult<DirectConversationFoundingAcceptanceOutcome> {
+        super::authority_direct_conversation::submit_peer_direct_conversation_founding(
+            self, peer, request,
+        )
+        .await
+    }
+
     async fn scan_stream_for_account(
         &self,
         account: &arkret_wire::AccountId,

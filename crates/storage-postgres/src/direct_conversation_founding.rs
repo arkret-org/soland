@@ -20,6 +20,11 @@
 
 use std::collections::BTreeSet;
 
+use arkret_models_collaboration::authority_commit::{
+    AggregateAcceptanceStatus, CommittedEventSubmission,
+    DirectConversationFoundingFederationSubmission, PeerAuthoritySubmitRequest,
+    PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitRequest, RegisteredAtomicUnitBranch,
+};
 use arkret_models_collaboration::contact_operations::ContactRound;
 use arkret_models_collaboration::objects::direct_conversation::{
     DirectConversationAuthorizationBasis, DirectConversationFoundingAuthorityEvidence,
@@ -28,7 +33,8 @@ use arkret_wire::ActorId;
 use soland_storage::{
     AuthorityCommitWriteOutcome, ConflictCode, ContactRecord,
     DirectConversationFoundingAuthorityRef, DirectConversationFoundingCommitOutcome,
-    DirectConversationFoundingCommitUnit, DirectConversationFoundingFacts, SelfProducerCommitGuard,
+    DirectConversationFoundingCommitUnit, DirectConversationFoundingFacts, FederationOutboxRecord,
+    SelfProducerCommitGuard,
 };
 
 use super::{
@@ -80,13 +86,17 @@ async fn verify_contact_round_founding_authority(
     contact_round_id: &arkret_wire::Hash,
     local_station: &arkret_wire::DidCoreId,
     at: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<DirectConversationAuthorizationBasis> {
+    missing_code: ConflictCode,
+) -> PersistenceResult<(
+    DirectConversationAuthorizationBasis,
+    DirectConversationFoundingAuthorityEvidence,
+)> {
     let stale = |detail: &str| conflict(ConflictCode::FailedPrecondition, detail);
     let contact = current_contact(
         crate::contacts::pair_contacts_in_connection(conn, &facts.founder_id, &facts.peer_id)
             .await?,
     )
-    .ok_or_else(|| stale("the pair has no accepted Contact round"))?;
+    .ok_or_else(|| conflict(missing_code, "the pair has no local Contact round"))?;
     let grants_direct_message = |scopes: &[String]| {
         scopes
             .iter()
@@ -205,7 +215,7 @@ async fn verify_contact_round_founding_authority(
     basis
         .validate_shape()
         .map_err(|error| stale(&format!("the Contact round heads are not a basis: {error}")))?;
-    Ok(basis)
+    Ok((basis, founding))
 }
 
 fn account_station(actor: &ActorId) -> Option<&arkret_wire::DidCoreId> {
@@ -236,11 +246,12 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
             "the founder's current Station admits the founding unit",
         ));
     }
-    if account_station(&facts.peer_id) != Some(&authority.service_id) {
-        return Err(PersistenceError::Internal(
-            "cross-Station Direct Conversation founding delivery is not connected".to_owned(),
-        ));
-    }
+    let peer_station = account_station(&facts.peer_id).cloned().ok_or_else(|| {
+        conflict(
+            ConflictCode::DirectConversationFoundingUnitInvalid,
+            "the peer must have a routable Account Station",
+        )
+    })?;
     let founder_id = facts.founder_id.to_string();
     let peer_id = facts.peer_id.to_string();
     let trust_domain_id = facts.trust_domain_id.as_str().to_owned();
@@ -308,7 +319,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
             )
             .into());
         }
-        let authorization_basis = match &facts.authority_ref {
+        let (authorization_basis, founding_evidence) = match &facts.authority_ref {
             DirectConversationFoundingAuthorityRef::ContactRound(contact_round_id) => {
                 verify_contact_round_founding_authority(
                     conn,
@@ -316,6 +327,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                     contact_round_id,
                     &authority.service_id,
                     committed_at,
+                    ConflictCode::FailedPrecondition,
                 )
                 .await?
             }
@@ -418,9 +430,170 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
         .bind::<Timestamptz, _>(committed_at)
         .execute(&mut *conn)
         .await?;
+        if peer_station != authority.service_id {
+            let request = PeerAuthoritySubmitRequest::RegisteredAtomicUnit(
+                PeerRegisteredAtomicUnitRequest {
+                    branch: RegisteredAtomicUnitBranch::RegisteredAtomicUnit,
+                    unit: PeerRegisteredAtomicUnit::DirectConversationFounding(
+                        DirectConversationFoundingFederationSubmission {
+                            unit_kind: unit.submission.unit_kind,
+                            committed_events: std::array::from_fn(|index| {
+                                CommittedEventSubmission {
+                                    event_submission: unit.submission.events[index].clone(),
+                                    source_commit: commits[index].clone(),
+                                    welcomes: None,
+                                }
+                            }),
+                            founding_authority_evidence: founding_evidence,
+                        },
+                    ),
+                },
+            );
+            request
+                .validate()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let payload_json = String::from_utf8(
+                arkret_canonical::canonical_json_bytes(&request)
+                    .map_err(PersistenceError::database)?,
+            )
+            .map_err(PersistenceError::database)?;
+            let delivery_key = format!("direct-conversation-founding:{digest}");
+            let delivery = FederationOutboxRecord::pending_without_locator(
+                delivery_key.clone(),
+                peer_station,
+                crate::realm_fanout::PEER_EVENTS_ENDPOINT.to_owned(),
+                delivery_key,
+                payload_json,
+                queued_at.timestamp(),
+            );
+            crate::federation::enqueue_federation_outbox_in_connection(conn, &delivery).await?;
+        }
         Ok(DirectConversationFoundingCommitOutcome::Committed(
             commits.clone(),
         ))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+/// The peer materialization cut. The source has already signed all four
+/// Commits; the peer locks its local Contact evidence and installs exactly
+/// those rows with a complete anchored replica stream in one transaction.
+pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
+    pool: &PgPool,
+    unit: &DirectConversationFoundingCommitUnit,
+    evidence: &DirectConversationFoundingAuthorityEvidence,
+    local_station: &arkret_wire::DidCoreId,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<AggregateAcceptanceStatus> {
+    let facts = unit
+        .facts()
+        .map_err(|error| conflict(ConflictCode::DirectConversationFoundingUnitInvalid, error))?;
+    unit.validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if &facts.governance_station_id == local_station
+        || facts.peer_id.route_service_id() != local_station
+    {
+        return Err(conflict(
+            ConflictCode::DirectConversationFoundingUnitInvalid,
+            "the peer Station is not the recipient of the founding unit",
+        ));
+    }
+    let founder_id = facts.founder_id.to_string();
+    let peer_id = facts.peer_id.to_string();
+    let trust_domain_id = facts.trust_domain_id.as_str().to_owned();
+    let pair_key = facts.pair_key.as_str().to_owned();
+    let digest = facts.founding_unit_digest.as_str().to_owned();
+    let commits = unit.commits();
+    let event_ids = unit
+        .transactions
+        .iter()
+        .map(|transaction| transaction.event.event_id.to_string())
+        .collect::<Vec<_>>();
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        crate::unit_of_work::advisory_lock(
+            conn,
+            format!("direct-conversation-founding:{founder_id}:{trust_domain_id}:{pair_key}"),
+        )
+        .await?;
+        let occupied = sql_query(
+            "SELECT founding_unit_digest,commits_json FROM direct_conversation_founding_slots \
+             WHERE founder_id=$1 AND trust_domain_id=$2 AND pair_key=$3",
+        )
+        .bind::<Text, _>(&founder_id)
+        .bind::<Text, _>(&trust_domain_id)
+        .bind::<Text, _>(&pair_key)
+        .get_result::<StoredUnitRow>(&mut *conn)
+        .await
+        .optional()?;
+        if let Some(occupied) = occupied {
+            let stored: [arkret_wire::RealmCommit; 4] =
+                serde_json::from_value(occupied.commits_json).map_err(PersistenceError::database)?;
+            if occupied.founding_unit_digest == digest && stored == commits {
+                return Ok(AggregateAcceptanceStatus::Duplicate);
+            }
+            return Err(conflict(
+                ConflictCode::DirectConversationSlotAlreadyCommitted,
+                "the peer already holds another founding unit for this pair",
+            )
+            .into());
+        }
+        let (basis, local_evidence) = match &facts.authority_ref {
+            DirectConversationFoundingAuthorityRef::ContactRound(round_id) => {
+                verify_contact_round_founding_authority(
+                    conn,
+                    &facts,
+                    round_id,
+                    local_station,
+                    commits[3].committed_at,
+                    ConflictCode::DependencyMissing,
+                )
+                .await?
+            }
+            DirectConversationFoundingAuthorityRef::AgentProvision(_) => {
+                return Err(conflict(
+                    ConflictCode::FailedPrecondition,
+                    "no accepted Agent provision is readable at the founding cut",
+                )
+                .into());
+            }
+        };
+        if &local_evidence != evidence {
+            return Err(conflict(
+                ConflictCode::FailedPrecondition,
+                "the source founding evidence does not match the peer's current Contact round",
+            )
+            .into());
+        }
+        crate::authority_commit::replica::materialize_founding_in_connection(
+            conn,
+            unit,
+            local_station,
+            received_at,
+        )
+        .await?;
+        sql_query(
+            "INSERT INTO direct_conversation_founding_slots \
+             (founder_id,trust_domain_id,pair_key,peer_id,founding_unit_digest,realm_id,\
+              main_strand_id,authorization_basis,event_ids,commits_json,idempotency_key,accepted_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+        )
+        .bind::<Text, _>(&founder_id)
+        .bind::<Text, _>(&trust_domain_id)
+        .bind::<Text, _>(&pair_key)
+        .bind::<Text, _>(&peer_id)
+        .bind::<Text, _>(&digest)
+        .bind::<Text, _>(facts.realm_id.as_str())
+        .bind::<Text, _>(facts.main_strand_id.as_str())
+        .bind::<Jsonb, _>(serde_json::to_value(&basis).map_err(PersistenceError::database)?)
+        .bind::<Jsonb, _>(serde_json::to_value(&event_ids).map_err(PersistenceError::database)?)
+        .bind::<Jsonb, _>(serde_json::to_value(&commits).map_err(PersistenceError::database)?)
+        .bind::<Text, _>(format!("peer:{digest}"))
+        .bind::<Timestamptz, _>(commits[3].committed_at)
+        .execute(&mut *conn)
+        .await?;
+        Ok(AggregateAcceptanceStatus::Committed)
     })
     .await
     .map_err(PgTransactionError::into_persistence)

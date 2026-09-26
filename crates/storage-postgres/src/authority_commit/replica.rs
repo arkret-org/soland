@@ -150,6 +150,66 @@ pub(super) async fn record_remote_authority_in_connection(
     Ok(())
 }
 
+/// The founding exception opens an already complete, anchored peer stream.
+/// The caller has verified every source proof and its local founding
+/// authority; all writes stay in the caller's transaction.
+pub(crate) async fn materialize_founding_in_connection(
+    conn: &mut AsyncPgConnection,
+    unit: &soland_storage::DirectConversationFoundingCommitUnit,
+    local_service_id: &arkret_wire::DidCoreId,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), PgTransactionError> {
+    let authority = &unit.transactions[0].expected_authority;
+    record_remote_authority_in_connection(conn, authority, local_service_id).await?;
+    let key = stream_key(&unit.transactions[0].commit.stream_ref)?;
+    if locked_head(conn, &key).await?.is_some() {
+        return Err(conflict(
+            ConflictCode::DirectConversationSlotAlreadyCommitted,
+            "the founding Realm stream already exists",
+        ));
+    }
+    for transaction in &unit.transactions {
+        let event = &transaction.event;
+        let commit = &transaction.commit;
+        store_replica_rows(conn, event, commit, &key, received_at).await?;
+        crate::capability_grant_current_results::commit_realm_authority_root_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::realm_bootstrap_current_results::commit_ordinary_bootstrap_singleton_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::unit_of_work::commit_parent_membership_current_results(conn, event, commit).await?;
+        crate::strand_current_results::commit_strand_create_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+    }
+    let facts = unit.facts().map_err(invalid)?;
+    let member_account_id = facts.peer_id.as_account_id().ok_or_else(|| {
+        invalid("a peer founding member must be an Account hosted by this Station")
+    })?;
+    let member = serde_json::to_value(member_account_id).map_err(PersistenceError::database)?;
+    sql_query(
+        "INSERT INTO replica_stream_anchors \
+         (stream_key,realm_id,join_commit_id,member_account_id,anchor_commit_id,anchor_stream_position,anchored_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+    )
+    .bind::<Text, _>(&key)
+    .bind::<Text, _>(facts.realm_id.as_str())
+    .bind::<Text, _>(unit.transactions[2].commit.commit_id.as_str())
+    .bind::<Jsonb, _>(&member)
+    .bind::<Text, _>(unit.transactions[3].commit.commit_id.as_str())
+    .bind::<BigInt, _>(i64::try_from(unit.transactions[3].commit.stream_position).map_err(invalid)?)
+    .bind::<Timestamptz, _>(received_at)
+    .execute(&mut *conn)
+    .await?;
+    crate::account_summary::publish_realm_account_summary_in_connection(conn, &facts.realm_id)
+        .await?;
+    Ok(())
+}
+
 async fn hosts_joined_member(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,

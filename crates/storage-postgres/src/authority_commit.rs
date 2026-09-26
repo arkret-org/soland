@@ -18,7 +18,7 @@ use crate::capability_grant_current_results::{
     commit_realm_authority_root_current_result_in_connection,
 };
 
-mod replica;
+pub(crate) mod replica;
 
 #[derive(Clone)]
 pub struct PgAuthorityCommitStore {
@@ -2158,6 +2158,24 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             unit,
             producer_guards,
             queued_at,
+        )
+        .await
+    }
+
+    async fn materialize_peer_direct_conversation_founding_unit(
+        &self,
+        unit: &soland_storage::DirectConversationFoundingCommitUnit,
+        evidence: &arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence,
+        local_station: &arkret_wire::DidCoreId,
+        received_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus>
+    {
+        crate::direct_conversation_founding::materialize_peer_direct_conversation_founding_unit(
+            &self.pool,
+            unit,
+            evidence,
+            local_station,
+            received_at,
         )
         .await
     }

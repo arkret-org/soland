@@ -585,6 +585,25 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    pub async fn materialize_peer_direct_conversation_founding_unit(
+        &self,
+        unit: &soland_storage::DirectConversationFoundingCommitUnit,
+        evidence: &arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence,
+        local_station: &arkret_wire::DidCoreId,
+        received_at: DateTime<Utc>,
+    ) -> ServiceResult<arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus>
+    {
+        Ok(self
+            .store()
+            .materialize_peer_direct_conversation_founding_unit(
+                unit,
+                evidence,
+                local_station,
+                received_at,
+            )
+            .await?)
+    }
+
     /// The Direct Conversation admission table's verdict for `event` at one
     /// read-only cut of its Realm.
     pub async fn direct_conversation_admission(

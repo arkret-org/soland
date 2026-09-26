@@ -52,6 +52,14 @@ struct CountRow {
     count: i64,
 }
 
+#[derive(diesel::QueryableByName)]
+struct DeliveryRow {
+    #[diesel(sql_type = Text)]
+    peer_id: String,
+    #[diesel(sql_type = Text)]
+    payload_json: String,
+}
+
 const TRUST_DOMAIN: &str = "ak:trust_domain:direct-conversation.example";
 
 /// A founder with an accepted founding device, a same-Station peer and their
@@ -717,6 +725,62 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
     );
     assert_eq!(footprint(&pool, &realm_of(&second)).await, [0; 5]);
     assert_eq!(footprint(&pool, &realm_id).await, [1, 4, 4, 1, 2]);
+}
+
+#[tokio::test]
+async fn cross_station_founding_commits_one_exact_peer_delivery_atomically() {
+    let pool = contract_pool().await;
+    let mut pair = pair(&pool).await;
+    let remote_station = DidCoreId::new(format!(
+        "ak:did_core:web:dc-remote-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    pair.peer = AccountId::new(pair.peer.principal_id.clone(), remote_station.clone());
+    pair.contact_round_id = accept_contact(&pool, &pair.peer, &pair.founder, "accepted").await;
+    let at = now();
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let commits = match pair
+        .store()
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await
+        .unwrap()
+    {
+        DirectConversationFoundingCommitOutcome::Committed(commits) => commits,
+        _ => panic!("the cross-Station founding unit must commit once"),
+    };
+    let mut conn = pool.get().await.unwrap();
+    let rows = diesel::sql_query(
+        "SELECT peer_id,payload_json FROM federation_outbox WHERE idempotency_key=$1",
+    )
+    .bind::<Text, _>(format!(
+        "direct-conversation-founding:{}",
+        unit.facts().unwrap().founding_unit_digest
+    ))
+    .load::<DeliveryRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].peer_id, remote_station.as_str());
+    let request: arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest =
+        serde_json::from_str(&rows[0].payload_json).unwrap();
+    let arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest::RegisteredAtomicUnit(
+        request,
+    ) = request
+    else {
+        panic!("the delivery must use registered_atomic_unit");
+    };
+    let arkret_models_collaboration::authority_commit::PeerRegisteredAtomicUnit::DirectConversationFounding(
+        delivered,
+    ) = request.unit
+    else {
+        panic!("the delivery must carry the founding unit");
+    };
+    for (index, item) in delivered.committed_events.iter().enumerate() {
+        assert_eq!(item.event_submission, unit.submission.events[index]);
+        assert_eq!(item.source_commit, commits[index]);
+    }
+    assert_eq!(footprint(&pool, &realm_of(&unit)).await, [1, 4, 4, 1, 2]);
 }
 
 #[tokio::test]

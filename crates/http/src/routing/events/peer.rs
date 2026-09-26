@@ -8,7 +8,11 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountStatusResolveRequestBody,
 };
 use arkret_models_collaboration::account_status::UnsignedAccountStatusReceipt;
-use arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest;
+use arkret_models_collaboration::authority_commit::{
+    DirectConversationFoundingMissingDependency, DirectConversationFoundingMissingDependencyList,
+    PeerAuthoritySubmitRequest, PeerRegisteredAtomicUnit,
+};
+use arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence;
 use arkret_models_collaboration::principal_operations::{
     PcrGenesisAdmissionInput, PcrGenesisAdmissionResult,
 };
@@ -980,9 +984,57 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     // The authority port validates each closed branch in its own order and
     // checks the outcome it returns: an `authority_forward` answers an exact
     // duplicate Event before its evidence rule (device-lifecycle §8.2.2).
+    let founding_missing_dependency =
+        match &submission {
+            PeerAuthoritySubmitRequest::RegisteredAtomicUnit(request) => {
+                match &request.unit {
+                    PeerRegisteredAtomicUnit::DirectConversationFounding(unit) => {
+                        match &unit.founding_authority_evidence {
+                    DirectConversationFoundingAuthorityEvidence::Human {
+                        contact_round_evidence,
+                        ..
+                    } => contact_round_evidence.request_receipts.first().map(|receipt| {
+                        DirectConversationFoundingMissingDependency::ContactRoundEvidence {
+                            source_event_ref: receipt.core.request_event_ref.clone(),
+                        }
+                    }),
+                    DirectConversationFoundingAuthorityEvidence::ControllerAgent {
+                        agent_provision_ref,
+                        ..
+                    } => Some(DirectConversationFoundingMissingDependency::AgentProvisionRef {
+                        source_event_ref: agent_provision_ref.clone(),
+                    }),
+                }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
     match state.authority().submit_peer(&peer, submission).await {
         Ok(outcome) => res.render(Json(outcome)),
         Err(error) => {
+            if error.conflict_code() == Some(soland_storage::ConflictCode::DependencyMissing)
+                && let Some(dependency) = founding_missing_dependency
+            {
+                let details = DirectConversationFoundingMissingDependencyList {
+                    missing_dependencies: vec![dependency],
+                };
+                crate::error::render_problem_envelope(
+                    res,
+                    StatusCode::CONFLICT,
+                    arkret_wire::problem_details::Problem::new(
+                        "dependency_missing",
+                        409,
+                        "the peer Station lacks a founding authority dependency",
+                    )
+                    .with_extension(
+                        "details",
+                        serde_json::to_value(details).expect("typed dependency list serializes"),
+                    ),
+                );
+                return;
+            }
             if matches!(
                 error,
                 soland_services::ServiceError::Internal(_)

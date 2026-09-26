@@ -1268,6 +1268,16 @@ pub trait AuthorityCommitStore: Send + Sync {
         queued_at: DateTime<Utc>,
     ) -> PersistenceResult<DirectConversationFoundingCommitOutcome>;
 
+    /// Materialize a verified, source-committed founding unit atomically on
+    /// the peer Station, without another admission or Commit signature.
+    async fn materialize_peer_direct_conversation_founding_unit(
+        &self,
+        unit: &DirectConversationFoundingCommitUnit,
+        evidence: &arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence,
+        local_station: &arkret_wire::DidCoreId,
+        received_at: DateTime<Utc>,
+    ) -> PersistenceResult<arkret_models_collaboration::authority_commit::AggregateAcceptanceStatus>;
+
     /// Evaluate the Direct Conversation admission table
     /// (contact-and-direct-conversation.md section 8.4) for `event` at one
     /// read-only cut of its Realm. The accepting transaction evaluates the

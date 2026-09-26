@@ -10,13 +10,17 @@
 
 use arkret_models_collaboration::authority_commit::{
     AggregateAcceptanceStatus, DirectConversationFoundingAcceptanceOutcome,
-    DirectConversationFoundingUnitSubmission,
+    DirectConversationFoundingFederationSubmission, DirectConversationFoundingUnitSubmission,
 };
+use arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence;
 use arkret_wire::{AuthorityRejectionStatus, AuthoritySubmitOutcome, Event};
 use chrono::Utc;
 use soland_services::identity::SessionIdentityState;
 use soland_services::{ServiceError, ServiceResult};
-use soland_storage::{ConflictCode, DirectConversationAdmissionCut, SelfProducerCommitGuard};
+use soland_storage::{
+    AuthorityCommitTransaction, ConflictCode, CurrentRealmAuthority,
+    DirectConversationAdmissionCut, DirectConversationFoundingCommitUnit, SelfProducerCommitGuard,
+};
 
 use super::AppState;
 
@@ -147,6 +151,166 @@ pub(super) async fn submit_self_direct_conversation_founding(
         .validate()
         .map_err(|error| ServiceError::Internal(error.to_string()))?;
     Ok(outcome)
+}
+
+/// Verify the source-committed founding unit before its peer-only atomic
+/// materialization. The source Station's signed Commits are the sole finality;
+/// the peer does not run profile admission or sign a second Commit chain.
+pub(super) async fn submit_peer_direct_conversation_founding(
+    state: &AppState,
+    peer: &soland_services::authority_commit::AuthenticatedPeerContext,
+    request: DirectConversationFoundingFederationSubmission,
+) -> ServiceResult<DirectConversationFoundingAcceptanceOutcome> {
+    request
+        .validate()
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    let genesis = &request.committed_events[0].event_submission.event;
+    let authority = CurrentRealmAuthority {
+        realm_id: genesis.realm_id.clone(),
+        generation: 0,
+        service_id: peer.source_service_id.clone(),
+        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+            genesis.event_id.clone(),
+        ),
+        last_handoff_ref: None,
+    };
+    let submission = DirectConversationFoundingUnitSubmission {
+        unit_kind: request.unit_kind,
+        idempotency_key: arkret_wire::UuidV7::new(uuid::Uuid::now_v7())
+            .map_err(|error| ServiceError::internal(error.to_string()))?,
+        events: request
+            .committed_events
+            .each_ref()
+            .map(|item| item.event_submission.clone()),
+    };
+    let transactions = request
+        .committed_events
+        .each_ref()
+        .map(|item| AuthorityCommitTransaction {
+            expected_authority: authority.clone(),
+            event: item.event_submission.event.clone(),
+            commit: item.source_commit.clone(),
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        });
+    let unit = DirectConversationFoundingCommitUnit {
+        submission,
+        transactions,
+    };
+    let facts = unit.facts().map_err(|error| {
+        ServiceError::Conflict(format!(
+            "{}: {error}",
+            ConflictCode::DirectConversationFoundingUnitInvalid
+        ))
+    })?;
+    if facts.governance_station_id != peer.source_service_id
+        || facts.founder_id.route_service_id() != &peer.source_service_id
+        || facts.peer_id.route_service_id() != &state.service_core_id()
+        || unit.transactions.iter().any(|transaction| {
+            transaction.event.actor_id.route_service_id() != &peer.source_service_id
+                || transaction.event.executed_by.is_some()
+        })
+    {
+        return Err(ServiceError::Conflict(format!(
+            "{}: founding source, actual authors or destination do not route to the expected Stations",
+            ConflictCode::DirectConversationFoundingUnitInvalid
+        )));
+    }
+    if request.founding_authority_evidence.founding_ref().id
+        != match &facts.authority_ref {
+            soland_storage::DirectConversationFoundingAuthorityRef::ContactRound(id) => {
+                id.to_string()
+            }
+            soland_storage::DirectConversationFoundingAuthorityRef::AgentProvision(id) => {
+                id.to_string()
+            }
+        }
+    {
+        return Err(ServiceError::Conflict(format!(
+            "{}: the founding authority evidence names another source",
+            ConflictCode::DirectConversationFoundingUnitInvalid
+        )));
+    }
+    if let DirectConversationFoundingAuthorityEvidence::Human { .. } =
+        &request.founding_authority_evidence
+    {
+        let (participants, founder) = request
+            .founding_authority_evidence
+            .participants_and_founder()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        if founder != facts.founder_id
+            || !participants.contains(&facts.founder_id)
+            || !participants.contains(&facts.peer_id)
+        {
+            return Err(ServiceError::Conflict(format!(
+                "{}: the evidence and Event pair disagree",
+                ConflictCode::DirectConversationFoundingUnitInvalid
+            )));
+        }
+    }
+    let mut located = crate::routing::realm_join::resolve_verified_authority_of_service(
+        state,
+        &facts.realm_id,
+        &peer.source_service_id,
+    )
+    .await
+    .map_err(|error| {
+        ServiceError::Conflict(format!("{}: {error}", ConflictCode::TemporarilyUnavailable))
+    })?;
+    for (index, item) in request.committed_events.iter().enumerate() {
+        let commit = &item.source_commit;
+        if arkret_identity::RealmAuthorityKeyDirectory::public_key(
+            &located.keys,
+            &commit.signature.verification_method,
+        )
+        .is_none()
+        {
+            crate::routing::realm_join::insert_method_key(
+                state,
+                &mut located.keys,
+                &commit.signature.verification_method,
+            )
+            .await
+            .map_err(|error| {
+                ServiceError::Conflict(format!("{}: {error}", ConflictCode::TemporarilyUnavailable))
+            })?;
+        }
+        let continuity = if index == 0 {
+            soland_services::committed_receipt::CommitContinuity::StreamStart
+        } else {
+            soland_services::committed_receipt::CommitContinuity::After(
+                &request.committed_events[index - 1].source_commit,
+            )
+        };
+        soland_services::committed_receipt::verify_committed_event_receipt(
+            state.persistence(),
+            &item.event_submission.event,
+            commit,
+            continuity,
+            &located.authority,
+            &located.keys,
+            &state.service_core_id(),
+            state
+                .projections()
+                .realm_digest_suite(facts.realm_id.as_str()),
+        )
+        .await?;
+    }
+    let status = state
+        .authority_commits()
+        .materialize_peer_direct_conversation_founding_unit(
+            &unit,
+            &request.founding_authority_evidence,
+            &state.service_core_id(),
+            crate::wire::now(),
+        )
+        .await?;
+    Ok(DirectConversationFoundingAcceptanceOutcome {
+        unit_kind: request.unit_kind,
+        status,
+        commits: unit.commits(),
+    })
 }
 
 #[cfg(test)]

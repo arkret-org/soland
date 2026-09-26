@@ -2194,9 +2194,6 @@ CREATE TABLE public.federation_outbox (
         OR
         (realm_fanout IS NOT NULL AND state IN ('pending', 'pending_route', 'leased', 'delivered', 'cancelled_authority_lost'))
     ),
-    CONSTRAINT federation_outbox_route_shape_check CHECK (
-        realm_fanout IS NOT NULL OR peer_url IS NOT NULL
-    ),
     CONSTRAINT federation_outbox_coalescing_shape_check CHECK (
         (coalescing_key IS NULL) = (coalescing_position IS NULL)
         AND (coalescing_key IS NULL OR realm_fanout IS NULL)
