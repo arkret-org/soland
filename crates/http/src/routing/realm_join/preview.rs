@@ -11,15 +11,14 @@ use std::time::Duration;
 
 use arkret_models_collaboration::events_payloads::preview::PreviewPolicyPayloadValue;
 use arkret_models_collaboration::events_payloads::realm::RealmProfile;
-use arkret_models_collaboration::governance::membership_invite::InviteCreatePayload;
 use arkret_models_collaboration::governance::realm_join_intake::{
     PUBLIC_PREVIEW_DISPLAY_NAME_MAX_CHARS, PeerRealmJoinPreviewOutcome,
     PeerRealmJoinPreviewRequestBody, RealmPublicPreview, SelfRealmJoinPreviewOutcome,
     SelfRealmJoinPreviewRequestBody,
 };
 use arkret_wire::{
-    AccountId, ActorId, Base64UrlString, CurrentSelector, DidCoreId, EventId, EventKind,
-    HistoryAccess, InviteId, JoinRule, RealmId, TypedCurrentResult,
+    AccountId, ActorId, Base64UrlString, CurrentSelector, DidCoreId, HistoryAccess, InviteId,
+    JoinRule, RealmId, TypedCurrentResult,
 };
 use base64::Engine as _;
 use salvo::prelude::*;
@@ -226,50 +225,26 @@ pub(super) async fn governance_preview(
     .ok_or_else(preview_not_found)
 }
 
-/// An `invite_id` counts only when this Station committed the directed
-/// `ak.invite.create` for this Realm, its payload names the exact complete
-/// requester AccountId, it has not expired, and its lifecycle has not moved to
-/// a terminal state.
+/// One read-only cut joins the directed Invite typed current results with its
+/// accepted create Event. A holder-private delivery or a stale InviteId cannot
+/// turn into a preview entitlement.
 async fn invite_binds_requester(
     state: &AppState,
     realm_id: &RealmId,
     invite_id: &InviteId,
     requester: &AccountId,
 ) -> Result<bool, AppError> {
-    let Ok(event_id) = EventId::from_token_bytes(invite_id.token_bytes()) else {
-        return Ok(false);
-    };
-    let Some(committed) = state
-        .authority_commits()
-        .committed_event(&event_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-    else {
-        return Ok(false);
-    };
-    let event = &committed.event;
-    if event.kind != EventKind::InviteCreate
-        || event.realm_id != *realm_id
-        || committed.commit.realm_id != *realm_id
-        || committed.commit.event_ref != event.event_id
-    {
-        return Ok(false);
-    }
-    let Ok(payload) = serde_json::to_value(&event.payload)
-        .and_then(serde_json::from_value::<InviteCreatePayload>)
-    else {
-        return Ok(false);
-    };
-    if payload.invitee_account_id != *requester || payload.expires_at <= crate::wire::now() {
-        return Ok(false);
-    }
-    let lifecycle = state
-        .realm_invites()
-        .get(invite_id.as_str())
+    let candidates = state
+        .persistence()
+        .open_directed_invites_for_invitee(requester, Some(realm_id))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(lifecycle
-        .is_some_and(|invite| invite.realm_id == realm_id.as_str() && invite.status == "pending"))
+    let at = crate::wire::now();
+    Ok(candidates.into_iter().any(|invite| {
+        invite.invite_id == *invite_id
+            && invite.state == arkret_wire::InviteState::Pending
+            && invite.expires_at > at
+    }))
 }
 
 /// The accepted `ak.realm.preview_policy` value of this Realm, as the

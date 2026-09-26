@@ -6,8 +6,8 @@ use arkret_wire::{
 };
 use salvo::test::{ResponseExt as _, TestClient};
 use soland_storage::{
-    AuthorityCommitTransaction, CurrentRealmAuthority, OrdinaryRealmBootstrapCommitUnit,
-    RealmInviteRecord, RealmMetaRecord,
+    AuthorityCommitTransaction, CanonicalEventRecord, CurrentRealmAuthority, EventCommitRequest,
+    OrdinaryRealmBootstrapCommitUnit, ProjectionEventRecord, RealmMetaRecord,
 };
 use soland_test_support::AppStateTestExt as _;
 
@@ -122,6 +122,63 @@ fn realm_transaction(
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,
     }
+}
+
+async fn commit_projected_invite(
+    store: &dyn soland_storage::PersistenceStore,
+    transaction: AuthorityCommitTransaction,
+) {
+    let event = &transaction.event;
+    let at = event.created_at;
+    let event_id = event.event_id.to_string();
+    let realm_id = event.realm_id.to_string();
+    let kind = event.kind.as_str().to_owned();
+    let payload = serde_json::to_value(&event.payload).unwrap();
+    let request = EventCommitRequest {
+        event: CanonicalEventRecord {
+            event_id: event_id.clone(),
+            actor_id: event.actor_id.to_string(),
+            realm_id: Some(realm_id.clone()),
+            kind: kind.clone(),
+            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(
+                &event.digest_payload().unwrap(),
+            )
+            .unwrap(),
+            envelope: serde_json::to_value(event).unwrap(),
+            received_at: at,
+        },
+        projections: vec![ProjectionEventRecord {
+            event_id,
+            realm_id,
+            event_kind: kind,
+            operation_kind: "create".to_owned(),
+            operation_id: None,
+            sender: Some(event.actor_id.to_string()),
+            payload,
+            created_at: at,
+            received_at: at,
+        }],
+        authority_commit: transaction,
+        self_producer_guard: None,
+        forwarded_producer_evidence: None,
+        parent_membership_admission: None,
+        contact_projection: None,
+        consent_projection: None,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
+        idempotency: None,
+        outbox: Vec::new(),
+        realm_fanout_source: None,
+    };
+    store
+        .commit_event(request)
+        .await
+        .expect("Invite Event/Commit unit");
 }
 
 impl GovernedRealm {
@@ -271,35 +328,41 @@ impl GovernedRealm {
             self.head.stream_position + 1,
             Some(self.head.commit_id.clone()),
         );
-        let authorities = store.authority_commits();
-        authorities
-            .queue_event(&event, event.created_at)
-            .await
-            .unwrap();
-        authorities
-            .commit_transaction(&transaction)
-            .await
-            .expect("invite Commit");
+        commit_projected_invite(store, transaction.clone()).await;
         self.head = transaction.commit;
         let invite_id = InviteId::from_event_id(&event.event_id);
-        store
-            .realm_invites()
-            .put(RealmInviteRecord {
-                invite_id: invite_id.to_string(),
-                realm_id: self.realm_id.to_string(),
-                inviter_id: self.founder.to_string(),
-                invitee_id: Some(invitee.to_string()),
-                introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
-                third_party_invite: None,
-                status: "pending".to_owned(),
-                claim_nonces: BTreeMap::new(),
-                expires_at: Some(expires_at),
-                created_at: event.created_at,
-                updated_at: None,
-            })
-            .await
-            .unwrap();
         invite_id
+    }
+
+    async fn cancel_invite(
+        &mut self,
+        store: &dyn soland_storage::PersistenceStore,
+        invite_id: &InviteId,
+        invitee: &AccountId,
+    ) {
+        let event = fixture_event(
+            EventKind::InviteCancel,
+            ScopeRef::Realm {
+                realm_id: self.realm_id.clone(),
+            },
+            &self.founder,
+            serde_json::json!({
+                "invite_id": invite_id,
+                "invitee_account_id": invitee,
+                "previous_state": "pending",
+                "target_state": "revoked",
+            }),
+            at(),
+        );
+        let transaction = realm_transaction(
+            &self.authority,
+            &self.method,
+            &event,
+            self.head.stream_position + 1,
+            Some(self.head.commit_id.clone()),
+        );
+        commit_projected_invite(store, transaction.clone()).await;
+        self.head = transaction.commit;
     }
 }
 
@@ -465,14 +528,7 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
         .invite(store.as_ref(), &carol, at() - chrono::Duration::seconds(1))
         .await;
     assert_not_found(&state, &request(&realm.realm_id, &carol, Some(expired))).await;
-    let mut accepted = store
-        .realm_invites()
-        .get(bob_invite.as_str())
-        .await
-        .unwrap()
-        .unwrap();
-    accepted.status = "accepted".to_owned();
-    store.realm_invites().put(accepted).await.unwrap();
+    realm.cancel_invite(store.as_ref(), &bob_invite, &bob).await;
     assert_not_found(
         &state,
         &request(&realm.realm_id, &bob, Some(bob_invite.clone())),
