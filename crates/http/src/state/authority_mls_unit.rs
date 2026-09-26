@@ -548,10 +548,23 @@ pub(super) async fn resolve_claim(
         .map_err(|_| failed_precondition("the stored claim receipt signature does not verify"))?;
     let request = &receipt.request;
     let group_id = event.scope_ref.canonical_mls_group_id().map_err(schema)?;
+    let target_matches = match (
+        &welcome.recipient_endpoint,
+        &request.target_account_id,
+        &request.target_agent_id,
+    ) {
+        (MlsWelcomeRecipientEndpoint::Device { .. }, Some(account), None) => {
+            account == recipient_account
+        }
+        (MlsWelcomeRecipientEndpoint::AgentRuntime { .. }, None, Some(agent_id)) => {
+            agent_id == &recipient_account.principal_id
+        }
+        _ => false,
+    };
     if request.intended_realm_id != event.realm_id
         || request.mls_group_id != group_id
         || request.requester_account_id.as_ref() != event.actor_id.as_account_id()
-        || request.target_account_id.as_ref() != Some(recipient_account)
+        || !target_matches
     {
         return Err(failed_precondition(
             "the claim was not made by this committer for this recipient, Realm and group",
