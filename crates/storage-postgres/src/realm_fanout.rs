@@ -237,6 +237,15 @@ async fn remote_targets(
     authority_station: &arkret_wire::DidCoreId,
     commit_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<BTreeMap<arkret_wire::DidCoreId, Vec<RealmFanoutAuthorityWitness>>> {
+    // A Circle is empty at create. Its Realm-stream authorization shell is
+    // visible, but the signed object contains private directory fields. The
+    // committed-replication carrier below contains a complete Event and has
+    // no withheld branch, so no remote Realm member may receive these bytes.
+    // A peer can fetch the Commit-only chain node through the registered
+    // committed-event scan; Circle-specific availability remains closed.
+    if event.kind == arkret_wire::EventKind::CircleCreate {
+        return Ok(BTreeMap::new());
+    }
     let rows = sql_query(
         "SELECT m.member_id, e.envelope->>'event_id' AS membership_event_id \
          FROM member_state_current_results m \

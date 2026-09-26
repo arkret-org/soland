@@ -1498,6 +1498,76 @@ fn rows(page: &arkret_wire::StreamScanOutcome) -> Vec<(u64, bool)> {
         .collect()
 }
 
+/// The Realm-stream Circle create shell remains a verifiable Commit for a
+/// remote joined Realm member, while its private object never enters a full
+/// Event fanout or peer scan. Circle-specific replication is still closed.
+#[tokio::test]
+async fn circle_create_withholds_private_object_from_remote_realm_member() {
+    use arkret_wire::StreamScanDirection::After;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = admit(&pool, "circle-private-fanout", "public").await;
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let joined_actor = remote_member("circle-private-peer");
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        joined_actor.clone(),
+        &joined_actor,
+        "join",
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    let at = join.authority_commit.commit.committed_at;
+    let create = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::CircleCreate,
+        &founder(),
+        serde_json::json!({"object": {
+            "schema":"ak.schema.circle.v1",
+            "realm_id":realm_id,
+            "title":"Private acquisition",
+            "summary":"Hidden Circle summary",
+            "display":{"short_name":"Private","color_token":"slate","symbol":{"glyph":"lock"}},
+            "directory_visibility":"members",
+            "join_rule":"public",
+            "history_access":"since_join",
+            "state":"active",
+            "created_by":founder_actor(),
+            "created_at":at,
+        }}),
+        at,
+    ));
+    let committed = uow.commit_event(create.clone()).await.unwrap();
+    assert_eq!(committed.outbox_inserted, 0);
+    assert!(fanout_rows(&pool, &create).await.is_empty());
+
+    let scan = scan_request(&realm_id, After(None), 10);
+    for result in [
+        peer_page(&store, scan.clone(), &member_station()).await,
+        scanned(&store, scan, &joined_actor).await,
+    ] {
+        let page = page(result);
+        assert_eq!(
+            rows(&page),
+            vec![
+                (join.authority_commit.commit.stream_position, true),
+                (create.authority_commit.commit.stream_position, false),
+            ]
+        );
+        let withheld = &page.committed_events[1];
+        assert_eq!(
+            withheld.commit().previous_commit_ref.as_ref(),
+            Some(&join.authority_commit.commit.commit_id)
+        );
+        let body = serde_json::to_value(withheld).unwrap();
+        assert_eq!(body["event_disclosure"]["status"], "withheld");
+        assert!(body.get("event").is_none());
+        assert!(!body.to_string().contains("Private acquisition"));
+    }
+}
+
 /// `ak.self.committed_event.resource.get.v1` for `caller` on `store`'s
 /// Station `issuer`.
 async fn member_read(

@@ -548,6 +548,12 @@ async fn peer_holds_full_event(
     joined: &[ActorId],
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<bool> {
+    // Circle create is on the Realm stream, but its signed payload contains
+    // the complete Circle object. A remote Realm member is not thereby a
+    // Circle member. Preserve the Commit slot and withhold Event bytes.
+    if event.kind == arkret_wire::EventKind::CircleCreate {
+        return Ok(false);
+    }
     if crate::realm_fanout::plaintext_message(event) {
         let services = sql_query(
             "SELECT value FROM realm_bootstrap_current_results \
