@@ -140,6 +140,34 @@ fn invite_account_matches(stored: &str, account: &arkret_wire::AccountId) -> boo
     serde_json::from_str::<arkret_wire::AccountId>(stored).is_ok_and(|invitee| invitee == *account)
 }
 
+async fn directed_pending_invite_matches(
+    state: &AppState,
+    realm_id: &str,
+    invite_id: &str,
+    account: &arkret_wire::AccountId,
+) -> bool {
+    let (Ok(realm_id), Ok(invite_id)) = (
+        arkret_wire::RealmId::new(realm_id.to_owned()),
+        arkret_wire::InviteId::new(invite_id.to_owned()),
+    ) else {
+        return false;
+    };
+    state
+        .persistence()
+        .open_directed_invites_for_invitee(account, Some(&realm_id))
+        .await
+        .is_ok_and(|invites| {
+            invites.into_iter().any(|invite| {
+                invite.invite_id == invite_id
+                    && matches!(
+                        invite.state,
+                        arkret_wire::InviteState::Pending | arkret_wire::InviteState::Claimed
+                    )
+                    && invite.expires_at > now()
+            })
+        })
+}
+
 pub(super) async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
@@ -169,27 +197,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
         return false;
     };
-    if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
-        return false;
-    }
-    let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
-        return false;
-    };
-    if !matches!(invite.status.as_str(), "pending" | "claimed")
-        || !invite
-            .invitee_id
-            .as_deref()
-            .is_some_and(|invitee| invite_account_matches(invitee, account))
-    {
-        return false;
-    }
-    if invite
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= now())
-    {
-        return false;
-    }
-    invite.realm_id == realm_id
+    directed_pending_invite_matches(state, realm_id, invite_id, account).await
 }
 
 pub(super) async fn invitee_cancels_pending_invite(
@@ -212,28 +220,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
         return false;
     };
-    if arkret_identifiers::InviteId::new(invite_id.to_owned()).is_err() {
-        return false;
-    }
-    let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
-        return false;
-    };
-    if invite.realm_id != realm_id
-        || !matches!(invite.status.as_str(), "pending" | "claimed")
-        || !invite
-            .invitee_id
-            .as_deref()
-            .is_some_and(|invitee| invite_account_matches(invitee, account))
-    {
-        return false;
-    }
-    if invite
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= now())
-    {
-        return false;
-    }
-    true
+    directed_pending_invite_matches(state, realm_id, invite_id, account).await
 }
 
 pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
@@ -557,7 +544,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invite_membership_exemptions_require_the_exact_authenticated_account() {
+    async fn retired_invite_rows_cannot_authorize_directed_membership_exemptions() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -603,7 +590,9 @@ mod tests {
                     } else {
                         invitee_cancels_pending_invite(&state, &object, caller, realm_id).await
                     };
-                    assert_eq!(accepted, caller == &actor, "{kind}: {caller}");
+                    // A legacy row cannot stand in for accepted Invite
+                    // Event plus typed lifecycle at the authority cut.
+                    assert!(!accepted, "{kind}: {caller}");
                     let mut other_event = object.clone();
                     other_event.insert("actor_id".to_owned(), json!(caller));
                     let own_event_accepted = if kind == "ak.invite.accept" {
@@ -612,7 +601,7 @@ mod tests {
                     } else {
                         invitee_cancels_pending_invite(&state, &other_event, caller, realm_id).await
                     };
-                    assert_eq!(own_event_accepted, caller == &actor, "own {kind}: {caller}");
+                    assert!(!own_event_accepted, "own {kind}: {caller}");
                 }
             }
         }

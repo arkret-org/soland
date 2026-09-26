@@ -616,9 +616,6 @@ pub async fn realm_member_invited_or_joined_at_for_id(
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     let actor_id = serde_json::from_str::<arkret_wire::ActorId>(actor).ok()?;
-    let account_key = actor_id
-        .as_account_id()
-        .and_then(|account| account.canonical_key().ok());
     {
         let projection = state.projections().snapshot();
         if let Some(member) = projection.member(realm_id, actor) {
@@ -635,26 +632,27 @@ pub async fn realm_member_invited_or_joined_at_for_id(
     // pre-join evidence. Account-client authoring surfaces must recognize it
     // so the invitee_id can obtain an empty actor frontier and submit the
     // invite-accept Control Move without widening general Realm reads.
-    let now = now();
-    if let Some(invited_at) = state
-        .realm_invites()
-        .snapshot_all()
-        .await
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter(|invite| {
-            invite.realm_id == realm_id
-                && account_key
-                    .as_ref()
-                    .is_some_and(|account| invite.invitee_id.as_ref() == Some(account))
-                && invite.status == "pending"
-                && invite.expires_at.is_none_or(|expires_at| expires_at > now)
-        })
-        .map(|invite| invite.created_at)
-        .min()
-    {
-        return Some(invited_at);
+    if let (Some(account), Ok(realm)) = (
+        actor_id.as_account_id(),
+        arkret_wire::RealmId::new(realm_id.to_owned()),
+    ) {
+        if let Ok(invites) = state
+            .persistence()
+            .open_directed_invites_for_invitee(account, Some(&realm))
+            .await
+        {
+            if let Some(invited_at) = invites
+                .into_iter()
+                .filter(|invite| {
+                    invite.state == arkret_wire::InviteState::Pending
+                        && invite.expires_at > now()
+                })
+                .map(|invite| invite.created_at)
+                .min()
+            {
+                return Some(invited_at);
+            }
+        }
     }
     realm_member_joined_at_for_id(state, realm_id, actor).await
 }
