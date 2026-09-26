@@ -150,7 +150,7 @@ async fn issue_invite_locator(
     let (record, token) =
         new_invite_locator(&session.actor, state.service_id(), body.into_inner())?;
     match state
-        .realm_invites()
+        .invite_locators()
         .insert_locator(&record, ACTIVE_LOCATOR_LIMIT, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator insert: {error}")))?
@@ -190,7 +190,7 @@ async fn rotate_invite_locator(
         display_hint: body.display_hint,
     };
     let Some(record) = state
-        .realm_invites()
+        .invite_locators()
         .rotate_locator(&session.actor, body.locator_id.as_str(), &mutation, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator rotate: {error}")))?
@@ -215,7 +215,7 @@ async fn revoke_invite_locator(
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let revoked_at = now();
     let Some(record) = state
-        .realm_invites()
+        .invite_locators()
         .revoke_locator(&session.actor, body.locator_id.as_str(), revoked_at)
         .await
         .map_err(|error| AppError::internal(format!("invite locator revoke: {error}")))?
@@ -1130,7 +1130,7 @@ async fn resolve_invite_locator(
     let locator_token = body.locator_token.trim();
     let token_digest = format!("sha256:{}", sha256_hex(locator_token.as_bytes()));
     let locator_ref = state
-        .realm_invites()
+        .invite_locators()
         .resolve_and_consume_locator(&token_digest, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator resolve: {error}")))?

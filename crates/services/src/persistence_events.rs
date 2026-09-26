@@ -15,6 +15,7 @@ struct PersistenceMlsGroupReader(Arc<dyn PersistenceStore>);
 struct PersistenceMlsKeyPackageMaintenance(Arc<dyn PersistenceStore>);
 struct PersistenceRealmMetadata(Arc<dyn PersistenceStore>);
 struct PersistenceRealmInvites(Arc<dyn PersistenceStore>);
+struct PersistenceInviteLocators(Arc<dyn PersistenceStore>);
 
 fn application_projected_event(
     event: soland_storage::ProjectionEventRecord,
@@ -878,7 +879,7 @@ impl crate::events::RealmInvitePort for PersistenceRealmInvites {
 }
 
 #[async_trait::async_trait]
-impl crate::events::InviteLocatorPort for PersistenceRealmInvites {
+impl crate::events::InviteLocatorPort for PersistenceInviteLocators {
     async fn insert(
         &self,
         record: &crate::events::InviteLocatorState,
@@ -1007,6 +1008,7 @@ pub struct PersistenceEventServices {
     pub mls_key_packages: MlsKeyPackageService,
     pub realm_queries: RealmQueryService,
     pub realm_invites: RealmInviteService,
+    pub invite_locators: InviteLocatorService,
 }
 
 pub fn build_persistence_event_services(
@@ -1033,9 +1035,11 @@ pub fn build_persistence_event_services(
         realm_queries: RealmQueryService::new(Arc::new(PersistenceRealmMetadata(
             persistence.clone(),
         ))),
-        realm_invites: RealmInviteService::new(
-            Arc::new(PersistenceRealmInvites(persistence.clone())),
-            Arc::new(PersistenceRealmInvites(persistence)),
-        ),
+        realm_invites: RealmInviteService::new(Arc::new(PersistenceRealmInvites(
+            persistence.clone(),
+        ))),
+        invite_locators: InviteLocatorService::new(Arc::new(PersistenceInviteLocators(
+            persistence,
+        ))),
     }
 }

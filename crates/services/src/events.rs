@@ -1380,15 +1380,16 @@ pub trait InviteLocatorPort: Send + Sync {
     ) -> ServiceResult<Option<InviteLocatorState>>;
 }
 
+/// The Station's own Realm Invite projection (third-party invites and their
+/// claims, holder-private deliveries).
 #[derive(Clone)]
 pub struct RealmInviteService {
     invites: Arc<dyn RealmInvitePort>,
-    locators: Arc<dyn InviteLocatorPort>,
 }
 
 impl RealmInviteService {
-    pub fn new(invites: Arc<dyn RealmInvitePort>, locators: Arc<dyn InviteLocatorPort>) -> Self {
-        Self { invites, locators }
+    pub fn new(invites: Arc<dyn RealmInvitePort>) -> Self {
+        Self { invites }
     }
 
     pub async fn get(&self, invite_id: &str) -> ServiceResult<Option<RealmInviteState>> {
@@ -1401,6 +1402,19 @@ impl RealmInviteService {
 
     pub async fn snapshot_all(&self) -> ServiceResult<Vec<RealmInviteState>> {
         self.invites.snapshot_all().await
+    }
+}
+
+/// Principal invite locators (`invite_locators`), independent of any Realm
+/// Invite.
+#[derive(Clone)]
+pub struct InviteLocatorService {
+    locators: Arc<dyn InviteLocatorPort>,
+}
+
+impl InviteLocatorService {
+    pub fn new(locators: Arc<dyn InviteLocatorPort>) -> Self {
+        Self { locators }
     }
 
     pub async fn insert_locator(
