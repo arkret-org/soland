@@ -113,6 +113,11 @@ const AUDITED_FAMILIES: &[&str] = &[
     // ordinary collaboration Realm, so any row refuses the cut below.
     "actor_profile_current_results",
     "identity_accountability_current_results",
+    // Controller-PCR Agent provisioning state: likewise never in an ordinary
+    // collaboration Realm.
+    "agent_provisioning_current_results",
+    "agent_pcr_genesis_declaration_current_results",
+    "agent_selector_claim_current_results",
     // Direct Conversation binding endorsements: `ak.direct_conversation.bound`
     // has no disclosure rule yet, so any row refuses the cut below.
     "direct_conversation_binding_current_results",
@@ -362,6 +367,9 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_generation_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM actor_profile_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM identity_accountability_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM agent_provisioning_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM agent_pcr_genesis_declaration_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM agent_selector_claim_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM direct_conversation_binding_current_results WHERE realm_id=$1) \

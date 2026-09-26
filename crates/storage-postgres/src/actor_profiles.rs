@@ -87,11 +87,11 @@ struct AccountabilityResultRow {
     commit_json: Value,
 }
 
-fn rejected(code: ConflictCode, reason: &str) -> PgTransactionError {
+pub(crate) fn rejected(code: ConflictCode, reason: &str) -> PgTransactionError {
     PersistenceError::Conflict(format!("{code}: {reason}")).into()
 }
 
-fn corrupt(detail: impl std::fmt::Display) -> PgTransactionError {
+pub(crate) fn corrupt(detail: impl std::fmt::Display) -> PgTransactionError {
     PersistenceError::SchemaViolation(detail.to_string()).into()
 }
 
@@ -121,23 +121,123 @@ fn payload<T: serde::de::DeserializeOwned>(
 }
 
 /// The verified signer of a device-signed PCR self Event.
-struct PcrSigner {
-    account: AccountId,
-    device_key: arkret_signatures::PublicKeyMaterial,
+pub(crate) struct PcrSigner {
+    pub(crate) account: AccountId,
+    pub(crate) device_key: arkret_signatures::PublicKeyMaterial,
 }
 
 /// Either the exact Event is already committed (its Commit) or it is a new
 /// Event whose signer is active at the locked PCR cut.
-enum PcrSelfEventCut {
+pub(crate) enum PcrSelfEventCut {
     Known(RealmCommit),
     Fresh(PcrSigner),
+}
+
+/// The device `signer` of `account` is active in `account`'s PCR at `at`,
+/// read on this connection, and the Event producer proof verifies against
+/// its accepted key. The caller holds the lock that orders that PCR's
+/// writers before using the cut.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn verify_device_signer_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    account: &AccountId,
+    signer: &arkret_wire::DeviceId,
+    pcr_realm_id: &arkret_wire::RealmId,
+    at: chrono::DateTime<chrono::Utc>,
+    suite: arkret_canonical::DigestSuite,
+    what: &str,
+) -> Result<
+    (
+        crate::pcr_device_status_reader::ConfirmedPcrDeviceStatusCut,
+        arkret_signatures::PublicKeyMaterial,
+    ),
+    PgTransactionError,
+> {
+    let proof = event.producer_proof.as_ref().ok_or_else(|| {
+        rejected(
+            ConflictCode::SignatureInvalid,
+            &format!("{what} producer proof is absent"),
+        )
+    })?;
+    let status = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+        conn, account, signer, at,
+    )
+    .await?
+    .ok_or_else(|| {
+        rejected(
+            ConflictCode::DeviceUnauthorized,
+            &format!("{what} signer has no confirmed PCR cut"),
+        )
+    })?;
+    if status.authority.realm_id != *pcr_realm_id {
+        return Err(rejected(
+            ConflictCode::FailedPrecondition,
+            &format!("{what} signer is outside the account's PCR"),
+        ));
+    }
+    if status.lifecycle != PcrDeviceLifecycle::Active {
+        return Err(rejected(
+            signer_status_code(status.lifecycle),
+            &format!("{what} signer is not active in the current generation"),
+        ));
+    }
+    let authorization = status.authority.authorization.as_ref().ok_or_else(|| {
+        rejected(
+            ConflictCode::DeviceUnauthorized,
+            &format!("{what} signer has no authorization"),
+        )
+    })?;
+    let did_key = authorization
+        .payload
+        .device_public_key_did
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| {
+            rejected(
+                ConflictCode::SignatureInvalid,
+                &format!("{what} signer authorization has no did:key key"),
+            )
+        })?;
+    let public_key =
+        arkret_canonical::multibase::decode_ed25519_multibase(did_key).map_err(|_| {
+            rejected(
+                ConflictCode::SignatureInvalid,
+                &format!("{what} signer authorization key is invalid"),
+            )
+        })?;
+    let device_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: public_key.to_vec(),
+    };
+    let envelope_bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| {
+            rejected(
+                ConflictCode::SignatureInvalid,
+                &format!("{what} proof envelope is invalid: {error}"),
+            )
+        })?;
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &envelope_bytes,
+        &event.actor_id,
+        &device_key,
+        suite,
+    )
+    .map_err(|_| {
+        rejected(
+            ConflictCode::SignatureInvalid,
+            &format!("{what} producer proof does not match the signer device key"),
+        )
+    })?;
+    Ok((status, device_key))
 }
 
 /// Shared PCR self-Event admission: Event/Commit agreement, the PCR lock,
 /// exact replay, the signer's active status at the same cut, the Commit
 /// extending the confirmed head and the producer proof against the accepted
 /// device key.
-async fn verify_pcr_self_event(
+pub(crate) async fn verify_pcr_self_event(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
     what: &str,
@@ -242,85 +342,23 @@ async fn verify_pcr_self_event(
         return Ok(PcrSelfEventCut::Known(stored));
     }
 
-    let status = crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+    let (status, device_key) = verify_device_signer_in_connection(
         conn,
+        event,
         &account,
         &signer,
+        &event.realm_id,
         commit.committed_at,
+        suite,
+        what,
     )
-    .await?
-    .ok_or_else(|| {
-        rejected(
-            ConflictCode::DeviceUnauthorized,
-            &format!("{what} signer has no confirmed PCR cut"),
-        )
-    })?;
-    if status.authority.realm_id != event.realm_id {
-        return Err(rejected(
-            ConflictCode::FailedPrecondition,
-            &format!("{what} Event is outside the account's PCR"),
-        ));
-    }
-    if status.lifecycle != PcrDeviceLifecycle::Active {
-        return Err(rejected(
-            signer_status_code(status.lifecycle),
-            &format!("{what} signer is not active in the current generation"),
-        ));
-    }
+    .await?;
     if commit.previous_commit_ref.as_ref() != Some(&status.authority.authority_commit_id) {
         return Err(rejected(
             ConflictCode::TemporarilyUnavailable,
             &format!("{what} Commit does not extend the confirmed PCR head"),
         ));
     }
-    let authorization = status.authority.authorization.as_ref().ok_or_else(|| {
-        rejected(
-            ConflictCode::DeviceUnauthorized,
-            &format!("{what} signer has no authorization"),
-        )
-    })?;
-    let did_key = authorization
-        .payload
-        .device_public_key_did
-        .as_str()
-        .strip_prefix("did:key:")
-        .ok_or_else(|| {
-            rejected(
-                ConflictCode::SignatureInvalid,
-                &format!("{what} signer authorization has no did:key key"),
-            )
-        })?;
-    let public_key =
-        arkret_canonical::multibase::decode_ed25519_multibase(did_key).map_err(|_| {
-            rejected(
-                ConflictCode::SignatureInvalid,
-                &format!("{what} signer authorization key is invalid"),
-            )
-        })?;
-    let device_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-        bytes: public_key.to_vec(),
-    };
-    let envelope_bytes = arkret_signatures::EventProofBuilder::new()
-        .envelope_bytes(event)
-        .map_err(|error| {
-            rejected(
-                ConflictCode::SignatureInvalid,
-                &format!("{what} proof envelope is invalid: {error}"),
-            )
-        })?;
-    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-        proof,
-        &envelope_bytes,
-        &event.actor_id,
-        &device_key,
-        suite,
-    )
-    .map_err(|_| {
-        rejected(
-            ConflictCode::SignatureInvalid,
-            &format!("{what} producer proof does not match the signer device key"),
-        )
-    })?;
     Ok(PcrSelfEventCut::Fresh(PcrSigner {
         account,
         device_key,
@@ -398,7 +436,7 @@ fn profile_record(row: ProfileResultRow) -> Result<ActorProfileResultRecord, PgT
 
 /// Whether every accountable principal has a committed active record for
 /// `subject` at `at`, share-locking the rows relied on.
-async fn accountability_holds_in_connection(
+pub(crate) async fn accountability_holds_in_connection(
     conn: &mut AsyncPgConnection,
     issuers: &[DidCoreId],
     subject: &DidCoreId,
@@ -781,6 +819,44 @@ impl soland_storage::ActorProfileStore for PgActorProfileStore {
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             admit_accountability_grant_in_connection(conn, &write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn admit_agent_provision(
+        &self,
+        write: soland_storage::AgentProvisionAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AgentProvisionAdmissionOutcome> {
+        write.commit.validate().map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "invalid Agent provision authority transaction: {error}"
+            ))
+        })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_provisioning::admit_agent_provision_in_connection(conn, &write).await
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn admit_agent_pcr_genesis(
+        &self,
+        write: soland_storage::AgentPcrGenesisAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AgentPcrGenesisAdmissionOutcome> {
+        write.commit.validate().map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "invalid Agent PCR genesis authority transaction: {error}"
+            ))
+        })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_pcr_genesis::admit_agent_pcr_genesis_in_connection(conn, &write).await
         })
         .await
         .map_err(PgTransactionError::into_persistence)

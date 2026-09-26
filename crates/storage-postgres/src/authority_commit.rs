@@ -1142,6 +1142,35 @@ pub(crate) async fn commit_verified_recovery_policy_in_connection(
     .await
 }
 
+/// Only the Agent provision unit may call this after rechecking the signing
+/// device, the envelope binding and both declarations under the controller
+/// PCR authority lock; the same transaction then writes the four results.
+pub(crate) async fn commit_verified_agent_provision_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::AgentProvision,
+    )
+    .await
+}
+
+/// Only the Agent PCR genesis unit may call this after the provision
+/// declaration reverse lookup and the controller device cut.
+pub(crate) async fn commit_verified_agent_pcr_genesis_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(
+        conn,
+        transaction,
+        VerifiedPcrUnit::AgentPcrGenesis,
+    )
+    .await
+}
+
 /// Only the Actor Profile and accountability grant units may call this after
 /// rechecking the signing device and the kind's same-cut admission under the
 /// PCR authority lock; the same transaction then writes the typed result.
@@ -1167,6 +1196,18 @@ enum VerifiedPcrUnit {
     KeyBackupPointer,
     RecoveryPolicy,
     ProfileOrAccountability,
+    AgentProvision,
+    AgentPcrGenesis,
+}
+
+fn is_agent_pcr_genesis(event: &arkret_wire::Event) -> bool {
+    event.kind == arkret_wire::EventKind::RealmCreate
+        && event
+            .payload
+            .get("object")
+            .and_then(|object| object.get("purpose"))
+            .and_then(serde_json::Value::as_str)
+            == Some("agent_control")
 }
 
 fn is_recovery_policy_set(event: &arkret_wire::Event) -> bool {
@@ -1222,14 +1263,22 @@ async fn commit_transaction_in_connection_with_device_guard(
         )
         .into());
     }
+    // An Agent PCR genesis is admitted only by the unit that reverse-looks-up
+    // its accepted provision declaration (key-management.md section 3.6.3).
+    if is_agent_pcr_genesis(&transaction.event) && verified_unit != VerifiedPcrUnit::AgentPcrGenesis
+    {
+        return Err(
+            PersistenceError::Conflict("agent_pcr_genesis_unit_required".to_owned()).into(),
+        );
+    }
     // ak.agent.provision projects four typed results atomically
-    // (key-management.md section 3.6.3); no unit writes that set yet, so a
-    // partial acceptance is refused.
-    if transaction.event.kind == arkret_wire::EventKind::AgentProvision {
-        return Err(PersistenceError::Conflict(
-            "agent_provision_atomic_unit_unavailable".to_owned(),
-        )
-        .into());
+    // (key-management.md section 3.6.3); only its unit writes that set.
+    if transaction.event.kind == arkret_wire::EventKind::AgentProvision
+        && verified_unit != VerifiedPcrUnit::AgentProvision
+    {
+        return Err(
+            PersistenceError::Conflict("agent_provision_atomic_unit_required".to_owned()).into(),
+        );
     }
     // No registered atomic revoke UoW yet writes the immutable proposal dot
     // and covering command result. Do not accept an Event that read-side

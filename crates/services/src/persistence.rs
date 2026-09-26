@@ -106,6 +106,29 @@ impl PersistenceHandle {
         self.persistence.actor_profiles().admit_profile(write).await
     }
 
+    /// Admit one controller-signed `ak.agent.provision` through its
+    /// controller-PCR unit.
+    pub async fn admit_agent_provision(
+        &self,
+        write: soland_storage::AgentProvisionAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AgentProvisionAdmissionOutcome> {
+        self.persistence
+            .actor_profiles()
+            .admit_agent_provision(write)
+            .await
+    }
+
+    /// Admit one controller-executed Agent PCR genesis through its unit.
+    pub async fn admit_agent_pcr_genesis(
+        &self,
+        write: soland_storage::AgentPcrGenesisAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::AgentPcrGenesisAdmissionOutcome> {
+        self.persistence
+            .actor_profiles()
+            .admit_agent_pcr_genesis(write)
+            .await
+    }
+
     /// Admit one issuer-signed accountability grant through its PCR unit.
     pub async fn admit_accountability_grant(
         &self,

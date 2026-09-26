@@ -4721,6 +4721,59 @@ CREATE TABLE identity_accountability_current_results (
 CREATE INDEX identity_accountability_current_result_pair
  ON identity_accountability_current_results(subject_id,issuer_id);
 
+-- The three provision-owned typed currents of ak.agent.provision
+-- (key-management.md section 3.6.3). One accepted provision writes them,
+-- with identity_accountability, in the transaction that commits it in the
+-- controller PCR. agent_provisioning is keyed by the Agent DID within that
+-- PCR; a second declaration of the same agent_id is refused.
+CREATE TABLE agent_provisioning_current_results (
+ realm_id TEXT NOT NULL,
+ agent_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,agent_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value ?& ARRAY['controller_principal_id','principal_control_realm_id',
+   'controller_authorization_ref','requested_scope_digest']),
+ CHECK(value - ARRAY['controller_principal_id','principal_control_realm_id',
+   'controller_authorization_ref','requested_scope_digest'] = '{}'::jsonb)
+);
+-- The forward declaration of an Agent PCR id, the index genesis and DID
+-- entry 1 admission read by realm id. The subject is unique within the
+-- controller PCR and, by this Station's local uniqueness index, across every
+-- controller PCR it governs.
+CREATE TABLE agent_pcr_genesis_declaration_current_results (
+ realm_id TEXT NOT NULL,
+ principal_control_realm_id TEXT NOT NULL UNIQUE,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,principal_control_realm_id),
+ CHECK(principal_control_realm_id<>realm_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value - 'agent_id' = '{}'::jsonb),
+ CHECK(jsonb_typeof(value->'agent_id')='string')
+);
+-- The controller-scoped selector binding (actor.md section 3.3): the subject
+-- is (controller principal, agent_slug) without a Station, and a later
+-- provision of the same slug replaces the binding.
+CREATE TABLE agent_selector_claim_current_results (
+ realm_id TEXT NOT NULL,
+ controller_principal_id TEXT NOT NULL,
+ agent_slug TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,controller_principal_id,agent_slug),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(jsonb_typeof(value->'subject_account_id')='object'),
+ CHECK(value->>'visibility' IN ('public','restricted','private'))
+);
+
 -- Irreversible composite subjects need an accepted origin association. This
 -- records selector/target identity, never a second copy of a current value.
 CREATE TABLE current_selector_origins (

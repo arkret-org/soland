@@ -1263,7 +1263,10 @@ fn validate_profile_request(body: &AccountUpdateProfileRequestBody) -> Result<()
 /// `accountability_grant_missing` reason), a head that moved before commit is
 /// retry-safe `revision_unavailable`, and signer-device refusals keep their
 /// device codes (device-lifecycle §8.2.2).
-fn profile_admission_error(code: Option<soland_storage::ConflictCode>, detail: &str) -> AppError {
+pub(crate) fn profile_admission_error(
+    code: Option<soland_storage::ConflictCode>,
+    detail: &str,
+) -> AppError {
     use soland_storage::ConflictCode;
     match code {
         Some(ConflictCode::AccountabilityGrantMissing) => {

@@ -336,6 +336,8 @@ pub(crate) async fn agent_record_for_controller_account_pcr(
     Ok(Some(record))
 }
 
+/// When the Agent PCR genesis was accepted: the covering Commit of the
+/// genesis the Agent account's durable principal resolution records.
 pub(crate) async fn agent_pcr_genesis_accepted_at(
     state: &AppState,
     agent_id: &str,
@@ -347,35 +349,30 @@ pub(crate) async fn agent_pcr_genesis_accepted_at(
     if record.principal_control_realm_id != pcr_id {
         return Ok(None);
     }
-    let events = state
-        .event_queries()
-        .accepted_events()
+    let agent_account = actor
+        .as_account_id()
+        .ok_or_else(|| schema_error("Agent actor is not an account"))?;
+    let Some(resolution) = state
+        .persistence()
+        .principal_resolution_by_account_id(agent_account)
         .await
-        .map_err(|error| AppError::internal(format!("Agent PCR genesis lookup failed: {error}")))?;
-    Ok(events.iter().find_map(|event| {
-        agent_genesis_matches(event, &actor, pcr_id).then_some(event.received_at)
-    }))
-}
-
-fn agent_genesis_matches(
-    event: &soland_services::events::AcceptedEvent,
-    actor: &ActorId,
-    pcr_id: &str,
-) -> bool {
-    event.kind == arkret_wire::EventKind::RealmCreate.as_str()
-        && event.actor_id == actor.to_string()
-        && event
-            .envelope
-            .get("actor_id")
-            .and_then(|value| serde_json::from_value::<ActorId>(value.clone()).ok())
-            .as_ref()
-            == Some(actor)
-        && event
-            .envelope
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .or(event.realm_id.as_deref())
-            == Some(pcr_id)
+        .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?
+    else {
+        return Ok(None);
+    };
+    if resolution.pcr_realm_id.as_str() != pcr_id {
+        return Err(failed_precondition(
+            "Agent account resolves to another Principal Control Realm",
+            "agent_pcr_genesis_identity_mismatch",
+        ));
+    }
+    let committed = state
+        .authority_commits()
+        .committed_event(&resolution.genesis_event.event_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Agent PCR genesis lookup failed: {error}")))?
+        .ok_or_else(|| AppError::internal("Agent PCR genesis has no covering Commit"))?;
+    Ok(Some(committed.commit.committed_at))
 }
 
 pub(crate) async fn validate_agent_controller_binding(
@@ -765,37 +762,6 @@ fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn accepted_agent_genesis_matches_full_hosted_actor_and_original_envelope() {
-        let actor = super::ActorId::account(arkret_wire::AccountId::new(
-            super::DidCoreId::new(AGENT).unwrap(),
-            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        ));
-        let mut event = soland_services::events::AcceptedEvent {
-            event_id: String::new(),
-            actor_id: actor.to_string(),
-            realm_id: Some(PCR.into()),
-            kind: arkret_wire::EventKind::RealmCreate.to_string(),
-            schema_id: String::new(),
-            digest_suite: arkret_canonical::DigestSuite::Sha256,
-            canonical_digest: String::new(),
-            canonical_bytes: Vec::new(),
-            envelope: serde_json::json!({"actor_id":actor}),
-            received_at: chrono::Utc::now(),
-        };
-        assert!(super::agent_genesis_matches(&event, &actor, PCR));
-        let foreign = super::ActorId::account(arkret_wire::AccountId::new(
-            actor.signing_principal_id().clone(),
-            super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        ));
-        assert!(!super::agent_genesis_matches(&event, &foreign, PCR));
-        event.envelope["actor_id"] = serde_json::json!(foreign);
-        assert!(!super::agent_genesis_matches(&event, &actor, PCR));
-        event.envelope["actor_id"] = serde_json::json!(actor);
-        event.actor_id = AGENT.into();
-        assert!(!super::agent_genesis_matches(&event, &actor, PCR));
-    }
-
     #[tokio::test]
     async fn agent_account_binding_rejects_same_principal_at_another_station() {
         let state = crate::state::AppState::new(

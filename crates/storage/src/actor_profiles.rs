@@ -6,8 +6,11 @@
 //! reads the accountability records at that same transaction, with the
 //! accepting Commit's time as the frozen admission instant.
 
+use arkret_models_collaboration::events_payloads::agent::{
+    AgentPcrGenesisDeclarationValue, AgentProvisioningValue,
+};
 use arkret_models_collaboration::governance::accountability::AccountabilityProjection;
-use arkret_models_identity::ActorProfile;
+use arkret_models_identity::{ActorProfile, AgentSelectorClaimValue};
 use arkret_wire::{AccountId, DidCoreId, Event, RealmCommit, RealmId};
 use async_trait::async_trait;
 
@@ -60,6 +63,50 @@ pub enum AccountabilityGrantAdmissionOutcome {
     Duplicate(IdentityAccountabilityRecord),
 }
 
+/// One controller-signed `ak.agent.provision` and the controller PCR Commit
+/// prepared at the head it was read against.
+#[derive(Clone, Debug)]
+pub struct AgentProvisionAdmissionWrite {
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The four typed current values one accepted `ak.agent.provision` wrote
+/// (key-management.md section 3.6.3), with that exact Event and its Commit.
+#[derive(Clone, Debug)]
+pub struct AgentProvisionRecord {
+    pub event: Event,
+    pub commit: RealmCommit,
+    pub provisioning: AgentProvisioningValue,
+    pub accountability: AccountabilityProjection,
+    pub selector: AgentSelectorClaimValue,
+    pub declaration: AgentPcrGenesisDeclarationValue,
+}
+
+#[derive(Clone, Debug)]
+pub enum AgentProvisionAdmissionOutcome {
+    /// This call accepted the Event, its Commit and all four typed results.
+    Committed(AgentProvisionRecord),
+    /// The exact Event was already accepted; these are the results it wrote.
+    Duplicate(AgentProvisionRecord),
+}
+
+/// One controller-executed Agent PCR `ak.realm.create` and the position-zero
+/// Commit this Station prepared for the new Realm.
+#[derive(Clone, Debug)]
+pub struct AgentPcrGenesisAdmissionWrite {
+    pub commit: AuthorityCommitTransaction,
+    pub queued_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AgentPcrGenesisAdmissionOutcome {
+    /// This call created the Agent PCR with its genesis Commit.
+    Committed(RealmCommit),
+    /// The exact genesis was already accepted with this Commit.
+    Duplicate(RealmCommit),
+}
+
 #[async_trait]
 pub trait ActorProfileStore: Send + Sync {
     /// Admit one profile Event under the owner's PCR authority lock: the
@@ -80,6 +127,25 @@ pub trait ActorProfileStore: Send + Sync {
         &self,
         write: AccountabilityGrantAdmissionWrite,
     ) -> PersistenceResult<AccountabilityGrantAdmissionOutcome>;
+
+    /// Admit one controller-signed `ak.agent.provision` in the controller
+    /// PCR: the signing device is active at the same cut, the payload binds
+    /// the envelope, neither the Agent nor the declared Agent PCR id is
+    /// already declared, and the four typed results are written with the
+    /// Commit. Any refusal writes nothing.
+    async fn admit_agent_provision(
+        &self,
+        write: AgentProvisionAdmissionWrite,
+    ) -> PersistenceResult<AgentProvisionAdmissionOutcome>;
+
+    /// Admit one Agent PCR genesis: an accepted provision in the controller's
+    /// PCR declares its realm id, the controller's signing device is active
+    /// at the Commit, and the Realm authority, genesis Commit and create
+    /// results are written together. Any refusal writes nothing.
+    async fn admit_agent_pcr_genesis(
+        &self,
+        write: AgentPcrGenesisAdmissionWrite,
+    ) -> PersistenceResult<AgentPcrGenesisAdmissionOutcome>;
 
     /// The current profile of the account's local PCR, with the exact Event
     /// and Commit that produced it.

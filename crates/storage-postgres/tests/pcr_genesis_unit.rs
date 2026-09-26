@@ -4669,3 +4669,764 @@ async fn profile_accountability_requires_active_grant_at_commit_cut() {
     };
     assert!(cleared.profile.accountable_principal_ids.is_empty());
 }
+
+#[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+struct ProvisionFootprint {
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    commits: i64,
+    #[diesel(sql_type = BigInt)]
+    provisionings: i64,
+    #[diesel(sql_type = BigInt)]
+    endorsements: i64,
+    #[diesel(sql_type = BigInt)]
+    selectors: i64,
+    #[diesel(sql_type = BigInt)]
+    declarations: i64,
+}
+
+/// Every durable row an Agent provision admission can write for these
+/// controller PCRs.
+async fn provision_footprint(pool: &PgPool, realms: &[&RealmId]) -> ProvisionFootprint {
+    let realms = realms
+        .iter()
+        .map(|realm| realm.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=ANY($1)) AS events, \
+                (SELECT COUNT(*) FROM realm_commits WHERE realm_id=ANY($1)) AS commits, \
+                (SELECT COUNT(*) FROM agent_provisioning_current_results \
+                  WHERE realm_id=ANY($1)) AS provisionings, \
+                (SELECT COUNT(*) FROM identity_accountability_current_results \
+                  WHERE realm_id=ANY($1)) AS endorsements, \
+                (SELECT COUNT(*) FROM agent_selector_claim_current_results \
+                  WHERE realm_id=ANY($1)) AS selectors, \
+                (SELECT COUNT(*) FROM agent_pcr_genesis_declaration_current_results \
+                  WHERE realm_id=ANY($1)) AS declarations",
+    )
+    .bind::<diesel::sql_types::Array<Text>, _>(realms)
+    .get_result::<ProvisionFootprint>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+/// A forward-declared Agent PCR id: the retype of an event id no Event has.
+fn declared_pcr_id(label: &str) -> RealmId {
+    RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(label.as_bytes()),
+    ))
+}
+
+/// One controller-signed `ak.agent.provision` in the controller's own PCR.
+#[allow(clippy::too_many_arguments)]
+fn agent_provision_event(
+    controller: &arkret_wire::AccountId,
+    realm_id: &RealmId,
+    method: &DidUrl,
+    seed: [u8; 32],
+    agent_id: &DidCoreId,
+    agent_pcr_id: &RealmId,
+    slug: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    payload_created_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::Event {
+    let mut event = arkret_wire::test_support::raw_event_at(
+        EventKind::AgentProvision.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        controller.principal_id.clone(),
+        controller.station_id.clone(),
+        serde_json::json!({
+            "schema": "ak.schema.agent_provision.v1",
+            "agent_id": agent_id,
+            "controller_principal_id": controller.principal_id,
+            "principal_control_realm_id": agent_pcr_id,
+            "controller_authorization_ref": "did:webvh:z6mkfixture:agent.example#managed-controller",
+            "agent_slug": slug,
+            "accountability_scope": "agent_operator",
+            "requested_scope_digest": format!("sha256:{}", "b".repeat(64)),
+            "selector_visibility": "private",
+            "created_at": arkret_canonical::format_timestamp_canonical(payload_created_at)
+        }),
+        created_at,
+    )
+    .unwrap();
+    event.created_at = created_at;
+    device_history_fixture::sign_event(event, method.clone(), seed)
+}
+
+#[tokio::test]
+async fn agent_provision_commits_four_families_or_none() {
+    use soland_storage::{
+        ActorProfileStore, AgentProvisionAdmissionOutcome, AgentProvisionAdmissionWrite,
+    };
+
+    let (pool, station) = contract_store().await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let admit_genesis = async |fixture: DeviceHistoryFixture| {
+        let genesis = assemble(station.clone(), fixture);
+        store
+            .admit_pcr_genesis_unit(&genesis, genesis.transactions[1].commit.committed_at)
+            .await
+            .unwrap();
+        genesis
+    };
+    let controller_fixture = fixture(&station);
+    let controller = controller_fixture.account.clone();
+    let controller_realm = RealmId::new(controller_fixture.events[0].realm_id.to_string()).unwrap();
+    let method = controller_fixture.device_verification_method.clone();
+    let seed = controller_fixture.founding_device_signing_seed;
+    let station_did = controller_fixture.station_did.clone();
+    let controller_genesis = admit_genesis(controller_fixture).await;
+    let other_fixture = fixture(&station);
+    let other = other_fixture.account.clone();
+    let other_realm = RealmId::new(other_fixture.events[0].realm_id.to_string()).unwrap();
+    let other_method = other_fixture.device_verification_method.clone();
+    let other_seed = other_fixture.founding_device_signing_seed;
+    let other_genesis = admit_genesis(other_fixture).await;
+
+    let tx = |authority: &soland_storage::CurrentRealmAuthority,
+              event: arkret_wire::Event,
+              commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+        expected_authority: authority.clone(),
+        event,
+        commit,
+        mls_state: None,
+        welcomes: Vec::new(),
+        recipient_queue_capacity: 0,
+    };
+    let controller_authority = controller_genesis.transactions[1]
+        .expected_authority
+        .clone();
+    let other_authority = other_genesis.transactions[1].expected_authority.clone();
+    let head = controller_genesis.transactions[1].commit.clone();
+    let other_head = other_genesis.transactions[1].commit.clone();
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    let admit = async |authority: &soland_storage::CurrentRealmAuthority,
+                       event: &arkret_wire::Event,
+                       commit: arkret_wire::RealmCommit| {
+        profiles
+            .admit_agent_provision(AgentProvisionAdmissionWrite {
+                commit: tx(authority, event.clone(), commit.clone()),
+                queued_at: commit.committed_at,
+            })
+            .await
+    };
+    let realms = [&controller_realm, &other_realm];
+    let signed_at = head.committed_at;
+    let agent = DidCoreId::new(format!(
+        "ak:did_core:webvh:z6mkfixture:agent-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    let agent_pcr = declared_pcr_id(&format!("{agent}:genesis"));
+    let provision = |agent: &DidCoreId, pcr: &RealmId, slug: &str, payload_at| {
+        agent_provision_event(
+            &controller,
+            &controller_realm,
+            &method,
+            seed,
+            agent,
+            pcr,
+            slug,
+            signed_at,
+            payload_at,
+        )
+    };
+    let before = provision_footprint(&pool, &realms).await;
+
+    // Two signed times that disagree: refused before anything is written.
+    let skewed = provision(
+        &agent,
+        &agent_pcr,
+        "summary",
+        signed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    assert_eq!(
+        admit(
+            &controller_authority,
+            &skewed,
+            station_successor(&head, &skewed, &station_did, 1)
+        )
+        .await
+        .unwrap_err()
+        .conflict_code(),
+        Some(ConflictCode::SchemaViolation)
+    );
+    assert_eq!(provision_footprint(&pool, &realms).await, before);
+
+    // The accepted provision writes the Event, its Commit and all four
+    // typed results together; an exact retry writes nothing.
+    let accepted = provision(&agent, &agent_pcr, "summary", signed_at);
+    let accepted_commit = station_successor(&head, &accepted, &station_did, 1);
+    let AgentProvisionAdmissionOutcome::Committed(record) =
+        admit(&controller_authority, &accepted, accepted_commit.clone())
+            .await
+            .unwrap()
+    else {
+        panic!("the controller's provision commits");
+    };
+    assert_eq!(record.commit, accepted_commit);
+    assert_eq!(record.declaration.agent_id, agent);
+    assert_eq!(record.provisioning.principal_control_realm_id, agent_pcr);
+    assert_eq!(
+        record.selector.subject_account_id,
+        arkret_wire::AccountId::new(agent.clone(), controller.station_id.clone())
+    );
+    assert_eq!(record.accountability.issuer_id, controller.principal_id);
+    let committed = provision_footprint(&pool, &realms).await;
+    assert_eq!(
+        committed,
+        ProvisionFootprint {
+            events: before.events + 1,
+            commits: before.commits + 1,
+            provisionings: before.provisionings + 1,
+            endorsements: before.endorsements + 1,
+            selectors: before.selectors + 1,
+            declarations: before.declarations + 1,
+        }
+    );
+    assert!(matches!(
+        admit(
+            &controller_authority,
+            &accepted,
+            station_successor(&accepted_commit, &accepted, &station_did, 1)
+        )
+        .await
+        .unwrap(),
+        AgentProvisionAdmissionOutcome::Duplicate(_)
+    ));
+    assert_eq!(provision_footprint(&pool, &realms).await, committed);
+
+    // Re-declaring the same Agent in this controller PCR, even for another
+    // Agent PCR id, widens nothing and writes nothing.
+    let redeclared = provision(
+        &agent,
+        &declared_pcr_id(&format!("{agent}:second")),
+        "summary-2",
+        signed_at,
+    );
+    assert_eq!(
+        admit(
+            &controller_authority,
+            &redeclared,
+            station_successor(&accepted_commit, &redeclared, &station_did, 1)
+        )
+        .await
+        .unwrap_err()
+        .conflict_code(),
+        Some(ConflictCode::AgentProvisioningAlreadyDeclared)
+    );
+    assert_eq!(provision_footprint(&pool, &realms).await, committed);
+
+    // Another Agent claiming the same Agent PCR id is refused in this PCR
+    // and, through the Station's uniqueness index, from another controller.
+    let second_agent = DidCoreId::new(format!("{agent}-b")).unwrap();
+    let squatted = provision(&second_agent, &agent_pcr, "second", signed_at);
+    assert_eq!(
+        admit(
+            &controller_authority,
+            &squatted,
+            station_successor(&accepted_commit, &squatted, &station_did, 1)
+        )
+        .await
+        .unwrap_err()
+        .conflict_code(),
+        Some(ConflictCode::AgentPcrGenesisDeclarationConflict)
+    );
+    let foreign = agent_provision_event(
+        &other,
+        &other_realm,
+        &other_method,
+        other_seed,
+        &second_agent,
+        &agent_pcr,
+        "second",
+        other_head.committed_at,
+        other_head.committed_at,
+    );
+    assert_eq!(
+        admit(
+            &other_authority,
+            &foreign,
+            station_successor(&other_head, &foreign, &station_did, 1)
+        )
+        .await
+        .unwrap_err()
+        .conflict_code(),
+        Some(ConflictCode::AgentPcrGenesisDeclarationConflict)
+    );
+    assert_eq!(provision_footprint(&pool, &realms).await, committed);
+
+    // The generic commit path never writes a provision on its own.
+    let generic = provision(
+        &second_agent,
+        &declared_pcr_id(&format!("{agent}:generic")),
+        "generic",
+        signed_at,
+    );
+    store
+        .queue_event(&generic, accepted_commit.committed_at)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .commit_transaction(&tx(
+                &controller_authority,
+                generic.clone(),
+                station_successor(&accepted_commit, &generic, &station_did, 1),
+            ))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        provision_footprint(&pool, &realms).await.provisionings,
+        committed.provisionings
+    );
+}
+
+#[tokio::test]
+async fn agent_profile_accountability_follows_the_provision_projection() {
+    use soland_storage::{
+        AccountabilityGrantAdmissionOutcome, AccountabilityGrantAdmissionWrite,
+        ActorProfileAdmissionOutcome, ActorProfileAdmissionWrite, ActorProfileStore,
+        AgentProvisionAdmissionOutcome, AgentProvisionAdmissionWrite,
+    };
+
+    let (pool, station) = contract_store().await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let admit_genesis = async |fixture: DeviceHistoryFixture| {
+        let genesis = assemble(station.clone(), fixture);
+        store
+            .admit_pcr_genesis_unit(&genesis, genesis.transactions[1].commit.committed_at)
+            .await
+            .unwrap();
+        genesis
+    };
+    let controller_fixture = fixture(&station);
+    let controller = controller_fixture.account.clone();
+    let controller_realm = RealmId::new(controller_fixture.events[0].realm_id.to_string()).unwrap();
+    let controller_method = controller_fixture.device_verification_method.clone();
+    let controller_seed = controller_fixture.founding_device_signing_seed;
+    let station_did = controller_fixture.station_did.clone();
+    let controller_genesis = admit_genesis(controller_fixture).await;
+    // The endorsed subject: the profile unit decides accountability by the
+    // profile principal, which the provision names as its agent_id.
+    let agent_fixture = fixture(&station);
+    let agent = agent_fixture.account.clone();
+    let agent_realm = RealmId::new(agent_fixture.events[0].realm_id.to_string()).unwrap();
+    let agent_method = agent_fixture.device_verification_method.clone();
+    let agent_seed = agent_fixture.founding_device_signing_seed;
+    let agent_genesis = admit_genesis(agent_fixture).await;
+
+    let tx = |authority: &soland_storage::CurrentRealmAuthority,
+              event: arkret_wire::Event,
+              commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+        expected_authority: authority.clone(),
+        event,
+        commit,
+        mls_state: None,
+        welcomes: Vec::new(),
+        recipient_queue_capacity: 0,
+    };
+    let controller_authority = controller_genesis.transactions[1]
+        .expected_authority
+        .clone();
+    let agent_authority = agent_genesis.transactions[1].expected_authority.clone();
+    let controller_head = controller_genesis.transactions[1].commit.clone();
+    let agent_head = agent_genesis.transactions[1].commit.clone();
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    let realms = [&controller_realm, &agent_realm];
+    let t0 = agent_head.committed_at;
+
+    let provision = agent_provision_event(
+        &controller,
+        &controller_realm,
+        &controller_method,
+        controller_seed,
+        &agent.principal_id,
+        &declared_pcr_id(&format!("{}:genesis", agent.principal_id)),
+        "endorsed",
+        t0 - chrono::TimeDelta::days(1),
+        t0 - chrono::TimeDelta::days(1),
+    );
+    let provision_commit = station_successor(&controller_head, &provision, &station_did, 1);
+    let AgentProvisionAdmissionOutcome::Committed(provisioned) = profiles
+        .admit_agent_provision(AgentProvisionAdmissionWrite {
+            commit: tx(
+                &controller_authority,
+                provision.clone(),
+                provision_commit.clone(),
+            ),
+            queued_at: provision_commit.committed_at,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("the provision commits");
+    };
+    assert_eq!(provisioned.accountability.subject_id, agent.principal_id);
+    let provisioned_footprint = profile_footprint(&pool, &realms).await;
+
+    // The provision projection alone satisfies accountable_principal_ids.
+    let create = profile_event(
+        &agent,
+        &agent_realm,
+        &agent_method,
+        agent_seed,
+        EventKind::ProfileCreate,
+        serde_json::json!({"object": {
+            "principal_id": agent.principal_id,
+            "actor_kind": "service",
+            "display_name": "Provisioned agent",
+            "accountable_principal_ids": [controller.principal_id]
+        }}),
+    );
+    let create_commit = station_successor(&agent_head, &create, &station_did, 60);
+    let ActorProfileAdmissionOutcome::Committed(created) = profiles
+        .admit_profile(ActorProfileAdmissionWrite {
+            commit: tx(&agent_authority, create.clone(), create_commit.clone()),
+            queued_at: create_commit.committed_at,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("a provision-endorsed profile commits");
+    };
+    assert_eq!(
+        created.profile.accountable_principal_ids,
+        vec![controller.principal_id.clone()]
+    );
+
+    // An independent grant on the same exact set, spelled as a one-element
+    // array, replaces the same row: here it revokes the endorsement.
+    let revoke = accountability_grant_event(
+        &controller,
+        &controller_realm,
+        &controller_method,
+        controller_seed,
+        controller_seed,
+        &agent.principal_id,
+        serde_json::json!(["agent_operator"]),
+        "revoked",
+        t0 - chrono::TimeDelta::days(1),
+        None,
+    );
+    let revoke_commit = station_successor(&provision_commit, &revoke, &station_did, 1);
+    assert!(matches!(
+        profiles
+            .admit_accountability_grant(AccountabilityGrantAdmissionWrite {
+                commit: tx(&controller_authority, revoke.clone(), revoke_commit.clone()),
+                queued_at: revoke_commit.committed_at,
+            })
+            .await
+            .unwrap(),
+        AccountabilityGrantAdmissionOutcome::Committed(_)
+    ));
+    let revoked_footprint = profile_footprint(&pool, &realms).await;
+    assert_eq!(
+        revoked_footprint.endorsements,
+        provisioned_footprint.endorsements
+    );
+
+    // The next update that keeps the declaration is refused at its Commit.
+    let rename = profile_event(
+        &agent,
+        &agent_realm,
+        &agent_method,
+        agent_seed,
+        EventKind::ProfileUpdate,
+        serde_json::json!({
+            "target_ref": created.profile.id,
+            "patch": {"display_name": "Renamed agent"}
+        }),
+    );
+    let refused = profiles
+        .admit_profile(ActorProfileAdmissionWrite {
+            commit: tx(
+                &agent_authority,
+                rename.clone(),
+                station_successor(&create_commit, &rename, &station_did, 1),
+            ),
+            queued_at: create_commit.committed_at,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.conflict_code(),
+        Some(ConflictCode::AccountabilityGrantMissing)
+    );
+    assert_eq!(profile_footprint(&pool, &realms).await, revoked_footprint);
+}
+
+/// The position-zero Commit this Station signs for a new Realm's genesis.
+fn station_genesis_commit(
+    template: &arkret_wire::RealmCommit,
+    event: &arkret_wire::Event,
+    station_did: &arkret_wire::Did,
+    committed_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::RealmCommit {
+    let realm_id = RealmId::from_event_id(&event.event_id);
+    let mut commit = template.clone();
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{}:genesis", event.event_id).as_bytes(),
+    ));
+    commit.realm_id = realm_id.clone();
+    commit.stream_ref = arkret_wire::CommitStreamRef::Realm { realm_id };
+    commit.stream_position = 0;
+    commit.previous_commit_ref = None;
+    commit.event_ref = event.event_id.clone();
+    commit.governance_generation = 0;
+    commit.authority_ref =
+        arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event.event_id.clone());
+    commit.committed_at = committed_at;
+    let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        DetachedSignatureContext::RealmCommit,
+        DidUrl::new(format!("{station_did}#authority")).unwrap(),
+        commit.committed_at,
+        &SigningKey::from_bytes(&[83; 32]),
+    )
+    .unwrap();
+    commit
+}
+
+#[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+struct AgentPcrFootprint {
+    #[diesel(sql_type = BigInt)]
+    authorities: i64,
+    #[diesel(sql_type = BigInt)]
+    events: i64,
+    #[diesel(sql_type = BigInt)]
+    commits: i64,
+    #[diesel(sql_type = BigInt)]
+    singletons: i64,
+    #[diesel(sql_type = BigInt)]
+    roots: i64,
+    #[diesel(sql_type = BigInt)]
+    statuses: i64,
+    #[diesel(sql_type = BigInt)]
+    resolutions: i64,
+}
+
+async fn agent_pcr_footprint(pool: &PgPool, realm: &RealmId) -> AgentPcrFootprint {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT (SELECT COUNT(*) FROM realm_authorities WHERE realm_id=$1) AS authorities, \
+                (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
+                (SELECT COUNT(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
+                (SELECT COUNT(*) FROM realm_bootstrap_current_results WHERE realm_id=$1) \
+                  AS singletons, \
+                (SELECT COUNT(*) FROM realm_authority_root_current_results WHERE realm_id=$1) \
+                  AS roots, \
+                (SELECT COUNT(*) FROM agent_status_current_results \
+                  WHERE realm_id=$1 AND value #>> '{}' = 'active') AS statuses, \
+                (SELECT COUNT(*) FROM principal_resolutions WHERE pcr_realm_id=$1) AS resolutions",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<AgentPcrFootprint>(&mut *conn)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn agent_pcr_genesis_requires_its_provision_declaration() {
+    use soland_storage::{
+        ActorProfileStore, AgentPcrGenesisAdmissionOutcome, AgentPcrGenesisAdmissionWrite,
+        AgentProvisionAdmissionOutcome, AgentProvisionAdmissionWrite,
+    };
+
+    let (pool, station) = contract_store().await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let controller_fixture = fixture(&station);
+    let controller = controller_fixture.account.clone();
+    let controller_realm = RealmId::new(controller_fixture.events[0].realm_id.to_string()).unwrap();
+    let method = controller_fixture.device_verification_method.clone();
+    let seed = controller_fixture.founding_device_signing_seed;
+    let station_did = controller_fixture.station_did.clone();
+    let controller_genesis = assemble(station.clone(), controller_fixture);
+    store
+        .admit_pcr_genesis_unit(
+            &controller_genesis,
+            controller_genesis.transactions[1].commit.committed_at,
+        )
+        .await
+        .unwrap();
+    let controller_authority = controller_genesis.transactions[1]
+        .expected_authority
+        .clone();
+    let head = controller_genesis.transactions[1].commit.clone();
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+
+    let agent_did = arkret_wire::Did::new(format!(
+        "did:web:agent-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
+    let authorization_ref = "did:webvh:z6mkfixture:agent.example#managed-controller";
+    let genesis_at = head.committed_at + chrono::TimeDelta::seconds(5);
+    let author = |executed_by: arkret_wire::ActorId, signing_seed: [u8; 32]| {
+        let authored =
+            arkret_bootstrap::build_agent_pcr_create(arkret_bootstrap::AgentPcrCreateEventInput {
+                payload: arkret_bootstrap::AgentPcrCreatePayloadInput {
+                    agent_id: agent_id.clone(),
+                    governance_station_id: station.clone(),
+                    initial_resolution: arkret_models_identity::ResolutionCommitment {
+                        did: agent_did.clone(),
+                        method_history_head: format!("sha256:{}", "c".repeat(64)),
+                        version_id: "1-agent".to_owned(),
+                    },
+                    genesis_salt: arkret_wire::GenesisSalt::new(
+                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                    )
+                    .unwrap(),
+                    trust_domain: arkret_wire::TrustDomainId::new(
+                        "ak:trust_domain:pcr-contract.example".to_owned(),
+                    )
+                    .unwrap(),
+                    initial_join_rule: arkret_wire::JoinRule::Closed,
+                    initial_history_access: arkret_wire::HistoryAccess::SinceJoin,
+                    initial_discoverability: arkret_wire::Discoverability::Secret,
+                },
+                executed_by,
+                authorization_ref: arkret_wire::AuthorizationRef::new(authorization_ref.to_owned())
+                    .unwrap(),
+                created_at: head.committed_at,
+            })
+            .unwrap();
+        device_history_fixture::sign_event(authored.into_event(), method.clone(), signing_seed)
+    };
+    let genesis = author(arkret_wire::ActorId::account(controller.clone()), seed);
+    let agent_pcr = RealmId::from_event_id(&genesis.event_id);
+    let authority = soland_storage::CurrentRealmAuthority {
+        realm_id: agent_pcr.clone(),
+        generation: 0,
+        service_id: station.clone(),
+        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+            genesis.event_id.clone(),
+        ),
+        last_handoff_ref: None,
+    };
+    let admit = async |event: &arkret_wire::Event| {
+        let commit = station_genesis_commit(&head, event, &station_did, genesis_at);
+        profiles
+            .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
+                commit: AuthorityCommitTransaction {
+                    expected_authority: soland_storage::CurrentRealmAuthority {
+                        realm_id: RealmId::from_event_id(&event.event_id),
+                        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                            event.event_id.clone(),
+                        ),
+                        ..authority.clone()
+                    },
+                    event: event.clone(),
+                    commit,
+                    mls_state: None,
+                    welcomes: Vec::new(),
+                    recipient_queue_capacity: 0,
+                },
+                queued_at: genesis_at,
+            })
+            .await
+    };
+    let empty = agent_pcr_footprint(&pool, &agent_pcr).await;
+    assert_eq!(empty.authorities + empty.events + empty.resolutions, 0);
+
+    // No accepted provision declares this realm id: nothing materializes.
+    assert_eq!(
+        admit(&genesis).await.unwrap_err().conflict_code(),
+        Some(ConflictCode::AgentPcrGenesisDeclarationMissing)
+    );
+    assert_eq!(agent_pcr_footprint(&pool, &agent_pcr).await, empty);
+
+    // The controller provisions the Agent, forward-declaring this realm id.
+    let provision = agent_provision_event(
+        &controller,
+        &controller_realm,
+        &method,
+        seed,
+        &agent_id,
+        &agent_pcr,
+        "genesis",
+        head.committed_at,
+        head.committed_at,
+    );
+    let provision_commit = station_successor(&head, &provision, &station_did, 1);
+    assert!(matches!(
+        profiles
+            .admit_agent_provision(AgentProvisionAdmissionWrite {
+                commit: AuthorityCommitTransaction {
+                    expected_authority: controller_authority.clone(),
+                    event: provision.clone(),
+                    commit: provision_commit.clone(),
+                    mls_state: None,
+                    welcomes: Vec::new(),
+                    recipient_queue_capacity: 0,
+                },
+                queued_at: provision_commit.committed_at,
+            })
+            .await
+            .unwrap(),
+        AgentProvisionAdmissionOutcome::Committed(_)
+    ));
+
+    // A service executor is not a controller account.
+    let mut service_executed = genesis.clone();
+    service_executed.executed_by = Some(arkret_wire::ActorId::service(
+        controller.principal_id.clone(),
+    ));
+    let service_executed =
+        device_history_fixture::sign_event(service_executed, method.clone(), seed);
+    assert_eq!(
+        admit(&service_executed).await.unwrap_err().conflict_code(),
+        Some(ConflictCode::SchemaViolation)
+    );
+    // The Agent's service actor is not the Agent's account.
+    let mut service_actor = genesis.clone();
+    service_actor.actor_id = arkret_wire::ActorId::service(agent_id.clone());
+    let service_actor = device_history_fixture::sign_event(service_actor, method.clone(), seed);
+    assert!(admit(&service_actor).await.is_err());
+    // A key other than the controller's active device does not sign it.
+    let forged = author(
+        arkret_wire::ActorId::account(controller.clone()),
+        [0x5b; 32],
+    );
+    assert_eq!(forged.event_id, genesis.event_id);
+    assert_eq!(
+        admit(&forged).await.unwrap_err().conflict_code(),
+        Some(ConflictCode::SignatureInvalid)
+    );
+    assert_eq!(agent_pcr_footprint(&pool, &agent_pcr).await, empty);
+
+    // With the declaration accepted, the genesis creates the Agent PCR and
+    // every registered create result at position zero.
+    let AgentPcrGenesisAdmissionOutcome::Committed(commit) = admit(&genesis).await.unwrap() else {
+        panic!("the declared Agent PCR genesis commits");
+    };
+    assert_eq!(commit.stream_position, 0);
+    assert_eq!(commit.realm_id, agent_pcr);
+    assert_eq!(
+        agent_pcr_footprint(&pool, &agent_pcr).await,
+        AgentPcrFootprint {
+            authorities: 1,
+            events: 1,
+            commits: 1,
+            singletons: 2,
+            roots: 1,
+            statuses: 1,
+            resolutions: 1,
+        }
+    );
+    let created = agent_pcr_footprint(&pool, &agent_pcr).await;
+    assert!(matches!(
+        admit(&genesis).await.unwrap(),
+        AgentPcrGenesisAdmissionOutcome::Duplicate(stored) if stored == commit
+    ));
+    assert_eq!(agent_pcr_footprint(&pool, &agent_pcr).await, created);
+}

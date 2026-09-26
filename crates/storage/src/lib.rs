@@ -323,11 +323,19 @@ pub enum ConflictCode {
     DirectConversationParticipantAuthorityDenied,
     /// `ak.space.*` targets a Direct Conversation Realm.
     DirectConversationSpaceForbidden,
+    /// A second `ak.agent.provision` declares an `agent_id` an accepted
+    /// provision in the controller PCR already carries.
+    AgentProvisioningAlreadyDeclared,
+    /// A second `ak.agent.provision` declares an Agent PCR id an accepted
+    /// provision already claims.
+    AgentPcrGenesisDeclarationConflict,
+    /// An Agent PCR genesis has no accepted provision declaring its id.
+    AgentPcrGenesisDeclarationMissing,
 }
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 65] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
@@ -390,6 +398,9 @@ impl ConflictCode {
         Self::DirectConversationRootMaskViolation,
         Self::DirectConversationParticipantAuthorityDenied,
         Self::DirectConversationSpaceForbidden,
+        Self::AgentProvisioningAlreadyDeclared,
+        Self::AgentPcrGenesisDeclarationConflict,
+        Self::AgentPcrGenesisDeclarationMissing,
     ];
 
     #[must_use]
@@ -488,6 +499,15 @@ impl ConflictCode {
             }
             Self::DirectConversationSpaceForbidden => {
                 arkret_wire::ReasonCode::DIRECT_CONVERSATION_SPACE_FORBIDDEN
+            }
+            Self::AgentProvisioningAlreadyDeclared => {
+                arkret_wire::ReasonCode::AGENT_PROVISIONING_ALREADY_DECLARED
+            }
+            Self::AgentPcrGenesisDeclarationConflict => {
+                arkret_wire::ReasonCode::AGENT_PCR_GENESIS_DECLARATION_CONFLICT
+            }
+            Self::AgentPcrGenesisDeclarationMissing => {
+                arkret_wire::ReasonCode::AGENT_PCR_GENESIS_DECLARATION_MISSING
             }
         }
     }

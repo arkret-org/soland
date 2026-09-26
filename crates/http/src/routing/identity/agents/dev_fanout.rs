@@ -12,9 +12,7 @@ use serde_json::Value;
 use soland_http::error::AppError;
 
 use super::SessionRecord;
-use crate::routing::events::event_log::{
-    submit_initial_event_submission, submit_one_error_to_app_error,
-};
+use crate::routing::events::event_log::submit_one_error_to_app_error;
 use crate::state::AppState;
 
 fn agent_fanout_submit_error(
@@ -138,10 +136,29 @@ fn verification_method_rooted_in(verification_method: &str, root: &str) -> bool 
     verification_method.starts_with(&format!("{root}#"))
 }
 
+/// The provision unit's refusals: both declaration uniqueness checks are
+/// `failed_precondition` with their registered reason; signer, schema and
+/// head refusals share the PCR self-Event mapping.
+fn agent_provision_admission_error(
+    code: Option<soland_storage::ConflictCode>,
+    detail: &str,
+) -> AppError {
+    use soland_storage::ConflictCode;
+    match code {
+        Some(
+            reason @ (ConflictCode::AgentProvisioningAlreadyDeclared
+            | ConflictCode::AgentPcrGenesisDeclarationConflict),
+        ) => AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+            .with_reason_code(reason.as_str()),
+        other => crate::routing::identity::account::profile_admission_error(other, detail),
+    }
+}
+
 /// Validate and admit the single controller-authored provisioning fact.
 ///
-/// The containing Event proof is the only signature. The registered reducer
-/// atomically projects the provision, accountability, and selector cells.
+/// The containing Event proof is the only signature. The controller-PCR
+/// provision unit verifies the signing device at the locked cut and writes
+/// the four typed results with the Commit, or nothing.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn submit_provision_event(
     state: &AppState,
@@ -178,16 +195,39 @@ pub(super) async fn submit_provision_event(
             "provision_event does not match the authenticated allocation",
         ));
     }
+    if submission.approval_signatures.is_some() {
+        return Err(AppError::schema_violation(
+            "provision_event carries no approval signatures",
+        ));
+    }
     let event_id = event.event_id.to_string();
-    submit_initial_event_submission(state, session, submission)
+    let committed_at = chrono::Utc::now();
+    let method = arkret_wire::DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(
+            state.service_did().as_str(),
+        ),
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let transaction = state
+        .authority_commits()
+        .prepare_self_event_transaction(
+            event,
+            &state.service_core_id(),
+            method,
+            state.notary_signing_key().as_ref(),
+            committed_at,
+        )
+        .await
+        .map_err(|error| agent_provision_admission_error(error.conflict_code(), error.detail()))?;
+    state
+        .persistence()
+        .admit_agent_provision(soland_storage::AgentProvisionAdmissionWrite {
+            commit: transaction,
+            queued_at: committed_at,
+        })
         .await
         .map_err(|error| {
-            agent_fanout_submit_error(
-                arkret_wire::EventKind::AgentProvision.as_str(),
-                error.status(),
-                error.code(),
-                error.message(),
-            )
+            agent_provision_admission_error(error.conflict_code(), &error.to_string())
         })?;
     Ok(event_id)
 }

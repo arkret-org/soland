@@ -307,6 +307,14 @@ impl AuthorityProtocolPort for AppState {
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.event;
         refuse_actor_private_event(&event.kind)?;
+        // The Agent PCR genesis is executed by the controller on the Agent's
+        // behalf; its unit verifies that delegated producer itself.
+        if super::authority_agent_pcr_genesis::is_agent_pcr_genesis(event) {
+            return super::authority_agent_pcr_genesis::submit_self_agent_pcr_genesis(
+                self, session, &request,
+            )
+            .await;
+        }
         let (producer_guard, producer_key) =
             super::authority_producer_validation::verify_self_event_producer_key(
                 self, session, event,

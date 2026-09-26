@@ -941,6 +941,56 @@ impl AuthorityCommitApplication {
         Ok(transaction)
     }
 
+    /// Prepare the position-zero Commit of a Realm this Station would create
+    /// by admitting `event`, its genesis. Only a unit that installs the new
+    /// Realm authority in the same transaction may use it.
+    pub fn prepare_genesis_transaction(
+        &self,
+        event: &Event,
+        local_service_id: &DidCoreId,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+    ) -> ServiceResult<AuthorityCommitTransaction> {
+        event.validate_for_submit_structural().map_err(|error| {
+            ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
+        })?;
+        if event.scope_ref != arkret_wire::ScopeRef::RealmGenesis {
+            return Err(ServiceError::SchemaViolation(
+                "a Realm genesis must use the genesis scope".to_owned(),
+            ));
+        }
+        let authority = CurrentRealmAuthority {
+            realm_id: event.realm_id.clone(),
+            generation: 0,
+            service_id: local_service_id.clone(),
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                event.event_id.clone(),
+            ),
+            last_handoff_ref: None,
+        };
+        let commit = build_signed_event_commit(
+            event,
+            &authority,
+            None,
+            verification_method,
+            signing_key,
+            committed_at,
+        )?;
+        let transaction = AuthorityCommitTransaction {
+            expected_authority: authority,
+            event: event.clone(),
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: self.recipient_queue_capacity,
+        };
+        transaction.validate().map_err(|error| {
+            ServiceError::SchemaViolation(format!("invalid authority transaction: {error}"))
+        })?;
+        Ok(transaction)
+    }
+
     /// [`Self::prepare_self_event_transaction`] for an `ak.mls.genesis` or
     /// `ak.mls.commit`: the transaction also installs the public transition
     /// the caller verified and queues every verified Welcome of the Commit.

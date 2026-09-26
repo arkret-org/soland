@@ -27,9 +27,10 @@ fn result_value<T: serde::Serialize>(value: &T) -> PersistenceResult<serde_json:
 /// member state have dedicated durable tables and are written by their own
 /// materializers in the same transaction.
 ///
-/// `realm-and-space.md` §2.5 create projection row 5: a Direct Conversation
-/// genesis also runs `realm_history_access` `null -> since_join` in the same
-/// write, since that profile has no history-access bootstrap facet.
+/// `realm-and-space.md` §2.5 create projection rows 5 and 7: a Direct
+/// Conversation or control-Realm genesis also runs `realm_history_access`
+/// `null -> since_join` in the same write, since those profiles have no
+/// history-access bootstrap facet.
 pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -39,7 +40,12 @@ pub(crate) async fn commit_ordinary_bootstrap_singleton_current_result_in_connec
         arkret_wire::EventKind::RealmCreate => {
             let genesis = typed_payload(event, EventPayloadExt::as_realm_create)?.object;
             let mut rows = vec![("realm_genesis", result_value(&genesis)?)];
-            if genesis.purpose == RealmPurpose::DirectConversation {
+            if matches!(
+                genesis.purpose,
+                RealmPurpose::DirectConversation
+                    | RealmPurpose::PrincipalControl
+                    | RealmPurpose::AgentControl
+            ) {
                 rows.push((
                     "realm_history_access",
                     result_value(&arkret_wire::HistoryAccess::SinceJoin)?,
