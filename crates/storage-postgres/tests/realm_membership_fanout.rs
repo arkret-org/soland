@@ -8,6 +8,8 @@
 //!   its held Realm stream, later Commits must directly follow it, and gaps, forks and unheld
 //!   streams are refused with zero writes.
 
+#[path = "support/accepted_human_profile.rs"]
+mod accepted_human_profile;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -374,8 +376,16 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = remote_member("fsm-alice");
-    let bob = remote_member("fsm-bob");
+    let alice = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .await;
+    let bob = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .await;
 
     // An invite-only Realm has no self entry.
     let invite = admit(&pool, "fsm-invite", "invite").await;
@@ -458,7 +468,11 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
 
     // A grant of `ak.realm.admin` from the root lets Alice remove Carol; once
     // the root revokes it, the same Alice is refused at the next cut.
-    let carol = remote_member("fsm-carol");
+    let carol = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .await;
     let carol_join = membership_request(&ban.authority_commit, carol.clone(), &carol, "join");
     uow.commit_event(carol_join.clone()).await.unwrap();
     let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
@@ -1917,8 +1931,16 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let unit = admit(&pool, "grant-guards", "public").await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
-    let alice = remote_member("guard-alice");
-    let bob = remote_member("guard-bob");
+    let alice = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .await;
+    let bob = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .await;
     let alice_join = membership_request(
         unit.transactions.last().unwrap(),
         alice.clone(),

@@ -1,3 +1,11 @@
+#[path = "support/accepted_human_profile.rs"]
+mod accepted_human_profile;
+#[path = "../../test-support/src/device_authorization_history.rs"]
+#[allow(dead_code)]
+mod device_authorization_history;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 mod support;
 
 use arkret_models_collaboration::authority_commit::{
@@ -3781,10 +3789,13 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let controller = default.authority_commit.event.actor_id.clone();
     let reporter = controller.signing_principal_id().clone();
-    let stranger = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new("ak:did_core:web:queue-stranger.example").unwrap(),
-        controller.as_account_id().unwrap().station_id.clone(),
-    ));
+    let stranger = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(
+            &controller.as_account_id().unwrap().station_id,
+        ),
+    )
+    .await;
 
     let items = |read: Vec<ModerationQueueItem>| read;
     assert!(items(queue.queue_view_for_actor(&controller, None).await.unwrap()).is_empty());
@@ -4852,10 +4863,14 @@ async fn invite_create_without_invite_capability_is_capability_denied_with_zero_
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let station = unit.transactions[0].expected_authority.service_id.clone();
-    let member = invite_account(
-        "member.example",
-        &station.as_str()["ak:did_core:web:".len()..],
-    );
+    let member = accepted_human_profile::accepted_human_profile(
+        &pool,
+        device_authorization_history::did_web_station(&station),
+    )
+    .await
+    .as_account_id()
+    .expect("profiled Human is an Account")
+    .clone();
     let stranger = invite_account(
         "stranger.example",
         &station.as_str()["ak:did_core:web:".len()..],
