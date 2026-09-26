@@ -29,6 +29,13 @@ fn forwarded_request(seed: u8) -> PeerAuthoritySubmitRequest {
     )
 }
 
+fn commit_event(request: &PeerAuthoritySubmitRequest) -> Event {
+    let PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) = request else {
+        unreachable!("fixture forwards one ordinary Event")
+    };
+    request.event_submission.event.clone()
+}
+
 fn commit_for(request: &PeerAuthoritySubmitRequest) -> arkret_wire::RealmCommit {
     let PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) = request else {
         unreachable!("fixture forwards one ordinary Event")
@@ -174,4 +181,104 @@ fn relayed_outcome_must_cover_the_forwarded_event() {
         Some(ConflictCode::TemporarilyUnavailable),
         "a Commit for another Event is never relayed as this forward's outcome"
     );
+}
+
+fn blob_ref(bytes: &[u8]) -> String {
+    format!("ak:blob:{}", arkret_canonical::sha256_digest(bytes))
+}
+
+/// Store `bytes` in the object store and a Blob row naming them under
+/// `blob_ref`, the way a creator's `ak.self.blob.*` upload leaves them.
+async fn store_blob(state: &AppState, blob_ref: &str, bytes: &[u8]) {
+    let sha256 = arkret_canonical::sha256_hex(bytes);
+    let storage_key = state.deliveries().object_key_for_sha256(&sha256);
+    state
+        .deliveries()
+        .put_object(&storage_key, bytes.to_vec())
+        .await
+        .unwrap();
+    state
+        .deliveries()
+        .store_blob(
+            blob_ref,
+            soland_services::delivery::BlobState {
+                sha256,
+                size_bytes: bytes.len() as i64,
+                storage_backend: state.deliveries().object_storage_backend_name(),
+                storage_key,
+                media_type: "application/octet-stream".to_owned(),
+                filename: None,
+                realm_id: None,
+                encryption: None,
+                legal_hold: false,
+                redacted: false,
+                visibility: arkret_models_collaboration::objects::blob::BlobVisibility::Public,
+                uploaded_by: "ak:did_core:web:genesis-creator.example".to_owned(),
+                created_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+/// encryption-and-audit.md §5.1.2: the forwarding Station reads the two
+/// Genesis Blobs from its own store and carries them only when it holds both
+/// and each addresses its ref; otherwise a bare `failed_precondition` stops
+/// the forward. Any other kind carries nothing.
+#[tokio::test]
+async fn a_forwarded_genesis_carries_its_local_blobs_only_when_they_address_their_refs() {
+    let state = AppState::new(
+        crate::config::AppConfig {
+            seed_demo_data: false,
+            ..crate::config::AppConfig::test_default()
+        },
+        soland_storage_postgres::Db { pool: None },
+    );
+    let seed = uuid::Uuid::now_v7();
+    let group_info = format!("group-info {seed}").into_bytes();
+    let tree = format!("ratchet-tree {seed}").into_bytes();
+    let realm_id = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [0x5a; 32],
+    ));
+    let genesis = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::MlsGenesis.as_str(),
+        ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        DidCoreId::new("ak:did_core:web:genesis-creator.example").unwrap(),
+        DidCoreId::new("ak:did_core:web:genesis-forwarder.example").unwrap(),
+        serde_json::json!({
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_ref": blob_ref(&group_info),
+            "ratchet_tree_ref": blob_ref(&tree),
+            "governance_binding":
+                arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm_id, None, 0, 0, 0)
+                    .unwrap(),
+            "created_at": "2026-09-26T00:00:00.000Z",
+        }),
+        Utc::now(),
+    )
+    .unwrap();
+    let refused = |result: ServiceResult<Option<MlsGenesisMaterial>>| {
+        result.unwrap_err().conflict_code() == Some(ConflictCode::FailedPrecondition)
+    };
+
+    assert!(
+        forwarded_genesis_material(&state, &commit_event(&forwarded_request(0x5b)))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(refused(forwarded_genesis_material(&state, &genesis).await));
+    store_blob(&state, &blob_ref(&group_info), &group_info).await;
+    assert!(refused(forwarded_genesis_material(&state, &genesis).await));
+    store_blob(&state, &blob_ref(&tree), b"bytes another ref addresses").await;
+    assert!(refused(forwarded_genesis_material(&state, &genesis).await));
+    store_blob(&state, &blob_ref(&tree), &tree).await;
+    let material = forwarded_genesis_material(&state, &genesis)
+        .await
+        .unwrap()
+        .expect("both Blobs address their refs");
+    assert_eq!(material.decode().unwrap(), (group_info, tree));
 }

@@ -20,8 +20,8 @@ use diesel_async::RunQueryDsl;
 use soland_storage::{
     AuthorityCommitStore, ConflictCode, DeviceMessageStore, DeviceRevocationGateSelector,
     DeviceRevocationStore, EventCommitRequest, EventCommitUnitOfWork, IdentityStoreRegistry,
-    MlsGroupCurrentStore, MlsInstalledBase, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
-    RecipientQueueSelector, VerifiedMlsWelcome,
+    MlsGroupCurrentStore, MlsInstalledBase, MlsKeyPackageStore, MlsStateInstallation,
+    MlsWelcomeClaimLedgerKey, RecipientQueueSelector, VerifiedMlsWelcome,
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
@@ -472,6 +472,22 @@ async fn mls_commit_welcome_queue_is_atomic_exact_endpoint_and_revocation_gated(
     uow.commit_event(commit.clone()).await.unwrap();
     assert_eq!(welcome_count(&pool).await, 1);
     let commit_ref = commit.authority_commit.event.event_id.clone();
+    // decision 0121: the queueing transaction binds the claim to its Welcome.
+    let queued = &commit.authority_commit.welcomes[0].delivery;
+    assert_eq!(
+        soland_storage_postgres::PgMlsKeyPackageStore { pool: pool.clone() }
+            .get_claim_welcome_binding(&first_claim)
+            .await
+            .unwrap(),
+        Some(soland_storage::MlsWelcomeClaimBinding {
+            claim_id: first_claim.clone(),
+            source_id: first_key.source_id.clone(),
+            claim_request_id: first_key.claim_request_id.clone(),
+            welcome_id: queued.welcome_id.to_string(),
+            welcome_digest: queued.durable_receipt_digest().unwrap().to_string(),
+            commit_event_ref: commit_ref.to_string(),
+        })
+    );
 
     let second_claim = claim_id();
     let second_key = live_claim(&pool, station.as_str(), &second_claim).await;
@@ -1005,20 +1021,20 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
             .iter()
             .map(|(peer, _)| peer.as_str())
             .collect::<Vec<_>>(),
-        [other_station, remote_station]
+        [remote_station, other_station]
     );
     let item = |payload: &serde_json::Value| payload["replications"][0].clone();
-    assert!(item(&payloads[0].1).get("welcomes").is_none());
+    assert!(item(&payloads[1].1).get("welcomes").is_none());
     let expected = welcomes
         .iter()
         .filter(|welcome| welcome.claim.is_none())
         .map(|welcome| serde_json::to_value(&welcome.delivery).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(
-        item(&payloads[1].1)["welcomes"],
+        item(&payloads[0].1)["welcomes"],
         serde_json::json!(expected)
     );
     let request: arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest =
-        serde_json::from_value(payloads[1].1.clone()).unwrap();
+        serde_json::from_value(payloads[0].1.clone()).unwrap();
     request.validate().unwrap();
 }

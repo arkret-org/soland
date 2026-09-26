@@ -8,7 +8,7 @@
 //! an accepted PCR genesis.
 
 use arkret_models_collaboration::authority_commit::{
-    AuthorityForwardBranch, PeerAuthorityForwardEventRequest,
+    AuthorityForwardBranch, MlsGenesisMaterial, PeerAuthorityForwardEventRequest,
 };
 use arkret_models_crypto::{
     DeviceAuthorizationWindow, DeviceProjectionAttestation, DeviceProjectionAttestationCore,
@@ -671,5 +671,131 @@ fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verif
             Some(soland_storage::ConflictCode::TemporarilyUnavailable),
             "{refused:?}"
         );
+    });
+}
+
+/// An `ak.mls.genesis` of the Realm scope produced on `station` by its human
+/// device, naming the two Blobs by their content addresses.
+fn genesis_event(
+    station: &Station,
+    realm_id: &RealmId,
+    created_at: DateTime<Utc>,
+    group_info: &[u8],
+    tree: &[u8],
+) -> Event {
+    let account = station.account();
+    let event = arkret_wire::test_support::raw_event_at(
+        EventKind::MlsGenesis.as_str(),
+        ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        account.principal_id,
+        account.station_id,
+        serde_json::json!({
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_ref": format!("ak:blob:{}", arkret_canonical::sha256_digest(group_info)),
+            "ratchet_tree_ref": format!("ak:blob:{}", arkret_canonical::sha256_digest(tree)),
+            "governance_binding": arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+                realm_id.clone(),
+                None,
+                0,
+                0,
+                0,
+            )
+            .unwrap(),
+            "created_at": arkret_canonical::format_timestamp_canonical(created_at),
+        }),
+        created_at,
+    )
+    .unwrap();
+    sign_event(
+        event,
+        DidUrl::new(format!("{PRINCIPAL_DID}#{DEVICE}")).unwrap(),
+        DEVICE_SEED,
+    )
+}
+
+/// The registered code a refusal carries, including a protocol code that is
+/// no persistence conflict code.
+fn protocol_code(result: Result<AuthoritySubmitOutcome, ServiceError>) -> String {
+    match result.expect_err("the forward must be refused") {
+        ServiceError::SchemaViolation(_) => "schema_violation".to_owned(),
+        ServiceError::Conflict(detail) => detail
+            .split_once(": ")
+            .map_or(detail.as_str(), |(code, _)| code)
+            .to_owned(),
+        error => format!("{error:?}"),
+    }
+}
+
+/// encryption-and-audit.md §5.1.2 and
+/// `ak.vector.federation.authority_forward_genesis_material.v1`: the governance
+/// Station checks the carried Genesis material before any write -- a Genesis
+/// without it or another kind with it is `schema_violation`, bytes that do
+/// not address the Genesis refs are `digest_mismatch`, and addressed bytes
+/// that are no RFC 9420 epoch-0 public state are `schema_violation` -- and
+/// stores neither the Event nor a Blob.
+#[test]
+fn forwarded_genesis_material_is_checked_before_any_write() {
+    runtime().block_on(async {
+        let (state, realm_id) = governance_station().await;
+        let at = now();
+        let a = Station::new(0x64, "genesis-forwarder.example", at - Duration::hours(1));
+        let created_at = at - Duration::seconds(60);
+        let source = peer(&a.service_id);
+        let group_info = b"forwarded GroupInfo".to_vec();
+        let tree = b"forwarded ratchet tree".to_vec();
+        let genesis = genesis_event(&a, &realm_id, created_at, &group_info, &tree);
+        let with_material =
+            |event: &Event, group_info: &[u8], tree: &[u8]| PeerAuthorityForwardEventRequest {
+                mls_genesis_material: Some(MlsGenesisMaterial::from_bytes(group_info, tree)),
+                ..forward(event.clone(), Some(evidence(&a, core(&a, at), at)))
+            };
+        let profile = producer_event(&a, &realm_id, DEVICE, created_at, "no material here");
+        let cases = [
+            (
+                "genesis_without_material",
+                genesis.clone(),
+                forward(genesis.clone(), Some(evidence(&a, core(&a, at), at))),
+                "schema_violation",
+            ),
+            (
+                "other_kind_with_material",
+                profile.clone(),
+                with_material(&profile, &group_info, &tree),
+                "schema_violation",
+            ),
+            (
+                "material_does_not_address_the_refs",
+                genesis.clone(),
+                with_material(&genesis, &group_info, b"another ratchet tree"),
+                "digest_mismatch",
+            ),
+            (
+                "addressed_material_is_no_public_group_state",
+                genesis.clone(),
+                with_material(&genesis, &group_info, &tree),
+                "schema_violation",
+            ),
+        ];
+        for (name, event, request, expected) in cases {
+            let result =
+                soland_http::test_admit_authority_forward(&state, &source, request, at).await;
+            assert_eq!(protocol_code(result), expected, "variant {name}");
+            assert_nothing_written(&state, &event).await;
+        }
+        for bytes in [&group_info, &tree] {
+            let blob_ref = format!("ak:blob:{}", arkret_canonical::sha256_digest(bytes));
+            assert!(
+                state
+                    .test_persistence()
+                    .blobs()
+                    .get(&blob_ref)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a refused Genesis stores no Blob"
+            );
+        }
     });
 }
