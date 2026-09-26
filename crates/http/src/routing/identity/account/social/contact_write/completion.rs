@@ -178,9 +178,15 @@ async fn sign_outcome(
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
         })
     };
-    let sign_lineage = |bytes: &[u8]| {
-        sign_contact_transcript(state, bytes)
-            .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+    let lineage_at = now();
+    let (lineage_method, lineage_key) = receipt_key_at_acceptance(state, lineage_at).await?;
+    let sign_lineage = |bytes: &[u8]| -> arkret_wire::Result<ProtocolSignature> {
+        Ok(ProtocolSignature {
+            verification_method: lineage_method.clone(),
+            created_at: lineage_at,
+            jws: super::contact_detached_jws(&lineage_key, bytes)
+                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
+        })
     };
     Ok(match &intent.plan.action {
         ContactCompletionAction::Request { .. } => ContactAcceptedOutcome::Request {
@@ -386,7 +392,8 @@ async fn latest_direction_proof(
             .event_digest()
             .digest_suite()
             .map_err(|error| AppError::internal(error.to_string()))?,
-    )?;
+    )
+    .await?;
     if record.status == "tombstoned" && !next.terminal {
         // A remote terminal fence requires its authenticated original lineage;
         // it cannot be reconstructed by signing a local non-terminal head.
@@ -398,7 +405,7 @@ async fn latest_direction_proof(
     Ok(next)
 }
 
-async fn receipt_key_at_acceptance(
+pub(super) async fn receipt_key_at_acceptance(
     state: &AppState,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(DidUrl, ed25519_dalek::SigningKey), AppError> {

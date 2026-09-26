@@ -1976,7 +1976,7 @@ async fn finalize_glare_contact_round(
         observed_at,
         signature: placeholder_contact_signature(state, observed_at)?,
     };
-    local_attestation.signature = sign_contact_evidence_bytes(
+    local_attestation.signature = sign_contact_assertion_evidence_bytes(
         state,
         observed_at,
         &local_attestation
@@ -1986,7 +1986,8 @@ async fn finalize_glare_contact_round(
                     "local glare attestation transcript failed: {error}"
                 ))
             })?,
-    )?;
+    )
+    .await?;
 
     let fresh_until = observed_at + chrono::Duration::minutes(10);
     let mut local_current_proof = ContactCurrentProof {
@@ -2000,7 +2001,7 @@ async fn finalize_glare_contact_round(
         fresh_until,
         signature: placeholder_contact_signature(state, observed_at)?,
     };
-    local_current_proof.signature = sign_contact_evidence_bytes(
+    local_current_proof.signature = sign_contact_assertion_evidence_bytes(
         state,
         observed_at,
         &local_current_proof
@@ -2010,7 +2011,8 @@ async fn finalize_glare_contact_round(
                     "local Contact current proof transcript failed: {error}"
                 ))
             })?,
-    )?;
+    )
+    .await?;
 
     let mut attestations = [remote_attestation.clone(), local_attestation.clone()];
     attestations.sort_by(|left, right| left.issuer_id.cmp(&right.issuer_id));
@@ -2129,6 +2131,19 @@ fn sign_contact_evidence_bytes(
     })
 }
 
+async fn sign_contact_assertion_evidence_bytes(
+    state: &AppState,
+    created_at: chrono::DateTime<chrono::Utc>,
+    signing_bytes: &[u8],
+) -> Result<ProtocolSignature, AppError> {
+    let (method, key) = super::account::contact_assertion_signer(state, created_at).await?;
+    Ok(ProtocolSignature {
+        verification_method: method,
+        created_at,
+        jws: super::account::contact_detached_jws(&key, signing_bytes)?,
+    })
+}
+
 /// The local direction's terminal acknowledgement of a verified remote
 /// tombstone (contact-and-direct-conversation.md section 3): it names the
 /// shared source tombstone head and retains the local direction's last
@@ -2151,6 +2166,7 @@ async fn terminal_ack_contact_current_proof(
                 )
             })?;
     let issued_at = now();
+    let (method, key) = super::account::contact_assertion_signer(state, issued_at).await?;
     ContactCurrentProof::sign_with(
         source.contact_round_id.clone(),
         state.service_core_id(),
@@ -2161,8 +2177,12 @@ async fn terminal_ack_contact_current_proof(
         complete_through,
         issued_at + chrono::Duration::minutes(10),
         |bytes| {
-            sign_contact_evidence_bytes(state, issued_at, bytes)
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+            Ok(ProtocolSignature {
+                verification_method: method.clone(),
+                created_at: issued_at,
+                jws: super::account::contact_detached_jws(&key, bytes)
+                    .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
+            })
         },
     )
     .map_err(|error| AppError::internal(error.to_string()))
@@ -2465,13 +2485,14 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         observed_at,
         signature: placeholder_contact_signature(state, observed_at)?,
     };
-    attestation.signature = sign_contact_evidence_bytes(
+    attestation.signature = sign_contact_assertion_evidence_bytes(
         state,
         observed_at,
         &attestation.canonical_signing_bytes().map_err(|error| {
             AppError::internal(format!("glare attestation transcript failed: {error}"))
         })?,
-    )?;
+    )
+    .await?;
     // The signed reverse request supplies the full recipient AccountId. A
     // service route supplies transport coordinates only; the carrier keeps
     // that exact principal and the receiver revalidates it independently.
@@ -2782,13 +2803,14 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     fresh_until: observed_at + chrono::Duration::minutes(10),
                     signature: placeholder_contact_signature(state, observed_at)?,
                 };
-                local_proof.signature = sign_contact_evidence_bytes(
+                local_proof.signature = sign_contact_assertion_evidence_bytes(
                     state,
                     observed_at,
                     &local_proof.canonical_signing_bytes().map_err(|error| {
                         AppError::internal(format!("local Contact proof transcript: {error}"))
                     })?,
-                )?;
+                )
+                .await?;
                 let mut attestations = [local_attestation.clone(), remote_attestation.clone()];
                 attestations.sort_by(|left, right| left.subject_id.cmp(&right.subject_id));
                 ContactRoundEvidenceBundle {

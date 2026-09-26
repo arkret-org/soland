@@ -1043,7 +1043,7 @@ fn accept_request_slot_transition(
     Ok(())
 }
 
-pub(super) fn signed_current_proof(
+pub(super) async fn signed_current_proof(
     state: &AppState,
     contact_round_id: Hash,
     peer: ContactPeer,
@@ -1065,6 +1065,8 @@ pub(super) fn signed_current_proof(
     }
     let fresh_until = now() + chrono::Duration::minutes(10);
     let complete_through = contact_direction_version(event)?;
+    let signed_at = now();
+    let (method, key) = completion::receipt_key_at_acceptance(state, signed_at).await?;
     ContactCurrentProof::sign_with(
         contact_round_id,
         issuer,
@@ -1075,8 +1077,12 @@ pub(super) fn signed_current_proof(
         complete_through,
         fresh_until,
         |bytes| {
-            sign_contact_transcript(state, bytes)
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))
+            Ok(ProtocolSignature {
+                verification_method: method.clone(),
+                created_at: signed_at,
+                jws: contact_detached_jws(&key, bytes)
+                    .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?,
+            })
         },
     )
     .map_err(|error| AppError::internal(error.to_string()))
@@ -1295,7 +1301,15 @@ pub(crate) async fn local_requester_current_proof(
         &request_event,
         request_digest_suite,
     )
+    .await
     .map(Some)
+}
+
+pub(crate) async fn contact_assertion_signer(
+    state: &AppState,
+    at: chrono::DateTime<chrono::Utc>,
+) -> Result<(DidUrl, ed25519_dalek::SigningKey), AppError> {
+    completion::receipt_key_at_acceptance(state, at).await
 }
 
 async fn commit(

@@ -75,7 +75,8 @@ pub(crate) async fn fresh_direct_contact_evidence(
             proof.peer.clone(),
             &event,
             digest_suite,
-        )?;
+        )
+        .await?;
     }
     Ok(Some(bundle))
 }
