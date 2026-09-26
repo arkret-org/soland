@@ -1211,23 +1211,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    realm_invites (pk) {
-        pk -> Int8,
-        id -> Bytea,
-        realm_id -> Text,
-        inviter_id -> Text,
-        invitee_id -> Nullable<Text>,
-        introduction_evidence_digest -> Nullable<Text>,
-        third_party_invite -> Nullable<Jsonb>,
-        status -> Text,
-        claim_nonces -> Jsonb,
-        expires_at -> Nullable<Timestamptz>,
-        created_at -> Timestamptz,
-        updated_at -> Nullable<Timestamptz>,
-    }
-}
-
-diesel::table! {
     realm_meta (realm_id) {
         realm_id -> Text,
         owner -> Text,
@@ -1998,7 +1981,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     push_devices,
     push_hard_logout_journal,
     push_registration_handoff_intents,
-    realm_invites,
     realm_meta,
     realm_organizations,
     realm_owning_organizations,

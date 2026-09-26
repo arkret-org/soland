@@ -3314,46 +3314,6 @@ CREATE UNIQUE INDEX push_registration_handoff_awaiting_local_route_idx
        (source_station_id, local_account_id, local_device_id, local_push_route_id, destination_gateway_id)
     WHERE status = 'awaiting_receipt' AND desired_state = 'active';
 
-CREATE TABLE public.realm_invites (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id bytea NOT NULL CHECK (octet_length(id) = 33),
-    realm_id text NOT NULL,
-    inviter_id text NOT NULL,
-    invitee_id text,
-    introduction_evidence_digest text,
-    third_party_invite jsonb,
-    status text NOT NULL,
-    claim_nonces jsonb DEFAULT '{}'::jsonb NOT NULL,
-    expires_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone
-);
-
-ALTER TABLE ONLY public.realm_invites
-    ADD CONSTRAINT realm_invites_id_key UNIQUE (id);
-
-CREATE INDEX realm_invites_invitee_idx ON public.realm_invites USING btree (invitee_id);
-
--- Read-model defence in depth only. It is NOT a reducer correctness premise.
--- Live directed-invite uniqueness is carried by the registered Realm cell
--- ak.component.invite.live_target.v1 and enforced at admission
--- (zh/models/governance-objects.md section 5.3); this index only stops a bug in
--- this projection from denormalising two live rows into one server's own
--- read model. A conforming implementation reproduces the rule from the Realm's
--- authoritative state without any private index, so nothing may treat an error
--- from this index as the uniqueness decision. The status array is the live set
--- section 5.3 defines for a *direct* invite, {pending, send_failed}. 'claimed'
--- used to sit here too, with a comment saying a claimed 3PID invite still
--- materialises an invitee_id row: it does, but such a row keeps a non-NULL
--- third_party_invite (the claim projection only nulls members inside that JSONB
--- object, never the column), so the second conjunct already excludes it. A
--- direct invite cannot reach 'claimed' at all -- the claim path requires a
--- token commitment inside third_party_invite -- which made the third state
--- unreachable and the reason for keeping it wrong.
-CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_invite IS NULL) AND (status = ANY (ARRAY['pending'::text, 'send_failed'::text])));
-
-CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_id);
-
 CREATE TABLE public.recovery_policies (
     id uuid PRIMARY KEY,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),

@@ -469,11 +469,11 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
 }
 
 #[tokio::test]
-async fn postgres_structured_projection_and_invite_identities_round_trip() {
+async fn postgres_structured_projection_identities_round_trip() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{
-        CircleProjectionStore, MorphProjectionStore, RealmInviteStore,
-        SpaceContainerProjectionStore, StrandProjectionStore,
+        CircleProjectionStore, MorphProjectionStore, SpaceContainerProjectionStore,
+        StrandProjectionStore,
     };
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
@@ -618,38 +618,6 @@ async fn postgres_structured_projection_and_invite_identities_round_trip() {
         },
         circle_id
     );
-
-    let invites = soland_storage_postgres::PgRealmInviteStore { pool: pool.clone() };
-    let record = soland_storage::RealmInviteRecord {
-        invite_id: "ak:invite:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".into(),
-        realm_id: realm_id.into(),
-        inviter_id: account.to_string(),
-        invitee_id: Some(other_account.to_string()),
-        introduction_evidence_digest: None,
-        third_party_invite: None,
-        status: "pending".into(),
-        claim_nonces: Default::default(),
-        expires_at: None,
-        created_at: now,
-        updated_at: None,
-    };
-    invites.put(record.clone()).await.unwrap();
-    let reopened = soland_storage_postgres::PgRealmInviteStore { pool };
-    let found = reopened.get(&record.invite_id).await.unwrap().unwrap();
-    assert_eq!(found.inviter_id, record.inviter_id);
-    assert_eq!(found.invitee_id, record.invitee_id);
-    assert_ne!(Some(&found.inviter_id), found.invitee_id.as_ref());
-    assert!(
-        reopened
-            .snapshot_all()
-            .await
-            .unwrap()
-            .iter()
-            .any(|invite| invite.invite_id == record.invite_id)
-    );
-    let mut invalid = record;
-    invalid.inviter_id = "ak:did_core:web:unbound.example".into();
-    assert!(reopened.put(invalid).await.is_err());
 }
 
 #[tokio::test]

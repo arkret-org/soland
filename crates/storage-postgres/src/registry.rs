@@ -56,7 +56,6 @@ pub struct PgPersistenceStore {
     service_identity: PgServiceIdentityStore,
     principal_resolutions: PgPrincipalResolutionStore,
     service_routes: PgServiceRouteStore,
-    realm_invites: PgRealmInviteStore,
     circle_projections: PgCircleProjectionStore,
     strand_watch_projections: PgStrandWatchProjectionStore,
     key_backups: PgKeyBackupStore,
@@ -142,7 +141,6 @@ impl PgPersistenceStore {
             service_identity: PgServiceIdentityStore { pool: pool.clone() },
             principal_resolutions: PgPrincipalResolutionStore { pool: pool.clone() },
             service_routes: PgServiceRouteStore { pool: pool.clone() },
-            realm_invites: PgRealmInviteStore { pool: pool.clone() },
             circle_projections: PgCircleProjectionStore { pool: pool.clone() },
             strand_watch_projections: PgStrandWatchProjectionStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
@@ -371,10 +369,6 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
 
     fn service_identity(&self) -> &dyn ServiceIdentityStore {
         &self.service_identity
-    }
-
-    fn realm_invites(&self) -> &dyn RealmInviteStore {
-        &self.realm_invites
     }
 }
 

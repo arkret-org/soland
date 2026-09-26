@@ -51,7 +51,6 @@ were reviewed against their protocol role before changing the interface:
 | `HistoryResponseStreamStore::expire_requests` | unwired worker capability | Retained; governance-history request lifecycle owns expiry scheduling. |
 | `HistoryResponseStreamStore::replace_response_with_lost_exact` | unwired protocol branch | Retained; governance-history response lifecycle owns exact lost-response replacement. |
 | `HistoryTraversalRetentionStore::resolve_retained_object` | unwired protocol branch | Retained; governance-history traversal/retention owns retained-object resolution. |
-| `RealmInviteStore::consume_third_party_token` | unwired invite capability | Retained; realm-invite lifecycle owns atomic third-party token consumption. |
 
 The retained entries are intentionally not folded into PostgreSQL-only APIs:
 they are part of the persistence contract a future SQLite adapter must either

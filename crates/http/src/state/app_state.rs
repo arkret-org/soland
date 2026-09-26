@@ -26,7 +26,7 @@ use soland_services::delivery::{DeliveryService, ObjectStoragePort};
 use soland_services::events::{
     EventQueryService, EventService, InviteLocatorService, MlsGroupQueryService,
     MlsKeyPackageService, RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryService,
-    RealmInviteService, RealmQueryService,
+    RealmQueryService,
 };
 use soland_services::federation::FederationService;
 use soland_services::governance::{GovernanceService, RuntimeSettingsPort};
@@ -107,7 +107,6 @@ pub struct AppState {
     mls_groups: MlsGroupQueryService,
     mls_key_packages: MlsKeyPackageService,
     realms: RealmQueryService,
-    realm_invites: RealmInviteService,
     invite_locators: InviteLocatorService,
     deliveries: DeliveryService,
     identities: IdentityService,
@@ -1083,7 +1082,6 @@ impl AppState {
             mls_groups,
             mls_key_packages,
             realm_queries: realms,
-            realm_invites,
             invite_locators,
         } = persistence.event_services();
         let deliveries = persistence.delivery_service(object_storage, push_target_hmac_key);
@@ -1144,7 +1142,6 @@ impl AppState {
             mls_groups,
             mls_key_packages,
             realms,
-            realm_invites,
             invite_locators,
             deliveries,
             identities,
@@ -1239,10 +1236,6 @@ impl AppState {
 
     pub(crate) fn realms(&self) -> &RealmQueryService {
         &self.realms
-    }
-
-    pub(crate) fn realm_invites(&self) -> &RealmInviteService {
-        &self.realm_invites
     }
 
     pub(crate) fn invite_locators(&self) -> &InviteLocatorService {

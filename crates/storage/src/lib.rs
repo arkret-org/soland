@@ -609,7 +609,6 @@ pub trait DeliveryPolicyStoreRegistry: Send + Sync {
     fn security_transactions(&self) -> &dyn SecurityTransactionStore;
     fn webvh(&self) -> &dyn WebvhStore;
     fn service_identity(&self) -> &dyn ServiceIdentityStore;
-    fn realm_invites(&self) -> &dyn RealmInviteStore;
 }
 
 /// Canonical event and derived projection persistence registry.

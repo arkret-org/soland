@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{BlobRef, Hash};
-use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::blob::BlobVisibility;
 use arkret_models_crypto::RecoveryIdentityModel;
 use arkret_wire::{
@@ -349,21 +348,6 @@ pub struct AccountDataChangeRecord {
 pub enum AccountDataCasResult {
     Applied(AccountDataRecord),
     Conflict(Option<AccountDataRecord>),
-}
-
-#[derive(Clone, Debug)]
-pub struct RealmInviteRecord {
-    pub invite_id: String,
-    pub realm_id: String,
-    pub inviter_id: String,
-    pub invitee_id: Option<String>,
-    pub introduction_evidence_digest: Option<String>,
-    pub third_party_invite: Option<ThirdPartyInvite>,
-    pub status: String,
-    pub claim_nonces: BTreeMap<String, String>,
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

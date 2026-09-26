@@ -14,7 +14,6 @@ struct PersistenceProjectionWriter {
 struct PersistenceMlsGroupReader(Arc<dyn PersistenceStore>);
 struct PersistenceMlsKeyPackageMaintenance(Arc<dyn PersistenceStore>);
 struct PersistenceRealmMetadata(Arc<dyn PersistenceStore>);
-struct PersistenceRealmInvites(Arc<dyn PersistenceStore>);
 struct PersistenceInviteLocators(Arc<dyn PersistenceStore>);
 
 fn application_projected_event(
@@ -861,24 +860,6 @@ impl crate::events::RealmMetadataPort for PersistenceRealmMetadata {
 }
 
 #[async_trait::async_trait]
-impl crate::events::RealmInvitePort for PersistenceRealmInvites {
-    async fn get(
-        &self,
-        invite_id: &str,
-    ) -> crate::ServiceResult<Option<crate::events::RealmInviteState>> {
-        Ok(self.0.realm_invites().get(invite_id).await?)
-    }
-
-    async fn put(&self, record: crate::events::RealmInviteState) -> crate::ServiceResult<()> {
-        Ok(self.0.realm_invites().put(record).await?)
-    }
-
-    async fn snapshot_all(&self) -> crate::ServiceResult<Vec<crate::events::RealmInviteState>> {
-        Ok(self.0.realm_invites().snapshot_all().await?)
-    }
-}
-
-#[async_trait::async_trait]
 impl crate::events::InviteLocatorPort for PersistenceInviteLocators {
     async fn insert(
         &self,
@@ -1007,7 +988,6 @@ pub struct PersistenceEventServices {
     pub mls_groups: MlsGroupQueryService,
     pub mls_key_packages: MlsKeyPackageService,
     pub realm_queries: RealmQueryService,
-    pub realm_invites: RealmInviteService,
     pub invite_locators: InviteLocatorService,
 }
 
@@ -1033,9 +1013,6 @@ pub fn build_persistence_event_services(
             persistence.clone(),
         ))),
         realm_queries: RealmQueryService::new(Arc::new(PersistenceRealmMetadata(
-            persistence.clone(),
-        ))),
-        realm_invites: RealmInviteService::new(Arc::new(PersistenceRealmInvites(
             persistence.clone(),
         ))),
         invite_locators: InviteLocatorService::new(Arc::new(PersistenceInviteLocators(

@@ -215,7 +215,6 @@ DROP TABLE IF EXISTS projection_spaces CASCADE;
 DROP TABLE IF EXISTS push_devices CASCADE;
 DROP TABLE IF EXISTS push_registration_handoff_intents CASCADE;
 DROP TABLE IF EXISTS push_hard_logout_journal CASCADE;
-DROP TABLE IF EXISTS realm_invites CASCADE;
 DROP TABLE IF EXISTS recovery_policies CASCADE;
 DROP TABLE IF EXISTS security_transaction_step_attempts CASCADE;
 DROP TABLE IF EXISTS security_transaction_step_outcomes CASCADE;

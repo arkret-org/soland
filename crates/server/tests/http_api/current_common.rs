@@ -27,7 +27,7 @@ pub(crate) use soland_http::state::{AppState, RealmDirectoryEntry};
 pub(crate) use soland_http::{
     service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
-pub(crate) use soland_storage::{RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord};
+pub(crate) use soland_storage::{RealmMetaRecord, WebvhDocumentRecord};
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
 

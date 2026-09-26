@@ -1276,7 +1276,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
 }
 // ── Pg-backed wire-facing sub-stores ─────────────────────────────────────
 //
-// ModerationStore / PresenceStore / WebvhStore / RealmInviteStore. Each
+// ModerationStore / PresenceStore / WebvhStore. Each
 // follows the same pattern: a typed-column header (extracted from the JSON
 // payload where applicable) plus the full canonical envelope in a JSONB
 // column. The trait surface itself is the architectural contract; the

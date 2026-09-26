@@ -1338,18 +1338,10 @@ impl RealmQueryService {
     }
 }
 
-#[async_trait::async_trait]
-pub trait RealmInvitePort: Send + Sync {
-    async fn get(&self, invite_id: &str) -> ServiceResult<Option<RealmInviteState>>;
-    async fn put(&self, record: RealmInviteState) -> ServiceResult<()>;
-    async fn snapshot_all(&self) -> ServiceResult<Vec<RealmInviteState>>;
-}
-
 pub use soland_storage::{
     InviteLocatorInsertOutcome as InviteLocatorInsertResult,
     InviteLocatorRecord as InviteLocatorState,
     InviteLocatorRotateMutation as InviteLocatorRotateCommand,
-    RealmInviteRecord as RealmInviteState,
 };
 
 #[async_trait::async_trait]
@@ -1378,31 +1370,6 @@ pub trait InviteLocatorPort: Send + Sync {
         locator_id: &str,
         now: DateTime<Utc>,
     ) -> ServiceResult<Option<InviteLocatorState>>;
-}
-
-/// The Station's own Realm Invite projection (third-party invites and their
-/// claims, holder-private deliveries).
-#[derive(Clone)]
-pub struct RealmInviteService {
-    invites: Arc<dyn RealmInvitePort>,
-}
-
-impl RealmInviteService {
-    pub fn new(invites: Arc<dyn RealmInvitePort>) -> Self {
-        Self { invites }
-    }
-
-    pub async fn get(&self, invite_id: &str) -> ServiceResult<Option<RealmInviteState>> {
-        self.invites.get(invite_id).await
-    }
-
-    pub async fn put(&self, record: RealmInviteState) -> ServiceResult<()> {
-        self.invites.put(record).await
-    }
-
-    pub async fn snapshot_all(&self) -> ServiceResult<Vec<RealmInviteState>> {
-        self.invites.snapshot_all().await
-    }
 }
 
 /// Principal invite locators (`invite_locators`), independent of any Realm

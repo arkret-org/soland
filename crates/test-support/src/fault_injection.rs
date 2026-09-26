@@ -482,9 +482,6 @@ impl soland_storage::DeliveryPolicyStoreRegistry for FaultInjectingStore {
     fn service_identity(&self) -> &dyn soland_storage::ServiceIdentityStore {
         self.inner.service_identity()
     }
-    fn realm_invites(&self) -> &dyn soland_storage::RealmInviteStore {
-        self.inner.realm_invites()
-    }
 }
 
 impl soland_storage::EventProjectionStoreRegistry for FaultInjectingStore {
