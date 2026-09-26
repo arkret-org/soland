@@ -2444,7 +2444,7 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
         &request_receipts[1].core.request_event_ref,
     )?;
 
-    let (contact_round_id, _basis, receipt_digests) = derive_glare_basis(&request_receipts)?;
+    let (contact_round_id, contact_round, receipt_digests) = derive_glare_basis(&request_receipts)?;
     let observed_at = record.updated_at;
     let checkpoint = glare_unconsumed_slot_checkpoint(
         holder,
@@ -2472,10 +2472,45 @@ pub(crate) async fn enqueue_glare_finalize_if_ready(
             AppError::internal(format!("glare attestation transcript failed: {error}"))
         })?,
     )?;
-    // The retained Contact record has no account authority pair.
-    // A service route or same-core address cannot select a human PCR, so glare
-    // finalization remains local until the wire contract carries that instance.
-    Ok(false)
+    // The signed reverse request supplies the full recipient AccountId. A
+    // service route supplies transport coordinates only; the carrier keeps
+    // that exact principal and the receiver revalidates it independently.
+    let recipient = request_receipts[1].core.holder.clone();
+    let route = crate::routing::federation::resolved_peer_route(
+        state,
+        peer_id,
+        PeerContactAddress::RECIPIENT_SERVICE_KIND,
+        false,
+    )
+    .await
+    .map_err(|error| {
+        crate::app_error!(
+            FailedPrecondition,
+            format!("glare recipient route: {error}"),
+        )
+    })?;
+    let contact_address = PeerContactAddress::for_recipient(
+        recipient,
+        arkret_models_identity::ServiceResolutionCarrier::ResolutionUrl {
+            resolution_url: format!(
+                "{}{}",
+                route.base_url(),
+                arkret_models_identity::canonical_service_resolution_path(route.service_id())
+                    .trim_start_matches('/'),
+            ),
+        },
+    );
+    let delivery = PeerContactSubmitRequestBody::GlareFinalize {
+        idempotency_key: IdempotencyKey::new(format!("peer-contact-glare:{contact_round_id}"))
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        contact_round_id,
+        contact_round,
+        request_receipts,
+        remote_mirror_receipt,
+        glare_concurrency_attestation: attestation,
+        contact_address,
+    };
+    enqueue_peer_contact_carrier(state, peer_id, &delivery).await
 }
 
 fn derive_glare_basis(
