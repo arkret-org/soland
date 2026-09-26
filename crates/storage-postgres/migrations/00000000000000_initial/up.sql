@@ -877,6 +877,20 @@ CREATE TRIGGER canonical_events_immutable
 BEFORE UPDATE ON public.canonical_events
 FOR EACH ROW EXECUTE FUNCTION public.enforce_canonical_event_immutability();
 
+-- A forward attempt is local transport state, not an Event admission result.
+-- A current-cut refusal can be overwritten by an exact retry or by the
+-- eventual committed replica without changing canonical_events.state.
+CREATE TABLE public.authority_forward_attempts (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    status text NOT NULL CHECK (status IN ('forwarding', 'rejected', 'temporarily_unavailable')),
+    reason_code text,
+    attempted_at timestamptz NOT NULL,
+    CONSTRAINT authority_forward_attempt_reason_check CHECK (
+        (status = 'rejected' AND reason_code IS NOT NULL)
+        OR (status <> 'rejected' AND reason_code IS NULL)
+    )
+);
+
 -- Single current write authority per Realm. This row is the write-serialization
 -- fence: every append locks it before inspecting a stream tail, so a Station
 -- that lost a completed handoff can never commit behind the new one.

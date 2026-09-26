@@ -27,7 +27,7 @@ use arkret_wire::{
 use chrono::{DateTime, Utc};
 use soland_services::authority_commit::AuthenticatedPeerContext;
 use soland_services::{ServiceError, ServiceResult};
-use soland_storage::{ConflictCode, ForwardedProducerDeviceEvidence};
+use soland_storage::{ConflictCode, ForwardAttemptStatus, ForwardedProducerDeviceEvidence};
 
 use super::AppState;
 
@@ -359,29 +359,57 @@ async fn send_forward(
     governance: &DidCoreId,
     request: PeerAuthoritySubmitRequest,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
-    let body = arkret_canonical::canonical_json_bytes(&request)
-        .map_err(|error| ServiceError::internal(error.to_string()))?;
-    let response = crate::routing::federation::outbox::submit_authority_forward(
-        state,
-        governance.as_str(),
-        &body,
-    )
-    .await
-    .map_err(temporarily_unavailable)?;
-    let outcome = relay_governance_response(&request, response)?;
-    if let AuthoritySubmitOutcome::Accepted { commit, .. } = &outcome {
-        let event = match &request {
-            PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
-                &request.event_submission.event
-            }
-            PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
-                &request.mls_submission.commit_event
-            }
-            _ => unreachable!("only authority forwards reach send_forward"),
-        };
-        verify_forwarded_commit(state, governance, event, commit).await?;
+    let event = match &request {
+        PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
+            &request.event_submission.event
+        }
+        PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
+            &request.mls_submission.commit_event
+        }
+        _ => unreachable!("only authority forwards reach send_forward"),
+    };
+    let result = async {
+        let body = arkret_canonical::canonical_json_bytes(&request)
+            .map_err(|error| ServiceError::internal(error.to_string()))?;
+        let response = crate::routing::federation::outbox::submit_authority_forward(
+            state,
+            governance.as_str(),
+            &body,
+        )
+        .await
+        .map_err(temporarily_unavailable)?;
+        let outcome = relay_governance_response(&request, response)?;
+        if let AuthoritySubmitOutcome::Accepted { commit, .. } = &outcome {
+            verify_forwarded_commit(state, governance, event, commit).await?;
+        }
+        Ok::<_, ServiceError>(outcome)
     }
-    Ok(outcome)
+    .await;
+    let (status, reason_code) = match &result {
+        Ok(AuthoritySubmitOutcome::Accepted { .. }) => (ForwardAttemptStatus::Forwarding, None),
+        Ok(AuthoritySubmitOutcome::Rejected { reason_code, .. }) => {
+            (ForwardAttemptStatus::Rejected, Some(reason_code.as_str()))
+        }
+        Err(error) if error.conflict_code() == Some(ConflictCode::TemporarilyUnavailable) => {
+            (ForwardAttemptStatus::TemporarilyUnavailable, None)
+        }
+        Err(error) => match error.conflict_code() {
+            Some(code) => (ForwardAttemptStatus::Rejected, Some(code.as_str())),
+            None if matches!(error, ServiceError::SchemaViolation(_)) => {
+                (ForwardAttemptStatus::Rejected, Some("schema_violation"))
+            }
+            None if matches!(error, ServiceError::UnsupportedEventKind(_)) => (
+                ForwardAttemptStatus::Rejected,
+                Some("unsupported_event_kind"),
+            ),
+            None => (ForwardAttemptStatus::TemporarilyUnavailable, None),
+        },
+    };
+    state
+        .authority_commits()
+        .record_forward_attempt(&event.event_id, status, reason_code, crate::wire::now())
+        .await?;
+    result
 }
 
 async fn verify_forwarded_commit(

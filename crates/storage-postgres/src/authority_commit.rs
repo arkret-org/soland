@@ -2,9 +2,9 @@ use diesel::sql_types::{Bool, SmallInt};
 use serde::de::DeserializeOwned;
 use soland_storage::{
     AcceptedDeviceAuthorizationOutcome, AuthorityCommitStore, AuthorityCommitTransaction,
-    AuthorityCommitWriteOutcome, CurrentRealmAuthority, OrdinaryRealmBootstrapCommitOutcome,
-    OrdinaryRealmBootstrapCommitUnit, PcrGenesisCommitOutcome, PcrGenesisCommitUnit,
-    QueuedEventRecord, QueuedEventStatus, SelfProducerCommitGuard,
+    AuthorityCommitWriteOutcome, CurrentRealmAuthority, ForwardAttemptRecord, ForwardAttemptStatus,
+    OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit, PcrGenesisCommitOutcome,
+    PcrGenesisCommitUnit, QueuedEventRecord, QueuedEventStatus, SelfProducerCommitGuard,
 };
 
 use super::{
@@ -51,6 +51,12 @@ struct EventRow {
     rejection_reason: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     commit_json: Option<Value>,
+    #[diesel(sql_type = Nullable<Text>)]
+    forward_status: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    forward_reason_code: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    forward_attempted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(QueryableByName)]
@@ -2531,6 +2537,40 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn record_forward_attempt(
+        &self,
+        event_id: &arkret_wire::EventId,
+        status: ForwardAttemptStatus,
+        reason_code: Option<&str>,
+        attempted_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        if (status == ForwardAttemptStatus::Rejected) != reason_code.is_some() {
+            return Err(invalid("forward attempt reason does not match status"));
+        }
+        let token = ids::parse_event_id(event_id.as_str())
+            .ok_or_else(|| invalid("Event id is not a canonical Event token"))?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let written = sql_query(
+            "INSERT INTO authority_forward_attempts (event_pk,status,reason_code,attempted_at) \
+             SELECT pk,$2,$3,$4 FROM canonical_events WHERE id=$1 \
+             ON CONFLICT (event_pk) DO UPDATE SET status=EXCLUDED.status, \
+             reason_code=EXCLUDED.reason_code, attempted_at=EXCLUDED.attempted_at",
+        )
+        .bind::<Binary, _>(token.to_vec())
+        .bind::<Text, _>(status.as_str())
+        .bind::<Nullable<Text>, _>(reason_code)
+        .bind::<Timestamptz, _>(attempted_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if written != 1 {
+            return Err(PersistenceError::Internal(
+                "forward attempt has no queued Event".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn queued_event(
         &self,
         event_id: &arkret_wire::EventId,
@@ -2539,8 +2579,11 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .ok_or_else(|| invalid("Event id is not a canonical Event token"))?;
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
-            "SELECT e.envelope, e.state, e.received_at, e.rejection_reason, c.commit_json \
+            "SELECT e.envelope, e.state, e.received_at, e.rejection_reason, c.commit_json, \
+                    f.status AS forward_status, f.reason_code AS forward_reason_code, \
+                    f.attempted_at AS forward_attempted_at \
              FROM canonical_events e LEFT JOIN realm_commits c ON c.event_pk = e.pk \
+             LEFT JOIN authority_forward_attempts f ON f.event_pk=e.pk \
              WHERE e.id = $1",
         )
         .bind::<Binary, _>(token.to_vec())
@@ -2568,6 +2611,30 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                     .map(|value| decode_json(value, "RealmCommit"))
                     .transpose()?,
                 rejection_reason: row.rejection_reason,
+                forward_attempt: match (row.forward_status, row.forward_attempted_at) {
+                    (None, None) => None,
+                    (Some(status), Some(attempted_at)) => Some(ForwardAttemptRecord {
+                        status: match status.as_str() {
+                            "forwarding" => ForwardAttemptStatus::Forwarding,
+                            "rejected" => ForwardAttemptStatus::Rejected,
+                            "temporarily_unavailable" => {
+                                ForwardAttemptStatus::TemporarilyUnavailable
+                            }
+                            other => {
+                                return Err(PersistenceError::Internal(format!(
+                                    "stored forward attempt has unknown status {other:?}"
+                                )));
+                            }
+                        },
+                        reason_code: row.forward_reason_code,
+                        attempted_at,
+                    }),
+                    _ => {
+                        return Err(PersistenceError::Internal(
+                            "stored forward attempt is incomplete".to_owned(),
+                        ));
+                    }
+                },
             })
         })
         .transpose()

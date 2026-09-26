@@ -92,6 +92,33 @@ pub enum QueuedEventStatus {
     Rejected,
 }
 
+/// Last local attempt to forward an already queued Event. This is not an
+/// authority decision: a rejection at one cut may be superseded by exact
+/// replay at a later cut, while the Event row remains queued until replica.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForwardAttemptStatus {
+    Forwarding,
+    Rejected,
+    TemporarilyUnavailable,
+}
+
+impl ForwardAttemptStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Forwarding => "forwarding",
+            Self::Rejected => "rejected",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForwardAttemptRecord {
+    pub status: ForwardAttemptStatus,
+    pub reason_code: Option<String>,
+    pub attempted_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueuedEventRecord {
     pub event: Event,
@@ -99,6 +126,7 @@ pub struct QueuedEventRecord {
     pub queued_at: DateTime<Utc>,
     pub committed: Option<RealmCommit>,
     pub rejection_reason: Option<String>,
+    pub forward_attempt: Option<ForwardAttemptRecord>,
 }
 
 /// Exact durable pair used to materialize a caller-scoped committed-event
@@ -1206,6 +1234,14 @@ pub trait AuthorityCommitStore: Send + Sync {
     >;
 
     async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> PersistenceResult<()>;
+
+    async fn record_forward_attempt(
+        &self,
+        event_id: &arkret_wire::EventId,
+        status: ForwardAttemptStatus,
+        reason_code: Option<&str>,
+        attempted_at: DateTime<Utc>,
+    ) -> PersistenceResult<()>;
 
     async fn queued_event(
         &self,

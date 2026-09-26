@@ -31,8 +31,9 @@ use ed25519_dalek::SigningKey;
 use serde::Serialize;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,
-    CurrentRealmAuthority, OrdinaryRealmBootstrapCommitOutcome, OrdinaryRealmBootstrapCommitUnit,
-    PcrGenesisCommitOutcome, PcrGenesisCommitUnit, QueuedEventRecord, SelfProducerCommitGuard,
+    CurrentRealmAuthority, ForwardAttemptStatus, OrdinaryRealmBootstrapCommitOutcome,
+    OrdinaryRealmBootstrapCommitUnit, PcrGenesisCommitOutcome, PcrGenesisCommitUnit,
+    QueuedEventRecord, SelfProducerCommitGuard,
 };
 
 use crate::persistence::PersistenceHandle;
@@ -463,6 +464,19 @@ impl AuthorityCommitApplication {
             crate::ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
         })?;
         self.store().queue_event(event, queued_at).await?;
+        Ok(())
+    }
+
+    pub async fn record_forward_attempt(
+        &self,
+        event_id: &arkret_wire::EventId,
+        status: ForwardAttemptStatus,
+        reason_code: Option<&str>,
+        attempted_at: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        self.store()
+            .record_forward_attempt(event_id, status, reason_code, attempted_at)
+            .await?;
         Ok(())
     }
 

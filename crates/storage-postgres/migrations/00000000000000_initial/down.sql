@@ -118,6 +118,7 @@ DROP TABLE IF EXISTS signal_relay CASCADE;
 DROP TABLE IF EXISTS signal_relay_position CASCADE;
 DROP TABLE IF EXISTS signal_relay_watermark CASCADE;
 DROP TABLE IF EXISTS membership_compensation_evidence CASCADE;
+DROP TABLE IF EXISTS authority_forward_attempts CASCADE;
 DROP TABLE IF EXISTS canonical_events CASCADE;
 DROP TABLE IF EXISTS canonical_realms CASCADE;
 DROP TABLE IF EXISTS event_collision_variants CASCADE;
