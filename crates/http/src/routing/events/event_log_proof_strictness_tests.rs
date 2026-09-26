@@ -280,8 +280,12 @@ fn declared_required_feature_is_accepted() {
         .expect("declared ServiceDescribe features may be required by events");
 }
 
+/// The Realm's plaintext-visible services are read from this Station's
+/// accepted typed current alone: the local metadata mirror, which a member
+/// Station never populates, grants nothing, while a payload declaring this
+/// Station for `media_plaintext` still does.
 #[tokio::test]
-async fn policy_bundle_media_plaintext_reads_realm_meta() {
+async fn media_plaintext_service_is_not_read_from_the_realm_meta_mirror() {
     let state = make_state(true);
     let realm_id = "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC";
     let now = chrono::Utc::now();
@@ -316,9 +320,16 @@ async fn policy_bundle_media_plaintext_reads_realm_meta() {
         .await
         .unwrap();
 
-    let payload = json!({ "media_service_decrypts": true });
-
-    assert!(projected_media_plaintext_service_present(&state, realm_id, &payload).await);
+    let undeclared = json!({ "media_service_decrypts": true });
+    assert!(!projected_media_plaintext_service_present(&state, realm_id, &undeclared).await);
+    let declared = json!({
+        "media_service_decrypts": true,
+        "plaintext_visible_services": [{
+            "service_id": state.service_id(),
+            "data_classes": ["media_plaintext"],
+        }],
+    });
+    assert!(projected_media_plaintext_service_present(&state, realm_id, &declared).await);
 }
 
 #[tokio::test]
