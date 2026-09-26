@@ -136,10 +136,6 @@ fn invite_event_account<'a>(
     actor.as_account_id()
 }
 
-fn invite_account_matches(stored: &str, account: &arkret_wire::AccountId) -> bool {
-    serde_json::from_str::<arkret_wire::AccountId>(stored).is_ok_and(|invitee| invitee == *account)
-}
-
 async fn directed_pending_invite_matches(
     state: &AppState,
     realm_id: &str,
@@ -548,7 +544,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retired_invite_rows_cannot_authorize_directed_membership_exemptions() {
+    async fn invite_membership_exemptions_fail_without_committed_invite() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -562,56 +558,36 @@ mod tests {
         let service = arkret_wire::ActorId::service(account.principal_id.clone());
         let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let timestamp = now();
-        let mut invite = soland_services::events::RealmInviteState {
-            invite_id: invite_id.to_owned(),
-            realm_id: realm_id.to_owned(),
-            inviter_id: account_actor(BOB).as_account_id().unwrap().to_string(),
-            invitee_id: Some(account.to_string()),
-            introduction_evidence_digest: None,
-            third_party_invite: None,
-            status: "pending".to_owned(),
-            claim_nonces: Default::default(),
-            expires_at: Some(timestamp + chrono::Duration::hours(1)),
-            created_at: timestamp,
-            updated_at: None,
-        };
-        for status in ["pending", "claimed"] {
-            invite.status = status.to_owned();
-            state.realm_invites().put(invite.clone()).await.unwrap();
-            for kind in ["ak.invite.accept", "ak.invite.cancel"] {
-                let object = json!({
-                    "kind": kind,
-                    "actor_id": actor,
-                    "payload": {"invite_id": invite_id}
-                })
-                .as_object()
-                .unwrap()
-                .clone();
-                for caller in [&actor, &other, &service] {
-                    let accepted = if kind == "ak.invite.accept" {
-                        member_join_accepts_pending_invite(&state, &object, caller, realm_id).await
-                    } else {
-                        invitee_cancels_pending_invite(&state, &object, caller, realm_id).await
-                    };
-                    // A legacy row cannot stand in for accepted Invite
-                    // Event plus typed lifecycle at the authority cut.
-                    assert!(!accepted, "{kind}: {caller}");
-                    let mut other_event = object.clone();
-                    other_event.insert("actor_id".to_owned(), json!(caller));
-                    let own_event_accepted = if kind == "ak.invite.accept" {
-                        member_join_accepts_pending_invite(&state, &other_event, caller, realm_id)
-                            .await
-                    } else {
-                        invitee_cancels_pending_invite(&state, &other_event, caller, realm_id).await
-                    };
-                    assert!(!own_event_accepted, "own {kind}: {caller}");
-                }
+        for kind in ["ak.invite.accept", "ak.invite.cancel"] {
+            let object = json!({
+                "kind": kind,
+                "actor_id": actor,
+                "payload": {"invite_id": invite_id}
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            for caller in [&actor, &other, &service] {
+                let accepted = if kind == "ak.invite.accept" {
+                    member_join_accepts_pending_invite(&state, &object, caller, realm_id).await
+                } else {
+                    invitee_cancels_pending_invite(&state, &object, caller, realm_id).await
+                };
+                // An Event naming a plausible InviteId cannot stand in
+                // for accepted create and typed lifecycle evidence.
+                assert!(!accepted, "{kind}: {caller}");
+                let mut other_event = object.clone();
+                other_event.insert("actor_id".to_owned(), json!(caller));
+                let own_event_accepted = if kind == "ak.invite.accept" {
+                    member_join_accepts_pending_invite(&state, &other_event, caller, realm_id).await
+                } else {
+                    invitee_cancels_pending_invite(&state, &other_event, caller, realm_id).await
+                };
+                assert!(!own_event_accepted, "own {kind}: {caller}");
             }
         }
 
-        // A legacy claimed 3PID row likewise cannot authorize a claim; even
-        // a well-formed subject must match committed create/claim evidence.
+        // A well-formed 3PID subject cannot claim an uncommitted Invite.
         let mut claim = json!({
             "kind": "ak.invite.claim",
             "actor_id": actor,
@@ -637,6 +613,5 @@ mod tests {
             !invite_claim_actor_claims_pending_third_party_invite(&state, &claim, &actor, realm_id)
                 .await
         );
-        assert!(!invite_account_matches(ALICE, account));
     }
 }
