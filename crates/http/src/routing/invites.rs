@@ -41,7 +41,7 @@ use soland_http::util::sha256_hex;
 use soland_services::events::{
     AcceptedEvent, InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
-    InviteLocatorState as InviteLocatorRecord, RealmInviteState as RealmInviteRecord,
+    InviteLocatorState as InviteLocatorRecord,
 };
 use soland_services::federation::{EnqueueFederationDeliveryCommand, FederationDeliveryRecord};
 use soland_services::identity::{
@@ -321,18 +321,11 @@ async fn peer_invites_submit(
     )
 }
 
-/// How the notify branch of a private invite delivery materializes the
-/// holder-private invite row (spec invite-addressing.md §7 steps 4 / 8 / 9).
+/// Evidence available to the notify branch of a private invite delivery.
 enum InvitePrivateProjection<'a> {
-    /// Peer ingress. This service holds no shared-Realm copy of the delivered
-    /// `ak.invite.create`, so the envelope is verified here under the
-    /// service-to-service session and projected into the holder's private
-    /// invite row.
+    /// Peer ingress verifies the delivered Event under the service session.
     FromDeliveredEvent { session: &'a SessionRecord },
-    /// Local self dispatch. This service already accepted the Event — which is
-    /// exactly what the two accepted-event preconditions proved — so its
-    /// registered reducer contract already owns the holder-visible invite row
-    /// and the notify branch owes no second write of it.
+    /// Local self dispatch already accepted the Event.
     AlreadyAcceptedLocally { record: &'a AcceptedEvent },
 }
 
@@ -446,30 +439,20 @@ async fn receive_private_invite_delivery(
         });
     }
 
-    let (event_id, event_canonical_digest, duplicate, realm_id) = match projection {
+    let (event_id, event_canonical_digest, realm_id) = match projection {
         InvitePrivateProjection::FromDeliveredEvent { .. } => {
-            // §7 step 8. The envelope was already verified in step 4 above; the
-            // holder-private row is written only once the receive decision is
-            // notify, so a step-4 or policy rejection writes nothing.
+            // The envelope was already verified in step 4. The holder's
+            // account-data cell is the sole private delivery projection.
             let validated = step_four.expect("peer ingress resolves its envelope in step 4");
-            let duplicate = persist_private_invite_projection(
-                state,
-                &delivery.invite_address.account_id,
-                body,
-                &validated,
-            )
-            .await?;
             (
                 validated.event_id.to_string(),
                 validated.canonical_digest,
-                duplicate,
                 validated.realm_id.to_string(),
             )
         }
         InvitePrivateProjection::AlreadyAcceptedLocally { record } => (
             record.event_id.clone(),
             record.canonical_digest.clone(),
-            false,
             record.realm_id.clone().ok_or_else(|| {
                 AppError::internal("accepted ak.invite.create carries no realm_id")
             })?,
@@ -495,7 +478,35 @@ async fn receive_private_invite_delivery(
     )
     .await?;
 
-    let status = if duplicate { "duplicate" } else { "accepted" };
+    let Some(credential_delivered) = credential_delivered else {
+        // The account does not exist at this Station. Keep the same opaque
+        // response class as a policy deferral and write no private state.
+        super::append_audit_log(
+            state,
+            None,
+            audit_operation,
+            json!({
+                "idempotency_key": delivery.idempotency_key,
+                "invitee_id": delivery.invite_address.account_id.principal_id,
+                "recipient_id": delivery.invite_address.account_id.station_id,
+                "receive_action": "deferred",
+            }),
+            "deferred",
+        )
+        .await;
+        return Ok(InviteDeliveryOutcome {
+            status: InviteDeliveryOutcomeStatus::Deferred,
+            disclosed_outcome: None,
+            received_at: Some(now()),
+            retry_after_ms: None,
+        });
+    };
+
+    let status = if credential_delivered {
+        "accepted"
+    } else {
+        "duplicate"
+    };
     super::append_audit_log(
         state,
         None,
@@ -517,7 +528,7 @@ async fn receive_private_invite_delivery(
     )
     .await;
     Ok(InviteDeliveryOutcome {
-        status: if duplicate {
+        status: if !credential_delivered {
             InviteDeliveryOutcomeStatus::Duplicate
         } else {
             InviteDeliveryOutcomeStatus::Accepted
@@ -803,102 +814,6 @@ async fn enqueue_remote_invite_delivery(
     })
 }
 
-async fn persist_private_invite_projection(
-    state: &AppState,
-    account_id: &arkret_wire::AccountId,
-    body: &Value,
-    validated: &super::events::event_log::PrivateInviteEnvelope,
-) -> Result<bool, AppError> {
-    if account_id.station_id != state.service_core_id() {
-        return Err(AppError::capability_denied(
-            "private invite holder belongs to another Station",
-        ));
-    }
-    let event = body
-        .get("invite_event")
-        .and_then(Value::as_object)
-        .ok_or_else(|| super::events::peer::schema_violation("invite_event must be an object"))?;
-    let payload = event
-        .get("payload")
-        .and_then(Value::as_object)
-        .ok_or_else(|| super::events::peer::schema_violation("invite_event.payload is required"))?;
-    let invite_id = arkret_wire::InviteId::from_event_id(&validated.event_id).to_string();
-    let created_at = event
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .ok_or_else(|| {
-            super::events::peer::schema_violation(
-                "invite_event.created_at must be an RFC 3339 timestamp",
-            )
-        })?;
-    let expires_at = payload
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .map(|value| {
-            chrono::DateTime::parse_from_rfc3339(value)
-                .map(|parsed| parsed.with_timezone(&chrono::Utc))
-                .map_err(|_| {
-                    super::events::peer::schema_violation(
-                        "invite_event.payload.expires_at must be an RFC 3339 timestamp",
-                    )
-                })
-        })
-        .transpose()?
-        .or_else(|| Some(created_at + Duration::days(7)));
-    let introduction_evidence_digest = payload
-        .get("introduction_evidence_digest")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let record = RealmInviteRecord {
-        invite_id: invite_id.clone(),
-        realm_id: validated.realm_id.to_string(),
-        inviter_id: validated
-            .actor
-            .as_account_id()
-            .ok_or_else(|| {
-                super::events::peer::schema_violation("invite author must be an account")
-            })?
-            .to_string(),
-        invitee_id: Some(account_id.to_string()),
-        introduction_evidence_digest,
-        third_party_invite: None,
-        status: "pending".to_owned(),
-        claim_nonces: std::collections::BTreeMap::new(),
-        expires_at,
-        created_at,
-        updated_at: None,
-    };
-
-    let invites = state.realm_invites();
-    if let Some(existing) = invites
-        .get(&invite_id)
-        .await
-        .map_err(|error| AppError::internal(format!("private invite lookup: {error}")))?
-    {
-        let exact_replay = existing.realm_id == record.realm_id
-            && existing.inviter_id == record.inviter_id
-            && existing.invitee_id == record.invitee_id
-            && existing.introduction_evidence_digest == record.introduction_evidence_digest
-            && existing.expires_at == record.expires_at
-            && existing.created_at == record.created_at;
-        if exact_replay {
-            return Ok(true);
-        }
-        return Err(crate::app_error!(
-            DuplicateConflict,
-            "invite_id is already bound to a different private invite delivery",
-        )
-        .with_wire_code("duplicate_conflict"));
-    }
-    invites
-        .put(record)
-        .await
-        .map_err(|error| AppError::internal(format!("private invite projection: {error}")))?;
-    Ok(false)
-}
-
 /// Spec invite-addressing.md §7 — hand a notified invite's private delivery
 /// material to the invitee_id's devices.
 ///
@@ -910,10 +825,8 @@ async fn persist_private_invite_projection(
 /// bounded registered state model so late devices can read it back, and fanned out to
 /// every device as an `ak.account_data.update`.
 ///
-/// The token itself is derived with the same inputs the invite projection
-/// used, so this never has to read the invite row back: the local dispatch
-/// branch runs before the reducer projection is guaranteed visible, and a
-/// deterministic derivation cannot race it.
+/// The token is derived from the verified Event, so the private delivery
+/// never has to read a mutable Invite row.
 async fn deliver_invite_credential(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
@@ -921,7 +834,7 @@ async fn deliver_invite_credential(
     body: &Value,
     realm_id: &str,
     authority_locator_hints: &[RealmJoinCandidate],
-) -> Result<bool, AppError> {
+) -> Result<Option<bool>, AppError> {
     if account_id.station_id != state.service_core_id() {
         return Err(AppError::param_invalid(
             "invite subject belongs to another Station",
@@ -935,9 +848,8 @@ async fn deliver_invite_credential(
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
     if !subject_exists {
-        // No local account means no devices to reach; the invite row itself is
-        // already persisted, so this delivery stays `accepted`.
-        return Ok(false);
+        // No local account means no private holder state may be written.
+        return Ok(None);
     }
     let event = body
         .get("invite_event")
@@ -1019,7 +931,7 @@ async fn deliver_invite_credential(
                     && invite_delivery_entry_active(entry, received_at)
             })
         }) {
-            return Ok(false);
+            return Ok(Some(false));
         }
         let cell = merge_invite_delivery_cell(existing_cell, new_entry.clone(), received_at)?;
         let payload = serde_json::to_value(&cell).map_err(|error| {
@@ -1069,7 +981,7 @@ async fn deliver_invite_credential(
         },
     )
     .await;
-    Ok(true)
+    Ok(Some(true))
 }
 
 /// Merge one accepted delivery into the current `ak.account.invite_delivery`
@@ -2814,15 +2726,6 @@ mod invite_locator_security_tests {
                 .is_none(),
             "a step-4 rejection must not create the holder invite delivery cell"
         );
-        assert!(
-            state
-                .realm_invites()
-                .get(arkret_wire::InviteId::from_event_id(&delivery.invite_event.event_id).as_str())
-                .await
-                .expect("private invite row read")
-                .is_none(),
-            "a step-4 rejection must not project a holder-private invite row"
-        );
     }
 
     #[test]
@@ -3134,7 +3037,7 @@ mod invite_locator_security_tests {
             state.service_core_id().clone(),
         );
 
-        assert!(
+        assert_eq!(
             deliver_invite_credential(
                 &state,
                 &delivery.invite_address.account_id,
@@ -3144,7 +3047,8 @@ mod invite_locator_security_tests {
                 &delivery.authority_locator_hints,
             )
             .await
-            .expect("invite credential delivery")
+            .expect("invite credential delivery"),
+            Some(true)
         );
         let cell = state
             .account_data()
@@ -3156,6 +3060,33 @@ mod invite_locator_security_tests {
             .await
             .expect("invite delivery cell")
             .expect("invite delivery write");
+        assert_eq!(
+            deliver_invite_credential(
+                &state,
+                &delivery.invite_address.account_id,
+                &inviter_account_id,
+                &body,
+                PRODUCTION_REALM,
+                &delivery.authority_locator_hints,
+            )
+            .await
+            .expect("exact replay"),
+            Some(false),
+        );
+        assert_eq!(
+            state
+                .account_data()
+                .entry(
+                    &arkret_wire::ActorId::account(delivery.invite_address.account_id.clone())
+                        .to_string(),
+                    AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+                )
+                .await
+                .expect("invite delivery cell after replay")
+                .expect("invite delivery write after replay")
+                .revision,
+            cell.revision,
+        );
         assert_service_account_data_fanout(
             &state,
             &holder,
@@ -3656,8 +3587,8 @@ mod invite_locator_security_tests {
             DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             state.service_core_id().clone(),
         );
-        assert!(
-            !deliver_invite_credential(
+        assert_eq!(
+            deliver_invite_credential(
                 &state,
                 &account_id,
                 &inviter_account_id,
@@ -3666,7 +3597,8 @@ mod invite_locator_security_tests {
                 &[fixture_locator_hint()],
             )
             .await
-            .expect("unknown subject skips the credential write")
+            .expect("unknown subject skips the credential write"),
+            None
         );
         assert!(
             state
@@ -3679,89 +3611,6 @@ mod invite_locator_security_tests {
                 .expect("account data lookup")
                 .is_none(),
             "no credential cell may be written for an unknown subject"
-        );
-    }
-
-    #[tokio::test]
-    async fn private_invite_projection_is_idempotent_and_never_writes_shared_event_state() {
-        let state = AppState::new(
-            crate::config::AppConfig {
-                seed_demo_data: false,
-                ..crate::config::AppConfig::test_default()
-            },
-            soland_storage_postgres::Db { pool: None },
-        );
-        let realm_id = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
-        let subject = "ak:did_core:web:bob.example";
-        let account_id =
-            arkret_wire::AccountId::new(DidCoreId::new(subject).unwrap(), state.service_core_id());
-        let body = json!({
-            "invite_event": {
-                "created_at": "2026-07-29T10:00:00.000Z",
-                "payload": {
-                    "introduction_evidence_digest":
-                        format!("sha256:{}", "a".repeat(64)),
-                    "expires_at": "2026-08-05T10:00:00.000Z"
-                }
-            }
-        });
-        let validated = crate::routing::events::event_log::PrivateInviteEnvelope {
-            event_id: arkret_identifiers::EventId::new(
-                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2".to_owned(),
-            )
-            .unwrap(),
-            actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                state.service_core_id(),
-            )),
-            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            canonical_digest: format!("sha256:{}", "b".repeat(64)),
-        };
-        let invite_id = arkret_wire::InviteId::from_event_id(&validated.event_id).to_string();
-
-        assert!(
-            !persist_private_invite_projection(&state, &account_id, &body, &validated)
-                .await
-                .expect("first private projection")
-        );
-        assert!(
-            persist_private_invite_projection(&state, &account_id, &body, &validated)
-                .await
-                .expect("exact replay")
-        );
-        let invite = state
-            .realm_invites()
-            .get(&invite_id)
-            .await
-            .unwrap()
-            .expect("private invite lookup");
-        assert_eq!(
-            invite.invitee_id.as_deref(),
-            Some(account_id.to_string().as_str())
-        );
-        let foreign_account = arkret_wire::AccountId::new(
-            account_id.principal_id.clone(),
-            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        );
-        assert!(
-            persist_private_invite_projection(&state, &foreign_account, &body, &validated)
-                .await
-                .is_err()
-        );
-        assert!(
-            state
-                .event_queries()
-                .realm_events_newest_first(realm_id)
-                .await
-                .expect("shared Event query")
-                .is_empty()
-        );
-        assert!(
-            state
-                .projections()
-                .snapshot()
-                .members_in_state(realm_id, "invite")
-                .is_empty()
         );
     }
 }
