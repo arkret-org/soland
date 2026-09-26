@@ -27,14 +27,59 @@ use arkret_wire::{
 };
 
 use super::{
-    Array, AsyncPgConnection, PersistenceError, PersistenceResult, QueryableByName, RunQueryDsl,
-    Text, sql_query,
+    Array, AsyncPgConnection, Bool, PersistenceError, PersistenceResult, QueryableByName,
+    RunQueryDsl, Text, sql_query,
 };
 
 #[derive(QueryableByName)]
 struct WithheldRow {
     #[diesel(sql_type = Text)]
     commit_id: String,
+}
+
+#[derive(QueryableByName)]
+struct AllowedRow {
+    #[diesel(sql_type = Bool)]
+    allowed: bool,
+}
+
+/// Circle creation occupies a Realm Commit slot, but its complete signed
+/// object is private to current members of that Circle. Both memberships and
+/// their accepted Commit coordinates are read in the caller's MVCC cut.
+async fn circle_create_full_for_member(
+    conn: &mut AsyncPgConnection,
+    row: &CommittedEventFullView,
+    caller: &arkret_wire::ActorId,
+) -> PersistenceResult<bool> {
+    let circle_id = arkret_wire::CircleId::from_event_id(&row.event.event_id);
+    let visible = sql_query(
+        "SELECT EXISTS(SELECT 1 FROM circle_current_results circle \
+         JOIN circle_member_state_current_results circle_member \
+           ON circle_member.circle_id=circle.circle_id AND circle_member.realm_id=circle.realm_id \
+         JOIN realm_commits circle_commit ON circle_commit.commit_id=circle_member.current_commit_id \
+           AND circle_commit.stream_position=circle_member.current_stream_position \
+           AND circle_commit.stream_ref=circle_member.source_stream_ref \
+         JOIN member_state_current_results realm_member ON realm_member.realm_id=circle.realm_id \
+           AND realm_member.member_id=circle_member.member_id \
+         JOIN realm_commits realm_commit ON realm_commit.commit_id=realm_member.current_commit_id \
+           AND realm_commit.stream_position=realm_member.current_stream_position \
+           AND realm_commit.stream_ref->>'kind'='realm' \
+           AND realm_commit.stream_ref->>'realm_id'=realm_member.realm_id \
+         WHERE circle.realm_id=$1 AND circle.circle_id=$2 AND circle.create_event_id=$3 \
+           AND circle_member.member_id=$4 AND circle_member.membership='join' \
+           AND circle_commit.stream_ref->>'kind'='circle' \
+           AND circle_commit.stream_ref->>'circle_id'=circle.circle_id \
+           AND circle_commit.stream_ref->>'realm_id'=circle.realm_id \
+           AND realm_member.membership='join') AS allowed",
+    )
+    .bind::<Text, _>(row.event.realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(row.event.event_id.as_str())
+    .bind::<Text, _>(caller.to_string())
+    .get_result::<AllowedRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(visible.allowed)
 }
 
 /// Commits among `$1` whose Event this Station withholds.
@@ -101,23 +146,28 @@ pub(crate) async fn disclose_to_member_in_connection(
     rows: Vec<CommittedEventFullView>,
     caller: &arkret_wire::ActorId,
 ) -> PersistenceResult<Vec<CommittedEventView>> {
-    Ok(disclose_in_connection(conn, rows)
-        .await?
-        .into_iter()
-        .map(|item| match item {
+    let mut disclosed = Vec::with_capacity(rows.len());
+    for item in disclose_in_connection(conn, rows).await? {
+        let CommittedEventView::Full(row) = item else {
+            disclosed.push(item);
+            continue;
+        };
+        let full = if row.event.kind == arkret_wire::EventKind::CircleCreate {
+            circle_create_full_for_member(conn, &row, caller).await?
+        } else {
+            &row.event.actor_id == caller
+                || crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS.contains(&row.event.kind)
+        };
+        disclosed.push(if full {
             CommittedEventView::Full(row)
-                if &row.event.actor_id != caller
-                    && !crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS
-                        .contains(&row.event.kind) =>
-            {
-                CommittedEventView::Withheld(CommittedEventWithheldView {
-                    commit: row.commit,
-                    event_disclosure: EventDisclosure {
-                        status: EventDisclosureStatus::Withheld,
-                    },
-                })
-            }
-            other => other,
-        })
-        .collect())
+        } else {
+            CommittedEventView::Withheld(CommittedEventWithheldView {
+                commit: row.commit,
+                event_disclosure: EventDisclosure {
+                    status: EventDisclosureStatus::Withheld,
+                },
+            })
+        });
+    }
+    Ok(disclosed)
 }

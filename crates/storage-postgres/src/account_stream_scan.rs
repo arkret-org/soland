@@ -768,6 +768,7 @@ pub(crate) async fn committed_event_for_member(
         };
         if let Some(event) = &event
             && &event.actor_id == caller
+            && event.kind != arkret_wire::EventKind::CircleCreate
         {
             let full = arkret_wire::CommittedEventFullView {
                 commit,

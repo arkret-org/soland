@@ -1542,6 +1542,18 @@ async fn circle_create_withholds_private_object_from_remote_realm_member() {
     let committed = uow.commit_event(create.clone()).await.unwrap();
     assert_eq!(committed.outbox_inserted, 0);
     assert!(fanout_rows(&pool, &create).await.is_empty());
+    assert_eq!(
+        read_shape(
+            member_read(
+                &store,
+                &create.authority_commit.event.event_id,
+                &joined_actor,
+                &arkret_wire::DidCoreId::new(STATION).unwrap(),
+            )
+            .await
+        ),
+        Some(false),
+    );
 
     let scan = scan_request(&realm_id, After(None), 10);
     for result in [

@@ -5039,6 +5039,22 @@ async fn circle_create_and_self_join_write_same_cut_current() {
             .unwrap()
             .is_none()
     );
+    let creator_actor = arkret_wire::ActorId::account(creator.clone());
+    let station = unit.transactions[0].expected_authority.service_id.clone();
+    let before_join = store
+        .committed_event_for_member(
+            &create.authority_commit.event.event_id,
+            &creator_actor,
+            &station,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        before_join,
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
+            _
+        ))
+    ));
     let join = circle_self_member_request(
         &create,
         &creator,
@@ -5061,6 +5077,40 @@ async fn circle_create_and_self_join_write_same_cut_current() {
     .unwrap();
     assert_eq!(joined.count, 1);
     drop(conn);
+    let after_join = store
+        .committed_event_for_member(
+            &create.authority_commit.event.event_id,
+            &creator_actor,
+            &station,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        after_join,
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(_))
+    ));
+    let scan_request = arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction: arkret_wire::StreamScanDirection::After(Some(
+            create.authority_commit.commit.stream_position - 1,
+        )),
+        limit: 1,
+    };
+    let soland_storage::AccountStreamScan::Page(page) = store
+        .scan_stream_for_account(&scan_request, &creator, &station)
+        .await
+        .unwrap()
+    else {
+        panic!("Circle member has a proved Realm stream page");
+    };
+    assert!(matches!(
+        page.committed_events.as_slice(),
+        [arkret_wire::CommittedEventView::Full(view)]
+            if view.event.event_id == create.authority_commit.event.event_id
+    ));
 
     let stale = circle_self_member_request(
         &join,
@@ -5093,6 +5143,29 @@ async fn circle_create_and_self_join_write_same_cut_current() {
     .await
     .unwrap();
     assert_eq!(unchanged.count, 1);
+    drop(conn);
+    let leave = circle_self_member_request(
+        &join,
+        &creator,
+        &circle_id,
+        "leave",
+        Some(serde_json::json!("join")),
+    );
+    uow.commit_event(leave).await.unwrap();
+    let after_leave = store
+        .committed_event_for_member(
+            &create.authority_commit.event.event_id,
+            &creator_actor,
+            &station,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        after_leave,
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
+            _
+        ))
+    ));
 }
 
 /// Real PostgreSQL: the same-cut evaluator refuses an actor without an
