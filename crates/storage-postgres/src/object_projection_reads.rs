@@ -9,8 +9,10 @@ use arkret_models_collaboration::objects::query_projection::{
 };
 use arkret_models_collaboration::objects::relation::Relation;
 use arkret_models_collaboration::objects::space::Space;
-use arkret_models_collaboration::objects::strand::Strand;
-use arkret_wire::{ActorId, CircleId, ObjectState, RealmId, ScopeRef, SpaceState, StrandId};
+use arkret_models_collaboration::objects::strand::{Strand, StrandPositionCurrent};
+use arkret_wire::{
+    ActorId, CircleId, ObjectState, RealmId, ScopeRef, SpaceId, SpaceState, StrandId,
+};
 use diesel::sql_types::{Jsonb, Text};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::Value;
@@ -28,6 +30,16 @@ struct ValueRow {
 struct CircleRow {
     #[diesel(sql_type = Text)]
     circle_id: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct PositionRow {
+    #[diesel(sql_type = Text)]
+    board_space_id: String,
+    #[diesel(sql_type = Text)]
+    strand_id: String,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
 }
 
 fn corrupt(detail: impl Into<String>) -> PersistenceError {
@@ -70,17 +82,6 @@ pub(crate) async fn lists_for_actor(
             .load::<CircleRow>(&mut *conn).await?;
         let circles = circle_rows.into_iter().map(|row| row.circle_id.parse::<CircleId>()
             .map_err(|error| corrupt(error.to_string()))).collect::<PersistenceResult<BTreeSet<_>>>()?;
-        // The registered position family must be installed before accepted
-        // placement Events can be represented by this read model. Never
-        // manufacture an unplaced answer for an accepted position write.
-        let position_events = diesel::sql_query(
-            "SELECT EXISTS(SELECT 1 FROM realm_commit_event_kinds WHERE realm_id=$1 \
-             AND kind IN ('ak.strand.move','ak.strand.reorder')) \
-             OR EXISTS(SELECT 1 FROM strand_position_current_results WHERE realm_id=$1) AS present",
-        ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
-        if position_events.present {
-            return Err(corrupt("position current read family is not installed").into());
-        }
         let incomplete_space = diesel::sql_query(
             "SELECT EXISTS(SELECT 1 FROM space_current_results s \
              LEFT JOIN space_parent_current_results p ON p.realm_id=s.realm_id AND p.space_id=s.space_id \
@@ -107,9 +108,12 @@ pub(crate) async fn lists_for_actor(
              WHERE s.realm_id=$1 ORDER BY s.space_id",
         ).bind::<Text,_>(realm_id.as_str()).load::<ValueRow>(&mut *conn).await?;
         let mut spaces = Vec::new();
+        let mut space_objects = BTreeMap::new();
         for row in space_rows {
             let space: Space = serde_json::from_value(row.value).map_err(PersistenceError::database)?;
             if space.realm_id != *realm_id { return Err(corrupt("Space Realm mismatch").into()); }
+            let space_id = space.id.clone().ok_or_else(|| corrupt("Space id absent"))?;
+            space_objects.insert(space_id, space.clone());
             if !visible(space.scope_circle_id.as_ref(), &circles) { continue; }
             let state = space.state.ok_or_else(|| corrupt("Space state absent"))?;
             if !include_terminal && state == SpaceState::Tombstoned { continue; }
@@ -147,6 +151,27 @@ pub(crate) async fn lists_for_actor(
                 actor_id: relation.to_ref.as_actor_id().ok_or_else(|| corrupt("assignment target is not an Actor"))?.clone(),
             });
         }
+        let unproved_position = diesel::sql_query(
+            "SELECT EXISTS(SELECT 1 FROM strand_position_current_results p \
+             LEFT JOIN realm_commits c ON c.commit_id=p.current_commit_id \
+               AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position \
+               AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',p.realm_id) \
+             WHERE p.realm_id=$1 AND c.commit_id IS NULL) AS present",
+        ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
+        if unproved_position.present {
+            return Err(corrupt("position current has no covering RealmCommit").into());
+        }
+        let position_rows = diesel::sql_query(
+            "SELECT board_space_id,strand_id,value FROM strand_position_current_results \
+             WHERE realm_id=$1 ORDER BY strand_id,board_space_id",
+        ).bind::<Text,_>(realm_id.as_str()).load::<PositionRow>(&mut *conn).await?;
+        let mut positions: BTreeMap<StrandId, Vec<(SpaceId, StrandPositionCurrent)>> = BTreeMap::new();
+        for row in position_rows {
+            let board = row.board_space_id.parse::<SpaceId>().map_err(|error| corrupt(error.to_string()))?;
+            let strand = row.strand_id.parse::<StrandId>().map_err(|error| corrupt(error.to_string()))?;
+            let value = serde_json::from_value::<Option<StrandPositionCurrent>>(row.value).map_err(PersistenceError::database)?;
+            if let Some(value) = value { positions.entry(strand).or_default().push((board, value)); }
+        }
         let strand_rows = diesel::sql_query(
             "SELECT value FROM strand_current_results WHERE realm_id=$1 ORDER BY strand_id",
         ).bind::<Text,_>(realm_id.as_str()).load::<ValueRow>(&mut *conn).await?;
@@ -158,6 +183,22 @@ pub(crate) async fn lists_for_actor(
             let state = strand.state.ok_or_else(|| corrupt("Strand state absent"))?;
             if !include_terminal && state == ObjectState::Redacted { continue; }
             let id = strand.id.ok_or_else(|| corrupt("Strand id absent"))?;
+            let mut placement = None;
+            for (board_id, position) in positions.remove(&id).unwrap_or_default() {
+                let board = space_objects.get(&board_id).ok_or_else(|| corrupt("position Board metadata absent"))?;
+                let list = space_objects.get(&position.list_space_id).ok_or_else(|| corrupt("position List metadata absent"))?;
+                if !visible(board.scope_circle_id.as_ref(), &circles) || !visible(list.scope_circle_id.as_ref(), &circles) { continue; }
+                if board.kind != "board" || list.kind != "list"
+                    || board.state == Some(SpaceState::Tombstoned) || list.state == Some(SpaceState::Tombstoned)
+                    || list.parent_space_id.as_ref() != Some(&board_id)
+                    || strand.scope_circle_id != board.scope_circle_id || strand.scope_circle_id != list.scope_circle_id {
+                    return Err(corrupt("position cannot form an available structural placement").into());
+                }
+                if placement.is_some() {
+                    return Err(corrupt("Strand has multiple visible Board placements; this row cannot select one").into());
+                }
+                placement = Some((board_id, position));
+            }
             let assigned = assignments.remove(&id).unwrap_or_default();
             let mut actors = assigned.iter().map(|row| row.actor_id.clone()).collect::<Vec<_>>();
             actors.sort_by_key(ToString::to_string); actors.dedup();
@@ -167,7 +208,9 @@ pub(crate) async fn lists_for_actor(
                 stage: strand.stage, stage_changed_at: strand.stage_changed_at,
                 title: strand.metadata.as_ref().and_then(|metadata| metadata.title.clone()),
                 summary: strand.metadata.as_ref().and_then(|metadata| metadata.summary.clone()),
-                board_space_id: None, list_space_id: None, rank: None,
+                board_space_id: placement.as_ref().map(|(board, _)| board.clone()),
+                list_space_id: placement.as_ref().map(|(_, position)| position.list_space_id.clone()),
+                rank: placement.map(|(_, position)| position.rank),
                 assigned_actor_ids: actors, assigned_to_relations: assigned,
                 created_by: Some(strand.created_by), created_at: Some(strand.created_at),
                 updated_by: strand.updated_by, updated_at: strand.updated_at,
