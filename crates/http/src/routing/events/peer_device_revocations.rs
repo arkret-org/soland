@@ -149,6 +149,26 @@ pub(super) struct CurrentDeviceCheckOutcome {
     accepted_commit_id: Option<RealmCommitId>,
 }
 
+fn private_current_device_action(
+    action: DeviceRevocationAdmissionAction,
+) -> Result<soland_storage::DeviceRevocationGateAction, AppError> {
+    use soland_storage::DeviceRevocationGateAction as Gate;
+    match action {
+        DeviceRevocationAdmissionAction::SessionGrantIssue
+        | DeviceRevocationAdmissionAction::ReturningSessionGrantIssue => {
+            Ok(Gate::SessionGrantIssue)
+        }
+        DeviceRevocationAdmissionAction::SessionGrantRefresh => Ok(Gate::SessionGrantRefresh),
+        DeviceRevocationAdmissionAction::DevicePairingCodeClaim => Ok(Gate::DevicePairingCodeClaim),
+        // The Account Authority checks the approver before admitting its exact
+        // device-authorize Event. This is eligibility, not Event acceptance.
+        DeviceRevocationAdmissionAction::EventWrite => Ok(Gate::EventWrite),
+        _ => Err(schema_violation(
+            "private current-device check only admits account-authority device actions",
+        )),
+    }
+}
+
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "soland.account_authority.current_device.check"))]
 pub(super) async fn check_private_current_device(
@@ -178,17 +198,7 @@ pub(super) async fn check_private_current_device(
         .parse_json::<CurrentDeviceCheckRequest>()
         .await
         .map_err(|_| AppError::json_invalid("invalid private current-device check request body"))?;
-    if !matches!(
-        request.action_class,
-        DeviceRevocationAdmissionAction::SessionGrantIssue
-            | DeviceRevocationAdmissionAction::ReturningSessionGrantIssue
-            | DeviceRevocationAdmissionAction::SessionGrantRefresh
-            | DeviceRevocationAdmissionAction::DevicePairingCodeClaim
-    ) {
-        return Err(schema_violation(
-            "peer device revocation check only admits session grant or device-pairing current-device actions",
-        ));
-    }
+    let action_class = private_current_device_action(request.action_class)?;
 
     // The target Station is the local fixed-route receiver, not an identity
     // repeated in channel headers.
@@ -298,21 +308,6 @@ pub(super) async fn check_private_current_device(
             "accepted-device proof key is no longer the current device generation",
         ));
     }
-    let action_class = match request.action_class {
-        DeviceRevocationAdmissionAction::SessionGrantIssue => {
-            soland_storage::DeviceRevocationGateAction::SessionGrantIssue
-        }
-        DeviceRevocationAdmissionAction::ReturningSessionGrantIssue => {
-            soland_storage::DeviceRevocationGateAction::SessionGrantIssue
-        }
-        DeviceRevocationAdmissionAction::SessionGrantRefresh => {
-            soland_storage::DeviceRevocationGateAction::SessionGrantRefresh
-        }
-        DeviceRevocationAdmissionAction::DevicePairingCodeClaim => {
-            soland_storage::DeviceRevocationGateAction::DevicePairingCodeClaim
-        }
-        _ => unreachable!("unsupported current-device action rejected above"),
-    };
     let expected_authorization_ref = match request.expected_device_authorize_event_id.as_ref() {
         Some(event_id) if request.expected_device_generation_ref == current_generation_ref => state
             .persistence()
@@ -427,6 +422,20 @@ mod tests {
     use soland_storage::{DeviceRevocationGateSelector, DeviceRevocationGateStatus};
 
     use super::*;
+
+    #[test]
+    fn private_pairing_approver_check_uses_event_write_eligibility() {
+        assert_eq!(
+            private_current_device_action(DeviceRevocationAdmissionAction::EventWrite).unwrap(),
+            soland_storage::DeviceRevocationGateAction::EventWrite,
+        );
+        for action in [
+            DeviceRevocationAdmissionAction::KeypackageClaim,
+            DeviceRevocationAdmissionAction::ToDeviceWrite,
+        ] {
+            assert!(private_current_device_action(action).is_err());
+        }
+    }
 
     const PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
     const STATION: &str = "ak:did_core:web:soland.example";
