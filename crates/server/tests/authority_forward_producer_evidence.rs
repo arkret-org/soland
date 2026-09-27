@@ -194,7 +194,10 @@ fn producer_event(
         },
         account.principal_id,
         account.station_id,
-        serde_json::json!({"name": name}),
+        arkret_models_collaboration::events_payloads::RealmProfile::new(name)
+            .unwrap()
+            .to_value()
+            .unwrap(),
         created_at,
     )
     .unwrap();
@@ -456,7 +459,8 @@ fn governance_station_refuses_every_evidence_negative_with_zero_writes() {
         }
 
         // Valid fresh evidence passes every §8.2.2 check; the Event then
-        // meets the ordinary admission, which still judges its kind here.
+        // reaches ordinary admission. This fixture installed only Station
+        // tenure, so the missing durable Realm authority root refuses it.
         let valid = human("valid");
         let result = soland_http::test_admit_authority_forward(
             &state,
@@ -465,7 +469,10 @@ fn governance_station_refuses_every_evidence_negative_with_zero_writes() {
             at,
         )
         .await;
-        assert_eq!(refusal_code(result), "unsupported_event_kind");
+        assert!(
+            matches!(&result, Err(ServiceError::Conflict(detail)) if detail == "failed_precondition: the Realm has no authority root at this cut"),
+            "valid producer evidence reaches Realm authorization: {result:?}"
+        );
         assert_nothing_written(&state, &valid).await;
     });
 }
@@ -589,7 +596,7 @@ fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verif
                 },
                 account.principal_id.clone(),
                 account.station_id.clone(),
-                serde_json::json!({"name": name}),
+                arkret_models_collaboration::events_payloads::RealmProfile::new(name).unwrap().to_value().unwrap(),
                 now() - Duration::seconds(1),
             )
             .unwrap();
@@ -629,7 +636,8 @@ fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verif
 
         // The governance Station accepts exactly that evidence from the
         // producer's Station: every §8.2.2 check passes and the Event reaches
-        // the ordinary admission, which still judges its kind.
+        // ordinary admission. Its deliberately incomplete Realm cut has no
+        // authority root; it must still refuse the write after verifying proof.
         let result = soland_http::test_admit_authority_forward(
             &governance,
             &peer(&account.station_id),
@@ -642,7 +650,10 @@ fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verif
             now(),
         )
         .await;
-        assert_eq!(refusal_code(result), "unsupported_event_kind");
+        assert!(
+            matches!(&result, Err(ServiceError::Conflict(detail)) if detail == "failed_precondition: the Realm has no authority root at this cut"),
+            "valid producer evidence reaches Realm authorization: {result:?}"
+        );
         assert_nothing_written(&governance, &event).await;
 
         // A non-device producer method carries no evidence at all.
@@ -695,7 +706,12 @@ fn forwarding_device_refusal_precedes_the_local_queue_write() {
             ScopeRef::Realm { realm_id },
             fixture.history.account.principal_id.clone(),
             fixture.history.account.station_id.clone(),
-            serde_json::json!({"name": "unknown device forward"}),
+            arkret_models_collaboration::events_payloads::RealmProfile::new(
+                "unknown device forward",
+            )
+            .unwrap()
+            .to_value()
+            .unwrap(),
             now() - Duration::seconds(1),
         )
         .unwrap();

@@ -17,7 +17,8 @@ use soland_storage::{
     KeyBackupActiveSeriesCommitWrite, RevokeCommandTerminalWrite, RevokeProposalCommitWrite,
     SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
 };
-use soland_test_support::{AppStateTestExt as _, pcr_genesis::PcrGenesisFixture};
+use soland_test_support::AppStateTestExt as _;
+use soland_test_support::pcr_genesis::PcrGenesisFixture;
 
 struct EraseFixture {
     state: soland_http::state::AppState,
@@ -296,7 +297,7 @@ async fn erase_fixture() -> EraseFixture {
     }
 }
 
-async fn revoke_authorizer_through_confirmed_pcr(fixture: &mut EraseFixture) {
+async fn propose_authorizer_revocation(fixture: &mut EraseFixture) -> SecurityTransactionRecord {
     let persistence = fixture.state.test_persistence();
     let account = fixture.pcr.history.account.clone();
     let authorizer = fixture.pcr.history.founding_device_id.clone();
@@ -445,12 +446,21 @@ async fn revoke_authorizer_through_confirmed_pcr(fixture: &mut EraseFixture) {
         .await
         .unwrap();
 
-    let mut accepted = transactions
+    transactions
         .get(transaction_id.as_str())
         .await
         .unwrap()
-        .unwrap();
-    let decided_at = covering.committed_at + chrono::TimeDelta::milliseconds(1);
+        .unwrap()
+}
+
+async fn accept_authorizer_revocation(
+    fixture: &EraseFixture,
+    mut accepted: SecurityTransactionRecord,
+) {
+    let persistence = fixture.state.test_persistence();
+    let proposal = accepted.resource.revoke_proposal.as_ref().unwrap().clone();
+    let decided_at = chrono::Utc::now();
+    let transaction_id = accepted.resource.transaction_id.clone();
     accepted.resource.accepted_steps.push(AcceptedStep {
         acceptor: SecurityTransactionAcceptor::Principal {
             principal_id: fixture.state.service_core_id(),
@@ -458,12 +468,13 @@ async fn revoke_authorizer_through_confirmed_pcr(fixture: &mut EraseFixture) {
         accepted_at: decided_at,
     });
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
-        proposal_event_id: revoke.event_id,
-        covering_commit_id: covering.commit_id,
+        proposal_event_id: proposal.proposal_event_id,
+        covering_commit_id: proposal.covering_commit_id,
         result: SecurityRotationRevokeCommandResult::Accepted,
         decided_at,
     });
-    transactions
+    persistence
+        .security_transactions()
         .commit_revoke_command_terminal(RevokeCommandTerminalWrite {
             step_outcome: Some(SecurityTransactionStepOutcomeRecord {
                 transaction_id: transaction_id.to_string(),
@@ -503,7 +514,8 @@ async fn assert_old_backup_was_not_touched(fixture: &EraseFixture) {
 #[tokio::test]
 async fn erase_worker_refuses_a_revoked_authorizer_without_deleting_old_backups() {
     let mut fixture = erase_fixture().await;
-    revoke_authorizer_through_confirmed_pcr(&mut fixture).await;
+    let proposal = propose_authorizer_revocation(&mut fixture).await;
+    accept_authorizer_revocation(&fixture, proposal).await;
     let error = soland_http::security_rotation_worker::execute_erase_for_test(
         &fixture.state,
         fixture.record.clone(),
@@ -513,6 +525,97 @@ async fn erase_worker_refuses_a_revoked_authorizer_without_deleting_old_backups(
     .unwrap_err();
     assert_eq!(error.wire_code(), "failed_precondition", "{error}");
     assert_old_backup_was_not_touched(&fixture).await;
+}
+
+async fn assert_forward_refused_before_effects(fixture: &EraseFixture, expected: &str) {
+    let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
+    ));
+    let event = soland_test_support::device_authorization_history::sign_event(
+        fixture.pcr.history.raw_event(
+            EventKind::RealmProfile,
+            arkret_models_collaboration::events_payloads::RealmProfile::new(
+                "refused forwarding attempt",
+            )
+            .unwrap()
+            .to_value()
+            .unwrap(),
+            &realm_id,
+        ),
+        fixture.pcr.history.device_verification_method.clone(),
+        fixture.pcr.history.founding_device_signing_seed,
+    );
+    let store = fixture.state.test_persistence();
+    let pcr_stream = fixture.pcr.history.commits[0].stream_ref.clone();
+    let before = store
+        .authority_commits()
+        .stream_head(&pcr_stream)
+        .await
+        .unwrap();
+    // No remote service is needed: reaching service resolution, HTTP or the
+    // queue would return a different error or leave an observable Event.
+    let error = soland_http::test_forward_self_event(
+        &fixture.state,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:governance.example").unwrap(),
+        arkret_wire::EventAdmissionSubmission::new(event.clone()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error
+            .conflict_code()
+            .map(soland_storage::ConflictCode::as_str),
+        Some(expected),
+        "{error}"
+    );
+    assert!(
+        store
+            .authority_commits()
+            .queued_event(&event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .authority_commits()
+            .committed_event(&event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .authority_commits()
+            .stream_head(&arkret_wire::CommitStreamRef::Realm { realm_id })
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .authority_commits()
+            .stream_head(&pcr_stream)
+            .await
+            .unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn authority_forward_pending_device_is_refused_before_queueing() {
+    let mut fixture = erase_fixture().await;
+    propose_authorizer_revocation(&mut fixture).await;
+    assert_forward_refused_before_effects(&fixture, "device_revocation_pending").await;
+}
+
+#[tokio::test]
+async fn authority_forward_revoked_device_is_refused_before_queueing() {
+    let mut fixture = erase_fixture().await;
+    let proposal = propose_authorizer_revocation(&mut fixture).await;
+    accept_authorizer_revocation(&fixture, proposal).await;
+    assert_forward_refused_before_effects(&fixture, "device_revoked").await;
 }
 
 #[tokio::test]
