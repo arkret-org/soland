@@ -234,6 +234,31 @@ async fn space_create_root_and_child_have_three_sibling_results_and_exact_replay
             )));
         }
     }
+    let (list, _) = PgAuthorityCommitStore { pool: pool.clone() }
+        .object_projection_lists_for_actor(
+            &realm_id,
+            &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                founder(),
+                ordinary_realm::station(),
+            )),
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(list.total, 2);
+    let root_row = list
+        .spaces
+        .iter()
+        .find(|row| row.space_id == root_id)
+        .unwrap();
+    assert_eq!(root_row.parent_space_id, None);
+    let child_row = list
+        .spaces
+        .iter()
+        .find(|row| row.space_id == child_id)
+        .unwrap();
+    assert_eq!(child_row.parent_space_id.as_ref(), Some(&root_id));
 }
 
 #[tokio::test]

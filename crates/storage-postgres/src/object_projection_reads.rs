@@ -1,0 +1,182 @@
+//! Caller-visible Space and Strand lists derived from durable current rows.
+//! No mutable in-process projection is an admission or read-state source.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use arkret_models_collaboration::objects::query_projection::{
+    ProjectionAssignedToRelation, ProjectionSpaceList, ProjectionSpaceRow, ProjectionStrandList,
+    ProjectionStrandRow,
+};
+use arkret_models_collaboration::objects::relation::Relation;
+use arkret_models_collaboration::objects::space::Space;
+use arkret_models_collaboration::objects::strand::Strand;
+use arkret_wire::{ActorId, CircleId, ObjectState, RealmId, ScopeRef, SpaceState, StrandId};
+use diesel::sql_types::{Jsonb, Text};
+use diesel_async::{AsyncConnection, RunQueryDsl};
+use serde_json::Value;
+use soland_storage::{PersistenceError, PersistenceResult};
+
+use crate::{PgPool, PgTransactionError};
+
+#[derive(diesel::QueryableByName)]
+struct ValueRow {
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct CircleRow {
+    #[diesel(sql_type = Text)]
+    circle_id: String,
+}
+
+fn corrupt(detail: impl Into<String>) -> PersistenceError {
+    PersistenceError::Internal(format!("invalid projection current: {}", detail.into()))
+}
+
+fn visible(circle: Option<&CircleId>, circles: &BTreeSet<CircleId>) -> bool {
+    circle.is_none_or(|id| circles.contains(id))
+}
+
+pub(crate) async fn lists_for_actor(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    actor: &ActorId,
+    include_terminal: bool,
+) -> PersistenceResult<Option<(ProjectionSpaceList, ProjectionStrandList)>> {
+    let mut conn = pool.get().await.map_err(PersistenceError::database)?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn).await?;
+        let joined: Option<ValueRow> = diesel::sql_query(
+            "SELECT value FROM member_state_current_results \
+             WHERE realm_id=$1 AND member_id=$2 AND membership='join'",
+        ).bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(actor.to_string())
+            .get_result(&mut *conn).await.optional()?;
+        if joined.is_none() { return Ok(None); }
+        if joined.as_ref().is_some_and(|row| row.value != serde_json::json!({"membership":"join"})) {
+            return Err(corrupt("member current value disagrees with joined state").into());
+        }
+        let circle_rows = diesel::sql_query(
+            "SELECT m.circle_id FROM circle_member_state_current_results m \
+             JOIN circle_current_results c ON c.circle_id=m.circle_id AND c.realm_id=m.realm_id \
+             JOIN realm_commits rc ON rc.commit_id=m.current_commit_id \
+               AND rc.realm_id=m.realm_id AND rc.stream_position=m.current_stream_position \
+               AND rc.stream_ref=m.source_stream_ref \
+             WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join' \
+               AND c.value->>'state'='active' \
+               AND m.source_stream_ref->>'circle_id'=m.circle_id",
+        ).bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(actor.to_string())
+            .load::<CircleRow>(&mut *conn).await?;
+        let circles = circle_rows.into_iter().map(|row| row.circle_id.parse::<CircleId>()
+            .map_err(|error| corrupt(error.to_string()))).collect::<PersistenceResult<BTreeSet<_>>>()?;
+        // The registered position family must be installed before accepted
+        // placement Events can be represented by this read model. Never
+        // manufacture an unplaced answer for an accepted position write.
+        let position_events = diesel::sql_query(
+            "SELECT EXISTS(SELECT 1 FROM realm_commit_event_kinds WHERE realm_id=$1 \
+             AND kind IN ('ak.strand.move','ak.strand.reorder')) AS present",
+        ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
+        if position_events.present {
+            return Err(corrupt("position current read family is not installed").into());
+        }
+        let incomplete_space = diesel::sql_query(
+            "SELECT EXISTS(SELECT 1 FROM space_current_results s \
+             LEFT JOIN space_parent_current_results p ON p.realm_id=s.realm_id AND p.space_id=s.space_id \
+             LEFT JOIN space_child_scope_policy_current_results c ON c.realm_id=s.realm_id AND c.space_id=s.space_id \
+             WHERE s.realm_id=$1 AND (p.space_id IS NULL OR c.space_id IS NULL \
+               OR s.value ? 'parent_space_id' OR s.value ? 'child_scope_policy' \
+               OR jsonb_typeof(p.value)<>'object' OR NOT p.value ? 'parent_space_id' \
+               OR p.value - 'parent_space_id' <> '{}'::jsonb)) \
+             OR EXISTS(SELECT 1 FROM space_parent_current_results p \
+               LEFT JOIN space_current_results s ON s.realm_id=p.realm_id AND s.space_id=p.space_id \
+               WHERE p.realm_id=$1 AND s.space_id IS NULL) \
+             OR EXISTS(SELECT 1 FROM space_child_scope_policy_current_results c \
+               LEFT JOIN space_current_results s ON s.realm_id=c.realm_id AND s.space_id=c.space_id \
+               WHERE c.realm_id=$1 AND s.space_id IS NULL) AS present",
+        ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
+        if incomplete_space.present {
+            return Err(corrupt("Space registered sibling families are incomplete or conflicting").into());
+        }
+        let space_rows = diesel::sql_query(
+            "SELECT s.value || jsonb_build_object('parent_space_id',p.value->'parent_space_id', \
+             'child_scope_policy',c.value) AS value FROM space_current_results s \
+             JOIN space_parent_current_results p ON p.realm_id=s.realm_id AND p.space_id=s.space_id \
+             JOIN space_child_scope_policy_current_results c ON c.realm_id=s.realm_id AND c.space_id=s.space_id \
+             WHERE s.realm_id=$1 ORDER BY s.space_id",
+        ).bind::<Text,_>(realm_id.as_str()).load::<ValueRow>(&mut *conn).await?;
+        let mut spaces = Vec::new();
+        for row in space_rows {
+            let space: Space = serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+            if space.realm_id != *realm_id { return Err(corrupt("Space Realm mismatch").into()); }
+            if !visible(space.scope_circle_id.as_ref(), &circles) { continue; }
+            let state = space.state.ok_or_else(|| corrupt("Space state absent"))?;
+            if !include_terminal && state == SpaceState::Tombstoned { continue; }
+            spaces.push(ProjectionSpaceRow {
+                space_id: space.id.ok_or_else(|| corrupt("Space id absent"))?,
+                realm_id: space.realm_id, kind: space.kind, title: space.title,
+                parent_space_id: space.parent_space_id, rank: space.rank, state,
+                state_changed_at: space.state_changed_at,
+                created_by: Some(space.created_by), created_at: Some(space.created_at), updated_at: space.updated_at,
+            });
+        }
+        let default: Option<ValueRow> = diesel::sql_query(
+            "SELECT value FROM realm_set_default_strand_current_results WHERE realm_id=$1",
+        ).bind::<Text,_>(realm_id.as_str()).get_result(&mut *conn).await.optional()?;
+        let default = default.map(|row| serde_json::from_value::<Option<StrandId>>(
+            row.value.get("default_strand_id").cloned().ok_or_else(|| corrupt("default Strand pointer absent"))?
+        ).map_err(PersistenceError::database)).transpose()?.flatten();
+        let mut assignments: BTreeMap<StrandId, Vec<ProjectionAssignedToRelation>> = BTreeMap::new();
+        let relations = diesel::sql_query(
+            "SELECT value FROM relation_current_results WHERE realm_id=$1 AND state='active' \
+             AND value->>'relation_kind'='assigned_to' ORDER BY relation_id",
+        ).bind::<Text,_>(realm_id.as_str()).load::<ValueRow>(&mut *conn).await?;
+        for row in relations {
+            let relation: Relation = serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+            if relation.realm_id != *realm_id || !visible(relation.scope_circle_id.as_ref(), &circles) { continue; }
+            if relation.effective_scope.as_ref().is_some_and(|scope| match scope {
+                ScopeRef::Realm { realm_id: id } => id != realm_id,
+                ScopeRef::Circle { realm_id: id, circle_id } => id != realm_id || !circles.contains(circle_id),
+                _ => true,
+            }) { continue; }
+            let source = relation.from_ref.as_object_ref().ok_or_else(|| corrupt("assignment source is not an object"))?;
+            let strand = source.parse::<StrandId>().map_err(|error| corrupt(error.to_string()))?;
+            assignments.entry(strand).or_default().push(ProjectionAssignedToRelation {
+                relation_id: relation.id.ok_or_else(|| corrupt("assignment id absent"))?,
+                actor_id: relation.to_ref.as_actor_id().ok_or_else(|| corrupt("assignment target is not an Actor"))?.clone(),
+            });
+        }
+        let strand_rows = diesel::sql_query(
+            "SELECT value FROM strand_current_results WHERE realm_id=$1 ORDER BY strand_id",
+        ).bind::<Text,_>(realm_id.as_str()).load::<ValueRow>(&mut *conn).await?;
+        let mut strands = Vec::new();
+        for row in strand_rows {
+            let strand: Strand = serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+            if strand.realm_id != *realm_id { return Err(corrupt("Strand Realm mismatch").into()); }
+            if !visible(strand.scope_circle_id.as_ref(), &circles) { continue; }
+            let state = strand.state.ok_or_else(|| corrupt("Strand state absent"))?;
+            if !include_terminal && state == ObjectState::Redacted { continue; }
+            let id = strand.id.ok_or_else(|| corrupt("Strand id absent"))?;
+            let assigned = assignments.remove(&id).unwrap_or_default();
+            let mut actors = assigned.iter().map(|row| row.actor_id.clone()).collect::<Vec<_>>();
+            actors.sort_by_key(ToString::to_string); actors.dedup();
+            strands.push(ProjectionStrandRow {
+                is_default: default.as_ref() == Some(&id), strand_id: id,
+                realm_id: strand.realm_id, state, state_changed_at: strand.state_changed_at,
+                stage: strand.stage, stage_changed_at: strand.stage_changed_at,
+                title: strand.metadata.as_ref().and_then(|metadata| metadata.title.clone()),
+                summary: strand.metadata.as_ref().and_then(|metadata| metadata.summary.clone()),
+                board_space_id: None, list_space_id: None, rank: None,
+                assigned_actor_ids: actors, assigned_to_relations: assigned,
+                created_by: Some(strand.created_by), created_at: Some(strand.created_at),
+                updated_by: strand.updated_by, updated_at: strand.updated_at,
+            });
+        }
+        Ok(Some((
+            ProjectionSpaceList { realm_id: realm_id.clone(), total: spaces.len() as u64, spaces, next_cursor: None, has_more: false },
+            ProjectionStrandList { realm_id: realm_id.clone(), total: strands.len() as u64, strands, next_cursor: None, has_more: false },
+        )))
+    }).await.map_err(PgTransactionError::into_persistence)
+}
+
+use diesel::OptionalExtension as _;

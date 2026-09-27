@@ -1,5 +1,6 @@
-//! Read-side HTTP handlers for the server-side Space-container / Strand / Morph
-//! lifecycle projection state maintained by `reducer::ProjectionState`.
+//! Space and Strand lists derive from durable typed current at one caller
+//! read cut. Morph and product-private reads retain their derived projection
+//! view until their registered current writers and disclosure cuts are wired.
 //!
 //! These endpoints let inkson (and other clients) re-hydrate the
 //! optimistic Archive / Restore state after a page refresh, so a
@@ -39,7 +40,7 @@ use arkret_models_collaboration::objects::query_projection::{
     ProjectionStrandRow, ReferenceProjectionState,
 };
 use arkret_models_collaboration::objects::relation::RelationEndpoint;
-use arkret_wire::{ObjectState, SpaceState};
+use arkret_wire::ObjectState;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
@@ -94,14 +95,6 @@ fn validate_realm_id(realm_id: String) -> Result<String, AppError> {
     RealmId::new(realm_id.clone())
         .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     Ok(realm_id)
-}
-
-fn projection_space_state(state: SpaceContainerLifecycleState) -> SpaceState {
-    match state {
-        SpaceContainerLifecycleState::Active => SpaceState::Active,
-        SpaceContainerLifecycleState::Archived => SpaceState::Archived,
-        SpaceContainerLifecycleState::Tombstoned => SpaceState::Tombstoned,
-    }
 }
 
 fn projection_object_state(state: ObjectLifecycleState) -> ObjectState {
@@ -900,63 +893,16 @@ async fn list_space_container_projections(
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
-    let response_realm_id = RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
+    let realm_id =
+        RealmId::new(realm_id).map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(crate::app_error!(
-            CapabilityDenied,
-            "Space not visible to this actor",
-        ));
-    }
-    let proj = state.projections().snapshot();
-    let spaces: Vec<ProjectionSpaceRow> = proj
-        .space_containers
-        .values()
-        .filter(|p| p.realm_id == realm_id)
-        .filter(|p| {
-            current_projection_scope_visible_to_actor(
-                &proj,
-                &session_actor,
-                p.scope_circle_id.as_deref(),
-            )
-        })
-        .filter(|p| include_terminal || p.state != SpaceContainerLifecycleState::Tombstoned)
-        .map(|p| {
-            Ok(ProjectionSpaceRow {
-                space_id: parse_projection_id::<SpaceId>(&p.container_space_id, "space_id")?,
-                realm_id: parse_projection_id::<RealmId>(&p.realm_id, "realm_id")?,
-                kind: p.kind.clone(),
-                title: p.title.clone(),
-                parent_space_id: p
-                    .parent_ref
-                    .as_deref()
-                    .map(|s| {
-                        SpaceId::new(s.to_owned()).map_err(|err| {
-                            AppError::internal(format!(
-                                "stored parent_space_id is not a typed SpaceId: {err}"
-                            ))
-                        })
-                    })
-                    .transpose()?,
-                rank: p.rank.clone(),
-                state: projection_space_state(p.state),
-                created_by: Some(parse_projection_actor(&p.created_by, "created_by")?),
-                created_at: Some(p.created_at),
-                updated_at: p.updated_at,
-                state_changed_at: p.state_changed_at,
-            })
-        })
-        .collect::<Result<_, AppError>>()?;
-    drop(proj);
-    let total = total_count(spaces.len())?;
-    json_ok(ProjectionSpaceList {
-        realm_id: response_realm_id,
-        spaces,
-        total,
-        next_cursor: None,
-        has_more: false,
-    })
+    let lists = state
+        .authority_commits()
+        .object_projection_lists_for_actor(&realm_id, &session_actor, include_terminal)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| crate::app_error!(NotFound, "Realm not found"))?;
+    json_ok(lists.0)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.strand.read.list", tags("events"))]
@@ -973,79 +919,16 @@ async fn list_strand_projections(
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
-    let response_realm_id = RealmId::new(realm_id.clone())
-        .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
+    let realm_id =
+        RealmId::new(realm_id).map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
-    if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(crate::app_error!(
-            CapabilityDenied,
-            "Space not visible to this actor",
-        ));
-    }
-    let proj = state.projections().snapshot();
-    // COT-06-004 — the Realm's default-Strand pointer drives each row's
-    // derived `is_default` flag (no per-Strand stored column).
-    let default_strand_id = proj
-        .realm_states
-        .get(&realm_id)
-        .and_then(|realm| realm.default_strand_id.clone());
-    let strands: Vec<ProjectionStrandRow> = proj
-        .strands
-        .values()
-        .filter(|f| f.realm_id == realm_id)
-        .filter(|f| {
-            current_projection_scope_visible_to_actor(
-                &proj,
-                &session_actor,
-                f.scope_circle_id.as_deref(),
-            )
-        })
-        .filter(|f| include_terminal || !is_object_terminal(f.state))
-        .map(|f| {
-            let (board_space_id, list_space_id, rank) =
-                strand_position_fields(&proj, &f.strand_id)?;
-            let assigned_to_relations = strand_assigned_to_relations(&proj, &f.strand_id)?;
-            let mut assigned_actor_ids = assigned_to_relations
-                .iter()
-                .map(|relation| relation.actor_id.clone())
-                .collect::<Vec<_>>();
-            assigned_actor_ids.sort();
-            assigned_actor_ids.dedup();
-            Ok(ProjectionStrandRow {
-                strand_id: parse_projection_id::<StrandId>(&f.strand_id, "strand_id")?,
-                realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
-                state: projection_object_state(f.state),
-                state_changed_at: f.state_changed_at,
-                stage: f.stage.clone(),
-                stage_changed_at: f.stage_changed_at,
-                title: Some(f.title.clone()),
-                summary: f.summary.clone(),
-                board_space_id,
-                list_space_id,
-                rank,
-                assigned_actor_ids,
-                assigned_to_relations,
-                created_by: Some(parse_projection_actor(&f.created_by, "created_by")?),
-                created_at: Some(f.created_at),
-                updated_by: f
-                    .updated_by
-                    .as_deref()
-                    .map(|actor| parse_projection_actor(actor, "updated_by"))
-                    .transpose()?,
-                updated_at: f.updated_at,
-                is_default: default_strand_id.as_deref() == Some(f.strand_id.as_str()),
-            })
-        })
-        .collect::<Result<_, AppError>>()?;
-    drop(proj);
-    let total = total_count(strands.len())?;
-    json_ok(ProjectionStrandList {
-        realm_id: response_realm_id,
-        strands,
-        total,
-        next_cursor: None,
-        has_more: false,
-    })
+    let lists = state
+        .authority_commits()
+        .object_projection_lists_for_actor(&realm_id, &session_actor, include_terminal)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| crate::app_error!(NotFound, "Realm not found"))?;
+    json_ok(lists.1)
 }
 
 /// Strongly-typed response body for `org.arkret.soland.strands.get`

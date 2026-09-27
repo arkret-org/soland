@@ -9,7 +9,7 @@ use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use ordinary_realm::{founder, next_request, open_discussion};
 use serde_json::{Value, json};
-use soland_storage::EventCommitUnitOfWork;
+use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::PgEventCommitUnitOfWork;
 use soland_storage_postgres::test_database::TestDatabase;
 
@@ -94,6 +94,34 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
     assert!(outcome.event_inserted);
     let after = current(&pool, &discussion.strand_id).await;
     assert_eq!(after.value["metadata"]["title"], "Accepted title");
+    let store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        founder(),
+        ordinary_realm::station(),
+    ));
+    let (_, list) = store
+        .object_projection_lists_for_actor(&realm_id, &actor, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let listed = list
+        .strands
+        .iter()
+        .find(|row| row.strand_id == discussion.strand_id)
+        .unwrap();
+    assert_eq!(listed.title.as_deref(), Some("Accepted title"));
+    assert!(listed.is_default);
+    let outsider = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:read-outsider.example").unwrap(),
+        ordinary_realm::station(),
+    ));
+    assert!(
+        store
+            .object_projection_lists_for_actor(&realm_id, &outsider, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         after.current_commit_id,
         accepted.authority_commit.commit.commit_id.as_str()

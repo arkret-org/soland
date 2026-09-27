@@ -3048,6 +3048,26 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .await
     }
 
+    async fn object_projection_lists_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+        include_terminal: bool,
+    ) -> PersistenceResult<
+        Option<(
+            arkret_models_collaboration::objects::query_projection::ProjectionSpaceList,
+            arkret_models_collaboration::objects::query_projection::ProjectionStrandList,
+        )>,
+    > {
+        crate::object_projection_reads::lists_for_actor(
+            &self.pool,
+            realm_id,
+            actor,
+            include_terminal,
+        )
+        .await
+    }
+
     async fn member_station_bootstrap_material(
         &self,
         realm_id: &arkret_wire::RealmId,

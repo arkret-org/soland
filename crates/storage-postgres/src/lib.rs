@@ -82,6 +82,7 @@ mod moderation;
 mod moderation_report_current_results;
 mod moderation_state_current_results;
 mod notifications;
+mod object_projection_reads;
 mod object_redaction_current_results;
 mod organization_registration;
 mod pcr_accepted_device_unit;

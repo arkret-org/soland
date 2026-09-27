@@ -1450,6 +1450,24 @@ pub trait AuthorityCommitStore: Send + Sync {
         account: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
 
+    /// Canonical object list DTOs derived from durable current at one caller
+    /// membership/scope cut. This is an internal read API, not new wire state.
+    async fn object_projection_lists_for_actor(
+        &self,
+        _realm_id: &arkret_wire::RealmId,
+        _actor: &arkret_wire::ActorId,
+        _include_terminal: bool,
+    ) -> PersistenceResult<
+        Option<(
+            arkret_models_collaboration::objects::query_projection::ProjectionSpaceList,
+            arkret_models_collaboration::objects::query_projection::ProjectionStrandList,
+        )>,
+    > {
+        Err(PersistenceError::Internal(
+            "durable object projection read is unavailable".to_owned(),
+        ))
+    }
+
     /// The bootstrap snapshot material a member Station anchors on
     /// (`federation.md` §4.1.1): `account`'s complete disclosure with the
     /// Realm stream floor at its join `membership_commit_id`, or `None`

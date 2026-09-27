@@ -1325,6 +1325,23 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    pub async fn object_projection_lists_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+        include_terminal: bool,
+    ) -> ServiceResult<
+        Option<(
+            arkret_models_collaboration::objects::query_projection::ProjectionSpaceList,
+            arkret_models_collaboration::objects::query_projection::ProjectionStrandList,
+        )>,
+    > {
+        Ok(self
+            .store()
+            .object_projection_lists_for_actor(realm_id, actor, include_terminal)
+            .await?)
+    }
+
     /// Materialize, tenure-check, sign, capacity-check and issue one complete
     /// Snapshot to `account` in a single durable cut held by the store. The
     /// signature is made with the Station's current service method only while
