@@ -1,6 +1,6 @@
 //! Recovery storage boundary: an accepted policy and a verified session feed
-//! the real terminal unit. Factor/session HTTP verification is tested elsewhere;
-//! no SQL fixture manufactures a generation, device authorization or Commit.
+//! the real terminal unit. Factor/session HTTP verification is outside this
+//! fixture; no SQL manufactures a generation, device authorization or Commit.
 
 use arkret_models_collaboration::events_payloads::{
     DeviceAuthorizationBindingKind, DeviceOrPrincipalRef, DeviceReanchorPayload, SignatureMaterial,

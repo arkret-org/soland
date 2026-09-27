@@ -696,12 +696,18 @@ mod tests {
             ) {
                 // Try a newer receipt from a different Realm, which used to
                 // overwrite shared object identities at the global PK.
-                assert!(
+                let mut foreign_value = changed.clone();
+                if let Some(value) = foreign_value.as_object_mut()
+                    && value.contains_key("realm_id")
+                {
+                    value.insert("realm_id".to_owned(), json!(foreign));
+                }
+                assert!(matches!(
                     writer
-                        .write(&mut conn, &foreign, &next, &changed)
-                        .await
-                        .is_err()
-                );
+                        .write(&mut conn, &foreign, &next, &foreign_value)
+                        .await,
+                    Err(PersistenceError::Conflict(_))
+                ));
             }
             writer
                 .write(&mut conn, &realm, &next, &changed)
