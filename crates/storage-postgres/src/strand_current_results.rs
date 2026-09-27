@@ -151,20 +151,28 @@ pub(crate) async fn commit_strand_transition_in_connection(
         )
         .await?;
     }
-    let row = diesel::sql_query(
+    let current_sql = if authorize {
         "SELECT s.realm_id,s.current_commit_id,s.current_stream_position,s.value \
          FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id \
          WHERE s.realm_id=$1 AND s.strand_id=$2 AND c.realm_id=s.realm_id \
            AND c.stream_position=s.current_stream_position AND c.stream_ref->>'kind'='realm' \
-           AND c.stream_ref->>'realm_id'=s.realm_id FOR UPDATE OF s",
-    )
-    .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<Text, _>(target.as_str())
-    .get_result::<StrandCurrentRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .ok_or_else(|| reject("Strand transition target has no confirmed current value"))?;
+           AND c.stream_ref->>'realm_id'=s.realm_id FOR UPDATE OF s"
+    } else {
+        // A verified snapshot can install current below its readable floor,
+        // without replicating that row's historical Event/Commit. The replica
+        // verifier, snapshot signature and immediately following stream head
+        // prove this baseline; no local historical cover is required here.
+        "SELECT realm_id,current_commit_id,current_stream_position,value \
+         FROM strand_current_results WHERE realm_id=$1 AND strand_id=$2 FOR UPDATE"
+    };
+    let row = diesel::sql_query(current_sql)
+        .bind::<Text, _>(event.realm_id.as_str())
+        .bind::<Text, _>(target.as_str())
+        .get_result::<StrandCurrentRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(|| reject("Strand transition target has no confirmed current value"))?;
     let position = i64::try_from(commit.stream_position).map_err(PersistenceError::database)?;
     if row.current_stream_position >= position || row.current_commit_id == commit.commit_id.as_str()
     {

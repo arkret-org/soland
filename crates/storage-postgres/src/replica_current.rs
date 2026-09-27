@@ -1079,6 +1079,205 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn strand_transition_replica_follows_snapshot_baseline_without_local_covering_commits() {
+        use arkret_models_collaboration::objects::strand::Strand;
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let realm =
+            arkret_wire::RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let strand_id =
+            arkret_wire::StrandId::new("ak:strand:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-station.example").unwrap(),
+        ));
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let mut strand = Strand::new(
+            strand_id.clone(),
+            realm.clone(),
+            "Snapshot Strand",
+            actor.clone(),
+        );
+        strand.created_at = at;
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        };
+        let entries = [arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::Strand {
+                strand_id: strand_id.clone(),
+            },
+            source_stream_ref: stream.clone(),
+            revision: arkret_wire::CurrentRevision {
+                commit_id: head.commit_id.clone(),
+                stream_position: 7,
+            },
+            value: serde_json::to_value(strand).unwrap(),
+        }];
+        // The signed snapshot and each following Event/Commit were verified
+        // before this adapter boundary. Structural signatures here are not
+        // claimed as live acceptance or a snapshot signature verification test.
+        install_snapshot_in_connection(&mut conn, &realm, &head, &entries, at)
+            .await
+            .unwrap();
+        let history: ValueRow =
+            diesel::sql_query("SELECT to_jsonb(count(*)) AS value FROM realm_commits")
+                .get_result(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(
+            history.value,
+            json!(0),
+            "snapshot installation does not invent local covering Commit nodes"
+        );
+        let mut first = None;
+        for (position, kind, payload, expected_state, expected_stage) in [
+            (
+                8,
+                arkret_wire::EventKind::StrandStageSet,
+                json!({"strand_id":strand_id,"stage":"planned"}),
+                "active",
+                "planned",
+            ),
+            (
+                9,
+                arkret_wire::EventKind::StrandArchive,
+                json!({"target_ref":strand_id}),
+                "archived",
+                "planned",
+            ),
+            (
+                10,
+                arkret_wire::EventKind::StrandRestore,
+                json!({"target_ref":strand_id}),
+                "active",
+                "planned",
+            ),
+            (
+                11,
+                arkret_wire::EventKind::StrandStageSet,
+                json!({"strand_id":strand_id,"stage":"done","expected_stage":"planned"}),
+                "active",
+                "done",
+            ),
+        ] {
+            let event_at = at + chrono::Duration::seconds(position);
+            let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+                kind.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                actor.clone(),
+                payload,
+                event_at,
+            )
+            .unwrap();
+            let digest = arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
+            event.producer_proof = Some(arkret_wire::ProducerEventProof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:web:replica-author.example#key")
+                    .unwrap(),
+                event_digest: digest.clone(),
+                created_at: event_at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: arkret_wire::test_support::structural_only_detached_jws(&digest),
+            });
+            let commit_at = event_at + chrono::Duration::milliseconds(500);
+            let commit = arkret_wire::RealmCommit {
+                commit_id: arkret_wire::RealmCommitId::from_digest([position as u8; 32]),
+                realm_id: realm.clone(),
+                stream_ref: stream.clone(),
+                stream_position: position as u64,
+                previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest(
+                    [(position - 1) as u8; 32],
+                )),
+                event_ref: event.event_id.clone(),
+                governance_generation: 0,
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    event.event_id.clone(),
+                ),
+                committed_at: commit_at,
+                signature: arkret_wire::DetachedObjectSignature {
+                    context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:web:replica-station.example#authority",
+                    )
+                    .unwrap(),
+                    signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                        .unwrap(),
+                    created_at: commit_at,
+                    sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+                },
+            };
+            diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+            let result = advance_in_connection(&mut conn, &event, &commit).await;
+            diesel::sql_query(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            result.unwrap();
+            let row: ValueRow =
+                diesel::sql_query("SELECT value FROM strand_current_results WHERE strand_id=$1")
+                    .bind::<Text, _>(strand_id.as_str())
+                    .get_result(&mut conn)
+                    .await
+                    .unwrap();
+            assert_eq!(row.value["state"], expected_state);
+            assert_eq!(row.value["stage"], expected_stage);
+            if kind == arkret_wire::EventKind::StrandStageSet {
+                assert_eq!(
+                    row.value["stage_changed_at"],
+                    arkret_canonical::format_timestamp_canonical(event_at)
+                );
+            } else {
+                assert_eq!(
+                    row.value["state_changed_at"],
+                    arkret_canonical::format_timestamp_canonical(commit_at)
+                );
+            }
+            let revision:ValueRow = diesel::sql_query("SELECT jsonb_build_object('commit',current_commit_id,'position',current_stream_position) AS value FROM strand_current_results WHERE strand_id=$1").bind::<Text,_>(strand_id.as_str()).get_result(&mut conn).await.unwrap();
+            assert_eq!(
+                revision.value,
+                json!({"commit":commit.commit_id,"position":position})
+            );
+            if position == 8 {
+                first = Some((event, commit));
+            }
+        }
+        let before:ValueRow = diesel::sql_query("SELECT jsonb_build_object('value',value,'commit',current_commit_id,'position',current_stream_position) AS value FROM strand_current_results WHERE strand_id=$1").bind::<Text,_>(strand_id.as_str()).get_result(&mut conn).await.unwrap();
+        let (event, commit) = first.unwrap();
+        diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        let error = advance_in_connection(&mut conn, &event, &commit)
+            .await
+            .unwrap_err();
+        diesel::sql_query("ROLLBACK")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert!(error.to_string().contains("does not precede transition"));
+        let after:ValueRow = diesel::sql_query("SELECT jsonb_build_object('value',value,'commit',current_commit_id,'position',current_stream_position) AS value FROM strand_current_results WHERE strand_id=$1").bind::<Text,_>(strand_id.as_str()).get_result(&mut conn).await.unwrap();
+        assert_eq!(
+            before.value, after.value,
+            "a late older transition cannot undo the verified current"
+        );
+    }
+
+    #[tokio::test]
     async fn position_snapshot_keeps_both_identity_components_null_and_transactional_rejection() {
         use arkret_models_collaboration::objects::strand::StrandPositionCurrent;
         use arkret_wire::{
