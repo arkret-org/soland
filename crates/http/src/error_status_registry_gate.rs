@@ -300,7 +300,7 @@ fn every_static_error_code_status_pairing_matches_the_registry() {
             .unwrap_or(&path)
             .display()
             .to_string();
-        let event_lane = display.contains("/routing/events/");
+        let event_lane = display.replace('\\', "/").contains("/routing/events/");
 
         // Rule A: wire-code reclassification names an active code, and the
         // statically visible constructor already carries that code's status.
