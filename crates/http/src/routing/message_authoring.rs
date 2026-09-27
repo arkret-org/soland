@@ -237,9 +237,7 @@ async fn validate_encryption_context(
         .collect();
     for envelope in &envelopes {
         envelope.validate().map_err(invalid)?;
-        if envelope.encryption_context.counter().is_some()
-            || envelope.encryption_context.routing_context().is_some()
-        {
+        if envelope.encryption_context.routing_context().is_some() {
             return Err(invalid(
                 "message envelopes carry only the standard RFC 9420 epoch and group_state_ref",
             ));
@@ -771,50 +769,20 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
-    async fn message_authoring_non_rfc9420_scheme_is_schema_violation() {
-        let state = test_state();
-        let scope = realm_scope(REALM);
-        accept_genesis(&state, &scope, &event_ref(1)).await;
-        let mut content = mls_content(standard(0, event_ref(1)), None, scope.clone(), DEVICE);
-        let MessageAuthoringContent::Mls {
-            encryption_context, ..
-        } = &mut content
-        else {
-            unreachable!()
-        };
-        encryption_context.scheme = EncryptedPayloadScheme::MlsExporterAeadV1;
-        assert_problem(
-            validate_encryption_context(&state, &content, &scope, DEVICE).await,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "schema_violation",
-            None,
-        )
-        .await;
+    #[test]
+    fn message_authoring_non_rfc9420_scheme_is_rejected_before_preparation() {
+        let content = mls_content(standard(0, event_ref(1)), None, realm_scope(REALM), DEVICE);
+        let mut value = serde_json::to_value(content).unwrap();
+        value["encryption_context"]["scheme"] = serde_json::json!("mls_exporter_aead_v1");
+        assert!(serde_json::from_value::<MessageAuthoringContent>(value).is_err());
     }
 
-    #[tokio::test]
-    async fn message_authoring_exporter_counter_is_schema_violation() {
-        let state = test_state();
-        let scope = realm_scope(REALM);
-        accept_genesis(&state, &scope, &event_ref(1)).await;
-        let content = mls_content(
-            envelope(EncryptedEnvelopeEncryptionContext::exporter(
-                0,
-                event_ref(1),
-                7,
-            )),
-            None,
-            scope.clone(),
-            DEVICE,
-        );
-        assert_problem(
-            validate_encryption_context(&state, &content, &scope, DEVICE).await,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "schema_violation",
-            None,
-        )
-        .await;
+    #[test]
+    fn message_authoring_exporter_counter_is_rejected_before_preparation() {
+        let content = mls_content(standard(0, event_ref(1)), None, realm_scope(REALM), DEVICE);
+        let mut value = serde_json::to_value(content).unwrap();
+        value["encrypted_content"]["encryption_context"]["counter"] = serde_json::json!(7);
+        assert!(serde_json::from_value::<MessageAuthoringContent>(value).is_err());
     }
 
     #[tokio::test]

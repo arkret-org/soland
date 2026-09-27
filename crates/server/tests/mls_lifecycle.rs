@@ -887,7 +887,6 @@ async fn mls_lifecycle_body() {
         1,
         commit_event.event_id.clone(),
         alice_group.local_content_sender_domain().unwrap(),
-        None,
         arkret_models_crypto::EventContentRoutingContext::None,
     )
     .unwrap();
