@@ -367,6 +367,33 @@ impl RecoveryUnitCommitWrite {
             ));
         };
         let [reanchor, authorize] = &self.commits;
+        let reanchor_payload: arkret_models_collaboration::events_payloads::DeviceReanchorPayload =
+            serde_json::from_value(
+                serde_json::to_value(&reanchor.event.payload)
+                    .map_err(PersistenceError::database)?,
+            )
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let authorize_payload: arkret_models_collaboration::events_payloads::DeviceAuthorizePayload = serde_json::from_value(
+            serde_json::to_value(&authorize.event.payload).map_err(PersistenceError::database)?,
+        ).map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let request: arkret_models_crypto::SecurityTransactionContinueRequest =
+            serde_json::from_slice(&self.step_outcome.canonical_request).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "invalid recovery terminal request: {error}"
+                ))
+            })?;
+        request
+            .client_attestation
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let arkret_models_crypto::ClientStepAttestationArtifact::Recovery(terminal) =
+            &request.client_attestation.artifact
+        else {
+            return Err(PersistenceError::SchemaViolation(
+                "recovery terminal request has no recovery receipt".to_owned(),
+            ));
+        };
+        let receipt = &terminal.recovery_receipt;
         let Some(arkret_models_crypto::SecurityTransactionTerminalOutcome::Completed {
             completion_attestation: Some(completion),
             ..
@@ -379,6 +406,25 @@ impl RecoveryUnitCommitWrite {
         let expected_stream = arkret_wire::CommitStreamRef::Realm {
             realm_id: intent.realm_id.clone(),
         };
+        let committed_ref = |commit: &AuthorityCommitTransaction| arkret_wire::CommittedEventRef {
+            event_id: commit.event.event_id.clone(),
+            commit_id: commit.commit.commit_id.clone(),
+            stream_ref: commit.commit.stream_ref.clone(),
+            stream_position: commit.commit.stream_position,
+        };
+        let resource = &self.transaction.resource;
+        let canonical =
+            arkret_canonical::canonical_json_bytes(&request).map_err(PersistenceError::database)?;
+        let receipt_digest = arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(receipt).map_err(PersistenceError::database)?,
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let authorize_digest =
+            arkret_models_collaboration::events_payloads::device_authorize_payload_digest(
+                &serde_json::to_value(&authorize_payload).map_err(PersistenceError::database)?,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         if self.step_outcome.step
             != arkret_models_crypto::SecurityTransactionStep::CommitRecoveryUnit
             || self.step_outcome.transaction_id != self.transaction.resource.transaction_id.as_str()
@@ -408,11 +454,48 @@ impl RecoveryUnitCommitWrite {
                         PersistenceError::SchemaViolation("PCR stream position overflow".to_owned())
                     })?
             || self.transaction.resource.terminal_outcome.is_none()
-            || completion.reanchor_event_ref.commit_id != reanchor.commit.commit_id
-            || completion.reanchor_event_ref.stream_position != reanchor.commit.stream_position
-            || completion.device_authorization_event_ref.commit_id != authorize.commit.commit_id
-            || completion.device_authorization_event_ref.stream_position
-                != authorize.commit.stream_position
+            || canonical != self.step_outcome.canonical_request
+            || self.step_outcome.response != serde_json::to_value(resource).map_err(PersistenceError::database)?
+            || self.step_outcome.participant_outcome.as_ref() != Some(&serde_json::to_value(terminal).map_err(PersistenceError::database)?)
+            || request.request_digest != resource.request_digest
+            || request.prepared_plan_digest != resource.prepared_plan_digest
+            || request.expected_accepted_step_count.checked_add(1) != Some(resource.accepted_steps.len() as u64)
+            || request.client_attestation.transaction_id != resource.transaction_id
+            || request.client_attestation.transaction_request_digest != resource.request_digest
+            || request.client_attestation.prepared_plan_digest != resource.prepared_plan_digest
+            || request.client_attestation.output_ref != receipt.receipt_id.as_str()
+            || receipt.transaction_id != resource.transaction_id
+            || receipt.transaction_request_digest != resource.request_digest
+            || receipt.prepared_plan_digest != resource.prepared_plan_digest
+            || receipt.account_id != resource.account_id
+            || receipt.receipt_id != plan.binding.terminal_receipt_id
+            || receipt.recovery_session_id != plan.binding.recovery_session_id
+            || receipt.new_device_id != plan.binding.replacement_device_id
+            || receipt.reanchor_event_id != reanchor.event.event_id
+            || receipt.authorization_event_id != authorize.event.event_id
+            || receipt.previous_model_generation_ref != plan.previous_model_generation_ref
+            || receipt.result_model_generation_ref != plan.result_model_generation_ref
+            || receipt.proof_summary.proof_digest != plan.proof_digest
+            || receipt.recovery_authority_kind != arkret_models_crypto::RecoveryAuthorityKind::PcrPolicy
+            || receipt.outcome != arkret_models_crypto::RecoveryReceiptOutcome::Completed
+            || receipt.policy_id != reanchor_payload.recovery_policy_id
+            || receipt.policy_version != reanchor_payload.recovery_policy_version
+            || completion.terminal_receipt_digest != receipt_digest
+            || completion.reanchor_event_ref != committed_ref(reanchor)
+            || completion.device_authorization_event_ref != committed_ref(authorize)
+            || reanchor_payload.account_id != resource.account_id
+            || reanchor_payload.recovery_authority_kind != arkret_models_crypto::RecoveryAuthorityKind::PcrPolicy
+            || reanchor_payload.recovery_session_id != plan.binding.recovery_session_id
+            || reanchor_payload.previous_device_generation != plan.previous_model_generation_ref
+            || reanchor_payload.new_device_generation != plan.result_model_generation_ref
+            || reanchor_payload.replacement_authorize_payload_digest != authorize_digest
+            || authorize_payload.device_id != plan.binding.replacement_device_id
+            || authorize_payload.recovery_session_id.as_ref() != Some(&plan.binding.recovery_session_id)
+            || authorize_payload.authorization_binding_kind != arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::PcrRecovery
+            || authorize_payload.authorized_generation_ref != plan.result_model_generation_ref
+            || reanchor.event.producer_proof.as_ref().is_none_or(|proof|
+                proof.verification_method != request.client_attestation.auth_data.verification_method
+                || proof.verification_method != receipt.auth_data.verification_method)
         {
             return Err(PersistenceError::SchemaViolation(
                 "recovery unit does not bind the exact ordered Event/Commit pair and terminal result"

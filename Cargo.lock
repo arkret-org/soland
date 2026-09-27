@@ -5813,6 +5813,8 @@ dependencies = [
  "bs58",
  "bytes",
  "chrono",
+ "diesel",
+ "diesel-async",
  "dotenvy",
  "ed25519-dalek 3.0.0",
  "floria-contracts",

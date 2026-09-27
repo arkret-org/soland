@@ -116,11 +116,9 @@ pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) actor_id: DidCoreId,
     /// Submitting device, absent for a deviceless service session.
     pub(in crate::routing) device_id: Option<DeviceId>,
-    pub(in crate::routing) actor_seq: u64,
     pub(in crate::routing) realm_id: RealmId,
     pub(in crate::routing) kind: String,
     pub(in crate::routing) schema_id: String,
-    pub(in crate::routing) prev_refs: Vec<EventId>,
     pub(in crate::routing) canonical_digest: String,
     pub(in crate::routing) digest_suite: arkret_canonical::DigestSuite,
     pub(in crate::routing) canonical_bytes: Vec<u8>,

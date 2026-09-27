@@ -301,33 +301,7 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
 
 pub use soland_storage::CanonicalEventRecord as AcceptedEvent;
 
-/// Locate the replacement `ak.device.authorize` that belongs to one accepted
-/// B-model re-anchor.
-///
-/// The pairing lives in the authorize envelope: its `prev_refs` is exactly the
-/// re-anchor id (`key-management.md` §5.0.7). The re-anchor payload commits
-/// only to the authorize *payload* digest, because the authorize envelope
-/// already names the re-anchor and every `event_id` derives from its own
-/// signed content — an id or envelope-digest binding would make the two Events
-/// preimages of each other.
-pub fn paired_replacement_authorize<'a>(
-    reanchor: &AcceptedEvent,
-    records: impl IntoIterator<Item = &'a AcceptedEvent>,
-) -> Option<&'a AcceptedEvent> {
-    records.into_iter().find(|candidate| {
-        arkret_wire::EventKind::DeviceAuthorize == candidate.kind
-            && candidate.actor_id == reanchor.actor_id
-            && candidate
-                .envelope
-                .pointer("/prev_refs")
-                .and_then(Value::as_array)
-                .is_some_and(|refs| {
-                    refs.len() == 1 && refs[0].as_str() == Some(reanchor.event_id.as_str())
-                })
-    })
-}
-
-/// Recompute the value a B-model re-anchor commits to.
+/// Recompute the replacement authorize payload commitment in a re-anchor.
 ///
 /// The digest suite comes from the authorize envelope digest so the payload
 /// commitment and the envelope commitment always speak the same Realm live

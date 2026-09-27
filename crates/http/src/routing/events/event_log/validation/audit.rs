@@ -302,7 +302,6 @@ mod tests {
             device_id: Some(
                 DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002".to_owned()).unwrap(),
             ),
-            actor_seq: 1,
             realm_id: RealmId::new(
                 "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv".to_owned(),
             )
@@ -310,7 +309,6 @@ mod tests {
             kind: kind.to_owned(),
             schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
             digest_suite: arkret_canonical::DigestSuite::Sha256,
-            prev_refs: Vec::new(),
             canonical_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             canonical_bytes: Vec::new(),
