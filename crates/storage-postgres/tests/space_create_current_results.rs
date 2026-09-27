@@ -188,11 +188,14 @@ async fn space_create_root_and_child_have_three_sibling_results_and_exact_replay
         child_space
     );
 
-    let snapshot = PgAuthorityCommitStore { pool: pool.clone() }
-        .realm_state_snapshot_material(&realm_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let snapshot = soland_storage_postgres::account_snapshot_material(
+        &pool,
+        &realm_id,
+        &arkret_wire::AccountId::new(founder(), ordinary_realm::station()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     for (space_id, metadata, parent, policy) in [
         (&root_id, &root_space, &root_parent, &root_policy),
         (&child_id, &child_space, &child_parent, &child_policy),

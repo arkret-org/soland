@@ -27,9 +27,10 @@
 //!
 //! Per family, a joined member receives:
 //!
-//! - every Realm singleton, every `member_state` row, every Realm-scoped Strand, every
-//!   `invite_lifecycle`, `invite_live_target`, `invite_directed_invitee` and `capability_grant`
-//!   row, and the Realm-scope `mls_group` row (the public MLS group every member's send gate reads,
+//! - every Realm singleton, every `member_state` row, every Realm-scoped Strand and Space (with its
+//!   separate parent and child-scope-policy current families), every `invite_lifecycle`,
+//!   `invite_live_target`, `invite_directed_invitee` and `capability_grant` row, and the
+//!   Realm-scope `mls_group` row (the public MLS group every member's send gate reads,
 //!   encryption-and-audit.md §2.5.3). These are Realm-stream state written by durable shared Events
 //!   that federation fans out to every joined member (`federation.md` §4.1.1); membership, not a
 //!   grant, decides a member's reads (`capabilities.md` §9) and a Realm promises no read isolation
@@ -73,6 +74,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::CapabilityRelinquish,
     EventKind::StrandCreate,
     EventKind::StrandUpdate,
+    EventKind::SpaceCreate,
     EventKind::RealmSetDefaultStrand,
     EventKind::MessageCreate,
     EventKind::MessageRevise,
@@ -375,9 +377,6 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM sidecar_context_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM rsvp_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM space_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM space_parent_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM space_child_scope_policy_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
@@ -484,6 +483,7 @@ pub(crate) fn disclose_to_account(
     let mut own_join = false;
     let mut redacted = std::collections::BTreeSet::new();
     let mut below_floor = std::collections::BTreeSet::new();
+    let mut space_families = std::collections::BTreeMap::new();
     for row in &material.current_state_entries {
         let TypedCurrentResult::Value {
             selector,
@@ -525,6 +525,41 @@ pub(crate) fn disclose_to_account(
                         "a Circle-scoped Strand's visibility is not proved",
                     ));
                 }
+            }
+            CurrentSelector::Space { space_id } => {
+                let space: arkret_models_collaboration::objects::space::Space =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if space.id.as_ref() != Some(space_id)
+                    || space.realm_id != material.realm_id
+                    || space.scope_circle_id.is_some()
+                    || space.parent_space_id.is_some()
+                    || space.child_scope_policy.is_some()
+                {
+                    return Err(rejected(
+                        "Space metadata is not a Realm-scoped registered value",
+                    ));
+                }
+                *space_families.entry(space_id.clone()).or_insert(0_u8) |= 1;
+            }
+            CurrentSelector::SpaceParent { space_id } => {
+                let parent = value
+                    .as_object()
+                    .filter(|object| object.len() == 1 && object.contains_key("parent_space_id"))
+                    .ok_or_else(|| rejected("Space parent value is not closed"))?;
+                if !parent["parent_space_id"].is_null() {
+                    serde_json::from_value::<arkret_wire::SpaceId>(
+                        parent["parent_space_id"].clone(),
+                    )
+                    .map_err(PersistenceError::database)?;
+                }
+                *space_families.entry(space_id.clone()).or_insert(0_u8) |= 2;
+            }
+            CurrentSelector::SpaceChildScopePolicy { space_id } => {
+                serde_json::from_value::<
+                    Option<arkret_models_collaboration::objects::space::ChildScopePolicy>,
+                >(value.clone())
+                .map_err(PersistenceError::database)?;
+                *space_families.entry(space_id.clone()).or_insert(0_u8) |= 4;
             }
             CurrentSelector::MessageRevision { message_id } => {
                 if revision.stream_position < floor.oldest_position {
@@ -572,6 +607,11 @@ pub(crate) fn disclose_to_account(
                 ));
             }
         }
+    }
+    if space_families.values().any(|families| *families != 7) {
+        return Err(rejected(
+            "a Space omits one of its registered sibling families",
+        ));
     }
     let Some(history_access) = history_access else {
         return Err(rejected("the cut has no Realm history-access current"));
@@ -842,6 +882,60 @@ mod tests {
                 }],
             }
         );
+    }
+
+    #[test]
+    fn realm_space_disclosure_requires_complete_siblings_and_rejects_circle_metadata() {
+        use arkret_models_collaboration::objects::space::Space;
+        let (founder, mut material, facts) = fixture();
+        let space_id = arkret_wire::SpaceId::from_event_id(&event_id(0x66));
+        let mut space = Space::new(
+            space_id.clone(),
+            realm_id(),
+            "board",
+            "Board",
+            ActorId::account(founder.clone()),
+        );
+        material.current_state_entries.extend([
+            row(
+                CurrentSelector::Space {
+                    space_id: space_id.clone(),
+                },
+                7,
+                serde_json::to_value(&space).unwrap(),
+            ),
+            row(
+                CurrentSelector::SpaceParent {
+                    space_id: space_id.clone(),
+                },
+                7,
+                json!({"parent_space_id":null}),
+            ),
+            row(
+                CurrentSelector::SpaceChildScopePolicy {
+                    space_id: space_id.clone(),
+                },
+                7,
+                Value::Null,
+            ),
+        ]);
+        assert_eq!(
+            disclose_to_account(material.clone(), &founder, &facts)
+                .unwrap()
+                .current_state_entries,
+            material.current_state_entries,
+        );
+        let mut incomplete = material.clone();
+        incomplete.current_state_entries.pop();
+        assert!(disclose_to_account(incomplete, &founder, &facts).is_err());
+        space.scope_circle_id = Some(arkret_wire::CircleId::from_event_id(&event_id(0x77)));
+        let index = material.current_state_entries.len() - 3;
+        material.current_state_entries[index] = row(
+            CurrentSelector::Space { space_id },
+            7,
+            serde_json::to_value(space).unwrap(),
+        );
+        assert!(disclose_to_account(material, &founder, &facts).is_err());
     }
 
     fn redaction_row(target: &str, redacted: &MessageId, position: u64) -> TypedCurrentResult {
