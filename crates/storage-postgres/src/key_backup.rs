@@ -481,7 +481,7 @@ impl KeyBackupStore for PgKeyBackupStore {
                 let account=&backup["actor_id"]["account_id"];
                 let canonical=arkret_canonical::canonical_json_string(account).map_err(PersistenceError::database)?;
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind::<Text,_>(format!("recovery-policy:{canonical}")).execute(&mut *conn).await.map_err(PersistenceError::database)?;
-                let current=sql_query("SELECT raw_payload AS payload FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 ORDER BY version DESC LIMIT 1 FOR SHARE")
+                let current=sql_query("SELECT p.raw_payload AS payload FROM recovery_policies p JOIN policy_current_results c ON c.policy_id=('ak:policy:' || p.id::text) AND c.current_commit_id=(p.acceptance_basis #>> '{}') AND c.value=p.raw_payload WHERE p.principal_id=$1 AND p.station_id=$2 ORDER BY p.version DESC LIMIT 1 FOR SHARE OF p")
                     .bind::<Text,_>(account["principal_id"].as_str().unwrap_or_default()).bind::<Text,_>(account["station_id"].as_str().unwrap_or_default())
                     .get_result::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?.payload;
                 let now=chrono::Utc::now();

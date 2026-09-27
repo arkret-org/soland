@@ -441,25 +441,16 @@ async fn verify_recovery_unlock_delete(
             AppError::capability_denied("key backup delete recovery session is unknown")
         })?;
     super::super::recovery::validate_frozen_session_policy(state, &session, None).await?;
-    if session.principal_id != challenge.account_id.principal_id
-        || session.station_id != challenge.account_id.station_id
-    {
-        return Err(AppError::capability_denied(
-            "key backup delete recovery session belongs to another account",
-        ));
-    }
-    if session.state != soland_storage::RecoverySessionLifecycle::Verified
-        || session.transaction_id.is_some()
-    {
-        return Err(AppError::capability_denied(
-            "key backup delete recovery session is not verified and unconsumed",
-        ));
-    }
-    if proof.created_at < session.created_at || proof.created_at > session.expires_at {
-        return Err(AppError::capability_denied(
-            "key backup delete recovery session is expired for this proof",
-        ));
-    }
+    ensure_recovery_unlock_session_eligible(
+        &session.principal_id,
+        &session.station_id,
+        session.state,
+        session.transaction_id.as_deref(),
+        session.created_at,
+        session.expires_at,
+        &challenge.account_id,
+        proof.created_at,
+    )?;
     let key = super::super::recovery::recovery_session_unlock_verifying_key(
         &session,
         proof.verification_method.as_str(),
@@ -470,6 +461,118 @@ async fn verify_recovery_unlock_delete(
         ));
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_recovery_unlock_session_eligible(
+    principal_id: &arkret_wire::DidCoreId,
+    station_id: &arkret_wire::DidCoreId,
+    lifecycle: soland_storage::RecoverySessionLifecycle,
+    transaction_id: Option<&str>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    account_id: &arkret_wire::AccountId,
+    proof_created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AppError> {
+    if principal_id != &account_id.principal_id || station_id != &account_id.station_id {
+        return Err(AppError::capability_denied(
+            "key backup delete recovery session belongs to another account",
+        ));
+    }
+    if lifecycle != soland_storage::RecoverySessionLifecycle::Verified || transaction_id.is_some() {
+        return Err(AppError::capability_denied(
+            "key backup delete recovery session is not verified and unconsumed",
+        ));
+    }
+    if proof_created_at < created_at || proof_created_at > expires_at {
+        return Err(AppError::capability_denied(
+            "key backup delete recovery session is expired for this proof",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod recovery_unlock_session_tests {
+    use super::*;
+
+    fn account(principal: &str, station: &str) -> arkret_wire::AccountId {
+        arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal.to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new(station.to_owned()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn recovery_unlock_delete_requires_the_exact_verified_live_session() {
+        let owner = account(
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:station.example",
+        );
+        let other = account(
+            "ak:did_core:web:bob.example",
+            "ak:did_core:web:station.example",
+        );
+        let created_at = "2026-09-27T00:00:00.000Z".parse().unwrap();
+        let expires_at = "2026-09-27T00:05:00.000Z".parse().unwrap();
+        let proof_at = "2026-09-27T00:01:00.000Z".parse().unwrap();
+        let check =
+            |account_id: &arkret_wire::AccountId, lifecycle, transaction_id, proof_created_at| {
+                ensure_recovery_unlock_session_eligible(
+                    &owner.principal_id,
+                    &owner.station_id,
+                    lifecycle,
+                    transaction_id,
+                    created_at,
+                    expires_at,
+                    account_id,
+                    proof_created_at,
+                )
+            };
+        check(
+            &owner,
+            soland_storage::RecoverySessionLifecycle::Verified,
+            None,
+            proof_at,
+        )
+        .unwrap();
+        assert!(
+            check(
+                &other,
+                soland_storage::RecoverySessionLifecycle::Verified,
+                None,
+                proof_at,
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                &owner,
+                soland_storage::RecoverySessionLifecycle::Pending,
+                None,
+                proof_at,
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                &owner,
+                soland_storage::RecoverySessionLifecycle::Verified,
+                Some("ak:security_transaction:consumed"),
+                proof_at,
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                &owner,
+                soland_storage::RecoverySessionLifecycle::Verified,
+                None,
+                "2026-09-27T00:05:00.001Z".parse().unwrap(),
+            )
+            .is_err()
+        );
+    }
 }
 
 /// `device_quorum`: deduplicate by `device_id`, verify every signature over the

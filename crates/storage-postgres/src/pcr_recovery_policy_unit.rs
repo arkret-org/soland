@@ -71,7 +71,12 @@ async fn policy_accepted_by(
 ) -> Result<Option<RecoveryPolicyRecord>, PgTransactionError> {
     let basis = serde_json::to_value(commit_id).map_err(PersistenceError::database)?;
     sql_query(format!(
-        "SELECT {POLICY_COLUMNS} FROM recovery_policies WHERE acceptance_basis=$1"
+        "SELECT {POLICY_COLUMNS} FROM recovery_policies p \
+         JOIN policy_current_results c \
+           ON c.policy_id=('ak:policy:' || p.id::text) \
+          AND c.current_commit_id=(p.acceptance_basis #>> '{{}}') \
+          AND c.value=p.raw_payload \
+         WHERE p.acceptance_basis=$1"
     ))
     .bind::<Jsonb, _>(basis)
     .get_result::<RecoveryPolicyRow>(&mut *conn)
@@ -97,8 +102,13 @@ async fn current_policy(
         .execute(&mut *conn)
         .await?;
     sql_query(format!(
-        "SELECT {POLICY_COLUMNS} FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 \
-         ORDER BY version DESC LIMIT 1 FOR UPDATE"
+        "SELECT {POLICY_COLUMNS} FROM recovery_policies p \
+         JOIN policy_current_results c \
+           ON c.policy_id=('ak:policy:' || p.id::text) \
+          AND c.current_commit_id=(p.acceptance_basis #>> '{{}}') \
+          AND c.value=p.raw_payload \
+         WHERE p.principal_id=$1 AND p.station_id=$2 \
+         ORDER BY p.version DESC LIMIT 1 FOR UPDATE OF p"
     ))
     .bind::<Text, _>(account.principal_id.as_str())
     .bind::<Text, _>(account.station_id.as_str())
@@ -403,8 +413,47 @@ pub(crate) async fn commit_recovery_policy_unit_in_connection(
         accepted_at: commit.committed_at,
         verification_method: policy.auth_data.verification_method.as_str().to_owned(),
     };
+    upsert_policy_current_in_connection(conn, &record, event, commit).await?;
     insert_accepted_policy_in_connection(conn, &record, policy.revokes_recovery()).await?;
     Ok(RecoveryPolicyPublicationOutcome::Committed(record))
+}
+
+/// Materialize the registered `policy` family at the exact PCR Commit cut.
+/// The recovery-specific table remains the immutable history/audit source;
+/// callers asking for current state use this row and its typed revision.
+async fn upsert_policy_current_in_connection(
+    conn: &mut AsyncPgConnection,
+    record: &RecoveryPolicyRecord,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> Result<(), PgTransactionError> {
+    let position = i64::try_from(commit.stream_position).map_err(|_| {
+        rejected(
+            ConflictCode::SchemaViolation,
+            "recovery policy stream position exceeds PostgreSQL BIGINT",
+        )
+    })?;
+    sql_query(
+        "INSERT INTO policy_current_results \
+         (realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6,$7) \
+         ON CONFLICT(policy_id) DO UPDATE SET \
+           realm_id=EXCLUDED.realm_id,current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_position=EXCLUDED.current_stream_position, \
+           current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
+         WHERE policy_current_results.realm_id=EXCLUDED.realm_id \
+           AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&record.policy_id)
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<diesel::sql_types::BigInt, _>(position)
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Jsonb, _>(&record.raw_payload)
+    .bind::<Timestamptz, _>(commit.committed_at)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// §8: a genesis policy is signed by the founding device; a successor names

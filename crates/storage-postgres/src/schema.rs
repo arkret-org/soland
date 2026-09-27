@@ -1265,6 +1265,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    policy_current_results (policy_id) {
+        realm_id -> Text,
+        policy_id -> Text,
+        current_commit_id -> Text,
+        current_stream_position -> Int8,
+        current_event_id -> Text,
+        value -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     recovery_sessions (id) {
         id -> Uuid,
         request_id -> Text,
@@ -1958,6 +1970,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     policy_documents,
     principal_resolution_events,
     principal_resolutions,
+    policy_current_results,
     projection_circle_members,
     projection_circles,
     projection_events,
