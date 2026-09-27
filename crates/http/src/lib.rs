@@ -202,6 +202,18 @@ pub async fn test_fresh_producer_device_evidence(
     crate::state::fresh_producer_device_evidence(state, event).await
 }
 
+/// Exercise the forwarding-Station preflight and queue boundary through the
+/// same function used by the self Event route.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn test_forward_self_event(
+    state: &crate::state::AppState,
+    governance: &arkret_wire::DidCoreId,
+    submission: arkret_wire::EventAdmissionSubmission,
+) -> soland_services::ServiceResult<arkret_wire::AuthoritySubmitOutcome> {
+    crate::state::forward_self_event(state, governance, submission).await
+}
+
 /// Governance-Station admission of one `authority_forward` at an explicit
 /// service clock instant (device-lifecycle §8.2.2).
 #[cfg(feature = "test-support")]

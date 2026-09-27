@@ -671,6 +671,56 @@ fn forwarding_station_signs_fresh_retained_evidence_the_governance_station_verif
             Some(soland_storage::ConflictCode::TemporarilyUnavailable),
             "{refused:?}"
         );
+
+    });
+}
+
+#[test]
+fn forwarding_device_refusal_precedes_the_local_queue_write() {
+    runtime().block_on(async {
+        let forwarder = soland_test_support::app_state_with_postgres_governance(
+            soland_test_support::app_config(),
+        );
+        let fixture = PcrGenesisFixture::new(forwarder.service_did());
+        fixture
+            .admit(&forwarder)
+            .await
+            .expect("accepted PCR genesis");
+        let realm_id = RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
+        ));
+        let event = arkret_wire::test_support::raw_event_at(
+            EventKind::RealmProfile.as_str(),
+            ScopeRef::Realm { realm_id },
+            fixture.history.account.principal_id.clone(),
+            fixture.history.account.station_id.clone(),
+            serde_json::json!({"name": "unknown device forward"}),
+            now() - Duration::seconds(1),
+        )
+        .unwrap();
+        let event = sign_event(
+            event,
+            DidUrl::new(format!("{}#{OTHER_DEVICE}", fixture.history.did)).unwrap(),
+            fixture.history.founding_device_signing_seed,
+        );
+
+        // The route-level forwarding function must run the PCR device gate
+        // before it queues the Event. This unknown generation exercises the
+        // same preflight boundary used by revoked, pending and fenced devices.
+        let refused = soland_http::test_forward_self_event(
+            &forwarder,
+            &DidCoreId::new("ak:did_core:web:governance.example").unwrap(),
+            EventAdmissionSubmission::new(event.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            refused.conflict_code(),
+            Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+            "{refused:?}"
+        );
+        assert_nothing_written(&forwarder, &event).await;
     });
 }
 

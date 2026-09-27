@@ -308,11 +308,16 @@ async fn forwarded_genesis_material(
 
 /// A: forward one self-submitted Event to its current governance Station and
 /// relay that Station's outcome.
-pub(super) async fn forward_self_event(
+pub(crate) async fn forward_self_event(
     state: &AppState,
     governance: &DidCoreId,
     submission: EventAdmissionSubmission,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    // Device admission and Genesis material are preflight gates.  In
+    // particular, a revoked/pending/fenced producer must leave no queued
+    // Event behind at the forwarding Station.
+    let material = forwarded_genesis_material(state, &submission.event).await?;
+    let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
     // Retain the producer's exact signed Event before any forwarding attempt.
     // A transport failure leaves this row queued for an exact replay or a
     // later committed replica; neither path makes it visible as accepted.
@@ -320,8 +325,6 @@ pub(super) async fn forward_self_event(
         .authority_commits()
         .queue_event(&submission.event, crate::wire::now())
         .await?;
-    let material = forwarded_genesis_material(state, &submission.event).await?;
-    let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
     let request = PeerAuthorityForwardEventRequest::new(submission, material, evidence)
         .map_err(wire_refusal)?;
     send_forward(
@@ -339,11 +342,13 @@ pub(super) async fn forward_self_mls(
     governance: &DidCoreId,
     submission: MlsCommitSubmission,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    // Match ordinary forwarding: the live device gate precedes every durable
+    // forwarding effect, including the local queued Event.
+    let evidence = fresh_producer_device_evidence(state, &submission.commit_event).await?;
     state
         .authority_commits()
         .queue_event(&submission.commit_event, crate::wire::now())
         .await?;
-    let evidence = fresh_producer_device_evidence(state, &submission.commit_event).await?;
     let request =
         PeerAuthorityForwardMlsRequest::new(submission, evidence).map_err(wire_refusal)?;
     send_forward(
