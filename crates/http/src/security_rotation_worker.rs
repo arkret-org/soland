@@ -17,12 +17,8 @@ pub async fn execute_erase_for_test(
     transaction: soland_storage::SecurityTransactionRecord,
     request: &soland_storage::BackupSeriesEraseWorkerRequest,
 ) -> Result<(), crate::error::AppError> {
-    crate::routing::identity::recovery::execute_rotation_erase_for_test(
-        state,
-        transaction,
-        request,
-    )
-    .await
+    crate::routing::identity::recovery::execute_rotation_erase_for_test(state, transaction, request)
+        .await
 }
 
 pub fn spawn(state: AppState) -> Arc<tokio::task::JoinHandle<()>> {

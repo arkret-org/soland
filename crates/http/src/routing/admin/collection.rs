@@ -470,7 +470,12 @@ pub(super) fn admin_invite_item(
     let invitee = invite
         .invitee_account_id
         .as_ref()
-        .or_else(|| invite.accepted_claim.as_ref().map(|claim| &claim.subject_account_id))
+        .or_else(|| {
+            invite
+                .accepted_claim
+                .as_ref()
+                .map(|claim| &claim.subject_account_id)
+        })
         .map(|account| account.principal_id.clone());
     soland_contracts::admin::invite_tokens::AdminInviteTokenItem {
         kind: "invite_token".to_owned(),

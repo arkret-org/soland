@@ -502,9 +502,11 @@ pub(crate) async fn confirmed_key_backup_pointer_in_connection(
     conn: &mut AsyncPgConnection,
     account_id: &AccountId,
 ) -> PersistenceResult<Option<BackupActiveSeriesState>> {
-    Ok(confirmed_key_backup_pointer_basis_in_connection(conn, account_id)
-        .await?
-        .map(|basis| basis.state))
+    Ok(
+        confirmed_key_backup_pointer_basis_in_connection(conn, account_id)
+            .await?
+            .map(|basis| basis.state),
+    )
 }
 
 pub(crate) async fn confirmed_key_backup_pointer_basis_in_connection(
@@ -774,7 +776,10 @@ mod tests {
             .unwrap();
         assert_eq!(absent_basis.state, absent);
         assert_eq!(absent_basis.committed_ref.event_id, genesis.event_id);
-        assert_eq!(absent_basis.committed_ref.commit_id, genesis_commit.commit_id);
+        assert_eq!(
+            absent_basis.committed_ref.commit_id,
+            genesis_commit.commit_id
+        );
         assert_eq!(
             absent_basis.committed_ref.stream_ref,
             genesis_commit.stream_ref

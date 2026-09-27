@@ -4522,9 +4522,10 @@ async fn keypackage_claim_record(
             principal_id.clone(),
             owner.account_id.station_id.clone(),
         ));
-        let agent = crate::routing::identity::agent_pcr::agent_record_for_actor(state, &agent_actor)
-            .await?
-            .ok_or_else(|| AppError::capability_denied("target Agent is unavailable"))?;
+        let agent =
+            crate::routing::identity::agent_pcr::agent_record_for_actor(state, &agent_actor)
+                .await?
+                .ok_or_else(|| AppError::capability_denied("target Agent is unavailable"))?;
         let controller =
             crate::routing::identity::agent_pcr::agent_controller_account(state, &agent).await?;
         if controller != owner.account_id

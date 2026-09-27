@@ -255,11 +255,14 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     let Ok(invites) = state.persistence().invites_in_realm(Some(&realm_id)).await else {
         return false;
     };
-    let Some(invite) = invites.into_iter().find(|invite| invite.invite_id == invite_id) else {
+    let Some(invite) = invites
+        .into_iter()
+        .find(|invite| invite.invite_id == invite_id)
+    else {
         return false;
     };
-    let is_pending_third_party = invite.state == arkret_wire::InviteState::Pending
-        && invite.third_party_invite.is_some();
+    let is_pending_third_party =
+        invite.state == arkret_wire::InviteState::Pending && invite.third_party_invite.is_some();
     let is_duplicate_claim_by_invitee = invite.state == arkret_wire::InviteState::Claimed
         && invite
             .accepted_claim

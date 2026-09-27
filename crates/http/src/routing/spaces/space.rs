@@ -644,8 +644,7 @@ pub async fn realm_member_invited_or_joined_at_for_id(
             if let Some(invited_at) = invites
                 .into_iter()
                 .filter(|invite| {
-                    invite.state == arkret_wire::InviteState::Pending
-                        && invite.expires_at > now()
+                    invite.state == arkret_wire::InviteState::Pending && invite.expires_at > now()
                 })
                 .map(|invite| invite.created_at)
                 .min()
