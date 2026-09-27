@@ -641,44 +641,11 @@ fn authority_from_row(row: AuthorityRow) -> PersistenceResult<CurrentRealmAuthor
     })
 }
 
-pub(crate) async fn realm_state_snapshot_material_in_connection(
-    conn: &mut AsyncPgConnection,
-    realm_id: &arkret_wire::RealmId,
-) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
-    let authority = sql_query(
-        "SELECT realm_id, generation, service_id, authority_ref, last_handoff_ref \
-         FROM realm_authorities WHERE realm_id = $1",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .get_result::<AuthorityRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .map(authority_from_row)
-    .transpose()?;
-    let Some(authority) = authority else {
-        return Ok(None);
-    };
-
-    let rows = sql_query(REALM_STREAM_HEADS_SQL)
-        .bind::<Text, _>(realm_id.as_str())
-        .load::<HeadRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-    let mut heads = rows
-        .into_iter()
-        .map(|row| {
-            Ok(arkret_wire::CommitStreamHead {
-                stream_ref: decode_json(row.stream_ref, "commit stream ref")?,
-                stream_position: to_u64(row.stream_position, "stream position")?,
-                commit_id: decode_text(row.commit_id, "RealmCommit id")?,
-            })
-        })
-        .collect::<PersistenceResult<Vec<_>>>()?;
-    heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
-
-    let rows = sql_query(
-        "SELECT result.*, covering.stream_ref AS source_stream_ref FROM ( \
+// Keep the covering-Commit lookup parameterized per current row. Flattening
+// this into a hash join can read the Realm's entire immutable history just
+// to materialize a small current cut. LIMIT 1 preserves the unique-id lookup
+// and the LEFT JOIN still exposes missing provenance as NULL for validation.
+pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_ref AS source_stream_ref FROM ( \
          SELECT result_family AS selector_kind, NULL::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM realm_bootstrap_current_results WHERE realm_id = $1 \
@@ -773,15 +740,53 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
          SELECT 'agent_key'::text AS selector_kind, jsonb_build_object('agent_id',agent_id,'agent_key_id',agent_key_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM agent_key_current_results WHERE realm_id = $1 \
-         ) result LEFT JOIN realm_commits covering \
-           ON covering.commit_id=result.current_commit_id \
-          AND covering.stream_position=result.current_stream_position \
-          AND covering.realm_id=$1",
+         ) result LEFT JOIN LATERAL ( \
+           SELECT stream_ref FROM realm_commits \
+           WHERE commit_id=result.current_commit_id \
+             AND stream_position=result.current_stream_position \
+             AND realm_id=$1 LIMIT 1) covering ON TRUE";
+
+pub(crate) async fn realm_state_snapshot_material_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+    let authority = sql_query(
+        "SELECT realm_id, generation, service_id, authority_ref, last_handoff_ref \
+         FROM realm_authorities WHERE realm_id = $1",
     )
     .bind::<Text, _>(realm_id.as_str())
-    .load::<SnapshotCurrentRow>(&mut *conn)
+    .get_result::<AuthorityRow>(&mut *conn)
     .await
-    .map_err(PersistenceError::database)?;
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(authority_from_row)
+    .transpose()?;
+    let Some(authority) = authority else {
+        return Ok(None);
+    };
+
+    let rows = sql_query(REALM_STREAM_HEADS_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .load::<HeadRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    let mut heads = rows
+        .into_iter()
+        .map(|row| {
+            Ok(arkret_wire::CommitStreamHead {
+                stream_ref: decode_json(row.stream_ref, "commit stream ref")?,
+                stream_position: to_u64(row.stream_position, "stream position")?,
+                commit_id: decode_text(row.commit_id, "RealmCommit id")?,
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
+
+    let rows = sql_query(SNAPSHOT_CURRENT_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .load::<SnapshotCurrentRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
     let current_state_entries = rows
         .into_iter()
         .map(|row| {

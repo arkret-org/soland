@@ -4179,6 +4179,8 @@ async fn self_current_reads_answer_only_the_provable_cut() {
         creator.station_id.clone(),
     );
     let unknown = arkret_wire::RealmId::from_event_id(&unit.transactions[1].event.event_id);
+    let same_principal_other_station =
+        arkret_wire::AccountId::new(creator.principal_id.clone(), other_station.clone());
     store
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
         .await
@@ -4208,7 +4210,11 @@ async fn self_current_reads_answer_only_the_provable_cut() {
             }),
         }]
     );
-    for (realm, account) in [(&realm_id, &stranger), (&unknown, &creator)] {
+    for (realm, account) in [
+        (&realm_id, &stranger),
+        (&realm_id, &same_principal_other_station),
+        (&unknown, &creator),
+    ] {
         assert_eq!(
             store
                 .list_realm_streams_for_account(realm, account, &station)
@@ -4309,6 +4315,15 @@ async fn self_current_reads_answer_only_the_provable_cut() {
     assert_eq!(entry.revision.stream_position, 6);
     assert_eq!(entry.source_stream_ref, effective_stream_head.stream_ref);
     // Non-members and unknown Realms cannot distinguish present from absent.
+    assert!(matches!(
+        exact(
+            relation_request(&realm_id),
+            same_principal_other_station,
+            station.clone()
+        )
+        .await,
+        SelfExactCurrentRead::NotFound
+    ));
     assert!(matches!(
         exact(
             relation_request(&realm_id),

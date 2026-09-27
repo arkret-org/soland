@@ -45,13 +45,34 @@ struct TenureRow {
     service_id: String,
 }
 
-#[derive(QueryableByName)]
-struct MemberRow {
-    #[diesel(sql_type = Text)]
-    member_id: String,
-    #[diesel(sql_type = Text)]
-    membership: String,
-}
+pub(crate) const RELATION_CURRENT_SQL: &str = "SELECT r.current_commit_id, r.current_stream_position, r.value, c.stream_ref \
+             FROM relation_current_results r \
+             JOIN realm_commits c ON c.commit_id = r.current_commit_id \
+             WHERE r.realm_id=$1 AND r.domain_key=$2 AND c.realm_id=r.realm_id \
+               AND c.stream_position=r.current_stream_position";
+
+pub(crate) const MODERATION_CURRENT_SQL: &str = "SELECT s.current_commit_id, s.current_stream_position, s.value, c.stream_ref \
+         FROM moderation_state_current_results s \
+         JOIN realm_commits c ON c.commit_id = s.current_commit_id \
+         WHERE s.realm_id=$1 AND s.target_ref=$2 AND c.realm_id=s.realm_id \
+           AND c.stream_position=s.current_stream_position";
+
+pub(crate) const MEMBER_PRESENT_SQL: &str = "SELECT EXISTS(SELECT 1 FROM member_state_current_results \
+     WHERE realm_id=$1 AND member_id=$2 AND membership='join') AS present";
+
+// Probe the adjacent keys on both sides of the Realm stream. Tuple bounds
+// keep each probe on the Realm-prefixed index. Scalar ORDER BY/LIMIT prevents
+// EXISTS from discarding that order and choosing a history scan instead.
+pub(crate) const SCOPED_STREAMS_SQL: &str = "SELECT ( \
+    (SELECT stream_key FROM realm_commits \
+     WHERE realm_id=$1 AND (realm_id,stream_key)<($1,$2) \
+     ORDER BY realm_id DESC,stream_key DESC LIMIT 1) IS NOT NULL OR \
+    (SELECT stream_key FROM realm_commits \
+     WHERE realm_id=$1 AND (realm_id,stream_key)>($1,$2) \
+     ORDER BY realm_id,stream_key LIMIT 1) IS NOT NULL) AS present";
+
+pub(crate) const MEDIA_ANCHOR_SQL: &str = "SELECT EXISTS(SELECT 1 FROM realm_commit_event_kinds \
+     WHERE realm_id=$1 AND kind=$2) AS present";
 
 #[derive(QueryableByName)]
 struct HeadRow {
@@ -119,18 +140,13 @@ async fn member_cut(
     else {
         return Ok(MemberCut::NotVisible);
     };
-    let members = sql_query(
-        "SELECT member_id, membership FROM member_state_current_results \
-         WHERE realm_id=$1 AND membership='join' ORDER BY member_id",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .load::<MemberRow>(&mut *conn)
-    .await?;
-    let caller = caller.to_string();
-    if !members
-        .iter()
-        .any(|row| row.member_id == caller && row.membership == "join")
-    {
+    let joined = sql_query(MEMBER_PRESENT_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(caller.to_string())
+        .get_result::<ExistsRow>(&mut *conn)
+        .await?
+        .present;
+    if !joined {
         return Ok(MemberCut::NotVisible);
     }
     if tenure.service_id != issuer.as_str() {
@@ -160,15 +176,12 @@ async fn member_cut(
         })
     })
     .transpose()?;
-    let scoped_streams = sql_query(
-        "SELECT EXISTS(SELECT 1 FROM realm_commits WHERE realm_id=$1 AND stream_key<>$2) \
-         AS present",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .bind::<Text, _>(&realm_key)
-    .get_result::<ExistsRow>(&mut *conn)
-    .await?
-    .present;
+    let scoped_streams = sql_query(SCOPED_STREAMS_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(&realm_key)
+        .get_result::<ExistsRow>(&mut *conn)
+        .await?
+        .present;
     Ok(MemberCut::Member {
         generation: to_u64(tenure.generation, "governance generation")?,
         realm_head,
@@ -283,18 +296,12 @@ pub(crate) async fn exact_current_result_for_account(
                     "Relation primary conflict domain canonicalization failed: {error}"
                 ))
             })?;
-        let Some(row) = sql_query(
-            "SELECT r.current_commit_id, r.current_stream_position, r.value, c.stream_ref \
-             FROM relation_current_results r \
-             JOIN realm_commits c ON c.commit_id = r.current_commit_id \
-             WHERE r.realm_id=$1 AND r.domain_key=$2 AND c.realm_id=r.realm_id \
-               AND c.stream_position=r.current_stream_position",
-        )
-        .bind::<Text, _>(request.realm_id.as_str())
-        .bind::<Text, _>(&domain_key)
-        .get_result::<CurrentRow>(&mut *conn)
-        .await
-        .optional()?
+        let Some(row) = sql_query(RELATION_CURRENT_SQL)
+            .bind::<Text, _>(request.realm_id.as_str())
+            .bind::<Text, _>(&domain_key)
+            .get_result::<CurrentRow>(&mut *conn)
+            .await
+            .optional()?
         else {
             // Absence of a row cannot prove never_written until the domain's
             // endpoint visibility is decided at this cut.
@@ -351,18 +358,12 @@ async fn moderation_state_read(
     head: CommitStreamHead,
     selector: &ModerationStateExactCurrentSelector,
 ) -> Result<SelfExactCurrentRead<ExactCurrentResultsReadOutcome>, PgTransactionError> {
-    let Some(row) = sql_query(
-        "SELECT s.current_commit_id, s.current_stream_position, s.value, c.stream_ref \
-         FROM moderation_state_current_results s \
-         JOIN realm_commits c ON c.commit_id = s.current_commit_id \
-         WHERE s.realm_id=$1 AND s.target_ref=$2 AND c.realm_id=s.realm_id \
-           AND c.stream_position=s.current_stream_position",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .bind::<Text, _>(selector.target_ref.as_str())
-    .get_result::<CurrentRow>(&mut *conn)
-    .await
-    .optional()?
+    let Some(row) = sql_query(MODERATION_CURRENT_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(selector.target_ref.as_str())
+        .get_result::<CurrentRow>(&mut *conn)
+        .await
+        .optional()?
     else {
         return Ok(SelfExactCurrentRead::NotFound);
     };
@@ -471,16 +472,12 @@ pub(crate) async fn media_service_anchor_for_account(
         ) {
             return Ok(MediaServiceAnchorRead::NotFound);
         }
-        let anchored = sql_query(
-            "SELECT EXISTS(SELECT 1 FROM realm_commits c \
-             JOIN canonical_events e ON e.pk = c.event_pk \
-             WHERE c.realm_id=$1 AND e.state='committed' AND e.kind=$2) AS present",
-        )
-        .bind::<Text, _>(realm_id.as_str())
-        .bind::<Text, _>(arkret_wire::EventKind::RealmMediaService.as_str())
-        .get_result::<ExistsRow>(&mut *conn)
-        .await?
-        .present;
+        let anchored = sql_query(MEDIA_ANCHOR_SQL)
+            .bind::<Text, _>(realm_id.as_str())
+            .bind::<Text, _>(arkret_wire::EventKind::RealmMediaService.as_str())
+            .get_result::<ExistsRow>(&mut *conn)
+            .await?
+            .present;
         Ok(if anchored {
             MediaServiceAnchorRead::Anchored
         } else {

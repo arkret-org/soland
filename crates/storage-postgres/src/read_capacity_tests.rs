@@ -264,3 +264,236 @@ async fn per_stream_reads_stay_bounded_across_one_hundred_and_one_thousand_realm
         }
     }
 }
+
+// These are query-plan fixtures, not admission evidence. The larger member
+// and message families expose a scan hidden by tiny bootstrap-only Realms.
+async fn seed_current(conn: &mut AsyncPgConnection, first: i64, last: i64, width: i64) {
+    conn.batch_execute(&format!(
+        "INSERT INTO member_state_current_results
+           (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at)
+         SELECT 'ak:realm:capacity-' || r, jsonb_build_object('member',m)::text, 'join',
+                'capacity-' || r || '-0', 0, '{{\"membership\":\"join\"}}'::jsonb, now()
+         FROM generate_series({first},{last}) r, generate_series(1,{width}) m;
+         INSERT INTO message_revision_current_results
+           (realm_id,message_id,current_commit_id,current_stream_position,value,updated_at)
+         SELECT 'ak:realm:capacity-' || r, 'message-' || r || '-' || m,
+                'capacity-' || r || '-0', 0,
+                '{{\"strand_id\":\"strand\",\"track_name\":\"discussion\"}}'::jsonb, now()
+         FROM generate_series({first},{last}) r, generate_series(1,{width}) m;
+         INSERT INTO relation_current_results
+           (realm_id,domain_key,domain,relation_id,state,current_commit_id,current_stream_position,value,updated_at)
+         SELECT 'ak:realm:capacity-' || r, 'domain-' || m, '{{}}'::jsonb, 'relation-' || r || '-' || m,
+                'active', 'capacity-' || r || '-0', 0,
+                jsonb_build_object('id','relation-' || r || '-' || m,'state','active'), now()
+         FROM generate_series({first},{last}) r, generate_series(1,{width}) m;
+         INSERT INTO moderation_state_current_results
+           (realm_id,target_ref,current_commit_id,current_stream_position,value,updated_at)
+         SELECT 'ak:realm:capacity-' || r, 'target-' || m, 'capacity-' || r || '-0', 0,
+                '{{}}'::jsonb, now()
+         FROM generate_series({first},{last}) r, generate_series(1,{width}) m;"
+    )).await.unwrap();
+}
+
+fn measured_current(plan: Value, label: &str, bound: f64) {
+    fn visit(node: &Value, label: &str, rows: &mut f64) {
+        if let Some(relation) = node.get("Relation Name").and_then(Value::as_str) {
+            let visited = [
+                "Actual Rows",
+                "Rows Removed by Filter",
+                "Rows Removed by Index Recheck",
+            ]
+            .into_iter()
+            .filter_map(|field| node.get(field).and_then(Value::as_f64))
+            .sum::<f64>()
+                * node["Actual Loops"].as_f64().unwrap_or(1.0);
+            // Current-table scans are judged by the total output-relative
+            // row budget below: PostgreSQL can prefer one when the requested
+            // Realm is a large fraction of the table. History scans must
+            // never grow with its length. Do not disable seqscan.
+            let current_table = relation.ends_with("_current_results");
+            assert!(
+                node["Node Type"] != "Seq Scan" || visited <= 32.0 || current_table,
+                "{label}: unbounded sequential scan of {relation}: {visited}: {node}"
+            );
+            *rows += visited;
+        }
+        for child in node["Plans"].as_array().into_iter().flatten() {
+            visit(child, label, rows);
+        }
+    }
+    let mut rows = 0.0;
+    visit(&plan[0]["Plan"], label, &mut rows);
+    assert!(
+        rows <= bound,
+        "{label}: visited {rows} rows, bound {bound}: {plan}"
+    );
+    println!(
+        "{label}: visited={rows} execution_ms={}",
+        plan[0]["Execution Time"]
+    );
+}
+
+#[tokio::test]
+async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_thousand_realms() {
+    let database = crate::test_database::TestDatabase::lease().await;
+    let mut conn = pg_conn(&database.pool()).await.unwrap();
+    seed(&mut conn, 1, 1, HOT_HISTORY).await;
+    seed_current(&mut conn, 1, 1, 1000).await;
+    let mut seeded = 1;
+    for realms in [1_i64, 100, 1000] {
+        if realms > seeded {
+            seed(&mut conn, seeded + 1, realms, COLD_HISTORY).await;
+            seed_current(&mut conn, seeded + 1, realms, 20).await;
+            seeded = realms;
+        }
+        conn.batch_execute("ANALYZE").await.unwrap();
+        for realm in [
+            "ak:realm:capacity-1".to_owned(),
+            format!("ak:realm:capacity-{realms}"),
+        ] {
+            let label = format!("typed current realms={realms} realm={realm}");
+            let plan = sql_query(format!(
+                "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+                crate::authority_commit::SNAPSHOT_CURRENT_SQL
+            ))
+            .bind::<Text, _>(&realm)
+            .get_result::<PlanRow>(&mut *conn)
+            .await
+            .unwrap()
+            .plan;
+            // Three published families plus their covering Commit probes.
+            // Relation is read by its exact endpoint, not this snapshot union.
+            let width = if realm == "ak:realm:capacity-1" {
+                1000.0
+            } else {
+                20.0
+            };
+            assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(3.0 * width));
+            // Up to four visited rows per output permits the planner's
+            // low-selectivity current-table scan, but never a history scan
+            // or a scan that grows with unrelated Realms.
+            measured_current(plan, &label, 12.0 * width + 32.0);
+            for (name, sql, key) in [
+                (
+                    "member present",
+                    crate::self_current_reads::MEMBER_PRESENT_SQL,
+                    "{\"member\": 1}",
+                ),
+                (
+                    "member absent",
+                    crate::self_current_reads::MEMBER_PRESENT_SQL,
+                    "{\"member\": 0}",
+                ),
+                (
+                    "no scoped stream",
+                    crate::self_current_reads::SCOPED_STREAMS_SQL,
+                    "stream-1",
+                ),
+                (
+                    "stream above",
+                    crate::self_current_reads::SCOPED_STREAMS_SQL,
+                    "stream-0",
+                ),
+                (
+                    "stream below",
+                    crate::self_current_reads::SCOPED_STREAMS_SQL,
+                    "stream-zzzz",
+                ),
+                (
+                    "media absent",
+                    crate::self_current_reads::MEDIA_ANCHOR_SQL,
+                    "ak.realm.media_service",
+                ),
+                (
+                    "media present",
+                    crate::self_current_reads::MEDIA_ANCHOR_SQL,
+                    "ak.realm.create",
+                ),
+                (
+                    "relation present",
+                    crate::self_current_reads::RELATION_CURRENT_SQL,
+                    "domain-1",
+                ),
+                (
+                    "relation absent",
+                    crate::self_current_reads::RELATION_CURRENT_SQL,
+                    "domain-0",
+                ),
+                (
+                    "moderation present",
+                    crate::self_current_reads::MODERATION_CURRENT_SQL,
+                    "target-1",
+                ),
+                (
+                    "moderation absent",
+                    crate::self_current_reads::MODERATION_CURRENT_SQL,
+                    "target-0",
+                ),
+            ] {
+                let label = format!("self current realms={realms} realm={realm} {name}");
+                let realm_stream = realm.replace("ak:realm:capacity-", "stream-");
+                let key = if name == "no scoped stream" {
+                    realm_stream.as_str()
+                } else {
+                    key
+                };
+                let plan = sql_query(format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}"))
+                    .bind::<Text, _>(&realm)
+                    .bind::<Text, _>(key)
+                    .get_result::<PlanRow>(&mut *conn)
+                    .await
+                    .unwrap()
+                    .plan;
+                measured_current(plan, &label, 4.0);
+            }
+            for (sql, key, expected) in [
+                (
+                    crate::self_current_reads::MEMBER_PRESENT_SQL,
+                    "{\"member\": 1}".to_owned(),
+                    true,
+                ),
+                (
+                    crate::self_current_reads::MEMBER_PRESENT_SQL,
+                    "{\"member\": 0}".to_owned(),
+                    false,
+                ),
+                (
+                    crate::self_current_reads::SCOPED_STREAMS_SQL,
+                    realm.replace("ak:realm:capacity-", "stream-"),
+                    false,
+                ),
+                (
+                    crate::self_current_reads::SCOPED_STREAMS_SQL,
+                    "stream-0".to_owned(),
+                    true,
+                ),
+                (
+                    crate::self_current_reads::SCOPED_STREAMS_SQL,
+                    "stream-zzzz".to_owned(),
+                    true,
+                ),
+                (
+                    crate::self_current_reads::MEDIA_ANCHOR_SQL,
+                    "ak.realm.media_service".to_owned(),
+                    false,
+                ),
+                (
+                    crate::self_current_reads::MEDIA_ANCHOR_SQL,
+                    "ak.realm.create".to_owned(),
+                    true,
+                ),
+            ] {
+                let result = sql_query(sql)
+                    .bind::<Text, _>(&realm)
+                    .bind::<Text, _>(key)
+                    .get_result::<crate::ExistsRow>(&mut *conn)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.present, expected,
+                    "realms={realms} realm={realm} {sql}"
+                );
+            }
+        }
+    }
+}
