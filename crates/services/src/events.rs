@@ -465,9 +465,6 @@ pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
     pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub contact_projection: Option<CommitContactProjection>,
-    /// Holder-private consent grant mutation plus its eager cache
-    /// invalidation, staged by admission and committed with the Event.
-    pub consent_projection: Option<CommitConsentProjection>,
     pub device_revocation_transition: Option<soland_storage::DeviceRevocationTransition>,
     pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
     pub projections: Vec<ProjectedEvent>,
@@ -476,17 +473,6 @@ pub struct CommitAcceptedEventCommand {
     /// The exact admission submission of a Realm-stream Event; its
     /// committed-replication fanout is planned inside the commit transaction.
     pub realm_fanout_source: Option<arkret_wire::EventAdmissionSubmission>,
-}
-
-/// The holder-private consent effects of one accepted consent command unit.
-///
-/// `consent-model.md` section 4.1.2 puts the downstream invalidation inside
-/// the same transaction boundary as the accepted revoke, so the holder grant
-/// mutation and the holder-quarantine CAS commit with the canonical Event.
-#[derive(Clone, Debug)]
-pub struct CommitConsentProjection {
-    pub grant: crate::identity::ConsentGrantRecord,
-    pub holder_quarantine: Option<CommitAccountDataCas>,
 }
 
 /// One account-data cell replaced by revision CAS inside an Event commit.
@@ -1587,7 +1573,7 @@ mod tests {
                 forwarded_producer_evidence: None,
                 parent_membership_admission: None,
                 contact_projection: None,
-                consent_projection: None,
+
                 event: AcceptedEvent {
                     event_id: event_id.clone(),
                     actor_id: "ak:did_core:web:alice.example".to_owned(),

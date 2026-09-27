@@ -1638,7 +1638,6 @@ impl AppState {
 
         // Hydrate the holder-private consent-cell working projection owned by
         // the application service.
-        self.consents.hydrate_runtime().await?;
 
         // MID-1..6 — rebuild the in-memory member-identity registry from the
         // durable store so a restart does not reset the R3.2 effective-set

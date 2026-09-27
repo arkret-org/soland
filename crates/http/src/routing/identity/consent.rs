@@ -1,19 +1,16 @@
 //! Holder-private Consent routes.
 //!
-//! The retired Cell/Seal consent projection cannot establish a typed current
-//! revision. Keep every authority-bearing edge closed until the PCR
-//! RealmCommit reducer and durable current-result reader are available.
+//! Caller-signed Events are admitted by the PCR current unit. Holder reads
+//! and introduction evidence use that same durable current, without caches.
 
-use arkret_event_draft::ProjectedEventOperation;
 use arkret_models_collaboration::consent_operations::{
     ConsentGrantRequestBody, ConsentList, ConsentRequestOutcome, ConsentRequestRequestBody,
     ConsentRevokeRequestBody, ConsentView,
 };
-use arkret_wire::{AccountDataKey, Event, EventKind};
+use arkret_wire::AccountDataKey;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use soland_services::events::CommitConsentProjection;
 use soland_storage::{ConsentRequestQuarantineInput, ConsentRequestQuarantineOutcome};
 
 use super::AuthArgs;
@@ -34,13 +31,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("request").post(request_consent))
 }
 
-fn current_unavailable() -> AppError {
-    crate::app_error!(
-        TemporarilyUnavailable,
-        "Consent current result and RealmCommit admission provider are unavailable"
-    )
-}
-
 #[salvo::handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.read.list.v1"))]
 async fn list_consents(
@@ -49,8 +39,16 @@ async fn list_consents(
     req: &mut Request,
 ) -> JsonResult<ConsentList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    Err(current_unavailable())
+    let session = aa.authenticated_session(state, req).await?;
+    let holder = super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
+    let records = state
+        .persistence()
+        .consent_current(&holder)
+        .await
+        .map_err(|error| consent_error(error.into()))?;
+    json_ok(ConsentList {
+        consents: records.iter().map(|record| record.view()).collect(),
+    })
 }
 
 #[salvo::handler]
@@ -61,8 +59,40 @@ async fn get_consent(
     req: &mut Request,
 ) -> JsonResult<ConsentView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    Err(current_unavailable())
+    let session = aa.authenticated_session(state, req).await?;
+    let holder = super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
+    let peer_raw = req
+        .query::<String>("peer")
+        .ok_or_else(|| AppError::param_invalid("peer is required"))?;
+    let peer: arkret_models_collaboration::events_payloads::consent::ConsentPeer =
+        serde_json::from_str(&peer_raw).map_err(|e| AppError::param_invalid(e.to_string()))?;
+    let scope = req
+        .query::<String>("consent_scope")
+        .map(|value| {
+            serde_json::from_value::<arkret_wire::ConsentScope>(serde_json::Value::String(value))
+        })
+        .transpose()
+        .map_err(|e| AppError::param_invalid(e.to_string()))?;
+    let mut records = state
+        .persistence()
+        .consent_current(&holder)
+        .await
+        .map_err(|error| consent_error(error.into()))?
+        .into_iter()
+        .filter(|record| {
+            record.value.peer == peer
+                && scope.is_none_or(|scope| record.value.consent_scope == scope)
+        });
+    let record = records
+        .next()
+        .ok_or_else(|| crate::app_error!(NotFound, "Consent does not exist"))?;
+    if records.next().is_some() {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "Consent peer and scope match multiple IDs"
+        ));
+    }
+    json_ok(record.view())
 }
 
 #[salvo::handler]
@@ -74,11 +104,18 @@ async fn grant_consent(
     body: JsonBody<ConsentGrantRequestBody>,
 ) -> JsonResult<ConsentView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    body.into_inner()
-        .validate()
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    body.validate()
         .map_err(|error| AppError::param_invalid(format!("grant_event: {error}")))?;
-    Err(current_unavailable())
+    let outcome = crate::state::authority_consent::submit(state, &session, &body.grant_event)
+        .await
+        .map_err(consent_error)?;
+    let record = match outcome {
+        soland_storage::ConsentAdmissionOutcome::Committed(record)
+        | soland_storage::ConsentAdmissionOutcome::Duplicate(record) => record,
+    };
+    json_ok(record.view())
 }
 
 #[salvo::handler]
@@ -90,11 +127,18 @@ async fn revoke_consent(
     body: JsonBody<ConsentRevokeRequestBody>,
 ) -> JsonResult<ConsentView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    body.into_inner()
-        .validate()
+    let session = aa.authenticated_session(state, req).await?;
+    let body = body.into_inner();
+    body.validate()
         .map_err(|error| AppError::param_invalid(format!("revoke_event: {error}")))?;
-    Err(current_unavailable())
+    let outcome = crate::state::authority_consent::submit(state, &session, &body.revoke_event)
+        .await
+        .map_err(consent_error)?;
+    let record = match outcome {
+        soland_storage::ConsentAdmissionOutcome::Committed(record)
+        | soland_storage::ConsentAdmissionOutcome::Duplicate(record) => record,
+    };
+    json_ok(record.view())
 }
 
 #[salvo::handler]
@@ -173,63 +217,49 @@ async fn request_consent(
     json_ok(ConsentRequestOutcome::accepted())
 }
 
-/// Legacy event_log integration carrier. No instance is constructed until
-/// admission and current projection execute in one RealmCommit transaction.
-#[derive(Clone, Debug)]
-pub(crate) struct ConsentAdmission {
-    commit: CommitConsentProjection,
-}
-
-impl ConsentAdmission {
-    pub(crate) fn commit(&self) -> CommitConsentProjection {
-        self.commit.clone()
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ConsentRejection {
-    pub status: StatusCode,
-    pub code: &'static str,
-    pub message: String,
-}
-
-/// Consent Event admission cannot use the retired Cell/Seal OR-set reducer.
-/// Reject before Event/RealmCommit writes while letting unrelated Events pass.
-pub(crate) async fn preflight_consent_admission(
-    _state: &AppState,
-    _operation: &ProjectedEventOperation,
-    event: &Event,
-) -> Result<Option<ConsentAdmission>, ConsentRejection> {
-    if matches!(
-        event.kind,
-        EventKind::ConsentGrant | EventKind::ConsentRevoke
-    ) {
-        return Err(ConsentRejection {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "temporarily_unavailable",
-            message: "Consent RealmCommit current admission provider is unavailable".to_owned(),
-        });
-    }
-    Ok(None)
-}
-
-pub(crate) async fn apply_committed_consent_admission(
-    _state: &AppState,
-    _admission: &ConsentAdmission,
-) {
-    // No caller can create a ConsentAdmission until the formal reducer exists.
+fn consent_error(error: soland_services::ServiceError) -> AppError {
+    use arkret_wire::ErrorCode;
+    use soland_services::ServiceError;
+    let code = match &error {
+        ServiceError::NotFound(_) => ErrorCode::NotFound,
+        ServiceError::SchemaViolation(_) => ErrorCode::SchemaViolation,
+        ServiceError::UnsupportedEventKind(_) => ErrorCode::UnsupportedEventKind,
+        ServiceError::Conflict(_) => error
+            .conflict_code()
+            .and_then(|code| ErrorCode::from_wire(code.as_str()))
+            .unwrap_or(ErrorCode::CapabilityDenied),
+        ServiceError::Database(_) | ServiceError::Internal(_) => ErrorCode::InternalError,
+    };
+    AppError::from_rejection(code, error.to_string())
 }
 
 /// Introduction evidence must be checked against the holder's current
 /// authority. A local legacy grant-dot cache is never proof of freshness.
-pub(crate) fn has_active_consent_grant_evidence(
-    _state: &AppState,
-    _subject: &str,
-    _holder_station_id: &str,
-    _inviter_actor_id: &arkret_wire::ActorId,
-    _consent_grant_ref: &str,
-    _consent_id: Option<&str>,
-    _at: DateTime<Utc>,
+pub(crate) async fn has_active_consent_grant_evidence(
+    state: &AppState,
+    subject: &str,
+    holder_station_id: &str,
+    inviter_actor_id: &arkret_wire::ActorId,
+    consent_grant_ref: &str,
+    consent_id: Option<&str>,
+    at: DateTime<Utc>,
 ) -> bool {
-    false
+    let Ok(principal) = arkret_wire::DidCoreId::new(subject.to_owned()) else {
+        return false;
+    };
+    let Ok(station) = arkret_wire::DidCoreId::new(holder_station_id.to_owned()) else {
+        return false;
+    };
+    if station != state.service_core_id() {
+        return false;
+    }
+    let holder = arkret_wire::AccountId::new(principal, station);
+    let Ok(records) = state.persistence().consent_current(&holder).await else {
+        return false;
+    };
+    records.iter().any(|record| {
+        record.event.event_id.as_str() == consent_grant_ref
+            && consent_id.is_none_or(|id| record.value.consent_id.as_str() == id)
+            && record.permits(inviter_actor_id, arkret_wire::ConsentScope::Invite, at)
+    })
 }

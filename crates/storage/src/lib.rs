@@ -14,9 +14,7 @@ pub(crate) use arkret_event_draft::ProjectedEventOperation;
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use serde_json::Value;
-pub use soland_domain::identity::{
-    ConsentGrantDot, ConsentGrantKey, ConsentGrantRecord, ContactRecord, ContactRequestSlotState,
-};
+pub use soland_domain::identity::{ContactRecord, ContactRequestSlotState};
 pub(crate) use uuid::Uuid;
 
 mod agent_draft_pending_intents;
@@ -39,8 +37,9 @@ mod audit;
 mod authority_commit;
 mod backup_series_erase;
 mod blobs;
-mod contacts;
+mod consent_current;
 mod consent_request_quarantine;
+mod contacts;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod contract_tests;
@@ -91,6 +90,8 @@ pub use audit::*;
 pub use authority_commit::*;
 pub use backup_series_erase::*;
 pub use blobs::*;
+pub use consent_current::*;
+pub use consent_request_quarantine::*;
 pub use contacts::*;
 pub use device_revocations::*;
 pub use devices::*;
@@ -101,7 +102,6 @@ pub use grant_evaluation::*;
 pub use idempotency::*;
 pub use invite_locators::*;
 pub use invite_new_source_ledger::*;
-pub use consent_request_quarantine::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
@@ -575,7 +575,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn invite_locators(&self) -> &dyn InviteLocatorStore;
     fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore;
     fn consent_request_quarantine(&self) -> &dyn ConsentRequestQuarantineStore;
-    fn consent_grants(&self) -> &dyn ConsentGrantStore;
+    fn consent_current(&self) -> &dyn ConsentCurrentStore;
     fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;
     fn messages(&self) -> &dyn MessageStore;

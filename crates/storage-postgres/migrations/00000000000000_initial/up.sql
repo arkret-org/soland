@@ -1863,22 +1863,25 @@ CREATE INDEX state_cell_ops_cell_idx ON public.state_cell_ops USING btree (realm
 
 CREATE INDEX state_cell_ops_seal_idx ON public.state_cell_ops USING btree (realm_id, seal_id);
 
--- Holder-private consent cells. `consent_id` is the cell subject
--- (`consent-model.md` section 3.1), so the natural key is (holder, cell_id);
--- peer_id and consent_scope are the intent frozen by the cell's first grant.
-CREATE TABLE public.consent_grants (
-    consent_id text NOT NULL,
+-- Holder-private Consent current and immutable accepted versions.
+CREATE TABLE public.consent_current_results (
     holder_account_id jsonb NOT NULL,
-    peer jsonb NOT NULL,
-    consent_scope text NOT NULL,
-    active_grants jsonb DEFAULT '{}'::jsonb NOT NULL,
-    revoked_grants jsonb DEFAULT '{}'::jsonb NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT consent_grants_holder_consent_key PRIMARY KEY (holder_account_id, consent_id)
+    consent_id text NOT NULL,
+    realm_id text NOT NULL REFERENCES public.realm_authorities(realm_id),
+    current_commit_id text NOT NULL REFERENCES public.realm_commits(commit_id),
+    current_stream_position bigint NOT NULL CHECK (current_stream_position >= 0),
+    value jsonb NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY(holder_account_id,consent_id),
+    CHECK (value->>'consent_id'=consent_id),
+    CHECK (value->>'status' IN ('active','revoked'))
 );
-
-CREATE INDEX consent_grants_holder_intent_idx
-    ON public.consent_grants USING btree (holder_account_id, consent_scope);
+CREATE TABLE public.consent_result_versions (
+    commit_id text PRIMARY KEY REFERENCES public.realm_commits(commit_id),
+    consent_id text NOT NULL,
+    value jsonb NOT NULL,
+    CHECK (value->>'consent_id'=consent_id)
+);
 
 -- Private service-local MIMI request correlation. These rows are not accepted
 -- protocol state; they only bind the

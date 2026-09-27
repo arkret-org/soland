@@ -31,6 +31,29 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn admit_consent(
+        &self,
+        write: soland_storage::ConsentAdmissionWrite,
+    ) -> PersistenceResult<soland_storage::ConsentAdmissionOutcome> {
+        self.persistence.consent_current().admit(write).await
+    }
+
+    pub async fn admit_consented_invite_delivery(
+        &self,
+        write: soland_storage::ConsentDeliveryWrite,
+    ) -> PersistenceResult<Option<soland_storage::AccountDataCasResult>> {
+        self.persistence
+            .consent_current()
+            .admit_invite_delivery(write)
+            .await
+    }
+
+    pub async fn consent_current(
+        &self,
+        holder: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Vec<soland_storage::ConsentCurrentRecord>> {
+        self.persistence.consent_current().list(holder).await
+    }
     pub async fn retain_current_account_device_signer_evidence(
         &self,
         evidence: &arkret_models_identity::AccountDeviceSignerEvidence,

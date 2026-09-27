@@ -391,8 +391,9 @@ impl soland_storage::IdentityStoreRegistry for FaultInjectingStore {
     fn consent_request_quarantine(&self) -> &dyn soland_storage::ConsentRequestQuarantineStore {
         self.inner.consent_request_quarantine()
     }
-    fn consent_grants(&self) -> &dyn soland_storage::ConsentGrantStore {
-        self.inner.consent_grants()
+
+    fn consent_current(&self) -> &dyn soland_storage::ConsentCurrentStore {
+        self.inner.consent_current()
     }
     fn mimi_consent_correlations(&self) -> &dyn soland_storage::MimiConsentCorrelationStore {
         self.inner.mimi_consent_correlations()

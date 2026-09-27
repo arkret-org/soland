@@ -32,6 +32,7 @@ enum SelfEventRoute {
     KeyBackupPointer,
     /// `ak.identity.accountability_grant`: the issuer-PCR accountability unit.
     AccountabilityGrant,
+    Consent,
     /// `ak.mls.genesis` and `ak.mls.commit`: the MLS public-transition unit.
     Mls,
     /// Realm-scope kinds with a guarded current-result authority cut.
@@ -50,6 +51,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
     match kind {
         EventKind::KeyBackupActiveSeries => Ok(SelfEventRoute::KeyBackupPointer),
         EventKind::IdentityAccountabilityGrant => Ok(SelfEventRoute::AccountabilityGrant),
+        EventKind::ConsentGrant | EventKind::ConsentRevoke => Ok(SelfEventRoute::Consent),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::StrandCreate
         | EventKind::SpaceCreate
@@ -309,6 +311,24 @@ impl AuthorityProtocolPort for AppState {
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.event;
         refuse_actor_private_event(&event.kind)?;
+        if matches!(
+            event.kind,
+            arkret_wire::EventKind::ConsentGrant | arkret_wire::EventKind::ConsentRevoke
+        ) {
+            let result = super::authority_consent::submit(self, session, &request).await?;
+            let (status, record) = match result {
+                soland_storage::ConsentAdmissionOutcome::Committed(record) => {
+                    (arkret_wire::AuthorityCommitStatus::Committed, record)
+                }
+                soland_storage::ConsentAdmissionOutcome::Duplicate(record) => {
+                    (arkret_wire::AuthorityCommitStatus::Duplicate, record)
+                }
+            };
+            return Ok(AuthoritySubmitOutcome::Accepted {
+                status,
+                commit: record.commit,
+            });
+        }
         // The Agent PCR genesis is executed by the controller on the Agent's
         // behalf; its unit verifies that delegated producer itself.
         if super::authority_agent_pcr_genesis::is_agent_pcr_genesis(event) {
@@ -366,6 +386,9 @@ impl AuthorityProtocolPort for AppState {
                 .await;
             }
             SelfEventRoute::GuardedUnit => {}
+            SelfEventRoute::Consent => {
+                unreachable!("Consent is admitted before ordinary forwarding")
+            }
         }
         require_guarded_unit_event(&request)?;
         super::authority_self_event_unit::commit_event_unit(
@@ -555,6 +578,8 @@ mod tests {
     #[test]
     fn every_other_active_kind_is_unsupported_event_kind_not_internal() {
         let routed = [
+            EventKind::ConsentGrant,
+            EventKind::ConsentRevoke,
             EventKind::KeyBackupActiveSeries,
             EventKind::IdentityAccountabilityGrant,
             EventKind::MlsGenesis,

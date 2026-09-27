@@ -3,10 +3,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::{
-    AccountDataRecord, CanonicalEventRecord, ConsentGrantRecord, ContactRecord,
-    ContactVerifiedMirrorRecord, DeviceRevocationGateSelector, DeviceRevocationTransition,
-    FederationOutboxRecord, IdempotencyRecord, PersistenceError, PersistenceResult,
-    ProjectionEventRecord,
+    AccountDataRecord, CanonicalEventRecord, ContactRecord, ContactVerifiedMirrorRecord,
+    DeviceRevocationGateSelector, DeviceRevocationTransition, FederationOutboxRecord,
+    IdempotencyRecord, PersistenceError, PersistenceResult, ProjectionEventRecord,
 };
 
 /// Project an already-admitted Agent cascade Event onto the frozen Agent ActorId
@@ -62,16 +61,6 @@ pub struct ContactProjectionCommit {
 /// Adapters must make the complete request visible atomically. Returning an
 /// error must leave the event log, projection log, idempotency table, and
 /// federation outbox unchanged.
-/// Holder-private consent effects installed with the accepted producer Event.
-#[derive(Clone, Debug)]
-pub struct ConsentProjectionCommit {
-    pub grant: ConsentGrantRecord,
-    /// Eager holder-quarantine invalidation for an accepted revoke
-    /// (`consent-model.md` section 4.1.2), staged as a whole-value CAS against
-    /// the revision admission read.
-    pub holder_quarantine: Option<AccountDataCasCommit>,
-}
-
 /// One account-data register replaced by revision CAS inside an Event commit.
 #[derive(Clone, Debug)]
 pub struct AccountDataCasCommit {
@@ -97,9 +86,6 @@ pub struct EventCommitRequest {
     /// and re-evaluate all `parent_membership` dependencies before writing.
     pub parent_membership_admission: Option<ParentMembershipAdmissionCheck>,
     pub contact_projection: Option<ContactProjectionCommit>,
-    /// Holder-private consent mutation plus its eager cache
-    /// invalidation, committed with the Event that authorizes them.
-    pub consent_projection: Option<ConsentProjectionCommit>,
     /// Reducer-derived target for an accepted `ak.device.revoke`.
     pub device_revocation_transition: Option<DeviceRevocationTransition>,
     /// Exact author-device generation rechecked inside the Event transaction.

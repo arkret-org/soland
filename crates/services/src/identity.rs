@@ -90,9 +90,7 @@ impl arkret_wire::PayloadSigner for Ed25519PayloadSigner {
     }
 }
 
-pub use soland_domain::identity::{
-    ConsentGrantDot, ConsentGrantKey, ConsentGrantRecord, ContactRecord, ContactRequestSlotState,
-};
+pub use soland_domain::identity::{ContactRecord, ContactRequestSlotState};
 pub use soland_storage::MimiConsentCorrelationRecord as MimiConsentCorrelation;
 
 /// The coordinates one `ak.direct_conversation.bound` endorsement settles.
@@ -340,17 +338,6 @@ pub struct AccountDataService {
     account_data: Arc<dyn AccountDataPort>,
 }
 
-/// Read side of the durable holder-private consent projection.
-///
-/// Consent cells are written only in the exact Seal transaction that commits
-/// their `ak.consent.grant` / `ak.consent.revoke` command unit,
-/// so this port carries no writer: a second write path would be a second
-/// source of truth for replicated cell state.
-#[async_trait]
-pub trait ConsentCellPort: Send + Sync {
-    async fn cells(&self) -> ServiceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>>;
-}
-
 #[async_trait]
 pub trait MimiConsentCorrelationPort: Send + Sync {
     async fn save_correlation(&self, correlation: MimiConsentCorrelation) -> ServiceResult<()>;
@@ -359,10 +346,7 @@ pub trait MimiConsentCorrelationPort: Send + Sync {
 
 #[derive(Clone)]
 pub struct ConsentService {
-    consent_cells: Arc<dyn ConsentCellPort>,
     mimi_correlations: Arc<dyn MimiConsentCorrelationPort>,
-    runtime_cells: Arc<Mutex<BTreeMap<ConsentGrantKey, ConsentGrantRecord>>>,
-    runtime_reload: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[async_trait]
@@ -608,16 +592,8 @@ impl ContactService {
 }
 
 impl ConsentService {
-    pub fn new(
-        consent_cells: Arc<dyn ConsentCellPort>,
-        mimi_correlations: Arc<dyn MimiConsentCorrelationPort>,
-    ) -> Self {
-        Self {
-            consent_cells,
-            mimi_correlations,
-            runtime_cells: Arc::new(Mutex::new(BTreeMap::new())),
-            runtime_reload: Arc::new(tokio::sync::Mutex::new(())),
-        }
+    pub fn new(mimi_correlations: Arc<dyn MimiConsentCorrelationPort>) -> Self {
+        Self { mimi_correlations }
     }
 
     pub async fn save_mimi_correlation(
@@ -632,110 +608,6 @@ impl ConsentService {
         consent_id: &str,
     ) -> ServiceResult<Option<MimiConsentCorrelation>> {
         self.mimi_correlations.correlation(consent_id).await
-    }
-
-    pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
-        // Order the fetch as well as the installation: a slow older fetch must
-        // never overwrite a newer confirmed revocation after it is installed.
-        let _reload = self.runtime_reload.lock().await;
-        self.replace_runtime_cells(self.consent_cells.cells().await?);
-        Ok(())
-    }
-
-    pub fn replace_runtime_cells(
-        &self,
-        cells: impl IntoIterator<Item = (ConsentGrantKey, ConsentGrantRecord)>,
-    ) {
-        *self.runtime_cells.lock() = cells.into_iter().collect();
-    }
-
-    /// Publish one durably committed consent grant into the runtime
-    /// projection. The Event already reached its `RealmCommit`, so this only
-    /// refreshes the working view a restart would rebuild from
-    /// `hydrate_runtime`.
-    pub fn install_committed_cell(&self, cell: ConsentGrantRecord) {
-        let key = consent_cell_key(&cell.holder_account_id, &cell.consent_id);
-        self.runtime_cells.lock().insert(key, cell);
-    }
-
-    /// Every consent cell the holder owns. Consent is holder-private
-    /// (`consent-model.md` section 8): a peer never reads cells, dots or
-    /// expiry, so there is no peer-visible listing.
-    pub fn holder_cells(
-        &self,
-        holder_account_id: &arkret_wire::AccountId,
-    ) -> Vec<ConsentGrantRecord> {
-        self.runtime_cells
-            .lock()
-            .values()
-            .filter(|cell| &cell.holder_account_id == holder_account_id)
-            .cloned()
-            .collect()
-    }
-
-    pub fn holder_cell(
-        &self,
-        holder_account_id: &arkret_wire::AccountId,
-        consent_id: impl AsRef<str>,
-    ) -> Option<ConsentGrantRecord> {
-        let consent_id = arkret_identifiers::ConsentId::new(consent_id.as_ref().to_owned()).ok()?;
-        self.runtime_cells
-            .lock()
-            .get(&consent_cell_key(holder_account_id, &consent_id))
-            .cloned()
-    }
-
-    /// Holder grants whose frozen peer matches an authenticated counterparty.
-    ///
-    /// Matching is the kind-dispatched exact comparison of
-    /// `consent-model.md` section 6.1 query step 1: an ordinary Actor
-    /// counterparty is compared by complete ActorId, a Realm-local ephemeral
-    /// pairwise counterparty by `(realm_id, principal_id)`, and the two kinds
-    /// never match each other. Callers pass the counterparty they
-    /// authenticated, never a peer value they rebuilt, so no bare
-    /// `principal_id` fallback is reachable from here.
-    pub fn cells_for_counterparty(
-        &self,
-        holder_account_id: &arkret_wire::AccountId,
-        counterparty: &arkret_models_collaboration::events_payloads::consent::ConsentPeer,
-    ) -> Vec<ConsentGrantRecord> {
-        self.runtime_cells
-            .lock()
-            .values()
-            .filter(|cell| {
-                &cell.holder_account_id == holder_account_id && &cell.peer == counterparty
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Holder cells whose frozen intent is exactly `(peer, consent_scope)`.
-    pub fn cells_for_intent(
-        &self,
-        holder_account_id: &arkret_wire::AccountId,
-        peer: &arkret_models_collaboration::events_payloads::consent::ConsentPeer,
-        consent_scope: &str,
-    ) -> Vec<ConsentGrantRecord> {
-        self.runtime_cells
-            .lock()
-            .values()
-            .filter(|cell| {
-                &cell.holder_account_id == holder_account_id
-                    && &cell.peer == peer
-                    && cell.consent_scope == consent_scope
-            })
-            .cloned()
-            .collect()
-    }
-}
-
-fn consent_cell_key(
-    holder_account_id: &arkret_wire::AccountId,
-    consent_id: &arkret_identifiers::ConsentId,
-) -> ConsentGrantKey {
-    ConsentGrantKey {
-        holder_account_id: holder_account_id.clone(),
-        consent_id: consent_id.clone(),
     }
 }
 
@@ -3928,110 +3800,5 @@ mod tests {
             "the rejected DID must leave no durable document row"
         );
         assert!(service.log_events(did.as_str()).await.unwrap().is_empty());
-    }
-}
-
-#[cfg(test)]
-mod consent_reload_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-
-    struct DelayedConsentRows {
-        cell: ConsentGrantRecord,
-        reads: AtomicUsize,
-        started: tokio::sync::Notify,
-        release: tokio::sync::Semaphore,
-    }
-    #[async_trait]
-    impl ConsentCellPort for DelayedConsentRows {
-        async fn cells(&self) -> ServiceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>> {
-            let index = self.reads.fetch_add(1, Ordering::SeqCst);
-            let mut cell = self.cell.clone();
-            if index == 0 {
-                self.started.notify_one();
-                self.release.acquire().await.unwrap().forget();
-            } else {
-                cell.revoke_grants(cell.active_grants.keys().cloned().collect::<Vec<_>>());
-            }
-            Ok(vec![(
-                consent_cell_key(&cell.holder_account_id, &cell.consent_id),
-                cell,
-            )])
-        }
-    }
-    struct NoCorrelations;
-    #[async_trait]
-    impl MimiConsentCorrelationPort for NoCorrelations {
-        async fn save_correlation(&self, _: MimiConsentCorrelation) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn correlation(&self, _: &str) -> ServiceResult<Option<MimiConsentCorrelation>> {
-            Ok(None)
-        }
-    }
-
-    #[tokio::test]
-    async fn delayed_consent_reload_cannot_overwrite_newer_revocation() {
-        let holder = AccountId::new(
-            "ak:did_core:web:holder.example".parse().unwrap(),
-            "ak:did_core:web:station.example".parse().unwrap(),
-        );
-        let now = Utc::now();
-        let rows = Arc::new(DelayedConsentRows {
-            cell: ConsentGrantRecord {
-                consent_id: "ak:consent:01964137-0000-7000-8000-000000000041"
-                    .parse()
-                    .unwrap(),
-                holder_account_id: holder.clone(),
-                peer: arkret_models_collaboration::events_payloads::consent::ConsentPeer::Actor {
-                    actor_id: arkret_wire::ActorId::account(holder.clone()),
-                },
-                consent_scope: "messages".into(),
-                active_grants: BTreeMap::from([(
-                    "grant".into(),
-                    ConsentGrantDot {
-                        dot: "grant".into(),
-                        not_before: None,
-                        expires_at: None,
-                        granted_at: now,
-                    },
-                )]),
-                revoked_grants: Default::default(),
-                updated_at: now,
-            },
-            reads: AtomicUsize::new(0),
-            started: tokio::sync::Notify::new(),
-            release: tokio::sync::Semaphore::new(0),
-        });
-        let service = ConsentService::new(rows.clone(), Arc::new(NoCorrelations));
-        let first_service = service.clone();
-        let first = tokio::spawn(async move {
-            first_service.hydrate_runtime().await.unwrap();
-        });
-        rows.started.notified().await;
-        let second_service = service.clone();
-        let mut second = tokio::spawn(async move {
-            second_service.hydrate_runtime().await.unwrap();
-        });
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), &mut second)
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            rows.reads.load(Ordering::SeqCst),
-            1,
-            "newer fetch must wait until the older result is installed"
-        );
-        rows.release.add_permits(1);
-        first.await.unwrap();
-        second.await.unwrap();
-        assert!(
-            !service
-                .holder_cell(&holder, rows.cell.consent_id.as_str())
-                .unwrap()
-                .has_active_grant_at(now)
-        );
     }
 }

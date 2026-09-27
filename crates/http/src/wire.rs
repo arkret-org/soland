@@ -330,9 +330,9 @@ fn profile_limitations() -> Vec<Value> {
             "area": "consent.scope_any_cross_service_cascade",
             "status": "partial_local_only",
             "spec": "T17",
-            "implemented": "a holder `ak.consent.revoke` with scope=any is honored on read: every child-scope grant resolution folds the `any` cell (see has_active_consent / has_active_consent_grant_evidence), so an any-revoke withdraws all child scopes for local consent decisions",
-            "unsupported": "the cross-service cache-invalidation broadcast to downstream consumers (directory_reachability / mimi_consent / push_contact_psi / invite_gate / in_flight_invite on teabay / floria / coauth) and the per-child-scope `superseded_by_any_revoke` durable marker are not emitted; this deployment has no production cross-service consent-invalidation fanout path",
-            "reason": "the local any-revoke effect is complete; the cross-service invalidation channels require a fanout transport soland does not implement"
+            "implemented": "holder Consent reads and invite introduction evidence use durable PCR current; revoking any invalidates its own record and leaves independently granted concrete scopes active",
+            "unsupported": "cross-service freshness and invalidation of downstream directory, MIMI, push and in-flight consumers remain unverified",
+            "reason": "no cross-service completion is claimed by the local current-result path"
         }),
         json!({
             "area": "identity.resolver_health_signal",

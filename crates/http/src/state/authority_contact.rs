@@ -153,7 +153,7 @@ pub(crate) async fn commit_contact_event_unit(
         },
         parent_membership_admission: None,
         contact_projection: Some(projection),
-        consent_projection: None,
+
         device_revocation_transition: None,
         device_revocation_gate: None,
         projections: Vec::new(),

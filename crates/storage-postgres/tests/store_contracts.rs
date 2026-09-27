@@ -9,10 +9,9 @@ mod pcr_genesis;
 mod support;
 
 use soland_storage::contract_tests::{
-    AppletFormalCommitContractStores, ConsentCommitContractStores, EventCommitContractMessages,
-    EventCommitContractStores, assert_account_localpart_remove_contract,
-    assert_applet_formal_commit_transaction_contract, assert_atomic_event_admission_contract,
-    assert_consent_projection_commit_contract, assert_device_message_snapshot_guard_contract,
+    AppletFormalCommitContractStores, EventCommitContractMessages, EventCommitContractStores,
+    assert_account_localpart_remove_contract, assert_applet_formal_commit_transaction_contract,
+    assert_atomic_event_admission_contract, assert_device_message_snapshot_guard_contract,
     assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_invite_new_source_ledger_contract,
     assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
@@ -1043,7 +1042,7 @@ fn franking_event_request(
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,
-        consent_projection: None,
+
         event: soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),
             actor_id: event.actor_id.to_string(),
@@ -2566,29 +2565,6 @@ async fn postgres_applet_authoring_preview_has_one_durable_exact_winner() {
             .request_digest,
         "request-b-reissued"
     );
-}
-
-#[tokio::test]
-async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract() {
-    let pool = test_pool().await;
-    let _db_guard = DB_GUARD.lock().await;
-    let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
-    let authority = PgAuthorityCommitStore { pool: pool.clone() };
-    let events = PgEventStore { pool: pool.clone() };
-    let consent_grants = soland_storage_postgres::PgConsentGrantStore { pool: pool.clone() };
-    let account_data = PgAccountDataStore { pool: pool.clone() };
-    let namespace = format!("pg-consent-commit-{}", uuid::Uuid::now_v7());
-    assert_consent_projection_commit_contract(
-        ConsentCommitContractStores {
-            unit_of_work: &unit_of_work,
-            authority: &authority,
-            events: &events,
-            consent_grants: &consent_grants,
-            account_data: &account_data,
-        },
-        &namespace,
-    )
-    .await;
 }
 
 #[tokio::test]

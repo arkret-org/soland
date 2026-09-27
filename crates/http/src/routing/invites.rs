@@ -385,6 +385,24 @@ async fn receive_private_invite_delivery(
     // verified), then apply blocklist + allowlist + behavior to pick a
     // receive action and a graded-disclosure outcome.
     let policy = resolve_core_invite_receive_policy(state, &delivery.invite_address.account_id);
+    let verified_consent = match &delivery.introduction_evidence {
+        IntroductionEvidence::ConsentGrant {
+            consent_grant_ref,
+            consent_id,
+        } => {
+            crate::routing::identity::consent::has_active_consent_grant_evidence(
+                state,
+                &subject,
+                delivery.invite_address.account_id.station_id.as_str(),
+                inviter_actor_id,
+                consent_grant_ref.as_str(),
+                consent_id.as_deref(),
+                now(),
+            )
+            .await
+        }
+        _ => false,
+    };
     let decision = evaluate_invite_receive(
         state,
         &policy,
@@ -394,6 +412,7 @@ async fn receive_private_invite_delivery(
         delivery.invite_address.account_id.station_id.as_str(),
         source_id,
         same_station,
+        verified_consent,
     );
 
     if decision.action != InviteReceiveAction::Notify {
@@ -475,6 +494,7 @@ async fn receive_private_invite_delivery(
         body,
         &realm_id,
         &delivery.authority_locator_hints,
+        (decision.effective_kind == "consent_grant").then_some(&delivery.introduction_evidence),
     )
     .await?;
 
@@ -834,6 +854,7 @@ async fn deliver_invite_credential(
     body: &Value,
     realm_id: &str,
     authority_locator_hints: &[RealmJoinCandidate],
+    consent_evidence: Option<&IntroductionEvidence>,
 ) -> Result<Option<bool>, AppError> {
     if account_id.station_id != state.service_core_id() {
         return Err(AppError::param_invalid(
@@ -948,11 +969,64 @@ async fn deliver_invite_credential(
         let expected_revision = existing.as_ref().map_or(0, |record| record.revision);
         #[cfg(test)]
         tokio::task::yield_now().await;
-        match account_data
-            .compare_and_set(record, expected_revision)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
+        let outcome = if let Some(IntroductionEvidence::ConsentGrant {
+            consent_grant_ref,
+            consent_id,
+        }) = consent_evidence
         {
+            let outcome = state
+                .persistence()
+                .admit_consented_invite_delivery(soland_storage::ConsentDeliveryWrite {
+                    holder: account_id.clone(),
+                    peer: arkret_wire::ActorId::account(inviter_account_id.clone()),
+                    consent_grant_ref: consent_grant_ref.clone(),
+                    consent_id: consent_id
+                        .as_ref()
+                        .map(|id| arkret_identifiers::ConsentId::new(id.clone()))
+                        .transpose()
+                        .map_err(|e| AppError::param_invalid(e.to_string()))?,
+                    record: soland_storage::AccountDataRecord {
+                        actor: record.actor_id,
+                        account_data_key: record.account_data_key,
+                        revision: record.revision,
+                        payload: record.payload,
+                        tombstone: record.tombstone,
+                        updated_at: record.updated_at,
+                    },
+                    expected_revision,
+                })
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            match outcome {
+                None => return Ok(None),
+                Some(soland_storage::AccountDataCasResult::Applied(record)) => {
+                    AccountDataCasOutcome::Applied(AccountDataState {
+                        actor_id: record.actor,
+                        account_data_key: record.account_data_key,
+                        revision: record.revision,
+                        payload: record.payload,
+                        tombstone: record.tombstone,
+                        updated_at: record.updated_at,
+                    })
+                }
+                Some(soland_storage::AccountDataCasResult::Conflict(_)) => {
+                    attempt += 1;
+                    if attempt >= INVITE_DELIVERY_CAS_ATTEMPTS {
+                        return Err(crate::app_error!(
+                            CasConflict,
+                            "invite delivery account data changed concurrently"
+                        ));
+                    }
+                    continue;
+                }
+            }
+        } else {
+            account_data
+                .compare_and_set(record, expected_revision)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+        };
+        match outcome {
             AccountDataCasOutcome::Applied(record) => break record,
             AccountDataCasOutcome::Conflict(_) => {
                 attempt += 1;
@@ -1535,6 +1609,7 @@ fn evaluate_invite_receive(
     recipient_id: &str,
     source_id: &str,
     same_station: bool,
+    verified_consent: bool,
 ) -> ReceiveDecision {
     let now = now();
     let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery);
@@ -1559,7 +1634,7 @@ fn evaluate_invite_receive(
     }
 
     // §2 — `consent_grant` evidence: verify the referenced grant is an
-    // active `invite`/`any` dot the subject gave that complete inviter
+    // active `invite`/`any` current record the subject gave that complete inviter
     // ActorId. On failure
     // MUST downgrade to low-trust `explicit_address`.
     if principal_service_blocked(policy, constraints, source_id)
@@ -1578,19 +1653,8 @@ fn evaluate_invite_receive(
                 "explicit_address"
             }
         }
-        IntroductionEvidence::ConsentGrant {
-            consent_grant_ref,
-            consent_id,
-        } => {
-            if crate::routing::identity::consent::has_active_consent_grant_evidence(
-                state,
-                subject,
-                recipient_id,
-                inviter_actor_id,
-                consent_grant_ref.as_str(),
-                consent_id.as_deref(),
-                now,
-            ) {
+        IntroductionEvidence::ConsentGrant { .. } => {
+            if verified_consent {
                 "consent_grant"
             } else {
                 "explicit_address"
@@ -2785,6 +2849,7 @@ mod invite_locator_security_tests {
                 state.service_id(),
                 state.service_id(),
                 true,
+                false,
             )
         };
         let evaluate_contact = |policy: &InviteReceivePolicy| {
@@ -2851,6 +2916,7 @@ mod invite_locator_security_tests {
             state.service_id(),
             state.service_id(),
             true,
+            false,
         );
         assert_eq!(invite.effective_kind, "same_station");
         assert_eq!(invite.action, InviteReceiveAction::Quarantine);
@@ -2881,6 +2947,7 @@ mod invite_locator_security_tests {
             state.service_id(),
             state.service_id(),
             true,
+            false,
         );
         assert_eq!(invite.action, InviteReceiveAction::Notify);
     }
@@ -3045,6 +3112,7 @@ mod invite_locator_security_tests {
                 &body,
                 PRODUCTION_REALM,
                 &delivery.authority_locator_hints,
+                None,
             )
             .await
             .expect("invite credential delivery"),
@@ -3068,6 +3136,7 @@ mod invite_locator_security_tests {
                 &body,
                 PRODUCTION_REALM,
                 &delivery.authority_locator_hints,
+                None,
             )
             .await
             .expect("exact replay"),
@@ -3116,6 +3185,7 @@ mod invite_locator_security_tests {
                 &body,
                 PRODUCTION_REALM,
                 &delivery.authority_locator_hints,
+                None,
             )
             .await
             .is_err()
@@ -3595,6 +3665,7 @@ mod invite_locator_security_tests {
                 &body,
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W",
                 &[fixture_locator_hint()],
+                None,
             )
             .await
             .expect("unknown subject skips the credential write"),

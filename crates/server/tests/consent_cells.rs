@@ -6,6 +6,7 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
 use soland_http::config::AppConfig;
 use soland_http::service;
+use soland_test_support::AppStateTestExt as _;
 
 const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 
@@ -83,7 +84,6 @@ async fn dev_token(
 }
 
 #[tokio::test]
-#[ignore = "requires accepted PCR Event/RealmCommit device authorization fixture"]
 async fn opaque_consent_request_does_not_create_a_pending_cell() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
@@ -122,7 +122,7 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
         "kind": "actor",
         "actor_id": fixture_account_actor(&state, alice_did),
     });
-    let mut cell_url = url::Url::parse("http://server/_arkret/self/consent/cell").unwrap();
+    let mut cell_url = url::Url::parse("http://server/_arkret/self/consent/result").unwrap();
     cell_url
         .query_pairs_mut()
         .append_pair("peer", &serde_json::to_string(&peer).unwrap())
@@ -137,6 +137,213 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
         .send(&app)
         .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
+}
+
+fn signed_consent_event(
+    fixture: &soland_test_support::pcr_genesis::PcrGenesisFixture,
+    kind: arkret_wire::EventKind,
+    payload: Value,
+) -> arkret_wire::Event {
+    let mut event = arkret_wire::test_support::raw_event_at(
+        kind.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: fixture.unit.transactions[1].event.realm_id.clone(),
+        },
+        fixture.history.account.principal_id.clone(),
+        fixture.history.account.station_id.clone(),
+        payload,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    event.authorization_ref = Some(fixture.unit.transactions[0].event.event_id.clone().into());
+    soland_test_support::device_authorization_history::sign_event(
+        event,
+        fixture.history.device_verification_method.clone(),
+        fixture.history.founding_device_signing_seed,
+    )
+}
+
+async fn consent_command(
+    app: &salvo::Service,
+    token: &str,
+    event: arkret_wire::Event,
+) -> (StatusCode, Value) {
+    use arkret_models_collaboration::consent_operations::{
+        ConsentGrantRequestBody, ConsentRevokeRequestBody,
+    };
+    let (path, operation, body) = if event.kind == arkret_wire::EventKind::ConsentGrant {
+        (
+            "grant",
+            "ak.self.consent.command.grant.v1",
+            arkret_canonical::canonical_json_bytes(&ConsentGrantRequestBody {
+                grant_event: arkret_wire::EventAdmissionSubmission::new(event),
+            })
+            .unwrap(),
+        )
+    } else {
+        (
+            "revoke",
+            "ak.self.consent.command.revoke.v1",
+            arkret_canonical::canonical_json_bytes(&ConsentRevokeRequestBody {
+                revoke_event: arkret_wire::EventAdmissionSubmission::new(event),
+            })
+            .unwrap(),
+        )
+    };
+    let mut response =
+        TestClient::post(format!("http://server/_arkret/self/consent/results/{path}"))
+            .add_header("Authorization", format!("Bearer {token}"), true)
+            .add_header("Arkret-Operation", operation, true)
+            .add_header("Content-Type", "application/json", true)
+            .body(body)
+            .send(app)
+            .await;
+    let status = response.status_code.unwrap();
+    (status, response.take_json().await.unwrap())
+}
+
+/// Seed accepted state through the production PCR transaction, never raw SQL.
+/// Positive HTTP writes with Standard SessionGrant run in Cotest.
+async fn admit_consent_fixture(
+    state: &soland_http::state::AppState,
+    event: arkret_wire::Event,
+) -> Value {
+    let store = state.test_persistence();
+    let application = soland_services::authority_commit::AuthorityCommitApplication::new(
+        soland_services::persistence::PersistenceHandle::from_shared(store.clone()),
+        0,
+    );
+    let transaction = application
+        .prepare_self_event_transaction(
+            &event,
+            &state.service_core_id(),
+            arkret_wire::DidUrl::new(format!("{}#federation-fanout-key", state.service_did()))
+                .unwrap(),
+            state.notary_signing_key().as_ref(),
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+    let outcome = store
+        .consent_current()
+        .admit(soland_storage::ConsentAdmissionWrite { transaction })
+        .await
+        .unwrap();
+    let record = match outcome {
+        soland_storage::ConsentAdmissionOutcome::Committed(record)
+        | soland_storage::ConsentAdmissionOutcome::Duplicate(record) => record,
+    };
+    serde_json::to_value(record.view()).unwrap()
+}
+
+#[tokio::test]
+async fn consent_holder_reads_exact_current_reject_ambiguity_and_local_bearer_writes() {
+    let state = soland_test_support::app_state(test_config());
+    let app = service(state.clone());
+    let holder = soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
+    let other = soland_test_support::pcr_genesis::PcrGenesisFixture::new(state.service_did());
+    let token = dev_token(&state, &app, &holder).await;
+    let other_token = dev_token(&state, &app, &other).await;
+    let peer = serde_json::json!({"kind":"actor","actor_id":arkret_wire::ActorId::account(other.history.account.clone())});
+    let id = "ak:consent:01964137-0000-7000-8000-000000000081";
+    let grant = signed_consent_event(
+        &holder,
+        arkret_wire::EventKind::ConsentGrant,
+        serde_json::json!({"consent_id":id,"peer":peer,"consent_scope":"invite"}),
+    );
+    let (status, value) = consent_command(&app, &token, grant.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{value}");
+    let value = admit_consent_fixture(&state, grant.clone()).await;
+    let granted: arkret_models_collaboration::consent_operations::ConsentView =
+        serde_json::from_value(value).unwrap();
+    assert_eq!(
+        granted.state,
+        arkret_models_collaboration::consent_operations::ConsentState::Active
+    );
+    let duplicate = admit_consent_fixture(&state, grant.clone()).await;
+    assert_eq!(
+        serde_json::from_value::<arkret_models_collaboration::consent_operations::ConsentView>(
+            duplicate
+        )
+        .unwrap(),
+        granted
+    );
+    let (wrong_status, _) = consent_command(&app, &other_token, grant.clone()).await;
+    assert_ne!(wrong_status, StatusCode::OK);
+    let mut query = url::Url::parse("http://server/_arkret/self/consent/result").unwrap();
+    query
+        .query_pairs_mut()
+        .append_pair("peer", &serde_json::to_string(&peer).unwrap())
+        .append_pair("consent_scope", "invite");
+    let mut get = TestClient::get(query.as_str())
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header("Arkret-Operation", "ak.self.consent.resource.get.v1", true)
+        .send(&app)
+        .await;
+    assert_eq!(get.status_code.unwrap(), StatusCode::OK);
+    assert_eq!(
+        get.take_json::<arkret_models_collaboration::consent_operations::ConsentView>()
+            .await
+            .unwrap(),
+        granted
+    );
+    let second = signed_consent_event(
+        &holder,
+        arkret_wire::EventKind::ConsentGrant,
+        serde_json::json!({"consent_id":"ak:consent:01964137-0000-7000-8000-000000000082","peer":peer,"consent_scope":"invite"}),
+    );
+    admit_consent_fixture(&state, second).await;
+    let mut ambiguous = TestClient::get(query.as_str())
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header("Arkret-Operation", "ak.self.consent.resource.get.v1", true)
+        .send(&app)
+        .await;
+    assert_eq!(
+        ambiguous.take_json::<Value>().await.unwrap()["type"],
+        "https://arkret.org/problems/failed_precondition"
+    );
+    let revoke = signed_consent_event(
+        &holder,
+        arkret_wire::EventKind::ConsentRevoke,
+        serde_json::json!({"consent_id":id,"expected_revision":granted.revision,"reason":"holder_request"}),
+    );
+    let (status, value) = consent_command(&app, &token, revoke.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{value}");
+    let value = admit_consent_fixture(&state, revoke).await;
+    assert_eq!(value["state"], "revoked");
+    let value = admit_consent_fixture(&state, grant).await;
+    assert_eq!(value["state"], "active");
+    let mut listed = TestClient::get("http://server/_arkret/self/consent/results")
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header("Arkret-Operation", "ak.self.consent.read.list.v1", true)
+        .send(&app)
+        .await;
+    let list = listed
+        .take_json::<arkret_models_collaboration::consent_operations::ConsentList>()
+        .await
+        .unwrap();
+    assert_eq!(list.consents.len(), 2);
+    assert_eq!(
+        list.consents
+            .iter()
+            .find(|row| row.consent_id.as_str() == id)
+            .unwrap()
+            .state,
+        arkret_models_collaboration::consent_operations::ConsentState::Revoked
+    );
+    let mut private = TestClient::get("http://server/_arkret/self/consent/results")
+        .add_header("Authorization", format!("Bearer {other_token}"), true)
+        .add_header("Arkret-Operation", "ak.self.consent.read.list.v1", true)
+        .send(&app)
+        .await;
+    assert!(
+        private
+            .take_json::<arkret_models_collaboration::consent_operations::ConsentList>()
+            .await
+            .unwrap()
+            .consents
+            .is_empty()
+    );
 }
 
 #[tokio::test]

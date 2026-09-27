@@ -93,25 +93,6 @@ fn persistence_event_commit_request(
         event: command.event,
         parent_membership_admission: command.parent_membership_admission,
         contact_projection: command.contact_projection,
-        consent_projection: command.consent_projection.map(|commit| {
-            soland_storage::ConsentProjectionCommit {
-                grant: commit.grant,
-                holder_quarantine: commit.holder_quarantine.map(|cas| {
-                    soland_storage::AccountDataCasCommit {
-                        record: soland_storage::AccountDataRecord {
-                            actor: cas.record.actor_id,
-                            account_data_key: cas.record.account_data_key,
-                            revision: cas.record.revision,
-                            payload: cas.record.payload,
-                            tombstone: cas.record.tombstone,
-                            updated_at: cas.record.updated_at,
-                        },
-                        expected_revision: cas.expected_revision,
-                        conflict_code: cas.conflict_code,
-                    }
-                }),
-            }
-        }),
         device_revocation_transition: command.device_revocation_transition,
         device_revocation_gate: command.device_revocation_gate,
         projections: command

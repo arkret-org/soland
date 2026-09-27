@@ -17,14 +17,14 @@ use arkret_wire::{
 use chrono::{Duration, Utc};
 
 use super::{
-    AccountDataStore, AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
+    AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
     AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
     AppletIdentityCommit, AppletRecordCommit, AppletStore, AuthorityCommitStore,
-    AuthorityCommitTransaction, AuthorityCommitWriteOutcome, CanonicalEventRecord, ConsentGrantDot,
-    ConsentGrantRecord, ConsentGrantStore, ConsentProjectionCommit, ContactProjectionCommit,
-    ContactRecord, ContactStore, CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore,
-    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
-    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
+    AuthorityCommitTransaction, AuthorityCommitWriteOutcome, CanonicalEventRecord,
+    ContactProjectionCommit, ContactRecord, ContactStore, CurrentRealmAuthority,
+    DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
+    DeviceMessageBatchInspection, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
+    DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
     DeviceMessageTargetSnapshotGuard, DeviceRevocationGateSelector, EventBatchCommitRequest,
     EventCommitRequest, EventCommitUnitOfWork, EventStore, FederationOutboxClaim,
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
@@ -1458,7 +1458,7 @@ fn contract_applet_event_request(
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,
-        consent_projection: None,
+
         event,
         device_revocation_transition: None,
         device_revocation_gate: None,
@@ -2545,7 +2545,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             verified_mirror: None,
             invite_policy: None,
         }),
-        consent_projection: None,
+
         event: contact_event,
         device_revocation_transition: None,
         device_revocation_gate: None,
@@ -2640,7 +2640,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
                 verified_mirror: None,
                 invite_policy: None,
             }),
-            consent_projection: None,
+
             event: failed_contact_event,
             device_revocation_transition: None,
             device_revocation_gate: None,
@@ -4752,125 +4752,6 @@ pub async fn assert_member_identity_store_contract(
             .iter()
             .all(|row| row.subject_id != claim.subject_id)
     );
-}
-
-/// Stores one consent-projection commit contract needs.
-pub struct ConsentCommitContractStores<'a> {
-    pub unit_of_work: &'a dyn EventCommitUnitOfWork,
-    pub authority: &'a dyn AuthorityCommitStore,
-    pub events: &'a dyn EventStore,
-    pub consent_grants: &'a dyn ConsentGrantStore,
-    pub account_data: &'a dyn AccountDataStore,
-}
-
-/// One authority commit publishes the consent grant's security mirror.
-///
-/// Spec `identity/consent-model.md` section 3.1: only a `RealmCommit` issued by
-/// the current governance Station makes the update effective. Ordering and
-/// projection therefore share one transaction boundary, so a committed grant is
-/// readable and a commit that fails leaves no mirror behind. Section 4.1.2 keeps
-/// the downstream invalidation inside the accepted revoke's own boundary, and
-/// the subject stays the `consent_id`.
-pub async fn assert_consent_projection_commit_contract(
-    stores: ConsentCommitContractStores<'_>,
-    namespace: &str,
-) {
-    let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
-    let realm_id = contract_realm_id(&format!("consent-commit:{namespace}"));
-    let holder = DidCoreId::new(format!("ak:did_core:web:{namespace}-holder.example")).unwrap();
-    // Realm-local ephemeral pairwise peers: the branch only admits `did:key`
-    // projections and only inside the Realm named alongside them, so the
-    // projection has to round-trip `(realm_id, principal_id)` as one key.
-    let pairwise_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
-    let peer = DidCoreId::new("ak:did_core:key:z6MkContractPairwisePeer".to_owned()).unwrap();
-    let consent_id = arkret_identifiers::ConsentId::new(format!(
-        "ak:consent:01964137-0000-7000-8000-{:012x}",
-        namespace.len()
-    ))
-    .unwrap();
-
-    let mut stream = ContractCommitStream::new(&realm_id);
-    stream.install(stores.authority).await;
-    let grant_event = canonical_wire_event_record(
-        arkret_wire::EventKind::ConsentGrant.as_str(),
-        holder.as_str(),
-        &realm_id,
-        0,
-        now,
-    );
-    let grant_event_id = grant_event.event_id.clone();
-    let holder_account_id = serde_json::from_str::<arkret_wire::ActorId>(&grant_event.actor_id)
-        .expect("contract consent actor")
-        .as_account_id()
-        .expect("contract consent account actor")
-        .clone();
-    let dot = format!("{grant_event_id}:0");
-    let granted = ConsentGrantRecord {
-        consent_id: consent_id.clone(),
-        holder_account_id: holder_account_id.clone(),
-        peer:
-            arkret_models_collaboration::events_payloads::consent::ConsentPeer::PairwisePrincipal {
-                realm_id: pairwise_realm_id.clone(),
-                principal_id: peer.clone(),
-            },
-        consent_scope: "invite".to_owned(),
-        active_grants: BTreeMap::from([(
-            dot.clone(),
-            ConsentGrantDot {
-                dot: dot.clone(),
-                not_before: None,
-                expires_at: None,
-                granted_at: now,
-            },
-        )]),
-        revoked_grants: BTreeMap::new(),
-        updated_at: now,
-    };
-    stores
-        .unit_of_work
-        .commit_event(consent_commit_request(
-            stream.accept(&grant_event),
-            grant_event,
-            ConsentProjectionCommit {
-                grant: granted.clone(),
-                holder_quarantine: None,
-            },
-        ))
-        .await
-        .expect("committed consent grant is durable");
-    assert!(stores.events.get(&grant_event_id).await.unwrap().is_some());
-    assert_eq!(
-        stores
-            .consent_grants
-            .get(&holder_account_id, &consent_id)
-            .await
-            .unwrap()
-            .as_ref(),
-        Some(&granted),
-        "the committed grant is the visible authority mirror"
-    );
-}
-
-fn consent_commit_request(
-    authority_commit: AuthorityCommitTransaction,
-    event: CanonicalEventRecord,
-    consent_projection: ConsentProjectionCommit,
-) -> EventCommitRequest {
-    EventCommitRequest {
-        authority_commit,
-        self_producer_guard: None,
-        forwarded_producer_evidence: None,
-        parent_membership_admission: None,
-        contact_projection: None,
-        consent_projection: Some(consent_projection),
-        event,
-        device_revocation_transition: None,
-        device_revocation_gate: None,
-        projections: Vec::new(),
-        idempotency: None,
-        outbox: Vec::new(),
-        realm_fanout_source: None,
-    }
 }
 
 /// Shared behaviour every `InviteNewSourceLedgerStore` backend must reproduce

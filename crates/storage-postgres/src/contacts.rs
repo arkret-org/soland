@@ -1,15 +1,14 @@
 pub(crate) mod completion;
 
-use arkret_identifiers::{ConsentId, DidCoreId, EventId, Hash};
+use arkret_identifiers::{DidCoreId, EventId, Hash};
 use arkret_wire::ActorId;
-use diesel::sql_types::{BigInt, Binary};
+use diesel::sql_types::Binary;
 
 use super::{
-    Array, AsyncPgConnection, ConsentGrantKey, ConsentGrantRecord, ConsentGrantStore,
-    ContactRecord, ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
-    InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
-    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, Text, Timestamptz, Value, async_trait, decode_consent_grants, ids, pg_conn,
+    Array, AsyncPgConnection, ContactRecord, ContactStore, ContactVerifiedMirrorRecord,
+    ContactVerifiedMirrorStore, InviteReceivePolicyStore, Jsonb, MimiConsentCorrelationRecord,
+    MimiConsentCorrelationStore, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
+    PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, ids, pg_conn,
     sql_query,
 };
 /// Encode a contact's Event reference for storage.
@@ -791,107 +790,5 @@ mod invite_policy_tests {
             .into_policy()
             .is_err()
         );
-    }
-}
-
-// Durable backing for holder-private consent grants, keyed by
-// `(holder, consent_id)`. `active_grants` is persisted as a JSONB object
-// `{dot -> {dot, not_before, expires_at, granted_at}}` and `revoked_grants` as a
-// audit map, so only `active_grants` participates in gate decisions. Both maps round-trip
-// losslessly. Writes happen only with the authority-committed source Event.
-pub struct PgConsentGrantStore {
-    pub pool: PgPool,
-}
-#[derive(QueryableByName)]
-struct ConsentGrantRow {
-    #[diesel(sql_type = Text)]
-    consent_id: String,
-    #[diesel(sql_type = Jsonb)]
-    holder_account_id: Value,
-    #[diesel(sql_type = Jsonb)]
-    peer: Value,
-    #[diesel(sql_type = Text)]
-    consent_scope: String,
-    #[diesel(sql_type = Jsonb)]
-    active_grants: Value,
-    #[diesel(sql_type = Jsonb)]
-    revoked_grants: Value,
-    #[diesel(sql_type = Timestamptz)]
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-impl ConsentGrantRow {
-    fn into_pair(self) -> PersistenceResult<(ConsentGrantKey, ConsentGrantRecord)> {
-        let holder_account_id: arkret_wire::AccountId =
-            serde_json::from_value(self.holder_account_id).map_err(|error| {
-                PersistenceError::SchemaViolation(format!("invalid consent holder: {error}"))
-            })?;
-        let consent_id = ConsentId::new(self.consent_id).map_err(|error| {
-            PersistenceError::SchemaViolation(format!("invalid consent id: {error}"))
-        })?;
-        let key = ConsentGrantKey {
-            holder_account_id: holder_account_id.clone(),
-            consent_id: consent_id.clone(),
-        };
-        let record = ConsentGrantRecord {
-            consent_id,
-            holder_account_id,
-            peer: serde_json::from_value(self.peer).map_err(|error| {
-                PersistenceError::SchemaViolation(format!("invalid consent peer: {error}"))
-            })?,
-            consent_scope: self.consent_scope,
-            active_grants: decode_consent_grants(&self.active_grants)?,
-            revoked_grants: decode_consent_grants(&self.revoked_grants)?,
-            updated_at: self.updated_at,
-        };
-        if record
-            .active_grants
-            .keys()
-            .any(|tag| record.revoked_grants.contains_key(tag))
-        {
-            return Err(PersistenceError::SchemaViolation(
-                "a consent grant cannot be both active and revoked".to_owned(),
-            ));
-        }
-        Ok((key, record))
-    }
-}
-const CONSENT_GRANT_COLUMNS: &str =
-    "consent_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at";
-#[async_trait]
-impl ConsentGrantStore for PgConsentGrantStore {
-    async fn get(
-        &self,
-        holder_account_id: &arkret_wire::AccountId,
-        consent_id: &ConsentId,
-    ) -> PersistenceResult<Option<ConsentGrantRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let row = sql_query(format!(
-            "SELECT {CONSENT_GRANT_COLUMNS} FROM consent_grants WHERE holder_account_id = $1 AND consent_id = $2"
-        ))
-        .bind::<Jsonb, _>(serde_json::to_value(holder_account_id).map_err(|error| {
-            PersistenceError::SchemaViolation(format!("consent holder account is not serializable: {error}"))
-        })?)
-        .bind::<Text, _>(consent_id.as_str())
-        .get_result::<ConsentGrantRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        row.map(|row| row.into_pair().map(|(_, record)| record))
-            .transpose()
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentGrantKey, ConsentGrantRecord)>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let rows = sql_query(format!(
-            "SELECT {CONSENT_GRANT_COLUMNS} FROM consent_grants"
-        ))
-        .get_results::<ConsentGrantRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        rows.into_iter().map(ConsentGrantRow::into_pair).collect()
     }
 }

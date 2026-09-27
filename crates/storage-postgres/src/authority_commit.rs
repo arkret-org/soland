@@ -1251,6 +1251,15 @@ enum VerifiedPcrUnit {
     AgentProvision,
     AgentPcrGenesis,
     AgentControl,
+    Consent,
+}
+
+pub(crate) async fn commit_verified_consent_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(conn, transaction, VerifiedPcrUnit::Consent)
+        .await
 }
 
 fn is_agent_pcr_genesis(event: &arkret_wire::Event) -> bool {
@@ -1280,6 +1289,13 @@ async fn commit_transaction_in_connection_with_device_guard(
 ) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
     let verified_pcr_device_unit = verified_unit == VerifiedPcrUnit::Device;
     let verified_pcr_revoke_unit = verified_unit == VerifiedPcrUnit::RevokeProposal;
+    if matches!(
+        transaction.event.kind,
+        arkret_wire::EventKind::ConsentGrant | arkret_wire::EventKind::ConsentRevoke
+    ) && verified_unit != VerifiedPcrUnit::Consent
+    {
+        return Err(PersistenceError::Conflict("consent_current_unit_required".to_owned()).into());
+    }
     // The pointer's own signature, accepted device authorization, current
     // generation and source checkpoint are rechecked only by the registered
     // pointer unit; generic Event admission must not publish an unchecked

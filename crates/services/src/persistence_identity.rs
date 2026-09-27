@@ -10,7 +10,6 @@ struct PersistenceAccountLookup(Arc<dyn PersistenceStore>);
 struct PersistenceAccountData(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceKeys(Arc<dyn PersistenceStore>);
 struct PersistenceOneTimeKeys(Arc<dyn PersistenceStore>);
-struct PersistenceConsentCells(Arc<dyn PersistenceStore>);
 struct PersistenceMimiConsentCorrelations(Arc<dyn PersistenceStore>);
 struct PersistenceContacts(Arc<dyn PersistenceStore>);
 struct PersistenceInviteReceivePolicies(Arc<dyn PersistenceStore>);
@@ -369,20 +368,6 @@ fn application_account_data(
         payload: record.payload,
         tombstone: record.tombstone,
         updated_at: record.updated_at,
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::identity::ConsentCellPort for PersistenceConsentCells {
-    async fn cells(
-        &self,
-    ) -> crate::ServiceResult<
-        Vec<(
-            crate::identity::ConsentGrantKey,
-            crate::identity::ConsentGrantRecord,
-        )>,
-    > {
-        Ok(self.0.consent_grants().snapshot_all().await?)
     }
 }
 
@@ -1748,10 +1733,9 @@ pub fn build_persistence_identity_services(
             Arc::new(PersistenceDeviceKeys(persistence.clone())),
             Arc::new(PersistenceOneTimeKeys(persistence.clone())),
         ),
-        consent: ConsentService::new(
-            Arc::new(PersistenceConsentCells(persistence.clone())),
-            Arc::new(PersistenceMimiConsentCorrelations(persistence.clone())),
-        ),
+        consent: ConsentService::new(Arc::new(PersistenceMimiConsentCorrelations(
+            persistence.clone(),
+        ))),
         contact: ContactService::new(
             Arc::new(PersistenceContacts(persistence.clone())),
             Arc::new(PersistenceInviteReceivePolicies(persistence.clone())),

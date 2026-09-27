@@ -461,18 +461,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    consent_grants (holder_account_id, consent_id) {
-        consent_id -> Text,
-        holder_account_id -> Jsonb,
-        peer -> Jsonb,
-        consent_scope -> Text,
-        active_grants -> Jsonb,
-        revoked_grants -> Jsonb,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     mimi_consent_correlations (consent_id) {
         consent_id -> Text,
         purpose -> Text,
@@ -1930,7 +1918,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     realm_authority_handoffs,
     realm_state_snapshots,
     mls_welcome_deliveries,
-    consent_grants,
     mimi_consent_correlations,
     contacts,
     contact_verified_mirrors,

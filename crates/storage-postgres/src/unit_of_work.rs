@@ -1458,51 +1458,6 @@ pub(crate) async fn commit_contact_projection(
 /// revoke. The insert guard repeats admission's `(holder, consent_id)` intent
 /// binding under the row lock, so a concurrent grant cannot rebind the same
 /// `consent_id` between admission and commit.
-async fn commit_consent_projection(
-    conn: &mut AsyncPgConnection,
-    commit: soland_storage::ConsentProjectionCommit,
-) -> PersistenceResult<()> {
-    let grant = commit.grant;
-    let active_grants = soland_storage::encode_consent_grants(&grant.active_grants);
-    let revoked_grants = soland_storage::encode_consent_grants(&grant.revoked_grants);
-    let holder = serde_json::to_value(&grant.holder_account_id).map_err(|error| {
-        PersistenceError::SchemaViolation(format!(
-            "consent holder account is not serializable: {error}"
-        ))
-    })?;
-    let peer = serde_json::to_value(&grant.peer).map_err(|error| {
-        PersistenceError::SchemaViolation(format!("consent peer is not serializable: {error}"))
-    })?;
-    let affected = sql_query(
-        "INSERT INTO consent_grants \
-         (consent_id, holder_account_id, peer, consent_scope, active_grants, revoked_grants, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         ON CONFLICT (holder_account_id, consent_id) DO UPDATE SET \
-             active_grants = EXCLUDED.active_grants, \
-             revoked_grants = EXCLUDED.revoked_grants, \
-             updated_at = EXCLUDED.updated_at \
-         WHERE consent_grants.peer = EXCLUDED.peer \
-           AND consent_grants.consent_scope = EXCLUDED.consent_scope",
-    )
-    .bind::<Text, _>(grant.consent_id.as_str())
-    .bind::<Jsonb, _>(&holder)
-    .bind::<Jsonb, _>(&peer)
-    .bind::<Text, _>(&grant.consent_scope)
-    .bind::<Jsonb, _>(&active_grants)
-    .bind::<Jsonb, _>(&revoked_grants)
-    .bind::<Timestamptz, _>(grant.updated_at)
-    .execute(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    if affected == 0 {
-        return Err(conflict("consent_intent_rebind"));
-    }
-    let Some(cas) = commit.holder_quarantine else {
-        return Ok(());
-    };
-    commit_account_data_cas(conn, cas, None).await.map(|_| ())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AccountDataCommitOutcome {
     Applied,
@@ -2589,9 +2544,6 @@ async fn commit_one_in_connection(
         && matches!(authority_write, AuthorityCommitWriteOutcome::Committed)
     {
         commit_contact_projection(conn, Some(&committed_ref), commit).await?;
-    }
-    if let Some(commit) = request.consent_projection {
-        commit_consent_projection(conn, commit).await?;
     }
 
     // Like the outbox count below, this reports rows this attempt wrote: an
