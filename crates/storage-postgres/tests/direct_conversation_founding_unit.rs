@@ -1528,10 +1528,9 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
 
     // A participant who left still counts for the exact-two gate
     // (`contact-and-direct-conversation.md` §8.4): the pair-external invite
-    // keeps its third-party reason and the peer's own rejoin passes every
-    // profile stage, leaving it to the self-membership authority. The peer's row is moved directly
-    // because its own leave is itself refused by the participant evaluator until binding
-    // admission exists.
+    // keeps its third-party reason.  This pre-binding Realm cannot use repair:
+    // the registered repair source requires an accepted stable binding.  The
+    // complete found -> leave -> rejoin path is exercised below.
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "UPDATE member_state_current_results \
@@ -1555,7 +1554,9 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
             serde_json::json!({"realm_id":realm_id,"member_id":pair.peer_actor(),"membership":"join"}),
         )
         .await,
-        DirectConversationAdmissionCut::Passed
+        DirectConversationAdmissionCut::Refused(
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        )
     );
 
     // Once the membership projection no longer resolves the exact pair, a
