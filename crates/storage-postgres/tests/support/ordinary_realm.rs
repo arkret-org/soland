@@ -503,7 +503,7 @@ pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
             "metadata":{"title":"Fixture discussion"},
             "state":"active",
             "created_by":creator,
-            "created_at":at,
+            "created_at":arkret_canonical::format_timestamp_canonical(at),
         }}),
         at,
     );
