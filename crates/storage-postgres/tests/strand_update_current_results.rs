@@ -107,6 +107,22 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
         (baseline.0 + 1, baseline.1 + 1)
     );
 
+    // Updating the already disclosed Strand family must keep member bootstrap
+    // available, with the accepted value and its exact current revision.
+    let account = arkret_wire::AccountId::new(founder(), ordinary_realm::station());
+    let snapshot = soland_storage_postgres::account_snapshot_material(&pool, &realm_id, &account)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
+        entry,
+        arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::Strand { strand_id }, revision, value, .. }
+            if strand_id == &discussion.strand_id
+                && revision.commit_id.as_str() == after.current_commit_id
+                && revision.stream_position == after.current_stream_position as u64
+                && value == &after.value
+    )));
+
     let duplicate = uow.commit_event(accepted.clone()).await.unwrap();
     assert!(!duplicate.event_inserted);
     assert_eq!(current(&pool, &discussion.strand_id).await, after);

@@ -615,6 +615,29 @@ impl RealmAuthorizationCut {
             circle_id: payload_id("circle_id"),
             ..OperationFacts::default()
         };
+        if event.kind == EventKind::StrandUpdate {
+            // The patch target and touched fields are producer-bound payload
+            // facts. Missing or malformed facts fail closed for constrained
+            // grants; the current writer additionally validates the payload.
+            if let Ok(payload) = serde_json::from_value::<
+                arkret_models_collaboration::events_payloads::strand::StrandPatchPayload,
+            >(
+                serde_json::to_value(&event.payload).unwrap_or(serde_json::Value::Null),
+            ) {
+                facts.strand_id = Some(payload.target_ref.as_str().to_owned());
+                facts.write_fields = Some(
+                    payload
+                        .patch
+                        .iter()
+                        .map(|(path, _)| path.to_owned())
+                        .collect(),
+                );
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), payload.target_ref),
+                    facts,
+                );
+            }
+        }
         if event.kind == EventKind::SpaceCreate {
             facts.space_kind = event
                 .payload
@@ -746,4 +769,48 @@ pub(crate) async fn authorize_capability_gated_event_in_connection(
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_event_in_connection(conn, event, at).await?;
     Ok(cut)
+}
+
+#[cfg(test)]
+mod operation_fact_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn strand_patch_authorization_names_exact_target_and_touched_fields() {
+        let realm_id =
+            RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7").unwrap();
+        let strand_id =
+            StrandId::new("ak:strand:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7").unwrap();
+        let actor = ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:patch-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:patch-station.example").unwrap(),
+        ));
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            EventKind::StrandUpdate.as_str(),
+            arkret_wire::ScopeRef::Realm { realm_id: realm_id.clone() },
+            actor.clone(),
+            json!({"target_ref":strand_id,"patch":{"metadata.title":{"$op":"set","value":"Title"}}}),
+            arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+        ).unwrap();
+        let cut = RealmAuthorizationCut {
+            realm_id: realm_id.clone(),
+            actor,
+            root: None,
+            grants: BTreeMap::new(),
+            revisions: BTreeMap::new(),
+            policy_bundle: None,
+            actor_membership: None,
+            lifecycle: RealmLifecycleGates::default(),
+            direct_conversation: None,
+        };
+        let (target, facts) = cut.event_operation(&event);
+        assert_eq!(
+            target,
+            WireResourceSelector::strand(realm_id, strand_id.clone())
+        );
+        assert_eq!(facts.strand_id.as_deref(), Some(strand_id.as_str()));
+        assert_eq!(facts.write_fields, Some(vec!["metadata.title".to_owned()]));
+    }
 }

@@ -72,6 +72,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::CapabilityRevoke,
     EventKind::CapabilityRelinquish,
     EventKind::StrandCreate,
+    EventKind::StrandUpdate,
     EventKind::RealmSetDefaultStrand,
     EventKind::MessageCreate,
     EventKind::MessageRevise,
