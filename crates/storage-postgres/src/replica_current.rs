@@ -35,6 +35,7 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "realm_link_current_results",
     "member_state_current_results",
     "strand_current_results",
+    "strand_position_current_results",
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
     "object_redaction_current_results",
@@ -249,6 +250,25 @@ pub(crate) async fn install_snapshot_in_connection(
                     Some(("strand_id", strand_id.as_str())),
                     &row,
                     value,
+                )
+                .await?;
+            }
+            S::StrandPosition {
+                board_space_id,
+                strand_id,
+            } => {
+                let current = serde_json::from_value::<
+                    Option<arkret_models_collaboration::objects::strand::StrandPositionCurrent>,
+                >(value.clone())
+                .map_err(PersistenceError::database)?;
+                crate::strand_position_current_results::install_in_connection(
+                    conn,
+                    realm_id,
+                    board_space_id,
+                    strand_id,
+                    revision,
+                    &current,
+                    installed_at,
                 )
                 .await?;
             }
@@ -767,5 +787,117 @@ mod tests {
                     .unwrap();
             assert_eq!(row.value["metadata"]["title"], "After");
         }
+    }
+
+    #[tokio::test]
+    async fn position_snapshot_keeps_both_identity_components_null_and_transactional_rejection() {
+        use arkret_models_collaboration::objects::strand::StrandPositionCurrent;
+        use arkret_wire::{
+            CurrentRevision, CurrentSelector, SpaceId, StrandId, TypedCurrentResult,
+        };
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let id = |byte| {
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [byte; 32])
+        };
+        let realm = arkret_wire::RealmId::from_event_id(&id(1));
+        let strand = StrandId::from_event_id(&id(2));
+        let board_a = SpaceId::from_event_id(&id(3));
+        let board_b = SpaceId::from_event_id(&id(4));
+        let list = SpaceId::from_event_id(&id(5));
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        };
+        let revision = CurrentRevision {
+            commit_id: head.commit_id.clone(),
+            stream_position: 7,
+        };
+        let placed = Some(StrandPositionCurrent {
+            list_space_id: list,
+            rank: "a0".to_owned(),
+        });
+        // The caller has verified the snapshot; this test exercises the
+        // durable sink and its transaction boundary, not a signed disclosure.
+        let entries = [
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::StrandPosition {
+                    board_space_id: board_a.clone(),
+                    strand_id: strand.clone(),
+                },
+                source_stream_ref: stream.clone(),
+                revision: revision.clone(),
+                value: serde_json::to_value(&placed).unwrap(),
+            },
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::StrandPosition {
+                    board_space_id: board_b.clone(),
+                    strand_id: strand.clone(),
+                },
+                source_stream_ref: stream.clone(),
+                revision: revision.clone(),
+                value: Value::Null,
+            },
+        ];
+        install_snapshot_in_connection(&mut conn, &realm, &head, &entries, at)
+            .await
+            .unwrap();
+        install_snapshot_in_connection(&mut conn, &realm, &head, &entries, at)
+            .await
+            .unwrap();
+        for (board, expected) in [
+            (&board_a, serde_json::to_value(&placed).unwrap()),
+            (&board_b, Value::Null),
+        ] {
+            let actual: ValueRow = diesel::sql_query(
+                "SELECT value FROM strand_position_current_results WHERE board_space_id=$1 AND strand_id=$2",
+            ).bind::<Text,_>(board.as_str()).bind::<Text,_>(strand.as_str())
+                .get_result(&mut conn).await.unwrap();
+            assert_eq!(actual.value, expected);
+        }
+        let foreign_realm = arkret_wire::RealmId::from_event_id(&id(6));
+        diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        assert!(
+            crate::strand_position_current_results::install_in_connection(
+                &mut conn,
+                &foreign_realm,
+                &board_a,
+                &strand,
+                &revision,
+                &None,
+                at,
+            )
+            .await
+            .is_err()
+        );
+        diesel::sql_query("ROLLBACK")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let mut malformed = entries.to_vec();
+        if let TypedCurrentResult::Value { value, .. } = &mut malformed[1] {
+            *value = json!({"rank":"partial"});
+        }
+        diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        assert!(
+            install_snapshot_in_connection(&mut conn, &realm, &head, &malformed, at)
+                .await
+                .is_err()
+        );
+        diesel::sql_query("ROLLBACK")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let actual: ValueRow = diesel::sql_query(
+            "SELECT value FROM strand_position_current_results WHERE board_space_id=$1 AND strand_id=$2",
+        ).bind::<Text,_>(board_a.as_str()).bind::<Text,_>(strand.as_str())
+            .get_result(&mut conn).await.unwrap();
+        assert_eq!(actual.value, serde_json::to_value(placed).unwrap());
     }
 }

@@ -701,6 +701,11 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'strand_position'::text AS selector_kind, \
+                jsonb_build_object('kind','strand_position','board_space_id',board_space_id,'strand_id',strand_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM strand_position_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'space'::text AS selector_kind, to_jsonb(space_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM space_current_results WHERE realm_id = $1 \
@@ -805,6 +810,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         ))
                     })?,
                 },
+                ("strand_position", Some(selector)) => {
+                    serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
+                        .map_err(PersistenceError::database)?
+                }
                 ("space", Some(space_id)) => arkret_wire::CurrentSelector::Space {
                     space_id: serde_json::from_value(space_id).map_err(|error| {
                         PersistenceError::Internal(format!(

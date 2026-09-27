@@ -4449,6 +4449,29 @@ CREATE TABLE strand_current_results (
 );
 CREATE INDEX strand_current_results_realm ON strand_current_results(realm_id,strand_id);
 
+-- Registered typed-pair position current, including an explicit JSON null.
+-- The Board and Strand are separate typed identity components, never a hash
+-- subject or a canonical Relation. RealmCommit order is the only revision.
+CREATE TABLE strand_position_current_results (
+ realm_id TEXT NOT NULL,
+ board_space_id TEXT NOT NULL,
+ strand_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(board_space_id,strand_id),
+ CHECK(value='null'::jsonb OR (
+   jsonb_typeof(value)='object' AND value ? 'list_space_id' AND value ? 'rank'
+   AND jsonb_typeof(value->'list_space_id')='string' AND jsonb_typeof(value->'rank')='string'
+   AND value - 'list_space_id' - 'rank'='{}'::jsonb
+ ))
+);
+CREATE INDEX strand_position_current_results_realm
+ ON strand_position_current_results(realm_id,board_space_id,strand_id);
+CREATE INDEX strand_position_current_results_list
+ ON strand_position_current_results(realm_id,board_space_id,(value->>'list_space_id'));
+
 -- Event-derived Space metadata and its two sibling registered current
 -- families. The parent and policy must exist from genesis, including explicit
 -- JSON null values for an undeclared parent/policy. They advance with the
