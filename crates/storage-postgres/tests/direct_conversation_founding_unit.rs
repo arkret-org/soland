@@ -107,6 +107,161 @@ fn fixture_hash(byte: char) -> Hash {
     Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
 }
 
+fn station_successor(
+    previous: &arkret_wire::RealmCommit,
+    event: &arkret_wire::Event,
+    station_did: &arkret_wire::Did,
+    offset_seconds: i64,
+) -> arkret_wire::RealmCommit {
+    let mut commit = previous.clone();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{}:{}:successor", event.event_id, previous.commit_id).as_bytes(),
+    ));
+    commit.stream_position = previous.stream_position + 1;
+    commit.previous_commit_ref = Some(previous.commit_id.clone());
+    commit.event_ref = event.event_id.clone();
+    commit.committed_at = previous.committed_at + chrono::TimeDelta::seconds(offset_seconds);
+    let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        DidUrl::new(format!("{station_did}#authority")).unwrap(),
+        commit.committed_at,
+        &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
+    )
+    .unwrap();
+    commit
+}
+
+fn station_genesis_commit(
+    template: &arkret_wire::RealmCommit,
+    event: &arkret_wire::Event,
+    station_did: &arkret_wire::Did,
+    committed_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::RealmCommit {
+    let realm_id = RealmId::from_event_id(&event.event_id);
+    let mut commit = template.clone();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        format!("{}:genesis", event.event_id).as_bytes(),
+    ));
+    commit.realm_id = realm_id.clone();
+    commit.stream_ref = arkret_wire::CommitStreamRef::Realm { realm_id };
+    commit.stream_position = 0;
+    commit.previous_commit_ref = None;
+    commit.event_ref = event.event_id.clone();
+    commit.governance_generation = 0;
+    commit.authority_ref =
+        arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event.event_id.clone());
+    commit.committed_at = committed_at;
+    let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &unsigned,
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        DidUrl::new(format!("{station_did}#authority")).unwrap(),
+        commit.committed_at,
+        &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
+    )
+    .unwrap();
+    commit
+}
+
+#[allow(clippy::too_many_arguments)]
+fn agent_provision_event(
+    controller: &AccountId,
+    realm_id: &RealmId,
+    method: &DidUrl,
+    seed: [u8; 32],
+    agent_id: &DidCoreId,
+    agent_pcr_id: &RealmId,
+    controller_authorization_ref: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::Event {
+    let event = arkret_wire::test_support::raw_event_at(
+        EventKind::AgentProvision.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        controller.principal_id.clone(),
+        controller.station_id.clone(),
+        serde_json::json!({
+            "schema": "ak.schema.agent_provision.v1",
+            "agent_id": agent_id,
+            "controller_principal_id": controller.principal_id,
+            "principal_control_realm_id": agent_pcr_id,
+            "controller_authorization_ref": controller_authorization_ref,
+            "agent_slug": "direct-helper",
+            "accountability_scope": "agent_operator",
+            "requested_scope_digest": format!("sha256:{}", "b".repeat(64)),
+            "selector_visibility": "private",
+            "created_at": arkret_canonical::format_timestamp_canonical(created_at)
+        }),
+        created_at,
+    )
+    .unwrap();
+    device_authorization_history::sign_event(event, method.clone(), seed)
+}
+
+fn agent_control_event(
+    controller_method: &DidUrl,
+    signing_seed: [u8; 32],
+    controller: &AccountId,
+    agent: &AccountId,
+    agent_pcr: &RealmId,
+    authorization_ref: &str,
+    payload: serde_json::Value,
+    at: chrono::DateTime<chrono::Utc>,
+) -> arkret_wire::Event {
+    let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+        EventKind::AgentKeyAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: agent_pcr.clone(),
+        },
+        ActorId::account(agent.clone()),
+        payload,
+        at,
+    )
+    .unwrap();
+    event.executed_by = Some(ActorId::account(controller.clone()));
+    event.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(authorization_ref.to_owned()).unwrap());
+    device_authorization_history::sign_event(event, controller_method.clone(), signing_seed)
+}
+
+fn agent_key_authorization(
+    agent_did: &arkret_wire::Did,
+    controller: &DidCoreId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    let method = format!("{agent_did}#runtime-1");
+    let submit = arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1;
+    serde_json::json!({
+        "agent_id": arkret_wire::project_did_to_core_id(agent_did).unwrap(),
+        "key_id": method,
+        "verification_method": method,
+        "public_key": {
+            "kty": "OKP",
+            "kid": method,
+            "algorithm": "Ed25519",
+            "key": arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(&[0x61; 32]).verifying_key().as_bytes()
+            )
+        },
+        "accountable_principal_id": controller,
+        "agent_key_scope": {
+            "actions": [submit],
+            "resources": [{"kind": "operation", "operation": submit}]
+        },
+        "audience": ["ak:did_core:web:direct-conversation.example"],
+        "issued_at": arkret_canonical::format_timestamp_canonical(at),
+        "approval_evidence": {
+            "kind": "pairing_request",
+            "request_canonical_digest": format!("sha256:{}", "d".repeat(64)),
+            "pairing_request_id": format!("agent_pairing_request:{}", uuid::Uuid::now_v7()),
+            "approved_by": controller
+        }
+    })
+}
+
 fn fixture_signature(
     issuer: &str,
     at: chrono::DateTime<chrono::Utc>,
@@ -422,24 +577,33 @@ fn founding_unit(
     let scope = arkret_wire::ScopeRef::Realm {
         realm_id: realm_id.clone(),
     };
-    let join = |member: &ActorId| {
+    let join = |member: &ActorId, controller_generation_ref: Option<&arkret_wire::EventId>| {
+        let mut payload = serde_json::json!({
+            "realm_id":realm_id,
+            "member_id":member,
+            "membership":"join",
+            "reason":"direct_conversation_bootstrap"
+        });
+        if shape.authority_ref.role == "direct_conversation_agent_provision"
+            && member == &shape.other
+        {
+            payload["agent_controller_binding"] = serde_json::json!({
+                "controller_account_id": shape.author.as_account_id().unwrap(),
+                "controller_membership_generation_ref": controller_generation_ref.unwrap(),
+            });
+        }
         authored(
             EventKind::MemberState,
             scope.clone(),
             shape.author.clone(),
             &pair.founder_method,
-            serde_json::json!({
-                "realm_id":realm_id,
-                "member_id":member,
-                "membership":"join",
-                "reason":"direct_conversation_bootstrap"
-            }),
+            payload,
             Vec::new(),
             at,
         )
     };
-    let founder_join = join(&shape.author);
-    let peer_join = join(&shape.other);
+    let founder_join = join(&shape.author, None);
+    let peer_join = join(&shape.other, Some(&founder_join.event_id));
     let strand = authored(
         EventKind::StrandCreate,
         scope.clone(),
@@ -992,6 +1156,259 @@ async fn founding_refusals_decide_authority_at_the_slot_cut_with_zero_writes() {
             .unwrap(),
         DirectConversationFoundingCommitOutcome::Committed(_)
     ));
+}
+
+#[tokio::test]
+async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_slot_cut() {
+    use soland_storage::{
+        ActorProfileStore, AgentControlAdmissionOutcome, AgentControlAdmissionWrite,
+        AgentPcrGenesisAdmissionWrite, AgentProvisionAdmissionWrite,
+    };
+
+    let pool = contract_pool().await;
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO device_inventory_station(singleton,station_id) \
+         VALUES(TRUE,'ak:did_core:web:direct-conversation-contract.example') \
+         ON CONFLICT(singleton) DO NOTHING",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let station =
+        diesel::sql_query("SELECT station_id FROM device_inventory_station WHERE singleton")
+            .get_result::<StationRow>(&mut *conn)
+            .await
+            .unwrap();
+    drop(conn);
+    let station = DidCoreId::new(station.station_id).unwrap();
+    let station_did = device_authorization_history::did_web_station(&station);
+    let controller_fixture = pcr_genesis::PcrGenesisFixture::new(station_did.clone());
+    let selector = controller_fixture
+        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+        .await
+        .unwrap();
+    let controller = controller_fixture.history.account.clone();
+    let controller_realm = controller_fixture.unit.transactions[0]
+        .commit
+        .realm_id
+        .clone();
+    let controller_head = controller_fixture.unit.transactions[1].commit.clone();
+    let controller_authority = controller_fixture.unit.transactions[1]
+        .expected_authority
+        .clone();
+    let controller_method = controller_fixture
+        .history
+        .device_verification_method
+        .clone();
+    let controller_seed = controller_fixture.history.founding_device_signing_seed;
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+
+    let agent_did = arkret_wire::Did::new(format!(
+        "did:web:dc-agent-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
+    let agent = AccountId::new(agent_id.clone(), station.clone());
+    let delegation = format!("{agent_did}#managed-controller");
+    let genesis = device_authorization_history::sign_event(
+        arkret_bootstrap::build_agent_pcr_create(arkret_bootstrap::AgentPcrCreateEventInput {
+            payload: arkret_bootstrap::AgentPcrCreatePayloadInput {
+                agent_id: agent_id.clone(),
+                governance_station_id: station.clone(),
+                initial_resolution: arkret_models_identity::ResolutionCommitment {
+                    did: agent_did.clone(),
+                    method_history_head: format!("sha256:{}", "c".repeat(64)),
+                    version_id: "1-agent".to_owned(),
+                },
+                genesis_salt: arkret_wire::GenesisSalt::new(
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                )
+                .unwrap(),
+                trust_domain: arkret_wire::TrustDomainId::new(
+                    "ak:trust_domain:pcr-contract.example".to_owned(),
+                )
+                .unwrap(),
+                initial_join_rule: arkret_wire::JoinRule::Closed,
+                initial_history_access: arkret_wire::HistoryAccess::SinceJoin,
+                initial_discoverability: arkret_wire::Discoverability::Secret,
+            },
+            executed_by: ActorId::account(controller.clone()),
+            authorization_ref: arkret_wire::AuthorizationRef::new(delegation.clone()).unwrap(),
+            created_at: controller_head.committed_at,
+        })
+        .unwrap()
+        .into_event(),
+        controller_method.clone(),
+        controller_seed,
+    );
+    let agent_pcr = RealmId::from_event_id(&genesis.event_id);
+    let provision = agent_provision_event(
+        &controller,
+        &controller_realm,
+        &controller_method,
+        controller_seed,
+        &agent_id,
+        &agent_pcr,
+        &delegation,
+        controller_head.committed_at,
+    );
+    let provision_commit = station_successor(&controller_head, &provision, &station_did, 1);
+    let transaction =
+        |authority: CurrentRealmAuthority,
+         event: arkret_wire::Event,
+         commit: arkret_wire::RealmCommit| AuthorityCommitTransaction {
+            expected_authority: authority,
+            event,
+            commit,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        };
+    profiles
+        .admit_agent_provision(AgentProvisionAdmissionWrite {
+            commit: transaction(
+                controller_authority,
+                provision.clone(),
+                provision_commit.clone(),
+            ),
+            queued_at: provision_commit.committed_at,
+        })
+        .await
+        .unwrap();
+    let genesis_commit = station_genesis_commit(
+        &controller_head,
+        &genesis,
+        &station_did,
+        provision_commit.committed_at + chrono::TimeDelta::seconds(1),
+    );
+    profiles
+        .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
+            commit: transaction(
+                CurrentRealmAuthority {
+                    realm_id: agent_pcr.clone(),
+                    generation: 0,
+                    service_id: station.clone(),
+                    authority_ref: genesis_commit.authority_ref.clone(),
+                    last_handoff_ref: None,
+                },
+                genesis.clone(),
+                genesis_commit.clone(),
+            ),
+            queued_at: genesis_commit.committed_at,
+        })
+        .await
+        .unwrap();
+
+    let pair = Pair {
+        pool: pool.clone(),
+        station: station.clone(),
+        founder: controller.clone(),
+        founder_method: controller_method.clone(),
+        founder_guard: SelfProducerCommitGuard::HumanDevice(selector),
+        peer: agent.clone(),
+        contact_round_id: fixture_hash('a'),
+    };
+    let shape = UnitShape {
+        author: ActorId::account(controller.clone()),
+        other: ActorId::account(agent.clone()),
+        authority_ref: arkret_wire::SemanticRef::new(
+            provision.event_id.to_string(),
+            "direct_conversation_agent_provision",
+        ),
+        ..UnitShape::exact(&pair)
+    };
+
+    // Provision and Agent PCR alone are insufficient: no current runtime key
+    // means the controller binding is not live, and the whole unit writes zero.
+    let no_key_at = genesis_commit.committed_at + chrono::TimeDelta::milliseconds(1);
+    let no_key = founding_unit(&pair, &shape, key(), no_key_at);
+    let no_key_result = store
+        .admit_self_direct_conversation_founding_unit(&no_key, &pair.guards(), no_key_at)
+        .await;
+    let no_key_detail = format!("{no_key_result:?}");
+    assert_eq!(
+        refusal_code(no_key_result),
+        ConflictCode::FailedPrecondition,
+        "unexpected no-key refusal: {no_key_detail}"
+    );
+    assert_eq!(footprint(&pool, &realm_of(&no_key)).await, [0; 5]);
+
+    let key_event = agent_control_event(
+        &controller_method,
+        controller_seed,
+        &controller,
+        &agent,
+        &agent_pcr,
+        &delegation,
+        agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            genesis_commit.committed_at,
+        ),
+        genesis_commit.committed_at,
+    );
+    let key_commit = station_successor(&genesis_commit, &key_event, &station_did, 1);
+    assert!(matches!(
+        profiles
+            .admit_agent_control_event(AgentControlAdmissionWrite {
+                commit: transaction(
+                    CurrentRealmAuthority {
+                        realm_id: agent_pcr.clone(),
+                        generation: 0,
+                        service_id: station,
+                        authority_ref: genesis_commit.authority_ref.clone(),
+                        last_handoff_ref: None,
+                    },
+                    key_event.clone(),
+                    key_commit.clone(),
+                ),
+                queued_at: key_commit.committed_at,
+            })
+            .await
+            .unwrap(),
+        AgentControlAdmissionOutcome::Committed(_)
+    ));
+
+    let unit_at = key_commit.committed_at + chrono::TimeDelta::milliseconds(1);
+    let unit = founding_unit(&pair, &shape, key(), unit_at);
+    assert!(matches!(
+        store
+            .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), unit_at,)
+            .await
+            .unwrap(),
+        DirectConversationFoundingCommitOutcome::Committed(_)
+    ));
+    assert_eq!(footprint(&pool, &realm_of(&unit)).await, [1, 4, 4, 1, 2]);
+
+    #[derive(diesel::QueryableByName)]
+    struct BasisRow {
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        authorization_basis: serde_json::Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let basis = diesel::sql_query(
+        "SELECT authorization_basis FROM direct_conversation_founding_slots WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm_of(&unit).as_str())
+    .get_result::<BasisRow>(&mut *conn)
+    .await
+    .unwrap();
+    let refs = basis.authorization_basis["event_refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(basis.authorization_basis["kind"], "agent_controller");
+    assert_eq!(
+        refs,
+        [provision.event_id.as_str(), key_event.event_id.as_str()]
+            .into_iter()
+            .collect()
+    );
 }
 
 #[tokio::test]
