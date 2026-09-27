@@ -1109,8 +1109,8 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let store = state.test_persistence();
     let caller_genesis = PcrGenesisFixture::new(state.service_did());
-    caller_genesis
-        .admit_into(store.as_ref())
+    let caller_device = caller_genesis
+        .admit_founding_device(store.as_ref())
         .await
         .expect("caller PCR genesis admitted");
     let mut actor_genesis = PcrGenesisFixture::new(state.service_did());
@@ -1120,7 +1120,10 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         .expect("actor PCR genesis admitted");
     let caller = caller_genesis.history.account.clone();
     let actor = actor_genesis.history.account.clone();
-    let session = roster_session(&state, caller.principal_id.as_str());
+    let mut session = roster_session(&state, caller.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: caller_device.device_id,
+    };
 
     let mut realm = CommittedRealm::bootstrap(
         store.as_ref(),

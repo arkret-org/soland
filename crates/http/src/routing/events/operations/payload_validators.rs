@@ -477,12 +477,21 @@ mod tests {
             "encryption_context": {
                 "epoch": 7u64,
                 "group_state_ref": "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-                "counter": 9u64,
             },
             "ciphertext": "Y2lwaGVydGV4dA",
         });
 
         assert_eq!(validate_encrypted_payload_envelope(&envelope), Ok(()));
+
+        for forbidden in ["counter", "scheme"] {
+            let mut widened = envelope.clone();
+            widened["encryption_context"][forbidden] = json!(9u64);
+            assert_eq!(
+                validate_encrypted_payload_envelope(&widened),
+                Err("encrypted content envelope violates SDK schema"),
+                "{forbidden} must not widen the closed encryption context"
+            );
+        }
 
         for forbidden in ["scheme", "group_id", "aad", "payload_digest"] {
             let mut widened = envelope.clone();

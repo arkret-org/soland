@@ -15,12 +15,6 @@ fn encrypted_payload() -> Value {
     })
 }
 
-fn exporter_encrypted_payload() -> Value {
-    let mut envelope = encrypted_payload();
-    envelope["encryption_context"]["counter"] = Value::from(4u64);
-    envelope
-}
-
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
     let now = chrono::Utc::now();
     state.realm_states.insert(
@@ -210,11 +204,12 @@ fn pin_note_rejects_envelope_committed_to_another_scope() {
 }
 
 #[test]
-fn pin_note_accepts_current_encrypted_projection_payload() {
+fn pin_note_rejects_unregistered_encryption_context_counter() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let note = exporter_encrypted_payload();
+    let mut note = encrypted_payload();
+    note["encryption_context"]["counter"] = Value::from(4u64);
 
     let effect = state.apply(
         &make_operation(
@@ -227,10 +222,10 @@ fn pin_note_accepts_current_encrypted_projection_payload() {
 
     assert!(matches!(
         effect,
-        ProjectionEffect::PinProjected { active: true, .. }
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "pin_note_encrypted_payload_required"
     ));
-    let pin = state.pins.values().next().expect("pin should project");
-    assert_eq!(pin.note.as_ref(), Some(&note));
+    assert!(state.pins.is_empty());
 }
 
 #[test]
