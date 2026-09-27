@@ -135,6 +135,17 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .direct_conversation_founding_slot(founder_id, trust_domain_id, pair_key)
             .await?)
     }
+    async fn direct_conversation_durable_state(
+        &self,
+        trust_domain_id: &str,
+        pair_key: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::DirectConversationDurableState>> {
+        Ok(self
+            .0
+            .events()
+            .direct_conversation_durable_state(trust_domain_id, pair_key)
+            .await?)
+    }
     async fn canonical_event(
         &self,
         event_id: &str,

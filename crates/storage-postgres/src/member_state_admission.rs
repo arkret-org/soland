@@ -456,6 +456,33 @@ async fn admit_member_state(
             "scoped, invited or cascade membership has its own admission",
         ));
     }
+    // Direct Conversation membership is a closed profile.  The profile
+    // evaluator has already checked the immutable pair, binding ref, exact
+    // authority source and current membership at this same locked cut.  Do
+    // not fall through to the ordinary collaboration Realm join rule: the
+    // only admitted edges here are participant self-leave and repair
+    // self-rejoin.
+    if let Some(authority) =
+        crate::direct_conversation_admission::profile_authority_in_connection(conn, event).await?
+    {
+        if authority != crate::direct_conversation_admission::ProfileAuthority::Profile
+            || event.executed_by.is_some()
+            || event.applet_id.is_some()
+            || event.actor_id != payload.member_id
+        {
+            return Err(capability_denied(
+                "Direct Conversation membership requires its exact self profile",
+            ));
+        }
+        let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;
+        let to = state_name(payload.membership);
+        return match (from.as_str(), to) {
+            ("join", "leave") | ("leave", "join") => Ok(()),
+            _ => Err(failed_precondition(
+                "Direct Conversation membership transition is not self-leave or self-rejoin",
+            )),
+        };
+    }
     if payload.agent_controller_binding.is_some() {
         if payload.membership != MembershipPayloadState::Join {
             return Err(unsupported(

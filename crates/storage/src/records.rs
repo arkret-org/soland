@@ -1253,3 +1253,22 @@ pub struct DirectConversationFoundingSlotRecord {
     pub idempotency_key: String,
     pub accepted_at: chrono::DateTime<chrono::Utc>,
 }
+
+/// One participant row in the durable Direct Conversation membership cut.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectConversationMemberCurrent {
+    pub member_id: arkret_wire::ActorId,
+    pub membership: String,
+}
+
+/// Resolver inputs read from accepted typed-current facts in one database
+/// statement.  The HTTP resolver derives its closed state from this value;
+/// it never consults the process-local binding/reducer projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectConversationDurableState {
+    pub founding_slot: DirectConversationFoundingSlotRecord,
+    pub binding: Option<arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingCurrentValue>,
+    pub group_state_ref: Option<arkret_wire::EventId>,
+    pub group_current_exact_pair: Option<bool>,
+    pub members: Vec<DirectConversationMemberCurrent>,
+}

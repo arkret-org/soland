@@ -33,12 +33,12 @@ use diesel_async::RunQueryDsl;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, ConflictCode, ContactStore,
     CurrentRealmAuthority, DirectConversationAdmissionCut, DirectConversationFoundingCommitOutcome,
-    DirectConversationFoundingCommitUnit, EventCommitUnitOfWork, PersistenceError,
+    DirectConversationFoundingCommitUnit, EventCommitUnitOfWork, EventStore, PersistenceError,
     SelfProducerCommitGuard,
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore,
+    Db, FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore, PgEventStore,
     PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
 };
 
@@ -1578,12 +1578,14 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
 
 const PARTICIPANT_SOURCE: &str = "ak.authority.direct_conversation_participant.v1";
 const BOOTSTRAP_SOURCE: &str = "ak.authority.direct_conversation_bootstrap_participant.v1";
+const REPAIR_SOURCE: &str = "ak.authority.direct_conversation_repair.v1";
 
 /// The authority source and critical ref one Direct Conversation Event cites.
 enum Cites<'a> {
     Nothing,
     Bootstrap(&'a arkret_wire::EventId),
     Participant(&'a arkret_wire::EventId),
+    Repair(&'a arkret_wire::EventId),
 }
 
 /// The next Realm-stream request by `actor` citing `cites`.
@@ -1614,6 +1616,7 @@ fn cited(
         Cites::Participant(reference) => {
             (PARTICIPANT_SOURCE, "direct_conversation_binding", reference)
         }
+        Cites::Repair(reference) => (REPAIR_SOURCE, "direct_conversation_binding", reference),
     };
     event.authorization_ref = Some(arkret_wire::AuthorizationRef::new(source).unwrap());
     event.semantic_refs = vec![arkret_wire::SemanticRef::new(reference.to_string(), role)];
@@ -2087,6 +2090,22 @@ async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zer
     uow.commit_event(founder_endorsement.clone()).await.unwrap();
     let head = founder_endorsement.authority_commit.clone();
     assert_eq!(dc_footprint(&pool, &realm_id).await[6], 2);
+    let durable = PgEventStore { pool: pool.clone() }
+        .direct_conversation_durable_state(TRUST_DOMAIN, facts.pair_key.as_str())
+        .await
+        .unwrap()
+        .expect("accepted founding slot is durable");
+    assert_eq!(durable.founding_slot.realm_id, realm_id.as_str());
+    assert_eq!(durable.group_state_ref.as_ref(), Some(&add_ref));
+    assert_eq!(durable.group_current_exact_pair, Some(true));
+    assert_eq!(durable.members.len(), 2);
+    assert!(
+        durable
+            .members
+            .iter()
+            .all(|member| member.membership == "join")
+    );
+    assert_eq!(durable.binding.unwrap().endorsements.len(), 2);
     assert_eq!(
         refused(&cited(
             &head,
@@ -2146,6 +2165,39 @@ async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zer
     );
     uow.commit_event(founder_message.clone()).await.unwrap();
     let head = founder_message.authority_commit.clone();
+
+    // Membership repair stays on the same stable Realm.  A joined
+    // participant may leave only through the participant source; while left,
+    // participant authority is inactive and only the repair source can carry
+    // that same participant's `leave -> join` edge.
+    let leave = cited(
+        &head,
+        EventKind::MemberState,
+        peer.clone(),
+        serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"leave"}),
+        Cites::Participant(&binding_ref),
+    );
+    uow.commit_event(leave.clone()).await.unwrap();
+    assert_eq!(
+        refused(&cited(
+            &leave.authority_commit,
+            EventKind::MemberState,
+            peer.clone(),
+            serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
+            Cites::Participant(&binding_ref),
+        ))
+        .await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    let rejoin = cited(
+        &leave.authority_commit,
+        EventKind::MemberState,
+        peer.clone(),
+        serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
+        Cites::Repair(&binding_ref),
+    );
+    uow.commit_event(rejoin.clone()).await.unwrap();
+    let head = rejoin.authority_commit.clone();
 
     // A withdrawn directional Contact stops every send at the next cut.
     let mut conn = pool.get().await.unwrap();

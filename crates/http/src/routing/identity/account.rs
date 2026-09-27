@@ -49,6 +49,7 @@ use arkret_models_identity::{
     DeviceSummaryStatus, DeviceSummaryVerificationState, PrincipalResolutionAuditEvidence,
     PrincipalResolutionAuditRequest,
 };
+use arkret_wire::ActorId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -66,7 +67,7 @@ use soland_services::identity::{
     DirectConversationBindingRecord, SessionIdentityState as SessionRecord,
 };
 
-use self::social::direct::{direct_founder_for_pair, direct_group_state_for_realm};
+use self::social::direct::direct_founder_for_pair;
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
     revoke_sessions_for_actor,
@@ -1642,23 +1643,26 @@ async fn direct_conversation_resolve(
     let pair_key_hash = Hash::new(pair_key.clone())
         .map_err(|error| AppError::internal(format!("direct pair key invalid: {error}")))?;
 
-    // Existing coordinates are never hidden by presence, session, KeyPackage inventory or MLS
-    // reconcile state.
-    let raw_binding = state.contacts().direct_binding(&pair_key);
-    if direct_binding_conflict(state, &pair_key)
-        && let Some(bindings) = state.contacts().direct_bindings_for_pair(&pair_key)
-        && let Some(record) = bindings.any_endorsed()
-    {
-        let group_state_ref = direct_group_state_for_realm(state, &record.realm_id).await?;
-        return json_ok(DirectConversationResolveOutcome::Suspended {
-            coordinates: direct_coordinates(pair_key_hash, &record)?,
-            blockers: vec![DirectConversationSendBlocker::PairMaterializationConflict],
-            group_state_ref,
-        });
-    }
+    // Existing coordinates and their state come from the accepted durable
+    // founding/current-result cut.  In particular, a live binding no longer
+    // depends on process hydration having replayed it into ContactService.
+    let durable = state
+        .event_queries()
+        .direct_conversation_durable_state(state.config().trust_domain.as_str(), &pair_key)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("direct durable-state lookup failed: {error}"))
+        })?;
+    let raw_binding = durable
+        .as_ref()
+        .and_then(|facts| facts.binding.as_ref())
+        .map(durable_binding_record)
+        .transpose()?;
     if let Some(binding) = raw_binding {
         let coordinates = direct_coordinates(pair_key_hash, &binding)?;
-        let group_state = direct_group_state_for_realm(state, &binding.realm_id).await?;
+        let group_state = durable
+            .as_ref()
+            .and_then(|facts| facts.group_state_ref.clone());
         let group_state_ref = group_state.clone();
         let projection = state.projections().snapshot();
         if projection.realm_is_destroyed(&binding.realm_id)
@@ -1685,10 +1689,11 @@ async fn direct_conversation_resolve(
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        let member_set = projection
-            .members_of_realm(&binding.realm_id)
+        let member_set = durable
+            .as_ref()
             .into_iter()
-            .map(|member| member.member.clone())
+            .flat_map(|facts| facts.members.iter())
+            .map(|member| member.member_id.to_string())
             .collect::<BTreeSet<_>>();
         if binding.participants_unordered.len() != 2
             || participant_set.len() != 2
@@ -1700,20 +1705,26 @@ async fn direct_conversation_resolve(
                 group_state_ref,
             });
         }
-        if !direct_binding_matches_projection(state, &binding) {
+        if durable
+            .as_ref()
+            .and_then(|facts| facts.group_current_exact_pair)
+            != Some(true)
+        {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
                 group_state_ref,
             });
         }
-        if projection
-            .member(&binding.realm_id, &actor.to_string())
-            .is_none_or(|member| member.state != "join")
-            || projection
-                .member(&binding.realm_id, &peer.to_string())
-                .is_none_or(|member| member.state != "join")
-        {
+        let joined = |participant: &ActorId| {
+            durable.as_ref().is_some_and(|facts| {
+                facts
+                    .members
+                    .iter()
+                    .any(|member| &member.member_id == participant && member.membership == "join")
+            })
+        };
+        if !joined(&actor) || !joined(&peer) {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PeerNotJoinedMls],
@@ -1783,6 +1794,24 @@ async fn direct_conversation_resolve(
         });
     }
 
+    if let Some(facts) = durable.as_ref() {
+        let coordinates = direct_slot_coordinates(pair_key_hash.clone(), &facts.founding_slot)?;
+        if contact
+            .as_ref()
+            .is_some_and(|contact| contact.status != "accepted")
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+                group_state_ref: facts.group_state_ref.clone(),
+            });
+        }
+        return json_ok(DirectConversationResolveOutcome::Provisional {
+            coordinates,
+            group_state_ref: facts.group_state_ref.clone(),
+        });
+    }
+
     // No accepted binding yet. Creation is founder-only: this endpoint never creates, and waiting
     // never grants create authority to the non-founder — there is no timeout fallback or takeover.
     let founder = direct_founder_for_pair(
@@ -1793,35 +1822,6 @@ async fn direct_conversation_resolve(
         agent_basis.is_some(),
     )
     .await?;
-    if let Some(founder_id) = founder.as_deref() {
-        let trust_domain = state.config().trust_domain.clone();
-        if let Some(slot) = state
-            .event_queries()
-            .direct_conversation_founding_slot(founder_id, trust_domain.as_str(), &pair_key)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("direct founding slot lookup failed: {error}"))
-            })?
-        {
-            let coordinates = direct_slot_coordinates(pair_key_hash, &slot)?;
-            let group_state_ref =
-                direct_group_state_for_realm(state, coordinates.realm_id.as_str()).await?;
-            if contact
-                .as_ref()
-                .is_some_and(|contact| contact.status != "accepted")
-            {
-                return json_ok(DirectConversationResolveOutcome::Suspended {
-                    coordinates,
-                    blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
-                    group_state_ref,
-                });
-            }
-            return json_ok(DirectConversationResolveOutcome::Provisional {
-                coordinates,
-                group_state_ref,
-            });
-        }
-    }
     if agent_basis.is_none() && accepted_contact.is_none() {
         return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
             retry_after_ms: None,
@@ -1948,6 +1948,30 @@ fn direct_coordinates(
                 AppError::internal(format!("stored direct binding ref: {error}"))
             })?,
         ),
+    })
+}
+
+fn durable_binding_record(
+    current: &arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingCurrentValue,
+) -> Result<DirectConversationBindingRecord, AppError> {
+    current.binding_digest().map_err(|error| {
+        AppError::internal(format!("durable direct binding is conflicted: {error}"))
+    })?;
+    let endorsement = current
+        .endorsements
+        .first()
+        .ok_or_else(|| AppError::internal("durable direct binding has no accepted endorsement"))?;
+    Ok(DirectConversationBindingRecord {
+        participants_unordered: endorsement
+            .value
+            .unordered_participant_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        realm_id: endorsement.value.realm_id.to_string(),
+        main_strand_id: endorsement.value.main_strand_id.to_string(),
+        created_at: endorsement.value.created_at,
+        binding_event_ref: endorsement.tag_id.event_id().to_string(),
     })
 }
 

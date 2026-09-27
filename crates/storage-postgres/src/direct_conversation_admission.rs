@@ -232,6 +232,14 @@ fn participant_action(event: &arkret_wire::Event) -> bool {
     }
 }
 
+/// The repair source is deliberately disjoint from the ordinary participant
+/// source: it carries only an existing participant's `leave -> join` edge.
+fn repair_action(event: &arkret_wire::Event) -> bool {
+    event.kind == EventKind::MemberState
+        && membership_of(event).as_deref() == Some("join")
+        && membership_target(event).as_ref() == Some(&event.actor_id)
+}
+
 /// Whether the Event maps to an action of the bootstrap source's allowlist
 /// (`ak.authority.direct_conversation_bootstrap_participant.v1`).
 fn bootstrap_action(event: &arkret_wire::Event) -> bool {
@@ -538,16 +546,12 @@ async fn participant_authority_admits(
         group,
         binding,
     } = inputs;
-    let actor_joined = members
-        .iter()
-        .any(|(member, membership)| member == &event.actor_id && membership == "join");
+    let actor_membership = members.iter().find_map(|(member, membership)| {
+        (member == &event.actor_id).then_some(membership.as_str())
+    });
     let realm_scope =
         matches!(&event.scope_ref, ScopeRef::Realm { realm_id } if realm_id == &event.realm_id);
-    if event.executed_by.is_some()
-        || !realm_scope
-        || !founding.pair().contains(&event.actor_id)
-        || !actor_joined
-    {
+    if event.executed_by.is_some() || !realm_scope || !founding.pair().contains(&event.actor_id) {
         return Ok(false);
     }
     let source = event
@@ -562,7 +566,19 @@ async fn participant_authority_admits(
             let covered = critical_ref(event, BINDING_REF_ROLE)
                 .and_then(|reference| EventId::new(reference).ok())
                 .is_some_and(|reference| binding.endorsed_by(&reference));
-            participant_action(event) && covered && group.current_exact_pair
+            participant_action(event)
+                && actor_membership == Some("join")
+                && covered
+                && group.current_exact_pair
+        }
+        Some(AuthoritySourceId::DirectConversationRepairV1) => {
+            let Some(binding) = binding else {
+                return Ok(false);
+            };
+            let covered = critical_ref(event, BINDING_REF_ROLE)
+                .and_then(|reference| EventId::new(reference).ok())
+                .is_some_and(|reference| binding.endorsed_by(&reference));
+            repair_action(event) && actor_membership == Some("leave") && covered
         }
         Some(AuthoritySourceId::DirectConversationBootstrapParticipantV1) => {
             let names_founding = critical_ref(event, FOUNDING_UNIT_REF_ROLE)
@@ -595,7 +611,9 @@ async fn participant_authority_admits(
     if !admitted {
         return Ok(false);
     }
-    if send_like(&event.kind) && !contact_grants_direct_message(conn, founding).await? {
+    if (send_like(&event.kind) || repair_action(event))
+        && !contact_grants_direct_message(conn, founding).await?
+    {
         return Ok(false);
     }
     Ok(true)
@@ -648,7 +666,7 @@ async fn evaluate_in_connection(
     ) {
         return Ok(Err(ConflictCode::DirectConversationInviteForbidden));
     }
-    let evaluated = participant_action(event) || bootstrap_action(event);
+    let evaluated = participant_action(event) || repair_action(event) || bootstrap_action(event);
     if !evaluated
         && root_reliant(event)
         && root_controller(conn, &event.realm_id).await?.as_ref() == Some(&event.actor_id)
