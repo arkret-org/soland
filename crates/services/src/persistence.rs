@@ -1220,15 +1220,6 @@ impl PersistenceHandle {
         self.persistence.devices().revoke_actor(actor, at).await
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub async fn seed_device_fixture(
-        &self,
-        record: &soland_storage::DeviceInventoryRecord,
-    ) -> PersistenceResult<()> {
-        self.persistence.devices().seed_test_record(record).await
-    }
-
     pub fn member_identity_store(&self) -> &dyn soland_storage::MemberIdentityStore {
         self.persistence.member_identity()
     }

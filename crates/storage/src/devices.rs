@@ -33,9 +33,6 @@ pub trait DeviceInventoryStore: Send + Sync {
         actor: &str,
         revoked_at: chrono::DateTime<Utc>,
     ) -> PersistenceResult<usize>;
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    async fn seed_test_record(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()>;
     /// Insert a placeholder only when the actor/device row does not exist.
     ///
     /// Account registration is idempotent and may be replayed after an
