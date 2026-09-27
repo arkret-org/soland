@@ -45,7 +45,9 @@ fn folded_short_name(name: &str) -> PersistenceResult<String> {
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'_' | b'-'))
     {
-        return Err(schema("Circle short_name is outside its closed ASCII profile"));
+        return Err(schema(
+            "Circle short_name is outside its closed ASCII profile",
+        ));
     }
     Ok(name.to_ascii_lowercase())
 }

@@ -77,9 +77,6 @@ mod profile_admission_spy {
     }
 }
 
-#[cfg(feature = "test-support")]
-pub use profile_admission_spy::FoundingProfileAdmissionSpy;
-
 use arkret_models_collaboration::authority_commit::{
     AggregateAcceptanceStatus, CommittedEventSubmission,
     DirectConversationFoundingFederationSubmission, PeerAuthoritySubmitRequest,
@@ -90,6 +87,8 @@ use arkret_models_collaboration::objects::direct_conversation::{
     DirectConversationAuthorizationBasis, DirectConversationFoundingAuthorityEvidence,
 };
 use arkret_wire::ActorId;
+#[cfg(feature = "test-support")]
+pub use profile_admission_spy::FoundingProfileAdmissionSpy;
 use soland_storage::{
     AuthorityCommitWriteOutcome, ConflictCode, ContactRecord,
     DirectConversationFoundingAuthorityRef, DirectConversationFoundingCommitOutcome,
