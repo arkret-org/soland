@@ -1,8 +1,5 @@
 use arkret_event_draft::EventPayloadExt as _;
 
-use super::minimal_metadata_author::{
-    minimal_metadata_author_context, validate_minimal_metadata_author_proof,
-};
 use super::*;
 use crate::routing::events::event_log::submit::InternalEventAdmission;
 
@@ -193,13 +190,6 @@ pub(crate) async fn validate_event_proofs(
         .signing_principal_id()
         .to_string();
     let root_anchor_method = resolve_event_root_anchor_method(state, object, actor_id).await?;
-    // §2.10.3 — minimal-metadata content Events authenticate authorship
-    // against the active MLS LeafNode at the envelope's `(group_id, epoch,
-    // group_state_ref)` instead of the DID-document / directory path. The
-    // context is only `Some` when the Realm positively declared the
-    // minimal-metadata profile AND the payload carries an encrypted-content
-    // envelope.
-    let minimal_metadata_context = minimal_metadata_author_context(object, state).await;
     if let Some(proof) = proofs.first() {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
@@ -336,12 +326,6 @@ pub(crate) async fn validate_event_proofs(
             // candidate overlay below supplies its typed public key. Do not
             // run this proof through the ordinary actor CoreId rooting gate.
             method_root.to_owned()
-        } else if minimal_metadata_context.is_some() {
-            // Pairwise authorship deliberately does not compare a resolvable
-            // did:key controller string with the stable Core DidCoreId here.
-            // The closed policy verifier below projects the DID controller
-            // and checks it against actor_id before accepting the Leaf key.
-            method_root.to_owned()
         } else if let Some(expected_root_method) = root_anchor_method.as_deref() {
             if verification_method_url != expected_root_method {
                 return Err(event_validation_error(
@@ -368,13 +352,6 @@ pub(crate) async fn validate_event_proofs(
             ordinary_proof_root.clone()
         };
         {
-            let jws = event_string_field(proof_object, &["jws"]).ok_or_else(|| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
-                    "proof jws is required",
-                )
-            })?;
             let created_at =
                 event_string_field(proof_object, &["created_at"]).ok_or_else(|| {
                     event_validation_error(
@@ -387,7 +364,7 @@ pub(crate) async fn validate_event_proofs(
             // subject) regardless of who signed it (encoding.md §6); only the
             // resolved signer DID (`proof_root`) switches to `executed_by` for
             // delegated execution.
-            let (typed_proof, actor_did, proof_binding_bytes) = event_proof_binding_bytes(
+            let (typed_proof, actor_did, _) = event_proof_binding_bytes(
                 &proof_event_digest,
                 &event_actor,
                 &verification_method,
@@ -421,7 +398,6 @@ pub(crate) async fn validate_event_proofs(
             });
             if root_anchored_candidate.is_none()
                 && root_anchor_method.is_none()
-                && minimal_metadata_context.is_none()
                 && staged_applet_key.is_none()
             {
                 return verify_with_historical_signer_evidence(
@@ -510,22 +486,6 @@ pub(crate) async fn validate_event_proofs(
                         format!("root-anchor Event key is invalid: {error}"),
                     )
                 })?);
-            }
-            // §2.10.3 minimal-metadata branch: LeafNode trust anchor, pure
-            // did:key fragment key material, zero DID-freshness / resolver /
-            // principal-directory calls. Mutually exclusive with the
-            // DID-document path below.
-            if let Some(context) = &minimal_metadata_context {
-                return validate_minimal_metadata_author_proof(
-                    state,
-                    context,
-                    object,
-                    actor_id,
-                    &verification_method,
-                    &proof_binding_bytes,
-                    &jws,
-                )
-                .await;
             }
             if let Some(signing_key) = staged_applet_key {
                 let material = root_anchor_event_public_key(signing_key.as_str())?;

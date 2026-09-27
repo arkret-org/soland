@@ -93,6 +93,8 @@ const AUDITED_FAMILIES: &[&str] = &[
     "realm_authority_root_current_results",
     "capability_grant_current_results",
     "realm_policy_bundle_current_results",
+    // PCR-private Policy documents have no ordinary Realm disclosure rule.
+    "policy_current_results",
     "mimi_room_binding_current_results",
     "realm_link_current_results",
     "member_state_current_results",
@@ -384,6 +386,7 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM rsvp_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM policy_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_key_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM key_backup_active_series_current_results WHERE realm_id=$1) \

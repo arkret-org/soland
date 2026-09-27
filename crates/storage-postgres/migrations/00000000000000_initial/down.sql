@@ -217,6 +217,7 @@ DROP TABLE IF EXISTS invite_lifecycle_current_results CASCADE;
 DROP TABLE IF EXISTS invite_third_party_create_index CASCADE;
 DROP TABLE IF EXISTS invite_live_target_current_results CASCADE;
 DROP TABLE IF EXISTS invite_directed_invitee_current_results CASCADE;
+DROP TABLE IF EXISTS policy_current_results CASCADE;
 DROP TABLE IF EXISTS projection_morphs CASCADE;
 DROP TABLE IF EXISTS projection_spaces CASCADE;
 DROP TABLE IF EXISTS push_devices CASCADE;

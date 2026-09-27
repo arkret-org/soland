@@ -587,35 +587,6 @@ impl DeviceInventoryStore for PgDeviceInventoryStore {
             .bind::<Text,_>(actor).bind::<Timestamptz,_>(revoked_at).execute(&mut *conn).await.map_err(PersistenceError::database)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    async fn seed_test_record(&self, record: &DeviceInventoryRecord) -> PersistenceResult<()> {
-        let station_id = record
-            .payload
-            .get("station_id")
-            .and_then(serde_json::Value::as_str);
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO devices (id, station_id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-             VALUES ($1, COALESCE($2, current_device_inventory_station()), $3, $4, $5, $6, $7, $8, $9) \
-             ON CONFLICT (actor_id, device_id) DO UPDATE SET payload = EXCLUDED.payload, \
-             verification_state = EXCLUDED.verification_state, updated_at = EXCLUDED.updated_at, revoked_at = EXCLUDED.revoked_at",
-        )
-        .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Nullable<Text>, _>(station_id)
-        .bind::<Text, _>(&record.actor)
-        .bind::<Text, _>(&record.device_id)
-        .bind::<Jsonb, _>(&record.payload)
-        .bind::<Text, _>(&record.verification_state)
-        .bind::<Timestamptz, _>(record.created_at)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .bind::<Nullable<Timestamptz>, _>(record.revoked_at)
-        .execute(&mut *conn).await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
     async fn put_if_absent(&self, record: &DeviceInventoryRecord) -> PersistenceResult<bool> {
         if record.verification_state != "unverified"
             || record.payload.get("device_authorize_event_id").is_some()

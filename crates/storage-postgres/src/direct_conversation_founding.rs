@@ -86,7 +86,7 @@ use arkret_models_collaboration::contact_operations::{ContactRound, GlareConcurr
 use arkret_models_collaboration::objects::direct_conversation::{
     DirectConversationAuthorizationBasis, DirectConversationFoundingAuthorityEvidence,
 };
-use arkret_wire::ActorId;
+use arkret_wire::{ActorId, EventId};
 #[cfg(feature = "test-support")]
 pub use profile_admission_spy::FoundingProfileAdmissionSpy;
 use soland_storage::{
@@ -97,8 +97,8 @@ use soland_storage::{
 };
 
 use super::{
-    AsyncConnection, Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RunQueryDsl, Text, Timestamptz, sql_query,
+    AsyncConnection, BigInt, Binary, Jsonb, OptionalExtension, PersistenceError, PersistenceResult,
+    PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, sql_query,
 };
 use crate::authority_commit::{
     check_self_producer_guard_in_connection, commit_transaction_in_connection,
@@ -114,8 +114,307 @@ struct StoredUnitRow {
     commits_json: serde_json::Value,
 }
 
+#[derive(QueryableByName)]
+struct AgentProvisionCurrentRow {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct AcceptedEventRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: serde_json::Value,
+    #[diesel(sql_type = Jsonb)]
+    commit_json: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct CurrentValueRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
 fn conflict(code: ConflictCode, detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("{}: {detail}", code.as_str()))
+}
+
+fn verify_agent_founding_join_binding(
+    unit: &DirectConversationFoundingCommitUnit,
+    facts: &DirectConversationFoundingFacts,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::governance::membership_invite::MembershipPayload;
+
+    let invalid =
+        |detail: &str| conflict(ConflictCode::DirectConversationFoundingUnitInvalid, detail);
+    let controller = facts
+        .founder_id
+        .as_account_id()
+        .ok_or_else(|| invalid("the Agent controller must be an account"))?;
+    let payload: MembershipPayload = serde_json::from_value(
+        serde_json::to_value(&unit.transactions[2].event.payload)
+            .map_err(PersistenceError::database)?,
+    )
+    .map_err(|error| {
+        invalid(&format!(
+            "the owned Agent founding join payload is invalid: {error}"
+        ))
+    })?;
+    let binding = payload.agent_controller_binding.as_ref().ok_or_else(|| {
+        invalid("the owned Agent founding join must carry its controller binding")
+    })?;
+    if binding.controller_account_id != *controller
+        || binding.controller_membership_generation_ref != unit.transactions[1].event.event_id
+        || binding.controller_terminal_event_ref.is_some()
+    {
+        return Err(invalid(
+            "the owned Agent founding join does not bind the staged controller generation",
+        ));
+    }
+    Ok(())
+}
+
+/// Section 5.4 controller/owned-Agent authority at the founding slot cut.
+///
+/// The provision Event is accepted in the controller PCR and remains the
+/// exact `agent_provisioning` current row.  The Agent PCR is active and has
+/// exactly one non-expired current runtime-key authorization.  The returned
+/// basis names those two accepted Events; the portable evidence commits to
+/// the complete provision payload through the shared SDK derivation.
+async fn verify_agent_founding_authority(
+    conn: &mut diesel_async::AsyncPgConnection,
+    facts: &DirectConversationFoundingFacts,
+    provision_ref: &EventId,
+    at: chrono::DateTime<chrono::Utc>,
+    missing_code: ConflictCode,
+) -> PersistenceResult<(
+    DirectConversationAuthorizationBasis,
+    DirectConversationFoundingAuthorityEvidence,
+)> {
+    use arkret_models_collaboration::events_payloads::agent::{
+        AgentKeyAuthorizePayload, AgentProvisionPayload, AgentProvisioningValue,
+    };
+
+    let stale = |detail: &str| conflict(ConflictCode::FailedPrecondition, detail);
+    let founder = facts
+        .founder_id
+        .as_account_id()
+        .ok_or_else(|| stale("the Agent controller must be an account"))?;
+    let agent = facts
+        .peer_id
+        .as_account_id()
+        .ok_or_else(|| stale("the owned Agent must use an account ActorId"))?;
+    if founder.station_id != agent.station_id {
+        return Err(stale(
+            "the controller and owned Agent must use the same Station",
+        ));
+    }
+
+    let token = crate::ids::parse_event_id(provision_ref.as_str())
+        .ok_or_else(|| stale("the Agent provision Event id is invalid"))?;
+    let accepted = sql_query(
+        "SELECT e.envelope,c.commit_json FROM canonical_events e \
+         JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.state='committed'",
+    )
+    .bind::<Binary, _>(token.to_vec())
+    .get_result::<AcceptedEventRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| conflict(missing_code, "the Agent provision Event is not accepted"))?;
+    let provision_event: arkret_wire::Event =
+        serde_json::from_value(accepted.envelope).map_err(|error| {
+            PersistenceError::Database(format!("stored Agent provision Event is invalid: {error}"))
+        })?;
+    let provision_commit: arkret_wire::RealmCommit = serde_json::from_value(accepted.commit_json)
+        .map_err(|error| {
+        PersistenceError::Database(format!("stored Agent provision Commit is invalid: {error}"))
+    })?;
+    if provision_event.kind != arkret_wire::EventKind::AgentProvision
+        || provision_event.event_id != *provision_ref
+        || provision_commit.event_ref != *provision_ref
+        || provision_commit.realm_id != provision_event.realm_id
+    {
+        return Err(stale(
+            "the accepted Agent provision Event/Commit binding is invalid",
+        ));
+    }
+    let payload = AgentProvisionPayload::try_from(&provision_event).map_err(|error| {
+        stale(&format!(
+            "the accepted Agent provision payload is invalid: {error}"
+        ))
+    })?;
+    payload
+        .validate_envelope(&provision_event)
+        .map_err(|error| {
+            stale(&format!(
+                "the accepted Agent provision envelope is invalid: {error}"
+            ))
+        })?;
+    if payload.controller_principal_id != founder.principal_id
+        || payload.agent_id != agent.principal_id
+        || provision_event.actor_id != facts.founder_id
+    {
+        return Err(stale(
+            "the accepted provision does not bind the founding controller/Agent pair",
+        ));
+    }
+
+    let current = sql_query(
+        "SELECT current_commit_id,current_stream_position,value \
+         FROM agent_provisioning_current_results \
+         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
+    )
+    .bind::<Text, _>(provision_event.realm_id.as_str())
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .get_result::<AgentProvisionCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        conflict(
+            missing_code,
+            "the Agent provision current result is unavailable",
+        )
+    })?;
+    let current_value: AgentProvisioningValue =
+        serde_json::from_value(current.value).map_err(|error| {
+            PersistenceError::Database(format!(
+                "stored Agent provision current is invalid: {error}"
+            ))
+        })?;
+    if current.current_commit_id != provision_commit.commit_id.as_str()
+        || u64::try_from(current.current_stream_position).ok()
+            != Some(provision_commit.stream_position)
+        || current_value != payload.provisioning_value()
+    {
+        return Err(stale(
+            "the accepted provision is not the Agent's current controller binding",
+        ));
+    }
+
+    let status = sql_query(
+        "SELECT value FROM agent_status_current_results \
+         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
+    )
+    .bind::<Text, _>(payload.principal_control_realm_id.as_str())
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .get_result::<CurrentValueRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if status.as_ref().and_then(|row| row.value.as_str()) != Some("active") {
+        return Err(stale("the owned Agent lifecycle is not active"));
+    }
+
+    let key_rows = sql_query(
+        "SELECT value FROM agent_key_current_results \
+         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
+    )
+    .bind::<Text, _>(payload.principal_control_realm_id.as_str())
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .load::<CurrentValueRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut current_authorizations = Vec::new();
+    for row in key_rows {
+        let entries = row
+            .value
+            .get("authorizations")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                PersistenceError::Database(
+                    "stored Agent key current has no authorizations".to_owned(),
+                )
+            })?;
+        for entry in entries {
+            let authorization: AgentKeyAuthorizePayload = serde_json::from_value(
+                entry
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|error| {
+                PersistenceError::Database(format!(
+                    "stored Agent key authorization is invalid: {error}"
+                ))
+            })?;
+            if authorization.agent_id != agent.principal_id
+                || authorization.accountable_principal_id != founder.principal_id
+                || authorization
+                    .expires_at
+                    .is_some_and(|expires_at| expires_at <= at)
+            {
+                continue;
+            }
+            let tag = entry
+                .get("tag_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    PersistenceError::Database(
+                        "stored Agent key authorization has no tag id".to_owned(),
+                    )
+                })?;
+            let event_id = tag
+                .strip_suffix(":1")
+                .and_then(|value| EventId::new(value.to_owned()).ok())
+                .ok_or_else(|| {
+                    PersistenceError::Database(
+                        "stored Agent key authorization tag is invalid".to_owned(),
+                    )
+                })?;
+            current_authorizations.push((event_id, authorization));
+        }
+    }
+    let [(key_event_ref, key_payload)] = current_authorizations.as_slice() else {
+        return Err(stale(
+            "the owned Agent must have exactly one current active key authorization",
+        ));
+    };
+    let key_token = crate::ids::parse_event_id(key_event_ref.as_str())
+        .ok_or_else(|| stale("the Agent key authorization Event id is invalid"))?;
+    let key_event = sql_query(
+        "SELECT e.envelope,c.commit_json FROM canonical_events e \
+         JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.state='committed'",
+    )
+    .bind::<Binary, _>(key_token.to_vec())
+    .get_result::<AcceptedEventRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| stale("the current Agent key authorization Event is not accepted"))?;
+    let key_event: arkret_wire::Event =
+        serde_json::from_value(key_event.envelope).map_err(|error| {
+            PersistenceError::Database(format!("stored Agent key Event is invalid: {error}"))
+        })?;
+    if key_event.kind != arkret_wire::EventKind::AgentKeyAuthorize
+        || key_event.event_id != *key_event_ref
+        || key_event.realm_id != payload.principal_control_realm_id
+        || serde_json::to_value(&key_event.payload).map_err(PersistenceError::database)?
+            != serde_json::to_value(key_payload).map_err(PersistenceError::database)?
+    {
+        return Err(stale(
+            "the current Agent key authorization differs from its accepted Event",
+        ));
+    }
+
+    let evidence = DirectConversationFoundingAuthorityEvidence::from_agent_provision(
+        provision_ref.clone(),
+        &payload,
+    )
+    .map_err(|error| stale(&format!("the Agent founding evidence is invalid: {error}")))?;
+    let mut refs = vec![provision_ref.clone(), key_event_ref.clone()];
+    refs.sort_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()));
+    let basis = DirectConversationAuthorizationBasis::agent_controller(refs);
+    basis
+        .validate_shape()
+        .map_err(|error| stale(&format!("the Agent controller basis is invalid: {error}")))?;
+    Ok((basis, evidence))
 }
 
 /// The scope both directions of the pair must grant.
@@ -420,15 +719,16 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                 )
                 .await?
             }
-            // `ak.agent.provision` has no atomic typed current admission yet
-            // (task 2230), so no accepted provision or current controller
-            // binding can be read at this cut.
-            DirectConversationFoundingAuthorityRef::AgentProvision(_) => {
-                return Err(conflict(
+            DirectConversationFoundingAuthorityRef::AgentProvision(provision_ref) => {
+                verify_agent_founding_join_binding(unit, &facts)?;
+                verify_agent_founding_authority(
+                    conn,
+                    &facts,
+                    provision_ref,
+                    committed_at,
                     ConflictCode::FailedPrecondition,
-                    "no accepted Agent provision is readable at the founding cut",
                 )
-                .into());
+                .await?
             }
         };
         let authority_inserted = sql_query(
@@ -693,12 +993,16 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
                 )
                 .await?
             }
-            DirectConversationFoundingAuthorityRef::AgentProvision(_) => {
-                return Err(conflict(
-                    ConflictCode::FailedPrecondition,
-                    "no accepted Agent provision is readable at the founding cut",
+            DirectConversationFoundingAuthorityRef::AgentProvision(provision_ref) => {
+                verify_agent_founding_join_binding(unit, &facts)?;
+                verify_agent_founding_authority(
+                    conn,
+                    &facts,
+                    provision_ref,
+                    commits[3].committed_at,
+                    ConflictCode::DependencyMissing,
                 )
-                .into());
+                .await?
             }
         };
         if !same_peer_founding_evidence(&local_evidence, evidence) {

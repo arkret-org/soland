@@ -39,6 +39,14 @@ async fn insert_policy(pool: &crate::PgPool, policy: &Value) {
         .bind::<Jsonb,_>(serde_json::to_value(acceptance_basis).unwrap())
         .bind::<Nullable<Timestamptz>,_>(typed.expires_at).bind::<Timestamptz,_>(typed.issued_at)
         .bind::<Jsonb,_>(policy).execute(&mut *conn).await.unwrap();
+    sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,1,$4,$5,$6)")
+        .bind::<Text,_>(wire::RealmId::from_digest(arkret_canonical::sha256_bytes(b"recovery-policy-realm")).as_str())
+        .bind::<Text,_>(typed.policy_id.as_str())
+        .bind::<Text,_>(acceptance_basis.as_str())
+        .bind::<Text,_>(wire::EventId::from_digest(arkret_canonical::sha256_bytes(b"recovery-policy-event")).as_str())
+        .bind::<Jsonb,_>(policy)
+        .bind::<Timestamptz,_>(typed.issued_at)
+        .execute(&mut *conn).await.unwrap();
 }
 
 impl Fixture {

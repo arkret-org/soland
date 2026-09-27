@@ -4305,6 +4305,22 @@ CREATE TABLE realm_policy_bundle_current_results (
  CHECK(jsonb_typeof(value)='object')
 );
 
+-- The registered `policy` typed-current family.  Recovery policy publication
+-- also keeps its immutable/audit record in `recovery_policies`, but every
+-- current read and snapshot is sourced from this RealmCommit-bound row.
+CREATE TABLE policy_current_results (
+ realm_id TEXT NOT NULL,
+ policy_id TEXT NOT NULL PRIMARY KEY,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ current_event_id TEXT NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ CHECK(jsonb_typeof(value)='object')
+);
+CREATE INDEX policy_current_result_realm
+ ON policy_current_results(realm_id,policy_id);
+
 -- URI-keyed MIMI binding current result. The accepting RealmCommit and the
 -- typed value become visible in the same transaction; URI is unique across
 -- Realms so a room cannot resolve to two current Arkret targets.

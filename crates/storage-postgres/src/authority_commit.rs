@@ -693,6 +693,10 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 current_commit_id, current_stream_position, value \
            FROM realm_policy_bundle_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'policy'::text AS selector_kind, to_jsonb(policy_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM policy_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'member_state'::text AS selector_kind, member_id::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM member_state_current_results WHERE realm_id = $1 \
@@ -786,6 +790,13 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 ("realm_authority_root", None) => arkret_wire::CurrentSelector::RealmAuthorityRoot,
                 ("realm_profile", None) => arkret_wire::CurrentSelector::RealmProfile,
                 ("realm_policy_bundle", None) => arkret_wire::CurrentSelector::RealmPolicyBundle,
+                ("policy", Some(policy_id)) => arkret_wire::CurrentSelector::Policy {
+                    policy_id: serde_json::from_value(policy_id).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Policy selector identity is invalid: {error}"
+                        ))
+                    })?,
+                },
                 ("realm_join_rule", None) => arkret_wire::CurrentSelector::RealmJoinRule,
                 ("realm_history_access", None) => arkret_wire::CurrentSelector::RealmHistoryAccess,
                 ("realm_discovery", None) => arkret_wire::CurrentSelector::RealmDiscovery,

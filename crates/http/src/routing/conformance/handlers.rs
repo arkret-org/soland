@@ -277,18 +277,6 @@ pub struct SignalMlsBasisOutcome {
     epoch: u64,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct DeviceSigningKeyRequest {
-    actor_id: String,
-    device_id: String,
-    public_key_multibase: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct DeviceSigningKeyOutcome {
-    accepted: bool,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct CanonicalEventDiagnostic {
     event_id: String,
@@ -394,56 +382,6 @@ pub async fn signal_mls_basis(
     )
     .with_rejection_code("service_unavailable"))
 }
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.conformance.device_signing_key_did",
-    tags("conformance")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.conformance.device_signing_key_did")
-)]
-pub async fn device_signing_key_did(
-    depot: &mut Depot,
-    body: JsonBody<DeviceSigningKeyRequest>,
-) -> JsonResult<DeviceSigningKeyOutcome> {
-    super::ensure_enabled()?;
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = body.into_inner();
-    if arkret_wire::DidCoreId::new(body.actor_id.clone()).is_err()
-        && arkret_identifiers::DidCoreId::new(body.actor_id.clone()).is_err()
-    {
-        return Err(AppError::param_invalid(
-            "actor_id must be a canonical did or core_id",
-        ));
-    }
-    arkret_identifiers::DeviceId::new(body.device_id.clone())
-        .map_err(|_| AppError::param_invalid("device_id must be canonical"))?;
-    arkret_canonical::decode_ed25519_multibase(&body.public_key_multibase)
-        .map_err(|_| AppError::param_invalid("public_key_multibase must encode Ed25519"))?;
-    let now = chrono::Utc::now();
-    let payload = json!({
-        "device_id": body.device_id,
-        "device_public_key_did": format!("did:key:{}", body.public_key_multibase),
-        "verification": "verified",
-        "last_seen_at": now,
-    });
-    state
-        .persistence()
-        .seed_device_fixture(&soland_storage::DeviceInventoryRecord {
-            actor: body.actor_id,
-            device_id: body.device_id,
-            display_name: Some("Cotest Signal Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload,
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        })
-        .await
-        .map_err(|error| AppError::internal(format!("store Signal device key: {error}")))?;
-    json_ok(DeviceSigningKeyOutcome { accepted: true })
-}
-
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.conformance.sign",
     tags("conformance")

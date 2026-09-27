@@ -3831,6 +3831,8 @@ struct PolicyFootprint {
     commits: i64,
     #[diesel(sql_type = BigInt)]
     policies: i64,
+    #[diesel(sql_type = BigInt)]
+    policy_currents: i64,
 }
 
 async fn policy_footprint(
@@ -3843,7 +3845,9 @@ async fn policy_footprint(
         "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
                 (SELECT COUNT(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
                 (SELECT COUNT(*) FROM recovery_policies WHERE principal_id=$2 AND station_id=$3) \
-                  AS policies",
+                  AS policies, \
+                (SELECT COUNT(*) FROM policy_current_results WHERE realm_id=$1) \
+                  AS policy_currents",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(account.principal_id.as_str())
@@ -4069,6 +4073,7 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
             events: before.events + 1,
             commits: before.commits + 1,
             policies: before.policies + 1,
+            policy_currents: before.policy_currents + 1,
         }
     );
     // An exact retry returns the accepted policy without a second write.
@@ -4127,6 +4132,42 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
         .unwrap();
     assert_eq!(active.policy_id, v2_id);
     assert_eq!(active.acceptance_basis, commit_v2.commit_id);
+    let after_v2 = policy_footprint(&pool, &realm_id, &account).await;
+    assert_eq!(after_v2.events, before.events + 2);
+    assert_eq!(after_v2.commits, before.commits + 2);
+    assert_eq!(after_v2.policies, before.policies + 2);
+    assert_eq!(after_v2.policy_currents, before.policy_currents + 2);
+    let material = store
+        .realm_state_snapshot_material(&realm_id)
+        .await
+        .unwrap()
+        .expect("PCR snapshot material");
+    let current = material
+        .current_state_entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                entry,
+                arkret_wire::TypedCurrentResult::Value {
+                    selector: arkret_wire::CurrentSelector::Policy { policy_id },
+                    ..
+                } if policy_id.as_str() == v2_id
+            )
+        })
+        .expect("recovery policy is materialized as registered policy current");
+    let arkret_wire::TypedCurrentResult::Value {
+        revision,
+        source_stream_ref,
+        value,
+        ..
+    } = current
+    else {
+        unreachable!()
+    };
+    assert_eq!(revision.commit_id, commit_v2.commit_id);
+    assert_eq!(revision.stream_position, commit_v2.stream_position);
+    assert_eq!(source_stream_ref, &commit_v2.stream_ref);
+    assert_eq!(value, &active.raw_payload);
     // The PCR conflict-index marker followed both Commits: device status is
     // still readable at the new head.
     assert!(

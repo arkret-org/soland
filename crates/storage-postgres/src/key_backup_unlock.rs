@@ -267,7 +267,7 @@ pub(crate) async fn validate_recovery_unlock_policy(
         return Err(rejected("recovery policy snapshot binding mismatch").into());
     }
     let version = i32::try_from(bound_version).map_err(PersistenceError::database)?;
-    let rows=sql_query("SELECT raw_payload AS payload FROM recovery_policies WHERE principal_id=$1 AND station_id=$2 AND version>=$3 ORDER BY version ASC FOR SHARE")
+    let rows=sql_query("SELECT p.raw_payload AS payload FROM recovery_policies p JOIN policy_current_results c ON c.policy_id=('ak:policy:' || p.id::text) AND c.current_commit_id=(p.acceptance_basis #>> '{}') AND c.value=p.raw_payload WHERE p.principal_id=$1 AND p.station_id=$2 AND p.version>=$3 ORDER BY p.version ASC FOR SHARE OF p")
         .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str()).bind::<crate::Integer,_>(version)
         .load::<JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?;
     if rows

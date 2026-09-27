@@ -82,7 +82,11 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         sql_query(
             "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE id = $1",
+             FROM recovery_policies p JOIN policy_current_results c \
+               ON c.policy_id=('ak:policy:' || p.id::text) \
+              AND c.current_commit_id=(p.acceptance_basis #>> '{}') \
+              AND c.value=p.raw_payload \
+             WHERE p.id = $1",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
         .get_result::<RecoveryPolicyRow>(&mut *conn)
@@ -102,8 +106,12 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         sql_query(
             "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
-             ORDER BY version DESC, accepted_at DESC LIMIT 1",
+             FROM recovery_policies p JOIN policy_current_results c \
+               ON c.policy_id=('ak:policy:' || p.id::text) \
+              AND c.current_commit_id=(p.acceptance_basis #>> '{}') \
+              AND c.value=p.raw_payload \
+             WHERE p.principal_id = $1 AND p.station_id = $2 \
+             ORDER BY p.version DESC, p.accepted_at DESC LIMIT 1",
         )
         .bind::<Text, _>(&account_id.principal_id)
         .bind::<Text, _>(&account_id.station_id)
