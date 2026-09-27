@@ -93,6 +93,24 @@ pub(super) struct CurrentDeviceCheckRequest {
     requested_at: DateTime<Utc>,
 }
 
+fn initial_issue_authorization_ref(
+    request: &CurrentDeviceCheckRequest,
+    current: Option<&soland_storage::DeviceRevocationGateSelector>,
+) -> Option<CommittedEventRef> {
+    // Initial registration/recovery issues use the authority's terminal
+    // ledger, not a previously issued grant binding. Freeze the independently
+    // derived active authorization for the same durable gate comparison.
+    // Returning issues, refreshes and explicit expectations never adopt it.
+    if request.action_class == DeviceRevocationAdmissionAction::SessionGrantIssue
+        && request.expected_device_authorize_event_id.is_none()
+        && request.expected_device_generation_ref.is_none()
+    {
+        current.map(|selector| selector.authorization_ref.clone())
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CurrentDeviceCheckOutcome {
@@ -286,7 +304,7 @@ pub(super) async fn check_private_current_device(
                 stream_ref: record.commit.stream_ref,
                 stream_position: record.commit.stream_position,
             }),
-        _ => None,
+        _ => initial_issue_authorization_ref(&request, origin_current_selector.as_ref()),
     };
     let linearization = state
         .persistence()
@@ -407,6 +425,58 @@ mod tests {
                 event_id,
             },
         }
+    }
+
+    #[test]
+    fn initial_issue_freezes_current_binding_without_weakening_returning_checks() {
+        let current = selector();
+        let mut request = CurrentDeviceCheckRequest {
+            account_id: AccountId::new(current.principal_id.clone(), current.station_id.clone()),
+            device_id: DeviceId::new(DEVICE).unwrap(),
+            expected_device_authorize_event_id: None,
+            expected_device_generation_ref: None,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantIssue,
+            intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            accepted_device_possession_proof: None,
+            requested_at: Utc::now(),
+        };
+        let adopted = initial_issue_authorization_ref(&request, Some(&current));
+        assert_eq!(adopted, Some(current.authorization_ref.clone()));
+        let mut gate = soland_storage::DeviceRevocationGateLinearizationRequest {
+            principal_id: current.principal_id.clone(),
+            station_id: current.station_id.clone(),
+            device_id: current.device_id.clone(),
+            expected_authorization_ref: adopted,
+            origin_current_selector: Some(current.clone()),
+            action_class: soland_storage::DeviceRevocationGateAction::SessionGrantIssue,
+            intent_digest: request.intent_digest.to_string(),
+            requested_at: request.requested_at,
+        };
+        assert_eq!(
+            soland_storage::selector_comparison_status(&gate, Some(&current)),
+            None
+        );
+        assert!(initial_issue_authorization_ref(&request, None).is_none());
+        for action in [
+            DeviceRevocationAdmissionAction::ReturningSessionGrantIssue,
+            DeviceRevocationAdmissionAction::SessionGrantRefresh,
+            DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
+        ] {
+            request.action_class = action;
+            gate.expected_authorization_ref =
+                initial_issue_authorization_ref(&request, Some(&current));
+            assert_eq!(
+                soland_storage::selector_comparison_status(&gate, Some(&current)),
+                Some(DeviceRevocationGateStatus::GenerationMismatch)
+            );
+        }
+        request.action_class = DeviceRevocationAdmissionAction::SessionGrantIssue;
+        request.expected_device_generation_ref = Some(999);
+        assert!(initial_issue_authorization_ref(&request, Some(&current)).is_none());
+        request.expected_device_generation_ref = None;
+        request.expected_device_authorize_event_id =
+            Some(current.authorization_ref.event_id.clone());
+        assert!(initial_issue_authorization_ref(&request, Some(&current)).is_none());
     }
 
     fn allow_outcome() -> CurrentDeviceCheckOutcome {
