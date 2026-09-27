@@ -135,6 +135,8 @@ const AUDITED_FAMILIES: &[&str] = &[
     // Direct Conversation binding endorsements: `ak.direct_conversation.bound`
     // has no disclosure rule yet, so any row refuses the cut below.
     "direct_conversation_binding_current_results",
+    // Holder-private PCR Consent is outside ordinary Realm disclosure.
+    "consent_current_results",
 ];
 
 /// A committed kind of the Realm outside [`DISCLOSED_EVENT_KINDS`].
@@ -393,6 +395,7 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM direct_conversation_binding_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM consent_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
@@ -678,6 +681,27 @@ mod tests {
                 stream_position: position,
             },
             value,
+        }
+    }
+
+    #[test]
+    fn initial_schema_current_families_are_all_explicitly_classified() {
+        let schema = include_str!("../migrations/00000000000000_initial/up.sql");
+        for line in schema.lines() {
+            let Some(table) = line.strip_prefix("CREATE TABLE ") else {
+                continue;
+            };
+            let table = table
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .trim_start_matches("public.");
+            if table.ends_with("_current_results") {
+                assert!(
+                    AUDITED_FAMILIES.contains(&table),
+                    "unclassified current family: {table}"
+                );
+            }
         }
     }
 
