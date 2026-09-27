@@ -27,6 +27,10 @@ pub(crate) struct ConfirmedDeviceAuthorization {
 }
 
 impl ConfirmedDeviceAuthorization {
+    pub(crate) fn event_id(&self) -> &EventId {
+        &self.event_id
+    }
+
     pub(crate) fn device_id(&self) -> &DeviceId {
         &self.device_id
     }
@@ -58,8 +62,14 @@ impl ConfirmedDeviceHistory {
         self.current_generation
     }
 
-    pub(crate) fn authorization(&self, id: &EventId) -> Option<&ConfirmedDeviceAuthorization> {
-        self.authorizations.get(id)
+    pub(crate) fn current_authorization(
+        &self,
+        device_id: &DeviceId,
+    ) -> Option<&ConfirmedDeviceAuthorization> {
+        self.current_by_device
+            .get(device_id)
+            .and_then(|id| self.authorizations.get(id))
+            .filter(|authorization| self.is_currently_active(authorization))
     }
 
     pub(crate) fn is_currently_active(&self, authorization: &ConfirmedDeviceAuthorization) -> bool {

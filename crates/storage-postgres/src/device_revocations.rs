@@ -1,4 +1,4 @@
-use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
@@ -13,6 +13,23 @@ use crate::{PgPool, PgTransactionError, async_trait, pg_conn};
 
 pub struct PgDeviceRevocationStore {
     pub pool: PgPool,
+}
+
+#[cfg(feature = "test-support")]
+impl PgDeviceRevocationStore {
+    /// Exercise the exact current-binding gate used by production write units.
+    #[doc(hidden)]
+    pub async fn test_gate_status_in_transaction(
+        &self,
+        selector: &DeviceRevocationGateSelector,
+    ) -> PersistenceResult<DeviceRevocationGateStatus> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async |conn| {
+            Ok(gate_status_in_transaction(conn, selector).await?)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
 }
 
 #[derive(QueryableByName)]
@@ -387,11 +404,11 @@ async fn complete(
 }
 
 #[derive(QueryableByName)]
-struct CurrentDeviceRow {
+struct CurrentDeviceCommitRow {
     #[diesel(sql_type = Jsonb)]
-    payload: serde_json::Value,
-    #[diesel(sql_type = Bool)]
-    active: bool,
+    stream_ref: serde_json::Value,
+    #[diesel(sql_type = BigInt)]
+    stream_position: i64,
 }
 
 #[derive(QueryableByName)]
@@ -437,39 +454,50 @@ pub(crate) async fn current_device_binding_in_transaction(
     station_id: &arkret_wire::DidCoreId,
     device_id: &str,
 ) -> PersistenceResult<Option<DeviceRevocationGateSelector>> {
-    let row = sql_query(
-        "SELECT payload, (verification_state='verified' AND revoked_at IS NULL) AS active \
-         FROM devices WHERE actor_id=$1 AND station_id=$2 AND device_id=$3 FOR SHARE",
+    let account = arkret_wire::AccountId::new(principal_id.clone(), station_id.clone());
+    let device =
+        arkret_wire::DeviceId::new(device_id.to_owned()).map_err(PersistenceError::database)?;
+    let Some(cut) = crate::pcr_device_revocation_proposals::confirmed_pcr_device_cut_in_connection(
+        conn, &account, &device,
     )
-    .bind::<Text, _>(principal_id.as_str())
-    .bind::<Text, _>(station_id.as_str())
-    .bind::<Text, _>(device_id)
-    .get_result::<CurrentDeviceRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?;
-    let Some(row) = row.filter(|row| row.active) else {
+    .await?
+    else {
         return Ok(None);
     };
-    let reference = row
-        .payload
-        .get("device_authorization_ref")
-        .or_else(|| row.payload.get("committed_authorization_ref"))
-        .ok_or_else(|| {
-            PersistenceError::SchemaViolation(
-                "verified device omits its committed authorization reference".to_owned(),
-            )
-        })?;
-    let authorization_ref = serde_json::from_value(reference.clone()).map_err(|error| {
-        PersistenceError::SchemaViolation(format!(
-            "verified device has invalid committed authorization reference: {error}"
-        ))
+    let Some(authorization) = cut.authorization.filter(|authorization| {
+        Some(authorization.payload.authorized_generation_ref) == cut.current_generation
+    }) else {
+        return Ok(None);
+    };
+    let row = sql_query(
+        "SELECT c.stream_ref, c.stream_position FROM realm_commits c \
+         JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.commit_id=$1 AND c.realm_id=$2 AND e.envelope->>'event_id'=$3",
+    )
+    .bind::<Text, _>(authorization.source_commit_id.as_str())
+    .bind::<Text, _>(cut.realm_id.as_str())
+    .bind::<Text, _>(authorization.event_id.as_str())
+    .get_result::<CurrentDeviceCommitRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        PersistenceError::SchemaViolation(
+            "PCR device authorization has no exact covering Commit".to_owned(),
+        )
     })?;
     Ok(Some(DeviceRevocationGateSelector {
         principal_id: principal_id.clone(),
         station_id: station_id.clone(),
         device_id: device_id.to_owned(),
-        authorization_ref,
+        authorization_ref: arkret_wire::CommittedEventRef {
+            event_id: authorization.event_id,
+            commit_id: authorization.source_commit_id,
+            stream_ref: serde_json::from_value(row.stream_ref)
+                .map_err(PersistenceError::database)?,
+            stream_position: u64::try_from(row.stream_position)
+                .map_err(PersistenceError::database)?,
+        },
     }))
 }
 

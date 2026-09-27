@@ -637,6 +637,71 @@ async fn recovery_terminal_unit_fences_old_device_and_replays_after_response_los
 }
 
 #[tokio::test]
+async fn completed_recovery_device_is_admitted_without_inventory_projection() {
+    let fixture = fixture().await;
+    let store = fixture.state.test_persistence();
+    store
+        .security_transactions()
+        .commit_recovery_unit(fixture.write.clone())
+        .await
+        .unwrap();
+    let payload: arkret_models_collaboration::events_payloads::DeviceAuthorizePayload =
+        serde_json::from_value(
+            serde_json::to_value(&fixture.write.commits[1].event.payload).unwrap(),
+        )
+        .unwrap();
+    let account = &fixture.pcr.history.account;
+    let missing = store
+        .devices()
+        .get(account.principal_id.as_str(), payload.device_id.as_str())
+        .await
+        .unwrap();
+    assert!(
+        missing.is_none(),
+        "the fixture must not supply an authorization mirror"
+    );
+    let selector = soland_http::test_active_device_revocation_gate_selector(
+        &fixture.state,
+        account.principal_id.as_str(),
+        payload.device_id.as_str(),
+    )
+    .await
+    .unwrap();
+    let committed = &fixture.write.commits[1];
+    assert_eq!(
+        selector.authorization_ref,
+        CommittedEventRef {
+            event_id: committed.event.event_id.clone(),
+            commit_id: committed.commit.commit_id.clone(),
+            stream_ref: committed.commit.stream_ref.clone(),
+            stream_position: committed.commit.stream_position,
+        }
+    );
+    let gates = soland_storage_postgres::PgDeviceRevocationStore {
+        pool: fixture.pool.clone(),
+    };
+    assert_eq!(
+        gates
+            .test_gate_status_in_transaction(&selector)
+            .await
+            .unwrap(),
+        soland_storage::DeviceRevocationGateStatus::Active
+    );
+    let mut wrong = selector;
+    wrong.authorization_ref = CommittedEventRef {
+        event_id: fixture.write.commits[0].event.event_id.clone(),
+        commit_id: fixture.write.commits[0].commit.commit_id.clone(),
+        stream_ref: fixture.write.commits[0].commit.stream_ref.clone(),
+        stream_position: fixture.write.commits[0].commit.stream_position,
+    };
+    assert_eq!(
+        gates.test_gate_status_in_transaction(&wrong).await.unwrap(),
+        soland_storage::DeviceRevocationGateStatus::GenerationMismatch
+    );
+    assert_old_device_fenced(&fixture).await;
+}
+
+#[tokio::test]
 async fn recovery_terminal_metadata_must_bind_the_exact_receipt_and_response() {
     let fixture = fixture().await;
     let before = footprint(&fixture).await;
