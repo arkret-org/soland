@@ -71,16 +71,12 @@ locked value reject with `cross_domain_replay_rejected`. This means:
 
 ## Idempotency
 
-Every outbound POST carries an `Idempotency-Key` header. The receiver
-keeps a per-origin replay cache so the same `(origin, idempotency_key)`
-returns the cached response body without re-running the reducer.
-
-After source-key revocation, cached entries flip to a
-`reason_code=historical_only` response: the receiver answers with the
-previously-cached body but explicitly tells the caller "this was a
-cache hit; no new side effects." This keeps post-revocation replays
-deterministic for the caller while preserving the revocation's
-security intent.
+Every outbound POST carries an `Idempotency-Key` header. The receiver first
+verifies the current peer service signature and Realm origin binding. A
+revoked signing key fails with `signature_invalid` before cache lookup; a
+current key whose origin binding was removed fails with `capability_denied`.
+Only a currently authorized, byte-identical retry under the same authorization
+basis can return its cached outcome without a second reducer write.
 
 ## Operator references
 

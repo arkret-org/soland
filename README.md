@@ -54,9 +54,9 @@ Operator-visible highlights:
 - **Federation S2S transport signs trust-domain and body bindings** —
   `Source-Trust-Domain`, `Destination-Trust-Domain`, and the single RFC 9530
   `Content-Digest` are verified through the signature transcript.
-- **Federation idempotency `historical_only`** — cache hits after
-  source-key revocation return the cached body with
-  `reason_code=historical_only`; no side effects.
+- **Federation idempotency** — current peer signature and origin binding
+  are checked before replay cache lookup; a revoked key returns
+  `signature_invalid` with no new side effects.
 
 ## Round R2/R3 deployment requirements
 
