@@ -638,6 +638,28 @@ impl RealmAuthorizationCut {
                 );
             }
         }
+        if matches!(event.kind, EventKind::StrandMove | EventKind::StrandReorder) {
+            let payload = serde_json::to_value(&event.payload).unwrap_or(serde_json::Value::Null);
+            let target = if event.kind == EventKind::StrandMove {
+                serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::strand::StrandMovePayload,
+                >(payload)
+                .map(|body| (body.strand_id, body.target_space_id))
+            } else {
+                serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::strand::StrandReorderPayload,
+                >(payload)
+                .map(|body| (body.strand_id, body.space_id))
+            };
+            if let Ok((strand, list)) = target {
+                facts.strand_id = Some(strand.as_str().to_owned());
+                facts.space_id = Some(list.as_str().to_owned());
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), strand),
+                    facts,
+                );
+            }
+        }
         if event.kind == EventKind::SpaceCreate {
             facts.space_kind = event
                 .payload
@@ -812,5 +834,35 @@ mod operation_fact_tests {
         );
         assert_eq!(facts.strand_id.as_deref(), Some(strand_id.as_str()));
         assert_eq!(facts.write_fields, Some(vec!["metadata.title".to_owned()]));
+        let list = arkret_wire::SpaceId::from_event_id(&event.event_id);
+        let board = arkret_wire::SpaceId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x77; 32],
+        ));
+        for kind in [EventKind::StrandMove, EventKind::StrandReorder] {
+            let mut payload = json!({"board_space_id":board,"strand_id":strand_id,"rank":"a0"});
+            payload[if kind == EventKind::StrandMove {
+                "target_space_id"
+            } else {
+                "space_id"
+            }] = json!(list);
+            let event = arkret_wire::test_support::raw_event_for_actor_at(
+                kind.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: cut.realm_id.clone(),
+                },
+                cut.actor.clone(),
+                payload,
+                event.created_at,
+            )
+            .unwrap();
+            let (target, facts) = cut.event_operation(&event);
+            assert_eq!(
+                target,
+                WireResourceSelector::strand(cut.realm_id.clone(), strand_id.clone())
+            );
+            assert_eq!(facts.strand_id.as_deref(), Some(strand_id.as_str()));
+            assert_eq!(facts.space_id.as_deref(), Some(list.as_str()));
+        }
     }
 }
