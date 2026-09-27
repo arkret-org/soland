@@ -241,6 +241,9 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::InviteDirectedInviteeMismatch
                 | soland_storage::ConflictCode::InviteKindRequiresRevoke
                 | soland_storage::ConflictCode::InviteAlreadyTerminal
+                | soland_storage::ConflictCode::StrandNotActive
+                | soland_storage::ConflictCode::StrandNotArchived
+                | soland_storage::ConflictCode::StrandAlreadyTerminal
                 | soland_storage::ConflictCode::GrantExceedsIssuerAuthority
                 | soland_storage::ConflictCode::AuthorityCycle
                 | soland_storage::ConflictCode::AuthorityExpiryWidening
@@ -731,6 +734,24 @@ mod tests {
                 StatusCode::CONFLICT,
                 "failed_precondition",
                 None,
+            ),
+            (
+                ConflictCode::StrandNotActive,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("strand_not_active"),
+            ),
+            (
+                ConflictCode::StrandNotArchived,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("strand_not_archived"),
+            ),
+            (
+                ConflictCode::StrandAlreadyTerminal,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("strand_already_terminal"),
             ),
         ] {
             let mut res = Response::new();

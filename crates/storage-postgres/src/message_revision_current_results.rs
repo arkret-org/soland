@@ -52,6 +52,10 @@ fn conflict(detail: &'static str) -> PersistenceError {
     PersistenceError::Conflict(detail.to_owned())
 }
 
+fn strand_lifecycle_conflict(code: soland_storage::ConflictCode, detail: &str) -> PersistenceError {
+    PersistenceError::Conflict(format!("{}: {detail}", code.as_str()))
+}
+
 /// The one Message body this Station admits: a plain `ak.content.text` block
 /// with no mention, part or extension member, so the create and revise
 /// carriers share one content and mention gate.
@@ -336,15 +340,27 @@ pub(crate) async fn require_active_discussion_strand(
             "Message target Strand identity has no creating Event",
         ));
     }
-    if strand.value.get("state") != Some(&Value::String("active".to_owned()))
-        || strand
-            .value
-            .get("scope_circle_id")
-            .is_some_and(|value| !value.is_null())
+    if strand
+        .value
+        .get("scope_circle_id")
+        .is_some_and(|value| !value.is_null())
     {
-        return Err(conflict(
-            "Message target Strand is not active in the Realm scope",
-        ));
+        return Err(conflict("Message target Strand is outside the Realm scope"));
+    }
+    match strand.value.get("state").and_then(Value::as_str) {
+        Some("active") => {}
+        Some("redacted") => {
+            return Err(strand_lifecycle_conflict(
+                soland_storage::ConflictCode::StrandAlreadyTerminal,
+                "Message target Strand is redacted",
+            ));
+        }
+        _ => {
+            return Err(strand_lifecycle_conflict(
+                soland_storage::ConflictCode::StrandNotActive,
+                "Message target Strand is not active",
+            ));
+        }
     }
     let discussion = strand
         .value

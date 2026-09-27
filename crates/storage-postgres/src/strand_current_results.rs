@@ -22,6 +22,10 @@ fn reject(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {}", detail.into()))
 }
 
+fn reject_lifecycle(code: soland_storage::ConflictCode, detail: &str) -> PersistenceError {
+    PersistenceError::Conflict(format!("{}: {detail}", code.as_str()))
+}
+
 /// The registered `strand` current value an accepted `ak.strand.create`
 /// derives: the authored initial object with its Event-derived id and the
 /// `active` state. Every Station that projects the Event derives it here.
@@ -189,7 +193,10 @@ pub(crate) async fn commit_strand_transition_in_connection(
         return Err(reject("Strand transition target identity or scope differs"));
     }
     if current.state == Some(arkret_wire::ObjectState::Redacted) {
-        return Err(reject("strand_already_terminal"));
+        return Err(reject_lifecycle(
+            soland_storage::ConflictCode::StrandAlreadyTerminal,
+            "Strand transition target is redacted",
+        ));
     }
     let mut post = row.value.clone();
     let time = Value::String(arkret_canonical::format_timestamp_canonical(
@@ -200,7 +207,10 @@ pub(crate) async fn commit_strand_transition_in_connection(
     ));
     if let Some(body) = stage {
         if current.state != Some(arkret_wire::ObjectState::Active) {
-            return Err(reject("strand_not_active"));
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::StrandNotActive,
+                "Strand stage target is not active",
+            ));
         }
         if row.value.get("stage").and_then(Value::as_str) != body.expected_stage.as_deref() {
             return Err(reject("Strand expected_stage differs from current stage"));
@@ -217,17 +227,20 @@ pub(crate) async fn commit_strand_transition_in_connection(
             (
                 arkret_wire::ObjectState::Active,
                 "archived",
-                "strand_not_active",
+                soland_storage::ConflictCode::StrandNotActive,
             )
         } else {
             (
                 arkret_wire::ObjectState::Archived,
                 "active",
-                "strand_not_archived",
+                soland_storage::ConflictCode::StrandNotArchived,
             )
         };
         if current.state != Some(expected) {
-            return Err(reject(reason));
+            return Err(reject_lifecycle(
+                reason,
+                "Strand lifecycle source state differs",
+            ));
         }
         post["state"] = Value::String(next.to_owned());
         post["state_changed_at"] = lifecycle_time.clone();
@@ -344,13 +357,23 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
         serde_json::from_value(row.value.clone()).map_err(|error| {
             PersistenceError::Internal(format!("stored Strand current value is invalid: {error}"))
         })?;
-    if current.id.as_ref() != Some(&payload.target_ref)
-        || current.realm_id != event.realm_id
-        || current.state != Some(arkret_wire::ObjectState::Active)
-    {
-        return Err(reject(
-            "Strand update target is not an active Strand in this Realm",
-        ));
+    if current.id.as_ref() != Some(&payload.target_ref) || current.realm_id != event.realm_id {
+        return Err(reject("Strand update target identity or Realm differs"));
+    }
+    match current.state {
+        Some(arkret_wire::ObjectState::Active) => {}
+        Some(arkret_wire::ObjectState::Redacted) => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::StrandAlreadyTerminal,
+                "Strand update target is redacted",
+            ));
+        }
+        _ => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::StrandNotActive,
+                "Strand update target is not active",
+            ));
+        }
     }
     let expected_scope = match current.scope_circle_id.as_ref() {
         Some(circle_id) => arkret_wire::ScopeRef::Circle {

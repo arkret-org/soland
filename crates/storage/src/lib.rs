@@ -230,6 +230,12 @@ pub enum ConflictCode {
     EventNotAccepted,
     /// A declared precondition does not hold.
     FailedPrecondition,
+    /// A Strand transition or Message targets an archived Strand.
+    StrandNotActive,
+    /// A Strand restore targets one that is not archived.
+    StrandNotArchived,
+    /// A Strand write targets terminal redacted state.
+    StrandAlreadyTerminal,
     /// A Realm entry was refused by its join rule or join policy; the
     /// applicant sees one non-enumerating result (`join-policy.md` §4).
     GateCheckFailed,
@@ -345,7 +351,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 70] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
@@ -364,6 +370,9 @@ impl ConflictCode {
         Self::EventIdDigestMismatch,
         Self::EventNotAccepted,
         Self::FailedPrecondition,
+        Self::StrandNotActive,
+        Self::StrandNotArchived,
+        Self::StrandAlreadyTerminal,
         Self::GateCheckFailed,
         Self::SnapshotCapacityExceeded,
         Self::MlsActivationRequired,
@@ -438,6 +447,9 @@ impl ConflictCode {
             Self::EventIdDigestMismatch => "event_id_digest_mismatch",
             Self::EventNotAccepted => "event_not_accepted",
             Self::FailedPrecondition => "failed_precondition",
+            Self::StrandNotActive => arkret_wire::ReasonCode::STRAND_NOT_ACTIVE,
+            Self::StrandNotArchived => arkret_wire::ReasonCode::STRAND_NOT_ARCHIVED,
+            Self::StrandAlreadyTerminal => arkret_wire::ReasonCode::STRAND_ALREADY_TERMINAL,
             Self::GateCheckFailed => arkret_wire::ReasonCode::GATE_CHECK_FAILED,
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
