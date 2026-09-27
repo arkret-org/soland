@@ -295,14 +295,21 @@ pub(crate) async fn commit_in_connection(
                     ))
                 });
             let value = json!({"membership": membership, "effective_at": effective_at});
-            sql_query(
+            let changed = sql_query(
                 "INSERT INTO circle_member_state_current_results \
                  (realm_id,circle_id,member_id,membership,current_commit_id,current_stream_position,source_stream_ref,value,updated_at) \
                  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) \
                  ON CONFLICT(circle_id,member_id) DO UPDATE SET \
                  membership=EXCLUDED.membership,current_commit_id=EXCLUDED.current_commit_id, \
                  current_stream_position=EXCLUDED.current_stream_position,source_stream_ref=EXCLUDED.source_stream_ref, \
-                 value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+                 value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
+                 WHERE circle_member_state_current_results.realm_id=EXCLUDED.realm_id \
+                   AND circle_member_state_current_results.source_stream_ref=EXCLUDED.source_stream_ref \
+                   AND (circle_member_state_current_results.current_stream_position<EXCLUDED.current_stream_position \
+                     OR (circle_member_state_current_results.current_stream_position=EXCLUDED.current_stream_position \
+                       AND circle_member_state_current_results.current_commit_id=EXCLUDED.current_commit_id \
+                       AND circle_member_state_current_results.membership=EXCLUDED.membership \
+                       AND circle_member_state_current_results.value=EXCLUDED.value))",
             )
             .bind::<Text, _>(event.realm_id.as_str())
             .bind::<Text, _>(circle_id.as_str())
@@ -316,6 +323,12 @@ pub(crate) async fn commit_in_connection(
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
+            if changed != 1 {
+                return Err(conflict(
+                    ConflictCode::FailedPrecondition,
+                    "Circle membership current revision or value differs",
+                ));
+            }
         }
         _ => {}
     }
