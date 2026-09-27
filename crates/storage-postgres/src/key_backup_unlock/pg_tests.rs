@@ -36,14 +36,14 @@ async fn insert_policy(pool: &crate::PgPool, policy: &Value) {
     sql_query("INSERT INTO recovery_policies(id,principal_id,station_id,version,acceptance_basis,trust_domain,expires_at,issued_at,verification_method,raw_payload,accepted_at) VALUES($1,$2,$3,$4,$5,'ak:trust_domain:station.example',$6,$7,'did:web:unlock-test.example#root',$8,$7)")
         .bind::<sql_types::Uuid,_>(ids::typed_uuid_part_expect_internal(typed.policy_id.as_str()))
         .bind::<Text,_>(PRINCIPAL).bind::<Text,_>(STATION).bind::<crate::Integer,_>(typed.version as i32)
-        .bind::<Jsonb,_>(serde_json::to_value(acceptance_basis).unwrap())
+        .bind::<Jsonb,_>(serde_json::to_value(&acceptance_basis).unwrap())
         .bind::<Nullable<Timestamptz>,_>(typed.expires_at).bind::<Timestamptz,_>(typed.issued_at)
-        .bind::<Jsonb,_>(policy).execute(&mut *conn).await.unwrap();
+        .bind::<Jsonb,_>(policy.clone()).execute(&mut *conn).await.unwrap();
     sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,1,$4,$5,$6)")
-        .bind::<Text,_>(wire::RealmId::from_digest(arkret_canonical::sha256_bytes(b"recovery-policy-realm")).as_str())
+        .bind::<Text,_>(wire::RealmId::from_event_id(&wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, arkret_canonical::sha256_bytes(b"recovery-policy-realm"))).as_str())
         .bind::<Text,_>(typed.policy_id.as_str())
         .bind::<Text,_>(acceptance_basis.as_str())
-        .bind::<Text,_>(wire::EventId::from_digest(arkret_canonical::sha256_bytes(b"recovery-policy-event")).as_str())
+        .bind::<Text,_>(wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, arkret_canonical::sha256_bytes(b"recovery-policy-event")).as_str())
         .bind::<Jsonb,_>(policy)
         .bind::<Timestamptz,_>(typed.issued_at)
         .execute(&mut *conn).await.unwrap();
