@@ -579,9 +579,8 @@ fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<S
 }
 
 /// Fan out due-date notifications for an accepted `ak.strand.update`.
-/// Calendar updates are recognized separately and fail closed below until the
-/// receiver-private policy projection required by their optional server
-/// profile exists.
+/// Calendar updates are recognized separately; their notification fanout is
+/// not implemented by this path.
 pub(crate) async fn dispatch_schedule_notifications(
     state: &AppState,
     operation: &arkret_event_draft::ProjectedEventOperation,
@@ -629,12 +628,9 @@ pub(crate) async fn dispatch_schedule_notifications(
             .await;
         }
     }
-    // Calendar fanout additionally requires receiver-private blocklist, DND
-    // and push-rule gates before a Notification row or wakeup is generated.
-    // Soland stores those standard account-data cells as holder-encrypted
-    // values and has no holder-authorized readable policy projection. The
-    // conformant behavior is therefore fail-closed; do not infer a verified
-    // schedule notification or blind wakeup from Calendar metadata.
+    // Calendar notification fanout is a separate implementation gap.
+    // Personal blocklist filtering belongs to the key-holding client; it
+    // must not be used to reject a blind wakeup at this service boundary.
 }
 
 #[cfg(test)]
