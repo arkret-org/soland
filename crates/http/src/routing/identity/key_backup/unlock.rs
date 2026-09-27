@@ -501,12 +501,14 @@ mod tests {
             .verify(transcript, &signature)
             .unwrap();
 
-        assert!(
-            enforce_unlock_signer_admission(
-                &published.verifying_key(),
-                "did:web:keys.example#runtime-1",
-            )
-            .is_err()
+        let published_error = enforce_unlock_signer_admission(
+            &published.verifying_key(),
+            "did:web:keys.example#runtime-1",
+        )
+        .expect_err("the published conformance key must not authorize an unlock");
+        assert_eq!(
+            published_error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::TEST_SIGNING_MATERIAL_DENIED)
         );
 
         let ordinary = SigningKey::from_bytes(&[42; 32]);
@@ -517,12 +519,14 @@ mod tests {
             )
             .is_ok()
         );
-        assert!(
-            enforce_unlock_signer_admission(
-                &ordinary.verifying_key(),
-                "did:web:keys.example#device-fixture",
-            )
-            .is_err()
+        let reserved_id_error = enforce_unlock_signer_admission(
+            &ordinary.verifying_key(),
+            "did:web:keys.example#device-fixture",
+        )
+        .expect_err("a reserved test key id must not authorize an unlock");
+        assert_eq!(
+            reserved_id_error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::TEST_SIGNING_MATERIAL_DENIED)
         );
     }
 
