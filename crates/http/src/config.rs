@@ -320,6 +320,8 @@ pub struct AppConfig {
     /// token endpoints are, while the signing key and TTL belong to the service
     /// those endpoints name (`media-service-binding.md` §2).
     pub media: MediaIssuerConfig,
+    /// Explicit comma-separated browser origin allowlist. Wildcards are invalid
+    /// because this service also exposes authenticated protocol operations.
     pub cors_allow_origin: Option<String>,
     /// Public Account Authority base URL advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.account_authority`. Registration,
@@ -1084,21 +1086,21 @@ impl AppConfig {
         // durable identity stores are open, by `first_provisioning`.
         // Development mode may provision automatically. Config never carries
         // or pins the resulting DID (identity-did.md §3.7 I-2/I-3).
-        // CORS posture per api-conventions.md §10 — browser clients SHOULD be
-        // able to reach us via preflight. Three shapes:
-        //   - env unset, production mode → `None` (no CORS handler at all; operator must opt in
-        //     explicitly for browser access)
-        //   - env unset, development mode → defaults to `Some("*")`, the spec-recommended
-        //     permissive default for local / loopback work so plain `cargo run` of soland is
-        //     reachable from a inkson dev server without extra env wiring
-        //   - env set → use as-is. `"*"` installs the permissive (mirror origin, no credentials)
-        //     handler; any other value is treated as an explicit origin allow-list and installs the
-        //     credentialed handler. See `routing::cors_handler_for_config`.
+        // API conventions section 10 requires explicit origins for endpoints
+        // carrying Authorization, device proof or session semantics. Development
+        // mode has the same boundary; operators opt in to browser origins.
         let cors_allow_origin = lookup(values, "SOLAND_CORS_ALLOW_ORIGIN")
             .ok()
             .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty())
-            .or_else(|| development_mode.then(|| "*".to_owned()));
+            .filter(|v| !v.is_empty());
+        if cors_allow_origin
+            .as_deref()
+            .is_some_and(|raw| raw.split(',').any(|origin| origin.trim() == "*"))
+        {
+            anyhow::bail!(
+                "SOLAND_CORS_ALLOW_ORIGIN requires explicit origins; wildcard is invalid"
+            );
+        }
         let session_grant_introspection_url =
             env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_URL");
         let auth_session_logout_url = env_non_empty(values, "SOLAND_AUTH_SESSION_LOGOUT_URL");

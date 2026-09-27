@@ -524,27 +524,18 @@ async fn cors_preflight(res: &mut Response) {
 
 /// Build a `CorsHandler` from the `SOLAND_CORS_ALLOW_ORIGIN` config string.
 ///
-/// Per `arkret-spec/spec/v1/zh/sync/api-conventions.md` §10 the recommended
-/// posture for browser-facing services is `Access-Control-Allow-Origin: *`,
-/// and §10 explicitly says browser-accessible private endpoints must not rely
-/// on cookies as the sole authentication mechanism, meaning credentials need
-/// not be reflected to the browser. Salvo's `Cors` builder also panics if `*`
-/// is combined with
-/// `allow_credentials(true)`, so we branch:
-///
-/// - `"*"` → mirror the request origin (universally usable as a `*` substitute that survives the
-///   no-credentials constraint) and skip `allow_credentials`. Suitable for local-dev and any
-///   deployment where auth is carried in the `Authorization` header rather than cookies.
-/// - any other value → treat as an explicit origin allow-list (split on `,` for multi-origin
-///   operators) and enable `allow_credentials` so cookie-bearing browser clients deployed under a
-///   known origin still work.
+/// API conventions section 10 requires an explicit allowlist for authenticated
+/// endpoints. Configuration loading rejects wildcards; direct `AppConfig`
+/// construction must also fail closed rather than mirror arbitrary origins.
 pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
-    let entries: Vec<String> = raw
+    let mut entries: Vec<String> = raw
         .split(',')
         .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty())
         .collect();
-    let is_wildcard = entries.iter().any(|v| v == "*");
+    if entries.iter().any(|v| v == "*") {
+        entries.clear();
+    }
 
     let base = Cors::new()
         .allow_methods(vec![
@@ -582,16 +573,10 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "range",
         ]);
 
-    let cors = if is_wildcard {
-        // Use `mirror_request` rather than the literal `*` header so the
-        // Vary: Origin response still admits the wildcard semantics while
-        // avoiding the salvo-side panic on `*` + credentials. No
-        // credentials are advertised in this posture.
-        base.allow_origin(salvo::cors::AllowOrigin::mirror_request())
-    } else {
-        let refs: Vec<&str> = entries.iter().map(|s| s.as_str()).collect();
-        base.allow_origin(refs).allow_credentials(true)
-    };
+    let refs: Vec<&str> = entries.iter().map(|s| s.as_str()).collect();
+    let cors = base
+        .allow_origin(refs)
+        .allow_credentials(!entries.is_empty());
 
     cors.expose_headers(vec![
         "arkret-operation",
