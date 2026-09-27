@@ -13,6 +13,8 @@ const CIRCLE_A: &str = "ak:circle:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M";
 const CIRCLE_B: &str = "ak:circle:AT2LoQ65P6bU2ZDxq9XbubTSMDrqzlK8EFJNmM_pxt62";
 const STRAND_A: &str = "ak:strand:AZ6GqZWWvnQ2KFwbBD-MenomzWNz-31MUAuKzBXIP0zv";
 const STRAND_B: &str = "ak:strand:Aa-h0nYxlvhQk1U9H0yQTY4hZEVTz0be75pj6U70n7qy";
+const LIST_A: &str = "ak:space:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7";
+const LIST_B: &str = "ak:space:AZ6GqZWWvnQ2KFwbBD-MenomzWNz-31MUAuKzBXIP0zv";
 
 fn actor() -> ActorId {
     ActorId::account(arkret_wire::AccountId::new(
@@ -127,6 +129,60 @@ fn circles(ids: &[&str]) -> GrantConstraint {
 
 fn now() -> DateTime<Utc> {
     at("2026-09-21T12:00:00Z")
+}
+
+#[test]
+fn placement_grant_checks_both_resolved_containers() {
+    let mut scope = constraint(
+        GrantConstraintKind::ScopeLimitation,
+        GrantConstraintEffect::Allow,
+    );
+    scope.allowed_from_container_refs = vec![LIST_A.to_owned()];
+    scope.allowed_to_container_refs = vec![LIST_B.to_owned()];
+    let grants = [grant(
+        19,
+        &[CapabilityActionId::STRAND_MOVE],
+        realm_wide(),
+        vec![scope],
+    )];
+    let mut facts = OperationFacts {
+        strand_id: Some(STRAND_A.to_owned()),
+        from_container_id: Some(LIST_A.to_owned()),
+        to_container_id: Some(LIST_B.to_owned()),
+        ..OperationFacts::default()
+    };
+    assert!(allowed(&evaluate(
+        &grants,
+        CapabilityActionId::STRAND_MOVE,
+        &strand(STRAND_A),
+        &facts,
+        now()
+    )));
+    facts.from_container_id = None;
+    assert!(!allowed(&evaluate(
+        &grants,
+        CapabilityActionId::STRAND_MOVE,
+        &strand(STRAND_A),
+        &facts,
+        now()
+    )));
+    facts.from_container_id = Some(LIST_B.to_owned());
+    assert!(!allowed(&evaluate(
+        &grants,
+        CapabilityActionId::STRAND_MOVE,
+        &strand(STRAND_A),
+        &facts,
+        now()
+    )));
+    facts.from_container_id = Some(LIST_A.to_owned());
+    facts.to_container_id = Some(LIST_A.to_owned());
+    assert!(!allowed(&evaluate(
+        &grants,
+        CapabilityActionId::STRAND_MOVE,
+        &strand(STRAND_A),
+        &facts,
+        now()
+    )));
 }
 
 #[test]

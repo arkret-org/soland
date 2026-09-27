@@ -2531,6 +2531,10 @@ async fn commit_one_in_connection(
             conn, event, commit, true,
         )
         .await?;
+        crate::strand_position_current_results::commit_authority_position_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::space_current_results::commit_space_create_current_results_in_connection(
             conn, event, commit,
         )

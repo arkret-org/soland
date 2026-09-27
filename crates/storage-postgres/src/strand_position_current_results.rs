@@ -3,9 +3,295 @@
 
 use arkret_models_collaboration::objects::strand::StrandPositionCurrent;
 use arkret_wire::{CurrentRevision, RealmId, SpaceId, StrandId};
-use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use diesel::OptionalExtension as _;
+use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use serde_json::{Value, json};
 use soland_storage::{PersistenceError, PersistenceResult};
+
+#[derive(diesel::QueryableByName)]
+struct ObjectRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct ListRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    space_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    space_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    space: Value,
+    #[diesel(sql_type = Text)]
+    parent_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    parent_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    parent: Value,
+    #[diesel(sql_type = Text)]
+    policy_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    policy_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    policy: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct PositionRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Bool)]
+    covered: bool,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+    #[diesel(sql_type = BigInt)]
+    invalid_count: i64,
+}
+
+fn refused(reason: &str) -> PersistenceError {
+    PersistenceError::Conflict(format!("failed_precondition: {reason}"))
+}
+
+/// Admit a placement against the same locked Realm cut as its covering Commit.
+/// The generic replica installer below only folds an already accepted value.
+pub(crate) async fn commit_authority_position_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::strand::{
+        StrandMovePayload, StrandReorderPayload,
+    };
+    let (board, strand, destination, rank, from, expected, reorder) = match event.kind {
+        arkret_wire::EventKind::StrandMove => {
+            let body: StrandMovePayload = serde_json::from_value(json!(&event.payload))
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            (
+                body.board_space_id,
+                body.strand_id,
+                body.target_space_id,
+                body.rank,
+                body.from_space_id,
+                body.expected_position,
+                false,
+            )
+        }
+        arkret_wire::EventKind::StrandReorder => {
+            let body: StrandReorderPayload = serde_json::from_value(json!(&event.payload))
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            (
+                body.board_space_id,
+                body.strand_id,
+                body.space_id,
+                body.rank,
+                None,
+                body.expected_position,
+                true,
+            )
+        }
+        _ => return Ok(()),
+    };
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if commit.realm_id != event.realm_id
+        || commit.event_ref != event.event_id
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "position requires its exact RealmCommit".to_owned(),
+        ));
+    }
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    let position =
+        i64::try_from(commit.stream_position).map_err(|_| refused("position exceeds BIGINT"))?;
+    let strand_row = diesel::sql_query("SELECT s.realm_id,s.current_stream_position,s.value FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position WHERE s.strand_id=$1 AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id FOR SHARE OF s")
+        .bind::<Text,_>(strand.as_str()).get_result::<ObjectRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(|| refused("placement Strand is absent"))?;
+    if strand_row.realm_id != event.realm_id.as_str() {
+        return Err(refused("space_realm_mismatch"));
+    }
+    if strand_row.current_stream_position >= position
+        || strand_row.value.get("state") != Some(&json!("active"))
+        || strand_row
+            .value
+            .get("scope_circle_id")
+            .is_some_and(|v| !v.is_null())
+    {
+        return Err(refused("strand_not_active"));
+    }
+    let board_row = diesel::sql_query("SELECT s.realm_id,s.current_stream_position,s.value FROM space_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position WHERE s.space_id=$1 AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id FOR SHARE OF s")
+        .bind::<Text,_>(board.as_str()).get_result::<ObjectRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(|| refused("placement Board is absent"))?;
+    if board_row.realm_id != event.realm_id.as_str() {
+        return Err(refused("space_realm_mismatch"));
+    }
+    if board_row.current_stream_position >= position
+        || board_row.value.get("kind") != Some(&json!("board"))
+        || board_row.value.get("state") != Some(&json!("active"))
+        || board_row
+            .value
+            .get("scope_circle_id")
+            .is_some_and(|v| !v.is_null())
+    {
+        return Err(refused("space_not_active"));
+    }
+    let list = diesel::sql_query("SELECT s.realm_id,s.current_commit_id AS space_commit_id,s.current_stream_position AS space_position,s.value AS space, p.current_commit_id AS parent_commit_id,p.current_stream_position AS parent_position,p.value AS parent, c.current_commit_id AS policy_commit_id,c.current_stream_position AS policy_position,c.value AS policy FROM space_current_results s JOIN space_parent_current_results p ON p.space_id=s.space_id AND p.realm_id=s.realm_id JOIN space_child_scope_policy_current_results c ON c.space_id=s.space_id AND c.realm_id=s.realm_id JOIN realm_commits rc ON rc.commit_id=s.current_commit_id AND rc.realm_id=s.realm_id AND rc.stream_position=s.current_stream_position WHERE s.space_id=$1 AND rc.stream_ref->>'kind'='realm' AND rc.stream_ref->>'realm_id'=s.realm_id FOR SHARE OF s,p,c")
+        .bind::<Text,_>(destination.as_str()).get_result::<ListRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(|| refused("placement List is absent or incomplete"))?;
+    if list.realm_id != event.realm_id.as_str() {
+        return Err(refused("space_realm_mismatch"));
+    }
+    if list.space_position >= position
+        || list.space_commit_id != list.parent_commit_id
+        || list.space_commit_id != list.policy_commit_id
+        || list.space_position != list.parent_position
+        || list.space_position != list.policy_position
+        || list.space.get("kind") != Some(&json!("list"))
+        || list.space.get("state") != Some(&json!("active"))
+        || list
+            .space
+            .get("scope_circle_id")
+            .is_some_and(|v| !v.is_null())
+        || list.parent != json!({"parent_space_id":board})
+    {
+        return Err(refused("space_not_active"));
+    }
+    if list.policy != Value::Null
+        && list.policy.get("kind") != Some(&json!("allow_any"))
+        && list.policy.get("kind") != Some(&json!("require_same_scope"))
+    {
+        return Err(refused("placement child-scope policy is unresolved"));
+    }
+    let previous = diesel::sql_query("SELECT p.realm_id,p.current_stream_position,p.value,(c.commit_id IS NOT NULL) AS covered FROM strand_position_current_results p LEFT JOIN realm_commits c ON c.commit_id=p.current_commit_id AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=p.realm_id WHERE p.board_space_id=$1 AND p.strand_id=$2 FOR UPDATE OF p")
+        .bind::<Text,_>(board.as_str()).bind::<Text,_>(strand.as_str())
+        .get_result::<PositionRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if previous.as_ref().is_some_and(|row| {
+        !row.covered
+            || row.realm_id != event.realm_id.as_str()
+            || row.current_stream_position >= position
+    }) {
+        return Err(refused("space_realm_mismatch"));
+    }
+    let current: Option<StrandPositionCurrent> = previous
+        .as_ref()
+        .map(|row| {
+            serde_json::from_value(row.value.clone()).map_err(|error| {
+                PersistenceError::Internal(format!("stored Strand position is invalid: {error}"))
+            })
+        })
+        .transpose()?
+        .flatten();
+    if expected
+        .as_ref()
+        .is_some_and(|guard| Some(guard) != current.as_ref())
+    {
+        return Err(refused("strand position expected_position mismatch"));
+    }
+    if from
+        .as_ref()
+        .is_some_and(|source| current.as_ref().map(|v| &v.list_space_id) != Some(source))
+    {
+        return Err(refused("source List differs from current position"));
+    }
+    if reorder
+        && current
+            .as_ref()
+            .is_none_or(|value| value.list_space_id != destination)
+    {
+        return Err(refused("reorder requires the current List"));
+    }
+    if let Some(source) = current.as_ref().map(|value| &value.list_space_id) {
+        // A tombstoned source can be repaired by moving out, but the source
+        // must still be an actual List within this Board and Realm.
+        let source_row = diesel::sql_query("SELECT s.realm_id,s.current_commit_id AS space_commit_id,s.current_stream_position AS space_position,s.value AS space,p.current_commit_id AS parent_commit_id,p.current_stream_position AS parent_position,p.value AS parent,c.current_commit_id AS policy_commit_id,c.current_stream_position AS policy_position,c.value AS policy FROM space_current_results s JOIN space_parent_current_results p ON p.space_id=s.space_id AND p.realm_id=s.realm_id JOIN space_child_scope_policy_current_results c ON c.space_id=s.space_id AND c.realm_id=s.realm_id JOIN realm_commits rc ON rc.commit_id=s.current_commit_id AND rc.realm_id=s.realm_id AND rc.stream_position=s.current_stream_position WHERE s.space_id=$1 AND rc.stream_ref->>'kind'='realm' AND rc.stream_ref->>'realm_id'=s.realm_id FOR SHARE OF s,p,c")
+            .bind::<Text,_>(source.as_str()).get_result::<ListRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+            .ok_or_else(|| refused("source List is absent or incomplete"))?;
+        if source_row.realm_id != event.realm_id.as_str()
+            || source_row.space_position >= position
+            || source_row.space_commit_id != source_row.parent_commit_id
+            || source_row.space_commit_id != source_row.policy_commit_id
+            || source_row.space_position != source_row.parent_position
+            || source_row.space_position != source_row.policy_position
+            || source_row.space.get("kind") != Some(&json!("list"))
+            || source_row.parent != json!({"parent_space_id":board})
+            || source_row
+                .space
+                .get("scope_circle_id")
+                .is_some_and(|v| !v.is_null())
+        {
+            return Err(refused("source List is not in the Board"));
+        }
+    }
+    crate::realm_authorization_cut::authorize_strand_position_in_connection(
+        conn,
+        event,
+        current.as_ref().map(|value| &value.list_space_id),
+        &destination,
+        commit.committed_at,
+    )
+    .await?;
+    if !reorder {
+        let fields = &list.space["fields"];
+        if let Some(limit) = fields.get("wip_limit").and_then(Value::as_i64) {
+            let counts = diesel::sql_query("SELECT COUNT(DISTINCT p.strand_id) FILTER (WHERE s.value->>'state' IN ('active','archived')) AS count, COUNT(*) FILTER (WHERE s.value->>'state' IS NULL OR s.value->>'state' NOT IN ('active','archived','redacted','tombstoned')) AS invalid_count FROM strand_position_current_results p JOIN strand_current_results s ON s.strand_id=p.strand_id AND s.realm_id=p.realm_id WHERE p.realm_id=$1 AND p.board_space_id=$2 AND p.value->>'list_space_id'=$3")
+                .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(board.as_str())
+                .bind::<Text,_>(destination.as_str()).get_result::<CountRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+            if counts.invalid_count != 0 {
+                return Err(refused("List WIP basis contains an unknown Strand state"));
+            }
+            let additional = i64::from(
+                current
+                    .as_ref()
+                    .is_none_or(|value| value.list_space_id != destination),
+            );
+            if counts.count + additional > limit {
+                match fields.get("wip_limit_enforcement").and_then(Value::as_str) {
+                    Some("warn") => {
+                        tracing::warn!(realm=%event.realm_id, list=%destination, "accepted Strand move exceeds List WIP limit")
+                    }
+                    Some("reject" | "require_review") => {
+                        return Err(refused("target List WIP limit exceeded"));
+                    }
+                    _ => return Err(refused("target List WIP policy is unresolved")),
+                }
+            }
+        }
+    }
+    install_in_connection(
+        conn,
+        &event.realm_id,
+        &board,
+        &strand,
+        &CurrentRevision {
+            commit_id: commit.commit_id.clone(),
+            stream_position: commit.stream_position,
+        },
+        &Some(StrandPositionCurrent {
+            list_space_id: destination,
+            rank,
+        }),
+        commit.committed_at,
+    )
+    .await
+}
 
 /// Install the value of a verified snapshot or project an accepted Commit.
 /// Admission checks belong to the authority writer, never this replica sink.

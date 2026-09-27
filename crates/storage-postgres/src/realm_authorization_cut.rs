@@ -508,6 +508,47 @@ impl RealmAuthorizationCut {
         }
     }
 
+    /// Evaluate the placement grant against the actual source List resolved
+    /// from durable position current, rather than an optional payload hint.
+    async fn require_position_in_connection(
+        &self,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
+        source: Option<&arkret_wire::SpaceId>,
+        destination: &arkret_wire::SpaceId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.require_open_lifecycle(event)?;
+        self.require_governed_member(&event.kind)?;
+        if self.profile_authorized() {
+            return Ok(());
+        }
+        let actions = Self::unconditional_actions(&event.kind);
+        let owner =
+            self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER);
+        let (target, mut facts) = self.event_operation(event);
+        facts.from_container_id = source.map(ToString::to_string);
+        facts.to_container_id = Some(destination.to_string());
+        match self
+            .admit_actions_in_connection(
+                conn,
+                &actions,
+                &target,
+                &facts,
+                owner,
+                event.event_id.as_str(),
+                at,
+            )
+            .await?
+        {
+            ActionAdmission::Admitted => Ok(()),
+            ActionAdmission::NotHeld { .. } => Err(capability_denied(format!(
+                "the actor holds no placement action authorizing {}",
+                event.kind.as_str()
+            ))),
+        }
+    }
+
     /// The capability-gated verdict for an `event` that acts on one authored
     /// object: an unconditional action as in
     /// [`Self::require_event_in_connection`], or, when the actor authored
@@ -892,6 +933,19 @@ pub(crate) async fn authorize_capability_gated_event_in_connection(
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_event_in_connection(conn, event, at).await?;
     Ok(cut)
+}
+
+pub(crate) async fn authorize_strand_position_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    source: Option<&arkret_wire::SpaceId>,
+    destination: &arkret_wire::SpaceId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
+    cut.require_position_in_connection(conn, event, source, destination, at)
+        .await
 }
 
 #[cfg(test)]

@@ -49,6 +49,9 @@ pub struct OperationFacts {
     pub registration_epoch: Option<String>,
     pub strand_id: Option<String>,
     pub space_id: Option<String>,
+    /// Frozen source and destination List Spaces for a placement operation.
+    pub from_container_id: Option<String>,
+    pub to_container_id: Option<String>,
     pub circle_id: Option<String>,
     pub view_id: Option<String>,
     /// The Strand track the operation targets (`discussion` for Messages).
@@ -422,12 +425,12 @@ fn constraint_is_evaluable(constraint: &GrantConstraint) -> bool {
         | (GrantConstraintKind::AuthorityControl, Some(GrantConstraintSubkind::AppletAuthority))
         | (GrantConstraintKind::Quota, Some(GrantConstraintSubkind::Rate)) => true,
         (GrantConstraintKind::ScopeLimitation, None) => {
-            // The Kanban container-move fields belong to
-            // `ak.profile.kanban_mvp.v1`, which this Station does not declare.
+            // Placement resolves the source from durable current and the
+            // destination from the signed payload at the accepting cut.
+            // An override=true grant needs a separate WIP-proof path and
+            // remains closed until that path exists.
             constraint.allowed_relation_kinds.is_empty()
-                && constraint.allowed_from_container_refs.is_empty()
-                && constraint.allowed_to_container_refs.is_empty()
-                && constraint.wip_limit_override.is_none()
+                && constraint.wip_limit_override != Some(true)
         }
         _ => false,
     }
@@ -1040,6 +1043,14 @@ fn scope_limitation_admits(
     .and(allow_list(
         &constraint.allowed_view_ids,
         view_id(operation).as_deref(),
+    ))
+    .and(allow_list(
+        &constraint.allowed_from_container_refs,
+        operation.facts.from_container_id.as_deref(),
+    ))
+    .and(allow_list(
+        &constraint.allowed_to_container_refs,
+        operation.facts.to_container_id.as_deref(),
     ))
     .and(allow_list(
         &constraint.allowed_tracks,
