@@ -22,6 +22,21 @@ pub struct PgSecurityTransactionStore {
     pub pool: PgPool,
 }
 
+#[cfg(feature = "test-support")]
+impl PgSecurityTransactionStore {
+    /// Install a structurally complete worker checkpoint for a crash/restart
+    /// integration test. Production callers must advance through the guarded
+    /// units instead; this hook exists because no public operation stops
+    /// exactly between pointer switch and the erase worker.
+    pub async fn seed_worker_checkpoint_for_test(
+        &self,
+        record: &SecurityTransactionRecord,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        insert_one(&mut conn, record).await
+    }
+}
+
 #[derive(QueryableByName)]
 struct SecurityTransactionRow {
     #[diesel(sql_type = sql_types::Uuid)]

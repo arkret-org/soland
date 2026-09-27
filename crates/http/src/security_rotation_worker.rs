@@ -10,6 +10,21 @@ use std::sync::Arc;
 
 use crate::state::AppState;
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn execute_erase_for_test(
+    state: &AppState,
+    transaction: soland_storage::SecurityTransactionRecord,
+    request: &soland_storage::BackupSeriesEraseWorkerRequest,
+) -> Result<(), crate::error::AppError> {
+    crate::routing::identity::recovery::execute_rotation_erase_for_test(
+        state,
+        transaction,
+        request,
+    )
+    .await
+}
+
 pub fn spawn(state: AppState) -> Arc<tokio::task::JoinHandle<()>> {
     let interval =
         std::time::Duration::from_secs(state.config().security_rotation_worker_interval_seconds);

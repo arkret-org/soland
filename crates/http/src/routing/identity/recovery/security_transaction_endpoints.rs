@@ -1202,12 +1202,17 @@ async fn execute_rotation_erase(
             "backup-series erase request is not authorized for this transaction",
         ));
     }
+    let existing_progress = state
+        .security_transactions()
+        .backup_erase_progress(&transaction_id)
+        .await
+        .map_err(security_transaction_service_error)?;
     // One PCR snapshot answers whether the authorizing device is still active
-    // and what the authoritative secret_storage pointer is (§3 step 4). The
-    // request's authority_commit_id is only the provenance of the first
-    // decision: an unrelated later PCR Commit does not make the frozen
-    // old-backup manifest stale (key-management.md §7.6); only a changed
-    // pointer or device generation stops the erase.
+    // and what the authoritative secret_storage pointer is (§3 step 4). On the
+    // first attempt, its covering Commit must be the exact basis frozen into
+    // the request. Once durable progress exists, an unrelated later PCR Commit
+    // does not stale the frozen bytes; pointer and generation checks below are
+    // the normative retry guards.
     let confirmed = state
         .key_backups()
         .confirmed_active_series_for_device(
@@ -1224,6 +1229,14 @@ async fn execute_rotation_erase(
                 "authorizing device or confirmed backup pointer is not current",
             )
         })?;
+    if existing_progress.is_none()
+        && confirmed.authority_commit_id != request.authority_commit_id
+    {
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "backup-series erase authority Commit does not match the current pointer",
+        ));
+    }
     for prepared in &plan.backup_rotations {
         let rotation = &prepared.binding;
         for expected in &rotation.new_backups {
@@ -1305,11 +1318,6 @@ async fn execute_rotation_erase(
         }
     }
 
-    let existing_progress = state
-        .security_transactions()
-        .backup_erase_progress(&transaction_id)
-        .await
-        .map_err(security_transaction_service_error)?;
     // Crash-consistency fault injection. Only the first attempt of a
     // transaction is armed, so the retry that must prove resumability runs the
     // real storage path. Empty outside development mode.
@@ -1510,6 +1518,19 @@ async fn execute_rotation_erase(
 /// device's `active` status are all decided by the registered storage unit
 /// at the locked PCR cut from the device's current accepted authorization;
 /// no device mirror or session record supplies key material.
+#[cfg(feature = "test-support")]
+pub(crate) async fn execute_rotation_erase_for_test(
+    state: &AppState,
+    transaction: SecurityTransactionRecord,
+    request: &soland_storage::BackupSeriesEraseWorkerRequest,
+) -> Result<(), AppError> {
+    let canonical_request = arkret_canonical::canonical_json_bytes(request)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    execute_rotation_erase(state, transaction, request, canonical_request)
+        .await
+        .map(|_| ())
+}
+
 async fn continue_rotation_local_commit(
     state: &AppState,
     session: &SessionRecord,

@@ -60,6 +60,8 @@ pub(crate) use session_endpoints::validate_frozen_session_policy;
 use session_endpoints::*;
 mod security_transaction_endpoints;
 pub(crate) use security_transaction_endpoints::sweep_rotation_worker;
+#[cfg(feature = "test-support")]
+pub(crate) use security_transaction_endpoints::execute_rotation_erase_for_test;
 use security_transaction_endpoints::*;
 mod signatures;
 use signatures::*;

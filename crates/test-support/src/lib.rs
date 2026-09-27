@@ -160,6 +160,18 @@ pub fn app_state(config: AppConfig) -> AppState {
     app_state_with_identity(config, persistence, identity, signing_seed)
 }
 
+/// Construct a test state and retain direct access to its leased PostgreSQL
+/// pool. This is reserved for integration tests that must install a durable
+/// pre-crash state which no public protocol operation can construct directly.
+pub fn app_state_with_pool(config: AppConfig) -> (AppState, soland_storage_postgres::PgPool) {
+    let identity = fixture_service_identity(&config);
+    let signing_seed = fixture_signing_seed(&config, &identity);
+    let (persistence, pool) =
+        leased_fixture_persistence_with_pool(&config, &identity, signing_seed, true);
+    let state = app_state_with_identity(config, persistence, identity, signing_seed);
+    (state, pool)
+}
+
 /// Construct a test state over the same PostgreSQL authority store as production.
 pub fn app_state_with_postgres_governance(config: AppConfig) -> AppState {
     app_state(config)
