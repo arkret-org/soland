@@ -385,6 +385,12 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::StrandMove | arkret_wire::EventKind::StrandReorder => {
+            crate::strand_position_current_results::project_verified_event_in_connection(
+                conn, event, commit,
+            )
+            .await?;
+        }
         arkret_wire::EventKind::SpaceCreate => {
             let values = crate::space_current_results::space_create_current_values(event)?;
             for (table, value) in [
@@ -820,7 +826,7 @@ mod tests {
             stream_position: 7,
         };
         let placed = Some(StrandPositionCurrent {
-            list_space_id: list,
+            list_space_id: list.clone(),
             rank: "a0".to_owned(),
         });
         // The caller has verified the snapshot; this test exercises the
@@ -861,6 +867,37 @@ mod tests {
                 .get_result(&mut conn).await.unwrap();
             assert_eq!(actual.value, expected);
         }
+        // A replay must agree on both receipt and value at the same position.
+        for (candidate_revision, candidate_value) in [
+            (
+                CurrentRevision {
+                    commit_id: arkret_wire::RealmCommitId::from_digest([99; 32]),
+                    stream_position: 7,
+                },
+                placed.clone(),
+            ),
+            (
+                revision.clone(),
+                Some(StrandPositionCurrent {
+                    list_space_id: list.clone(),
+                    rank: "b0".to_owned(),
+                }),
+            ),
+        ] {
+            assert!(
+                crate::strand_position_current_results::install_in_connection(
+                    &mut conn,
+                    &realm,
+                    &board_a,
+                    &strand,
+                    &candidate_revision,
+                    &candidate_value,
+                    at,
+                )
+                .await
+                .is_err()
+            );
+        }
         let foreign_realm = arkret_wire::RealmId::from_event_id(&id(6));
         diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
         assert!(
@@ -899,5 +936,76 @@ mod tests {
         ).bind::<Text,_>(board_a.as_str()).bind::<Text,_>(strand.as_str())
             .get_result(&mut conn).await.unwrap();
         assert_eq!(actual.value, serde_json::to_value(placed).unwrap());
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-station.example").unwrap(),
+        ));
+        // Admission has already occurred at the authority. Even a stale
+        // optional preimage must not be re-adjudicated during replica folding.
+        for (position, board, kind, rank) in [
+            (8, &board_a, arkret_wire::EventKind::StrandMove, "b0"),
+            (9, &board_b, arkret_wire::EventKind::StrandMove, "c0"),
+            (10, &board_a, arkret_wire::EventKind::StrandReorder, "d0"),
+        ] {
+            let mut payload = json!({"board_space_id":board,"strand_id":strand,"rank":rank});
+            payload[if kind == arkret_wire::EventKind::StrandMove {
+                "target_space_id"
+            } else {
+                "space_id"
+            }] = json!(list);
+            if position != 9 {
+                payload["expected_position"] = json!({"list_space_id":list,"rank":"stale"});
+            }
+            let event = arkret_wire::test_support::raw_event_for_actor_at(
+                kind.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                actor.clone(),
+                payload,
+                at,
+            )
+            .unwrap();
+            let commit = arkret_wire::RealmCommit {
+                commit_id: arkret_wire::RealmCommitId::from_digest([position as u8; 32]),
+                realm_id: realm.clone(),
+                stream_ref: stream.clone(),
+                stream_position: position,
+                previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest(
+                    [(position - 1) as u8; 32],
+                )),
+                event_ref: event.event_id.clone(),
+                governance_generation: 0,
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    event.event_id.clone(),
+                ),
+                committed_at: at,
+                signature: arkret_wire::DetachedObjectSignature {
+                    context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:web:replica-station.example#authority",
+                    )
+                    .unwrap(),
+                    signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                        .unwrap(),
+                    created_at: at,
+                    sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+                },
+            };
+            advance_in_connection(&mut conn, &event, &commit)
+                .await
+                .unwrap();
+            advance_in_connection(&mut conn, &event, &commit)
+                .await
+                .unwrap();
+        }
+        for (board, rank) in [(&board_a, "d0"), (&board_b, "c0")] {
+            let actual: ValueRow = diesel::sql_query(
+                "SELECT value FROM strand_position_current_results WHERE board_space_id=$1 AND strand_id=$2",
+            ).bind::<Text,_>(board.as_str()).bind::<Text,_>(strand.as_str())
+                .get_result(&mut conn).await.unwrap();
+            assert_eq!(actual.value, json!({"list_space_id":list,"rank":rank}));
+        }
     }
 }

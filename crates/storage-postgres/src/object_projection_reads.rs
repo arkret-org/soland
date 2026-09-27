@@ -75,7 +75,8 @@ pub(crate) async fn lists_for_actor(
         // manufacture an unplaced answer for an accepted position write.
         let position_events = diesel::sql_query(
             "SELECT EXISTS(SELECT 1 FROM realm_commit_event_kinds WHERE realm_id=$1 \
-             AND kind IN ('ak.strand.move','ak.strand.reorder')) AS present",
+             AND kind IN ('ak.strand.move','ak.strand.reorder')) \
+             OR EXISTS(SELECT 1 FROM strand_position_current_results WHERE realm_id=$1) AS present",
         ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
         if position_events.present {
             return Err(corrupt("position current read family is not installed").into());
