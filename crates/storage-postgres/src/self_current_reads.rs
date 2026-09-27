@@ -74,8 +74,14 @@ pub(crate) const SCOPED_STREAMS_SQL: &str = "SELECT ( \
      WHERE realm_id=$1 AND (realm_id,stream_key)>($1,$2) \
      ORDER BY realm_id,stream_key LIMIT 1) IS NOT NULL) AS present";
 
-pub(crate) const MEDIA_ANCHOR_SQL: &str = "SELECT EXISTS(SELECT 1 FROM realm_commit_event_kinds \
-     WHERE realm_id=$1 AND kind=$2) AS present";
+// Probe the first key at or above the exact selector. The ordered, bounded
+// probe uses the (realm_id, kind) primary key even when PostgreSQL estimates
+// a small table scan as cheaper for a plain EXISTS predicate.
+pub(crate) const MEDIA_ANCHOR_SQL: &str = "SELECT EXISTS(SELECT 1 FROM ( \
+     SELECT realm_id, kind FROM realm_commit_event_kinds \
+     WHERE (realm_id, kind) >= ($1, $2) \
+     ORDER BY realm_id, kind LIMIT 1 \
+     ) candidate WHERE candidate.realm_id=$1 AND candidate.kind=$2) AS present";
 
 #[derive(QueryableByName)]
 struct HeadRow {
