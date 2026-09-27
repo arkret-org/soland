@@ -1463,7 +1463,7 @@ pub trait AuthorityCommitStore: Send + Sync {
             arkret_models_collaboration::objects::query_projection::ProjectionStrandList,
         )>,
     > {
-        Err(PersistenceError::Internal(
+        Err(crate::PersistenceError::Internal(
             "durable object projection read is unavailable".to_owned(),
         ))
     }
