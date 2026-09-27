@@ -74,6 +74,8 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::CapabilityRelinquish,
     EventKind::StrandCreate,
     EventKind::StrandUpdate,
+    EventKind::StrandMove,
+    EventKind::StrandReorder,
     EventKind::SpaceCreate,
     EventKind::RealmSetDefaultStrand,
     EventKind::MessageCreate,
@@ -380,7 +382,6 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM sidecar_context_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM rsvp_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM strand_position_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
@@ -489,6 +490,7 @@ pub(crate) fn disclose_to_account(
     let mut redacted = std::collections::BTreeSet::new();
     let mut below_floor = std::collections::BTreeSet::new();
     let mut space_families = std::collections::BTreeMap::new();
+    let mut position_subjects = Vec::new();
     for row in &material.current_state_entries {
         let TypedCurrentResult::Value {
             selector,
@@ -530,6 +532,15 @@ pub(crate) fn disclose_to_account(
                         "a Circle-scoped Strand's visibility is not proved",
                     ));
                 }
+            }
+            CurrentSelector::StrandPosition {
+                board_space_id,
+                strand_id,
+            } => {
+                let position: Option<
+                    arkret_models_collaboration::objects::strand::StrandPositionCurrent,
+                > = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                position_subjects.push((board_space_id, strand_id, position));
             }
             CurrentSelector::Space { space_id } => {
                 let space: arkret_models_collaboration::objects::space::Space =
@@ -617,6 +628,49 @@ pub(crate) fn disclose_to_account(
         return Err(rejected(
             "a Space omits one of its registered sibling families",
         ));
+    }
+    for (board_id, strand_id, position) in position_subjects {
+        let subject_value = |wanted: CurrentSelector| {
+            material
+                .current_state_entries
+                .iter()
+                .find_map(|row| match row {
+                    TypedCurrentResult::Value {
+                        selector, value, ..
+                    } if selector == &wanted => Some(value.clone()),
+                    _ => None,
+                })
+                .ok_or_else(|| rejected("a position subject has no disclosed metadata"))
+        };
+        let strand: arkret_models_collaboration::objects::strand::Strand =
+            serde_json::from_value(subject_value(CurrentSelector::Strand {
+                strand_id: strand_id.clone(),
+            })?)
+            .map_err(PersistenceError::database)?;
+        if strand.id.as_ref() != Some(strand_id)
+            || strand.realm_id != material.realm_id
+            || strand.scope_circle_id.is_some()
+        {
+            return Err(rejected("position Strand visibility is not proved"));
+        }
+        let board: arkret_models_collaboration::objects::space::Space =
+            serde_json::from_value(subject_value(CurrentSelector::Space {
+                space_id: board_id.clone(),
+            })?)
+            .map_err(PersistenceError::database)?;
+        if board.kind != "board" {
+            return Err(rejected("position Board subject is not a Board"));
+        }
+        if let Some(position) = position {
+            let list: arkret_models_collaboration::objects::space::Space =
+                serde_json::from_value(subject_value(CurrentSelector::Space {
+                    space_id: position.list_space_id,
+                })?)
+                .map_err(PersistenceError::database)?;
+            if list.kind != "list" {
+                return Err(rejected("position List subject is not a List"));
+            }
+        }
     }
     let Some(history_access) = history_access else {
         return Err(rejected("the cut has no Realm history-access current"));
@@ -908,6 +962,102 @@ mod tests {
                 }],
             }
         );
+    }
+
+    #[test]
+    fn position_disclosure_requires_visible_board_strand_and_list_subjects() {
+        use arkret_models_collaboration::objects::space::Space;
+        use arkret_models_collaboration::objects::strand::Strand;
+        let (founder, mut material, facts) = fixture();
+        let actor = ActorId::account(founder.clone());
+        let strand_id = StrandId::from_event_id(&event_id(0x22));
+        material.current_state_entries[8] = row(
+            CurrentSelector::Strand {
+                strand_id: strand_id.clone(),
+            },
+            7,
+            serde_json::to_value(Strand::new(
+                strand_id.clone(),
+                realm_id(),
+                "Card",
+                actor.clone(),
+            ))
+            .unwrap(),
+        );
+        let board_id = arkret_wire::SpaceId::from_event_id(&event_id(0x66));
+        let list_id = arkret_wire::SpaceId::from_event_id(&event_id(0x67));
+        for (id, kind) in [(&board_id, "board"), (&list_id, "list")] {
+            material.current_state_entries.extend([
+                row(
+                    CurrentSelector::Space {
+                        space_id: id.clone(),
+                    },
+                    7,
+                    serde_json::to_value(Space::new(
+                        id.clone(),
+                        realm_id(),
+                        kind,
+                        kind,
+                        actor.clone(),
+                    ))
+                    .unwrap(),
+                ),
+                row(
+                    CurrentSelector::SpaceParent {
+                        space_id: id.clone(),
+                    },
+                    7,
+                    json!({"parent_space_id":null}),
+                ),
+                row(
+                    CurrentSelector::SpaceChildScopePolicy {
+                        space_id: id.clone(),
+                    },
+                    7,
+                    Value::Null,
+                ),
+            ]);
+        }
+        material.current_state_entries.push(row(
+            CurrentSelector::StrandPosition {
+                board_space_id: board_id.clone(),
+                strand_id: strand_id.clone(),
+            },
+            7,
+            json!({"list_space_id":list_id,"rank":"a0"}),
+        ));
+        assert_eq!(
+            disclose_to_account(material.clone(), &founder, &facts)
+                .unwrap()
+                .current_state_entries,
+            material.current_state_entries
+        );
+        let mut null_position = material.clone();
+        if let Some(TypedCurrentResult::Value { value, .. }) =
+            null_position.current_state_entries.last_mut()
+        {
+            *value = Value::Null;
+        }
+        assert!(disclose_to_account(null_position, &founder, &facts).is_ok());
+        for missing in [
+            CurrentSelector::Strand {
+                strand_id: strand_id.clone(),
+            },
+            CurrentSelector::Space { space_id: board_id },
+            CurrentSelector::Space { space_id: list_id },
+        ] {
+            let mut incomplete = material.clone();
+            incomplete.current_state_entries.retain(|entry| {
+                !matches!(entry,
+                TypedCurrentResult::Value { selector, .. } if selector == &missing)
+            });
+            assert!(disclose_to_account(incomplete, &founder, &facts).is_err());
+        }
+        let mut foreign = material;
+        if let TypedCurrentResult::Value { value, .. } = &mut foreign.current_state_entries[8] {
+            value["realm_id"] = json!(RealmId::from_event_id(&event_id(0x68)));
+        }
+        assert!(disclose_to_account(foreign, &founder, &facts).is_err());
     }
 
     #[test]
