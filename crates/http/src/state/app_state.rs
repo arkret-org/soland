@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -1678,35 +1676,6 @@ impl AppState {
             }
         }
 
-        // The canonical Event store exposes committed rows only. Keep direct
-        // bindings behind that durable acceptance boundary during restart.
-        let direct_binding_records = self
-            .event_queries()
-            .canonical_events()
-            .await?
-            .into_iter()
-            .filter(|record| {
-                record.kind == arkret_wire::EventKind::DirectConversationBound.as_str()
-            })
-            .collect::<Vec<_>>();
-        for record in direct_binding_records {
-            let Some(operation) =
-                crate::routing::events::event_log::projection_operation_from_canonical_record(
-                    &record,
-                )
-            else {
-                tracing::warn!(event_id = %record.event_id, "ignored unprojectable direct binding during hydration");
-                continue;
-            };
-            if let Err(reason) =
-                crate::routing::identity::validate_direct_binding_operation(self, &operation).await
-            {
-                tracing::warn!(event_id = %record.event_id, reason, "ignored invalid direct binding during hydration");
-                continue;
-            }
-            crate::routing::identity::project_canonical_direct_binding(self, &operation).await;
-        }
-
         self.identities.hydrate_account_lifecycles().await?;
 
         self.governance.hydrate_projections().await?;
@@ -2107,12 +2076,6 @@ impl AppState {
     #[doc(hidden)]
     pub fn test_account_registration_policy(&self) -> &Arc<Mutex<AccountRegistrationPolicy>> {
         &self.account_registration_policy
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn test_direct_conversation_binding_count(&self) -> usize {
-        self.contacts.runtime_direct_binding_count()
     }
 }
 

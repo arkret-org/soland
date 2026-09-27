@@ -517,6 +517,10 @@ pub trait EventReadPort: Send + Sync {
         trust_domain_id: &str,
         pair_key: &str,
     ) -> ServiceResult<Option<soland_storage::DirectConversationDurableState>>;
+    async fn direct_conversation_durable_state_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> ServiceResult<Option<soland_storage::DirectConversationDurableState>>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
@@ -632,6 +636,14 @@ impl EventQueryService {
     ) -> ServiceResult<Option<soland_storage::DirectConversationDurableState>> {
         self.events
             .direct_conversation_durable_state(trust_domain_id, pair_key)
+            .await
+    }
+    pub async fn direct_conversation_durable_state_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> ServiceResult<Option<soland_storage::DirectConversationDurableState>> {
+        self.events
+            .direct_conversation_durable_state_for_realm(realm_id)
             .await
     }
     pub async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {

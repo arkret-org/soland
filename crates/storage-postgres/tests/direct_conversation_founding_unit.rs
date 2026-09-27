@@ -38,8 +38,8 @@ use soland_storage::{
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore, PgEventStore,
-    PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
+    Db, FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore,
+    PgEventCommitUnitOfWork, PgEventStore, PgPersistenceStore, PgPool,
 };
 
 #[derive(diesel::QueryableByName)]
@@ -2105,6 +2105,14 @@ async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zer
             .members
             .iter()
             .all(|member| member.membership == "join")
+    );
+    assert_eq!(
+        PgEventStore { pool: pool.clone() }
+            .direct_conversation_durable_state_for_realm(realm_id.as_str())
+            .await
+            .unwrap()
+            .expect("accepted direct Realm resolves to its durable cut"),
+        durable
     );
     assert_eq!(durable.binding.unwrap().endorsements.len(), 2);
     assert_eq!(

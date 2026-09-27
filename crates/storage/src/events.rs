@@ -44,6 +44,10 @@ pub trait EventStore: Send + Sync {
         trust_domain_id: &str,
         pair_key: &str,
     ) -> PersistenceResult<Option<crate::DirectConversationDurableState>>;
+    async fn direct_conversation_durable_state_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Option<crate::DirectConversationDurableState>>;
     /// Accepted identity-anchor binding for one exact protocol Account.
     /// This is service-internal authority evidence and is never projected to
     /// holder sync as AccountData.

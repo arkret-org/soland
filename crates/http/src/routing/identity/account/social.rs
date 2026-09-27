@@ -5,10 +5,7 @@ use super::*;
 
 pub(crate) mod direct;
 
-pub(crate) use direct::{
-    active_direct_binding, direct_binding_conflict, direct_binding_matches_projection,
-    direct_pair_key, project_canonical_direct_binding, validate_direct_binding_operation,
-};
+pub(crate) use direct::{direct_binding_matches_projection, direct_pair_key};
 
 mod contact_write;
 
@@ -518,33 +515,31 @@ async fn contact_list_rows(
             rows.insert(peer.to_string(), candidate);
         }
     }
-    let mut out = rows
-        .into_values()
-        .map(|mut row| {
-            row.bidirectional_scopes =
-                intersection(&row.granted_to_peer_scopes, &row.granted_by_peer_scopes);
-            row.effective_scopes = Some(row.bidirectional_scopes.clone());
-            row.direct_conversation = direct_pair_key(state, actor, &row.peer.contact_actor_id())
-                .ok()
-                .and_then(|pair_key| {
-                    // §5.7 — a pair holding two distinct endorsements is frozen,
-                    // and neither side may be presented as the conversation.
-                    if direct_binding_conflict(state, &pair_key) {
-                        return state
-                            .contacts()
-                            .direct_bindings_for_pair(&pair_key)
-                            .and_then(|bindings| bindings.any_endorsed())
-                            .map(|binding| {
-                                direct_summary(binding, DirectConversationSummaryState::Suspended)
-                            });
-                    }
-                    active_direct_binding(state, &pair_key).map(|binding| {
-                        direct_summary(binding, DirectConversationSummaryState::Found)
-                    })
-                });
-            row
-        })
-        .collect::<Vec<_>>();
+    let mut out = Vec::with_capacity(rows.len());
+    for mut row in rows.into_values() {
+        row.bidirectional_scopes =
+            intersection(&row.granted_to_peer_scopes, &row.granted_by_peer_scopes);
+        row.effective_scopes = Some(row.bidirectional_scopes.clone());
+        if let Ok(pair_key) = direct_pair_key(state, actor, &row.peer.contact_actor_id())
+            && let Some(facts) = state
+                .event_queries()
+                .direct_conversation_durable_state(state.config().trust_domain.as_str(), &pair_key)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("direct durable-state lookup failed: {error}"))
+                })?
+            && let Some(current) = facts.binding.as_ref()
+        {
+            let binding = super::durable_binding_record(current)?;
+            let summary_state = if direct_binding_matches_projection(state, &binding) {
+                DirectConversationSummaryState::Found
+            } else {
+                DirectConversationSummaryState::Suspended
+            };
+            row.direct_conversation = Some(direct_summary(binding, summary_state));
+        }
+        out.push(row);
+    }
     let mut agent_peers = BTreeSet::new();
     let mut agents_by_controller = BTreeMap::<String, Vec<ContactAgentProjection>>::new();
     for row in &out {

@@ -716,6 +716,7 @@ pub(super) async fn validate_agent_context_authorization_ref(
             state,
             operation.realm_id.as_str(),
         )
+        .await?
         .ok_or("agent_context_authorization_ref_inactive")?;
         let strand_id = operation
             .payload

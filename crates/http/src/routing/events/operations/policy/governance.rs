@@ -602,15 +602,27 @@ pub(super) fn moderation_actor<'a>(
     Ok(Some(&operation.context.sender))
 }
 
-pub(super) fn active_direct_conversation_binding_for_realm(
+pub(super) async fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<soland_services::identity::DirectConversationBindingRecord> {
-    let binding = state
-        .contacts()
-        .settled_direct_binding_for_realm(realm_id)?;
-    crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
-        .then_some(binding)
+) -> Result<Option<soland_services::identity::DirectConversationBindingRecord>, &'static str> {
+    let Some(facts) = state
+        .event_queries()
+        .direct_conversation_durable_state_for_realm(realm_id)
+        .await
+        .map_err(|_| "agent_context_authorization_ref_lookup")?
+    else {
+        return Ok(None);
+    };
+    let Some(current) = facts.binding.as_ref() else {
+        return Ok(None);
+    };
+    let binding = crate::routing::identity::account::durable_binding_record(current)
+        .map_err(|_| "agent_context_authorization_ref_binding")?;
+    Ok(
+        crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
+            .then_some(binding),
+    )
 }
 
 #[cfg(test)]

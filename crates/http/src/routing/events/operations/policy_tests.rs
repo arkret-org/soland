@@ -1,9 +1,6 @@
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
-use soland_services::identity::{
-    DirectConversationCoordinatesRecord, DirectConversationEndorsement,
-};
 use soland_storage_postgres::Db;
 
 use super::*;
@@ -41,33 +38,6 @@ fn test_config() -> crate::config::AppConfig {
         seed_demo_data: true,
         ..crate::config::AppConfig::test_default()
     }
-}
-
-fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
-    // Only the coordinates conflict rule is exercised. No Event is accepted here.
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6".to_owned(),
-    )
-    .unwrap();
-    state.contacts().install_direct_binding(
-        "sha256:00000000000000000000000000000000000000000000000000000000000006a1".to_owned(),
-        "sha256:0000000000000000000000000000000000000000000000000000000000000601",
-        DirectConversationCoordinatesRecord {
-            participants_unordered: vec![
-                fixture_actor(ALICE_CORE_ID).to_string(),
-                fixture_actor("ak:did_core:webvh:z6mkbob").to_string(),
-            ],
-            realm_id: realm_id.to_string(),
-            main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
-            created_at: chrono::Utc::now(),
-        },
-        DirectConversationEndorsement {
-            actor_id: fixture_actor(ALICE_CORE_ID).to_string(),
-            binding_event_ref: "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
-        },
-    );
-    (state, realm_id)
 }
 
 fn op(
@@ -761,93 +731,6 @@ fn insert_resolved_agent_action(state: &AppState, message: &Operation, resolutio
             message.context.event_id.to_string(),
             arkret_wire::EventId::new(resolution_event_id).expect("confirmation Event id"),
         );
-}
-
-#[tokio::test]
-async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
-    let (state, realm_id) = state_with_direct_binding();
-    let pair_key = "sha256:00000000000000000000000000000000000000000000000000000000000006a1";
-
-    state.contacts().install_direct_binding(
-        pair_key.to_owned(),
-        "sha256:0000000000000000000000000000000000000000000000000000000000000601",
-        DirectConversationCoordinatesRecord {
-            participants_unordered: vec![
-                fixture_actor(ALICE_CORE_ID).to_string(),
-                fixture_actor("ak:did_core:webvh:z6mkbob").to_string(),
-            ],
-            realm_id: realm_id.to_string(),
-            main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
-            created_at: chrono::Utc::now(),
-        },
-        DirectConversationEndorsement {
-            actor_id: fixture_actor("ak:did_core:webvh:z6mkbob").to_string(),
-            binding_event_ref: "ak:event:AfBl2v9EFciTUTWf3Pyvb2ZNjC04y8l-AW2bp6dJAZn1".to_owned(),
-        },
-    );
-
-    assert!(
-        !state.contacts().direct_binding_is_conflicted(pair_key),
-        "two endorsements of one digest are compatible adds, not a conflict"
-    );
-    let settled = state
-        .contacts()
-        .direct_binding(pair_key)
-        .expect("the pair stays settled");
-    assert_eq!(settled.realm_id, realm_id.to_string());
-    assert_eq!(
-        settled.binding_event_ref, "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D",
-        "the named endorsement is the lowest actor id's, so replicas agree"
-    );
-    assert!(
-        state
-            .contacts()
-            .settled_direct_binding_for_realm(realm_id.as_ref())
-            .is_some(),
-        "the realm lookup must see the settled pair"
-    );
-}
-
-/// §5.7 / §8.3 — two *distinct* digests for one pair freeze it. Nothing picks a
-/// winner by digest order, arrival order or UUID.
-#[tokio::test]
-async fn two_distinct_endorsement_digests_freeze_the_pair() {
-    let (state, realm_id) = state_with_direct_binding();
-    let pair_key = "sha256:00000000000000000000000000000000000000000000000000000000000006a1";
-
-    state.contacts().install_direct_binding(
-        pair_key.to_owned(),
-        "sha256:00000000000000000000000000000000000000000000000000000000000006ff",
-        DirectConversationCoordinatesRecord {
-            participants_unordered: vec![
-                fixture_actor("ak:did_core:web:alice.example").to_string(),
-                fixture_actor("ak:did_core:web:bob.example").to_string(),
-            ],
-            realm_id: "ak:realm:ARM1n3PTeYfi_CEquXWAA_goRY85bAGIYUrIFzp-2oey".to_owned(),
-            main_strand_id: "ak:strand:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
-            created_at: chrono::Utc::now(),
-        },
-        DirectConversationEndorsement {
-            actor_id: fixture_actor("ak:did_core:web:bob.example").to_string(),
-            binding_event_ref: "ak:event:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
-        },
-    );
-
-    assert!(
-        state.contacts().direct_binding_is_conflicted(pair_key),
-        "a second distinct digest is a materialization conflict"
-    );
-    assert!(
-        state.contacts().direct_binding(pair_key).is_none(),
-        "a frozen pair has no settled coordinates; neither side may be served"
-    );
-    assert!(
-        state
-            .contacts()
-            .settled_direct_binding_for_realm(realm_id.as_ref())
-            .is_none(),
-        "the realm lookup must not resurrect one side of a frozen pair"
-    );
 }
 
 #[tokio::test]

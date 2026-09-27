@@ -1,7 +1,6 @@
 use salvo::prelude::*;
 
 pub(crate) mod account;
-pub(crate) use account::{project_canonical_direct_binding, validate_direct_binding_operation};
 pub(crate) mod account_authority_client;
 pub(crate) mod account_data;
 pub(crate) mod agents;

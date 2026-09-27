@@ -71,6 +71,64 @@ struct DirectConversationDurableStateRow {
     members: Value,
 }
 
+impl TryFrom<DirectConversationDurableStateRow> for DirectConversationDurableState {
+    type Error = PersistenceError;
+
+    fn try_from(row: DirectConversationDurableStateRow) -> Result<Self, Self::Error> {
+        let members: Vec<serde_json::Value> =
+            serde_json::from_value(row.members).map_err(PersistenceError::database)?;
+        let members = members
+            .into_iter()
+            .map(|value| {
+                let member_id = value
+                    .get("member_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        PersistenceError::Database("stored member id is invalid".to_owned())
+                    })
+                    .and_then(|id| serde_json::from_str(id).map_err(PersistenceError::database))?;
+                let membership = value
+                    .get("membership")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        PersistenceError::Database("stored membership is invalid".to_owned())
+                    })?
+                    .to_owned();
+                Ok(DirectConversationMemberCurrent {
+                    member_id,
+                    membership,
+                })
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        Ok(Self {
+            founding_slot: DirectConversationFoundingSlotRecord {
+                founder_id: row.founder_id,
+                trust_domain_id: row.trust_domain_id,
+                pair_key: row.pair_key,
+                founding_unit_digest: row.founding_unit_digest,
+                realm_id: row.realm_id,
+                main_strand_id: row.main_strand_id,
+                event_ids: serde_json::from_value(row.event_ids)
+                    .map_err(PersistenceError::database)?,
+                idempotency_key: row.idempotency_key,
+                accepted_at: row.accepted_at,
+            },
+            binding: row
+                .binding
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(PersistenceError::database)?,
+            group_state_ref: row
+                .group_state_ref
+                .map(arkret_wire::EventId::new)
+                .transpose()
+                .map_err(|error| PersistenceError::Database(error.to_string()))?,
+            group_current_exact_pair: row.group_current_exact_pair,
+            members,
+        })
+    }
+}
+
 impl TryFrom<CanonicalEventRow> for CanonicalEventRecord {
     type Error = PersistenceError;
 
@@ -246,62 +304,39 @@ impl EventStore for PgEventStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        row.map(|row| {
-            let members: Vec<serde_json::Value> =
-                serde_json::from_value(row.members).map_err(PersistenceError::database)?;
-            let members = members
-                .into_iter()
-                .map(|value| {
-                    let member_id = value
-                        .get("member_id")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            PersistenceError::Database("stored member id is invalid".to_owned())
-                        })
-                        .and_then(|id| {
-                            serde_json::from_str(id).map_err(PersistenceError::database)
-                        })?;
-                    let membership = value
-                        .get("membership")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            PersistenceError::Database("stored membership is invalid".to_owned())
-                        })?
-                        .to_owned();
-                    Ok(DirectConversationMemberCurrent {
-                        member_id,
-                        membership,
-                    })
-                })
-                .collect::<PersistenceResult<Vec<_>>>()?;
-            Ok(DirectConversationDurableState {
-                founding_slot: DirectConversationFoundingSlotRecord {
-                    founder_id: row.founder_id,
-                    trust_domain_id: row.trust_domain_id,
-                    pair_key: row.pair_key,
-                    founding_unit_digest: row.founding_unit_digest,
-                    realm_id: row.realm_id,
-                    main_strand_id: row.main_strand_id,
-                    event_ids: serde_json::from_value(row.event_ids)
-                        .map_err(PersistenceError::database)?,
-                    idempotency_key: row.idempotency_key,
-                    accepted_at: row.accepted_at,
-                },
-                binding: row
-                    .binding
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .map_err(PersistenceError::database)?,
-                group_state_ref: row
-                    .group_state_ref
-                    .map(arkret_wire::EventId::new)
-                    .transpose()
-                    .map_err(|error| PersistenceError::Database(error.to_string()))?,
-                group_current_exact_pair: row.group_current_exact_pair,
-                members,
-            })
-        })
-        .transpose()
+        row.map(DirectConversationDurableState::try_from)
+            .transpose()
+    }
+
+    async fn direct_conversation_durable_state_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Option<DirectConversationDurableState>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT s.founder_id,s.trust_domain_id,s.pair_key,s.founding_unit_digest,\
+                    s.realm_id,s.main_strand_id,s.event_ids,s.idempotency_key,s.accepted_at,\
+                    b.value AS binding,\
+                    m.value->>'current_mls_commit_event_ref' AS group_state_ref,\
+                    g.current_exact_pair AS group_current_exact_pair,\
+                    COALESCE((SELECT jsonb_agg(jsonb_build_object(\
+                        'member_id',ms.member_id,'membership',ms.membership) ORDER BY ms.member_id)\
+                      FROM member_state_current_results ms WHERE ms.realm_id=s.realm_id),\
+                      '[]'::jsonb) AS members \
+             FROM direct_conversation_founding_slots s \
+             LEFT JOIN direct_conversation_binding_current_results b ON b.realm_id=s.realm_id \
+             LEFT JOIN direct_conversation_group_states g ON g.realm_id=s.realm_id \
+             LEFT JOIN mls_group_current_results m ON m.realm_id=s.realm_id \
+                AND m.value->'effective_scope'->>'kind'='realm' \
+             WHERE s.realm_id=$1",
+        )
+        .bind::<Text, _>(realm_id)
+        .get_result::<DirectConversationDurableStateRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        row.map(DirectConversationDurableState::try_from)
+            .transpose()
     }
 
     async fn identity_anchor_account_slot(
