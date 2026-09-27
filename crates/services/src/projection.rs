@@ -146,7 +146,6 @@ pub enum ProjectionWriteThroughRecord {
         crate::events::CircleProjectionRecord,
         Vec<crate::events::CircleMemberProjectionRecord>,
     ),
-    StrandWatch(crate::events::StrandWatchProjectionRecord),
 }
 
 impl From<ProjectionEffect> for ProjectionEffectView {
@@ -511,13 +510,11 @@ impl ProjectionService {
                 | arkret_wire::EventKind::CircleTombstone
                 | arkret_wire::EventKind::CircleMemberState
         );
-        let is_strand_watch_kind = kind == arkret_wire::EventKind::StrandWatchSet;
         let is_redaction = kind == arkret_wire::EventKind::Redaction;
         if !(is_space_container_kind
             || is_strand_kind
             || is_morph_kind
             || is_circle_kind
-            || is_strand_watch_kind
             || is_redaction)
         {
             return None;
@@ -581,21 +578,6 @@ impl ProjectionService {
                         updated_at: row.updated_at,
                     },
                     members,
-                )
-            });
-        }
-        if is_strand_watch_kind {
-            let strand_id = string_field("strand_id")?;
-            let actor_id = operation.context.sender.to_string();
-            return state.strand_watches.get(&(strand_id, actor_id)).map(|row| {
-                ProjectionWriteThroughRecord::StrandWatch(
-                    crate::events::StrandWatchProjectionRecord {
-                        strand_id: row.strand_id.clone(),
-                        actor_id: row.actor_id.clone(),
-                        level: row.level.clone(),
-                        level_public: row.level_public,
-                        updated_at: row.updated_at,
-                    },
                 )
             });
         }

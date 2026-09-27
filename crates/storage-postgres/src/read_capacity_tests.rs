@@ -302,9 +302,18 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
     let realm = "'ak:realm:capacity-' || r";
     let commit = "'capacity-' || r || '-0'";
     let key = "r || '-' || m";
+    conn.batch_execute(&format!("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,committed_at) SELECT '\\x01'::bytea || d.digest,1,d.digest,jsonb_build_object('watcher','actor-' || {key})::text,{realm},'{{}}','ak.strand.watch.set','\\x00'::bytea,jsonb_build_object('event_id','watch-event-' || {key},'payload',jsonb_build_object('strand_id','strand-' || {key})),'committed',now() {rows},LATERAL(SELECT sha256(convert_to('watch-' || {key},'UTF8')) AS digest)d"))
+        .await.unwrap();
+    if first == 1 {
+        // A nonempty hot watch index must retain bounded exact-selector reads
+        // even after many accepted replacements of the same cell.
+        conn.batch_execute(&format!("INSERT INTO canonical_events(id,digest_suite,digest,actor_id,realm_id,scope_ref,kind,canonical_bytes,envelope,state,committed_at) SELECT '\\x01'::bytea || d.digest,1,d.digest,jsonb_build_object('watcher','actor-1-1')::text,'ak:realm:capacity-1','{{}}','ak.strand.watch.set','\\x00'::bytea,jsonb_build_object('event_id','watch-hot-' || p,'payload',jsonb_build_object('strand_id','strand-1-1')),'committed',now() FROM generate_series(1,{HOT_HISTORY}) p,LATERAL(SELECT sha256(convert_to('watch-hot-' || p,'UTF8')) AS digest)d"))
+            .await.unwrap();
+    }
     for (table, columns, expressions, value) in [
         ("policy_current_results", "policy_id,current_event_id", format!("'policy-' || {key}, 'event-' || {key}"), "'{}'::jsonb".to_owned()),
         ("strand_current_results", "strand_id", format!("'strand-' || {key}"), format!("jsonb_build_object('id','strand-' || {key},'realm_id',{realm})")),
+        ("strand_watch_current_results", "strand_id,watcher_actor_id", format!("'strand-' || {key},jsonb_build_object('watcher','actor-' || {key})::text"), "jsonb_build_object('level','all')".to_owned()),
         ("strand_position_current_results", "board_space_id,strand_id", format!("'board-' || {key},'strand-' || {key}"), "jsonb_build_object('list_space_id','list','rank','a')".to_owned()),
         ("space_current_results", "space_id", format!("'space-' || {key}"), format!("jsonb_build_object('id','space-' || {key},'realm_id',{realm})")),
         ("space_parent_current_results", "space_id", format!("'space-' || {key}"), "jsonb_build_object('parent_space_id',NULL)".to_owned()),
@@ -472,8 +481,8 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                 .map(str::to_owned)
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(observed, expected);
-            assert_eq!(observed.len(), 23);
-            let output = 19.0 * width + 10.0;
+            assert_eq!(observed.len(), 24);
+            let output = 20.0 * width + 10.0;
             assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan
@@ -551,6 +560,47 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                     .unwrap()
                     .plan;
                 measured_current(plan, &label, 4.0);
+            }
+            let number = realm.strip_prefix("ak:realm:capacity-").unwrap();
+            for (suffix, expected_rows) in [("1", 1.0), ("0", 0.0)] {
+                let strand = format!("strand-{number}-{suffix}");
+                let actor = format!("{{\"watcher\": \"actor-{number}-{suffix}\"}}");
+                let label = format!("watch current realms={realms} realm={realm} {suffix}");
+                let plan = sql_query(format!(
+                    "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+                    crate::self_current_reads::WATCH_CURRENT_SQL
+                ))
+                .bind::<Text, _>(&realm)
+                .bind::<Text, _>(&strand)
+                .bind::<Text, _>(&actor)
+                .get_result::<PlanRow>(&mut *conn)
+                .await
+                .unwrap()
+                .plan;
+                assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(expected_rows));
+                measured_current(plan, &label, 4.0);
+                let result = sql_query(crate::strand_watch_current_results::WATCH_HISTORY_SQL)
+                    .bind::<Text, _>(&realm)
+                    .bind::<Text, _>(&strand)
+                    .bind::<Text, _>(&actor)
+                    .bind::<Text, _>("")
+                    .get_result::<crate::ExistsRow>(&mut *conn)
+                    .await
+                    .unwrap();
+                assert_eq!(result.present, expected_rows == 1.0);
+                let plan = sql_query(format!(
+                    "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+                    crate::strand_watch_current_results::WATCH_HISTORY_SQL
+                ))
+                .bind::<Text, _>(&realm)
+                .bind::<Text, _>(&strand)
+                .bind::<Text, _>(&actor)
+                .bind::<Text, _>("")
+                .get_result::<PlanRow>(&mut *conn)
+                .await
+                .unwrap()
+                .plan;
+                measured_current(plan, &format!("watch accepted history {label}"), 4.0);
             }
             for (sql, key, expected) in [
                 (

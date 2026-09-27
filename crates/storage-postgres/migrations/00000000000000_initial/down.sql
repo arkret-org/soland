@@ -202,7 +202,6 @@ DROP TABLE IF EXISTS policy_documents CASCADE;
 DROP TABLE IF EXISTS projection_circle_members CASCADE;
 DROP TABLE IF EXISTS projection_circles CASCADE;
 DROP TABLE IF EXISTS projection_events CASCADE;
-DROP TABLE IF EXISTS projection_strand_watches CASCADE;
 DROP TABLE IF EXISTS projection_strands CASCADE;
 DROP TABLE IF EXISTS strand_current_results CASCADE;
 DROP TABLE IF EXISTS strand_position_current_results CASCADE;
@@ -265,4 +264,5 @@ DROP TABLE IF EXISTS public.history_key_requests;
 
 DROP TABLE IF EXISTS device_inventory_station CASCADE;
 DROP VIEW IF EXISTS poll_state_current_votes;
+DROP TABLE IF EXISTS strand_watch_current_results;
 DROP TABLE IF EXISTS poll_response_inputs;

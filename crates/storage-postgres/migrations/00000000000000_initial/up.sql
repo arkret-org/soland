@@ -3093,23 +3093,6 @@ CREATE INDEX projection_events_space_idx ON public.projection_events USING btree
 
 CREATE INDEX projection_events_realm_pk_idx ON public.projection_events USING btree (realm_pk, pk);
 
-CREATE TABLE public.projection_strand_watches (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    strand_pk bigint NOT NULL,
-    actor_id text NOT NULL,
-    level text,
-    level_public boolean DEFAULT false NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT projection_strand_watches_level_check CHECK (((level IS NULL) OR (level = ANY (ARRAY['mentions_only'::text, 'participating'::text, 'all'::text, 'muted'::text]))))
-);
-
-ALTER TABLE ONLY public.projection_strand_watches
-    ADD CONSTRAINT projection_strand_watches_strand_pk_actor_id_key UNIQUE (strand_pk, actor_id);
-
-CREATE INDEX projection_strand_watches_actor_idx ON public.projection_strand_watches USING btree (actor_id) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
-
-CREATE INDEX projection_strand_watches_strand_idx ON public.projection_strand_watches USING btree (strand_pk) WHERE ((level IS NOT NULL) AND (level <> 'mentions_only'::text));
-
 CREATE TABLE public.projection_strands (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id bytea NOT NULL CHECK (octet_length(id) = 33),
@@ -3157,9 +3140,6 @@ CREATE INDEX projection_strands_realm_idx ON public.projection_strands USING btr
 CREATE INDEX projection_strands_scope_circle_id_idx ON public.projection_strands USING btree (scope_circle_id);
 
 CREATE INDEX projection_strands_state_idx ON public.projection_strands USING btree (state);
-
-ALTER TABLE ONLY public.projection_strand_watches
-    ADD CONSTRAINT projection_strand_watches_strand_pk_fkey FOREIGN KEY (strand_pk) REFERENCES public.projection_strands(pk) ON DELETE CASCADE;
 
 CREATE TABLE public.projection_morphs (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -4570,6 +4550,20 @@ CREATE TABLE realm_set_default_strand_current_results (
 -- `ak.message.create` opens the row; every accepted `ak.message.revise` of the
 -- same MessageId replaces it whole, so the carrier is either the create payload
 -- (naming its Strand) or a revise payload (naming this Message).
+-- Whole-value watch CAS preserves written null and its accepting revision.
+CREATE TABLE strand_watch_current_results (
+ realm_id TEXT NOT NULL,
+ strand_id TEXT NOT NULL,
+ watcher_actor_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL REFERENCES public.realm_commits(commit_id) ON DELETE RESTRICT,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL CHECK(value='null'::jsonb OR jsonb_typeof(value)='object'),
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(strand_id,watcher_actor_id)
+);
+CREATE INDEX strand_watch_current_results_realm_idx ON strand_watch_current_results (realm_id,strand_id,watcher_actor_id);
+CREATE INDEX canonical_events_watch_key_idx ON public.canonical_events (realm_id,((envelope->'payload'->>'strand_id')),actor_id) WHERE kind='ak.strand.watch.set' AND state='committed';
+
 -- Poll response history references its canonical truth in the same acceptance
 -- transaction. No independently mutable selections or Actor claims are stored.
 CREATE TABLE poll_response_inputs (

@@ -16,6 +16,7 @@ mod redaction_message;
 mod space_container;
 mod stage_axis;
 mod strand_morph;
+mod strand_watch;
 
 pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {
     let principal_id = arkret_identifiers::DidCoreId::new(principal_id).unwrap();

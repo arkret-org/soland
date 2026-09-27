@@ -1117,17 +1117,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    projection_strand_watches (pk) {
-        pk -> Int8,
-        strand_pk -> Int8,
-        actor_id -> Text,
-        level -> Nullable<Text>,
-        level_public -> Bool,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     projection_strands (pk) {
         pk -> Int8,
         id -> Bytea,
@@ -1898,7 +1887,6 @@ diesel::joinable!(projection_events -> canonical_realms (realm_pk));
 diesel::joinable!(event_federation_outbox -> federation_outbox (outbox_id));
 diesel::joinable!(account_status_propagation_targets -> account_status_propagations (account_status_record_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
-diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
     agent_recipient_delivery_ack_tokens,
     account_status_affected_services,
@@ -1976,7 +1964,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_events,
     projection_morphs,
     projection_spaces,
-    projection_strand_watches,
     projection_strands,
     push_devices,
     push_hard_logout_journal,

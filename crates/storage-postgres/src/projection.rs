@@ -1215,8 +1215,8 @@ pub struct PgStrandWatchProjectionStore {
 
 #[derive(QueryableByName)]
 struct StrandWatchProjectionRow {
-    #[diesel(sql_type = Binary)]
-    strand_id: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    strand_id: String,
     #[diesel(sql_type = Text)]
     actor_id: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -1225,62 +1225,47 @@ struct StrandWatchProjectionRow {
     level_public: bool,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = Jsonb)]
+    committed_ref: Value,
 }
 
-impl From<StrandWatchProjectionRow> for StrandWatchProjectionRecord {
-    fn from(row: StrandWatchProjectionRow) -> Self {
-        Self {
-            strand_id: token_string("strand", &row.strand_id),
+impl TryFrom<StrandWatchProjectionRow> for StrandWatchProjectionRecord {
+    type Error = PersistenceError;
+    fn try_from(row: StrandWatchProjectionRow) -> PersistenceResult<Self> {
+        Ok(Self {
+            strand_id: row.strand_id,
             actor_id: row.actor_id.to_string(),
             level: row.level,
             level_public: row.level_public,
             updated_at: row.updated_at,
-        }
+            committed_ref: serde_json::from_value(row.committed_ref)
+                .map_err(PersistenceError::database)?,
+        })
     }
 }
 
 #[async_trait]
 impl StrandWatchProjectionStore for PgStrandWatchProjectionStore {
-    async fn put(&self, record: &StrandWatchProjectionRecord) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO projection_strand_watches (strand_pk, actor_id, level, level_public, updated_at) \
-             SELECT pk, $2, $3, $4, $5 FROM projection_strands WHERE id = $1 \
-             ON CONFLICT (strand_pk, actor_id) DO UPDATE SET \
-                level = EXCLUDED.level, \
-                level_public = EXCLUDED.level_public, \
-                updated_at = EXCLUDED.updated_at",
-        )
-        .bind::<Binary, _>(token_bytes("strand", &record.strand_id))
-        .bind::<Text, _>(&record.actor_id)
-        .bind::<Nullable<Text>, _>(&record.level)
-        .bind::<Bool, _>(record.level_public)
-        .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
     async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandWatchProjectionRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT s.id AS strand_id, w.actor_id, w.level, w.level_public, w.updated_at \
-             FROM projection_strand_watches w JOIN projection_strands s ON s.pk = w.strand_pk \
-             ORDER BY w.pk",
+            "SELECT w.strand_id,w.watcher_actor_id AS actor_id,w.value->>'level' AS level, \
+                    COALESCE((w.value->>'level_public')::boolean,false) AS level_public,w.updated_at, \
+                    jsonb_build_object('event_id',e.envelope->>'event_id','commit_id',c.commit_id,'stream_ref',c.stream_ref,'stream_position',c.stream_position) AS committed_ref \
+             FROM strand_watch_current_results w JOIN realm_commits c ON c.commit_id=w.current_commit_id \
+             JOIN canonical_events e ON e.pk=c.event_pk \
+             WHERE c.realm_id=w.realm_id AND c.stream_position=w.current_stream_position \
+               AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=w.realm_id AND e.state='committed' \
+             ORDER BY w.strand_id,w.watcher_actor_id",
         )
         .load::<StrandWatchProjectionRow>(&mut *conn)
         .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(StrandWatchProjectionRecord::from)
-                .collect()
-        })
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(StrandWatchProjectionRecord::try_from)
+        .collect()
     }
 }
 

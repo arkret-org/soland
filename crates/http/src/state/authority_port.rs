@@ -56,6 +56,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::StrandCreate
         | EventKind::RealmProfile
         | EventKind::StrandUpdate
+        | EventKind::StrandWatchSet
         | EventKind::SpaceCreate
         | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
@@ -555,6 +556,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
+            EventKind::StrandWatchSet,
             EventKind::SpaceCreate,
             EventKind::RealmSetDefaultStrand,
             EventKind::MessageCreate,
@@ -591,6 +593,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
+            EventKind::StrandWatchSet,
             EventKind::SpaceCreate,
             EventKind::DirectConversationBound,
             EventKind::RealmSetDefaultStrand,

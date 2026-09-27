@@ -672,6 +672,11 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'strand_watch'::text AS selector_kind, \
+                jsonb_build_object('kind','strand_watch','strand_id',strand_id,'watcher_actor_id',watcher_actor_id::jsonb) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM strand_watch_current_results WHERE realm_id=$1 \
+         UNION ALL \
          SELECT 'strand_position'::text AS selector_kind, \
                 jsonb_build_object('kind','strand_position','board_space_id',board_space_id,'strand_id',strand_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
@@ -853,6 +858,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         })?,
                     }
                 }
+                ("strand_watch", Some(subject)) => serde_json::from_value(subject).map_err(PersistenceError::database)?,
                 ("message_revision", Some(message_id)) => {
                     arkret_wire::CurrentSelector::MessageRevision {
                         message_id: serde_json::from_value(message_id).map_err(|error| {

@@ -682,6 +682,18 @@ impl RealmAuthorizationCut {
                 );
             }
         }
+        if event.kind == EventKind::StrandWatchSet {
+            if let Some(strand_id) = facts
+                .strand_id
+                .as_deref()
+                .and_then(|value| value.parse::<StrandId>().ok())
+            {
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), strand_id),
+                    facts,
+                );
+            }
+        }
         if event.kind == EventKind::MessageCreate {
             facts.track = Some(DISCUSSION_TRACK.to_owned());
             if let Some(strand_id) = facts

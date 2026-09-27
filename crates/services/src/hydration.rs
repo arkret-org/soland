@@ -1168,6 +1168,7 @@ pub async fn hydrate_projections_from_persistence(
                     level: record.level,
                     level_public: record.level_public,
                     updated_at: record.updated_at,
+                    committed_ref: Some(record.committed_ref),
                 },
             );
         }

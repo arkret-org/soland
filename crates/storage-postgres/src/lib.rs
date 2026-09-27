@@ -128,6 +128,7 @@ mod snapshot_disclosure_gate;
 mod space_current_results;
 mod strand_current_results;
 mod strand_position_current_results;
+mod strand_watch_current_results;
 mod sync_cursor;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_database;

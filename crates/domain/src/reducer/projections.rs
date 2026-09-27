@@ -32,6 +32,7 @@ pub struct StrandWatchProjection {
     pub level: Option<String>,
     pub level_public: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub committed_ref: Option<arkret_wire::CommittedEventRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

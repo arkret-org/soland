@@ -990,6 +990,7 @@ mod tests {
                 level: Some(level.to_owned()),
                 level_public: false,
                 updated_at: chrono::Utc::now(),
+                committed_ref: None,
             },
         );
     }

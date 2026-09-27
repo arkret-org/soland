@@ -501,10 +501,7 @@ impl ProjectionState {
         }
     }
 
-    /// Apply `ak.strand.watch.set`. Writes the watch cell on the
-    /// Move/Seal pipeline (registered state model `ak.component.strand.watch.v1`);
-    /// the soland projection records the materialised value into
-    /// `projection_strand_watches` via `ProjectionEffect::StrandWatchUpdated`.
+    /// Cache a watch value already accepted at its durable Commit cut.
     /// The Strand's `updated_at` is NOT bumped — watch is a per-(strand, actor)
     /// subscription, not a Strand mutation. Unknown Strand tolerated (causal
     /// / backfill).
@@ -517,6 +514,16 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
+        let Some(reference) = operation.context.committed_ref.clone() else {
+            return ProjectionEffect::Rejected {
+                reason: "watch_accepting_commit_unavailable".to_owned(),
+            };
+        };
+        if reference.event_id != operation.context.accepted_event_id {
+            return ProjectionEffect::Rejected {
+                reason: "watch_accepting_commit_mismatch".to_owned(),
+            };
+        }
         let Some(strand_id) = operation
             .payload
             .get("strand_id")
@@ -552,6 +559,33 @@ impl ProjectionState {
             .payload
             .get("level_public")
             .and_then(|v| v.as_bool());
+        if let Some(current) = self
+            .strand_watches
+            .get(&(strand_id.clone(), actor_id.clone()))
+        {
+            if let Some(prior) = &current.committed_ref {
+                if prior.stream_ref != reference.stream_ref {
+                    return ProjectionEffect::Rejected {
+                        reason: "watch_current_stream_mismatch".to_owned(),
+                    };
+                }
+                if prior.stream_position > reference.stream_position {
+                    return ProjectionEffect::Ignored;
+                }
+                if prior.stream_position == reference.stream_position {
+                    return if prior == &reference
+                        && current.level == level
+                        && current.level_public == level_public.unwrap_or(false)
+                    {
+                        ProjectionEffect::Ignored
+                    } else {
+                        ProjectionEffect::Rejected {
+                            reason: "watch_current_revision_conflict".to_owned(),
+                        }
+                    };
+                }
+            }
+        }
         self.strand_watches.insert(
             (strand_id.clone(), actor_id.clone()),
             StrandWatchProjection {
@@ -560,6 +594,7 @@ impl ProjectionState {
                 level: level.clone(),
                 level_public: level_public.unwrap_or(false),
                 updated_at: now,
+                committed_ref: Some(reference),
             },
         );
         ProjectionEffect::StrandWatchUpdated {

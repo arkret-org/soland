@@ -36,6 +36,7 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "member_state_current_results",
     "strand_current_results",
     "strand_position_current_results",
+    "strand_watch_current_results",
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
     "object_redaction_current_results",
@@ -290,6 +291,21 @@ pub(crate) async fn install_snapshot_in_connection(
                 )
                 .await?;
             }
+            S::StrandWatch {
+                strand_id,
+                watcher_actor_id,
+            } => {
+                crate::strand_watch_current_results::install_in_connection(
+                    conn,
+                    realm_id,
+                    strand_id,
+                    watcher_actor_id,
+                    revision,
+                    value,
+                    installed_at,
+                )
+                .await?;
+            }
             S::StrandPosition {
                 board_space_id,
                 strand_id,
@@ -416,6 +432,22 @@ pub(crate) async fn advance_in_connection(
                 Some(("strand_id", strand_id.as_str())),
                 &row,
                 &value,
+            )
+            .await?;
+        }
+        arkret_wire::EventKind::StrandWatchSet => {
+            let payload: arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload = serde_json::from_value(serde_json::json!(&event.payload)).map_err(PersistenceError::database)?;
+            crate::strand_watch_current_results::install_in_connection(
+                conn,
+                &event.realm_id,
+                &payload.strand_id,
+                &payload.watcher_actor_id,
+                &arkret_wire::CurrentRevision {
+                    commit_id: commit.commit_id.clone(),
+                    stream_position: commit.stream_position,
+                },
+                &crate::strand_watch_current_results::event_value(event)?,
+                commit.committed_at,
             )
             .await?;
         }

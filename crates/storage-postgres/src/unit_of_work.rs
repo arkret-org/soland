@@ -2446,6 +2446,7 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
+        crate::strand_watch_current_results::commit_in_connection(conn, event, commit).await?;
         crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;

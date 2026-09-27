@@ -105,6 +105,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "sidecar_current_results",
     "sidecar_context_current_results",
     "strand_current_results",
+    "strand_watch_current_results",
     "strand_position_current_results",
     "rsvp_current_results",
     "space_current_results",
@@ -152,7 +153,7 @@ pub(crate) fn undisclosed_kind_sql() -> String {
         .join(",");
     format!(
         "SELECT kind FROM realm_commit_event_kinds \
-         WHERE realm_id=$1 AND kind NOT IN ({disclosed_kinds}) LIMIT 1"
+         WHERE realm_id=$1 AND kind NOT IN ({disclosed_kinds},'ak.strand.watch.set') LIMIT 1"
     )
 }
 
@@ -526,6 +527,9 @@ pub(crate) fn disclose_to_account(
                 own_join |=
                     actor_id == &caller && value == &serde_json::json!({"membership":"join"});
             }
+            CurrentSelector::StrandWatch { .. } => {
+                let _: arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+            }
             CurrentSelector::Strand { .. } => {
                 if value
                     .get("scope_circle_id")
@@ -684,6 +688,24 @@ pub(crate) fn disclose_to_account(
         ));
     }
     material.current_state_entries.retain(|row| {
+        if let TypedCurrentResult::Value {
+            selector:
+                CurrentSelector::StrandWatch {
+                    watcher_actor_id, ..
+                },
+            value,
+            ..
+        } = row
+        {
+            // This snapshot has no audit-read pairing. Only the exact watcher
+            // or an explicit non-muted public opt-in may disclose the value.
+            return watcher_actor_id == &caller
+                || (value.get("level_public") == Some(&serde_json::json!(true))
+                    && matches!(
+                        value.get("level").and_then(serde_json::Value::as_str),
+                        Some("all" | "participating")
+                    ));
+        }
         !matches!(
             row,
             TypedCurrentResult::Value {
@@ -759,6 +781,64 @@ mod tests {
                     "unclassified current family: {table}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn watch_snapshot_filters_private_muted_and_cleared_values_by_complete_actor() {
+        for (value, public) in [
+            (json!({"level":"all"}), false),
+            (json!({"level":"all","level_public":false}), false),
+            (json!({"level":"all","level_public":true}), true),
+            (json!({"level":"participating","level_public":true}), true),
+            (json!({"level":"muted","level_public":true}), false),
+            (json!({"level":"mentions_only","level_public":true}), false),
+            (serde_json::Value::Null, false),
+        ] {
+            let (caller, mut material, facts) = fixture();
+            let strand = material
+                .current_state_entries
+                .iter()
+                .find_map(|entry| match entry {
+                    TypedCurrentResult::Value {
+                        selector: CurrentSelector::Strand { strand_id },
+                        ..
+                    } => Some(strand_id.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let other = ActorId::account(account("bob"));
+            material.current_state_entries.push(row(
+                CurrentSelector::StrandWatch {
+                    strand_id: strand.clone(),
+                    watcher_actor_id: other,
+                },
+                7,
+                value.clone(),
+            ));
+            material.current_state_entries.push(row(
+                CurrentSelector::StrandWatch {
+                    strand_id: strand,
+                    watcher_actor_id: ActorId::account(caller.clone()),
+                },
+                7,
+                value,
+            ));
+            let disclosed = disclose_to_account(material, &caller, &facts).unwrap();
+            let watches = disclosed
+                .current_state_entries
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry,
+                        TypedCurrentResult::Value {
+                            selector: CurrentSelector::StrandWatch { .. },
+                            ..
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(watches, if public { 2 } else { 1 });
         }
     }
 

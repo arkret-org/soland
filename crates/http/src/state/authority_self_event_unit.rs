@@ -103,14 +103,15 @@ pub(super) struct SelfEventUnitEffects {
 
 /// Kinds whose authorization and domain pre-state are decided only at the
 /// accepting transaction's cut, by the same-cut evaluator and their typed
-/// current writers. The in-process projection is neither consulted before
-/// them nor advanced after them.
+/// current writers. The in-process projection is not consulted for admission.
+/// Watch notification caches advance afterward from the accepting Commit.
 fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
         arkret_wire::EventKind::SpaceCreate
             | arkret_wire::EventKind::RealmProfile
             | arkret_wire::EventKind::StrandUpdate
+            | arkret_wire::EventKind::StrandWatchSet
             | arkret_wire::EventKind::InviteCreate
             | arkret_wire::EventKind::InviteThirdParty
             | arkret_wire::EventKind::InviteRevoke
@@ -357,7 +358,7 @@ pub(super) async fn commit_event_unit(
         }
         return super::authority_direct_conversation::relay_direct_conversation_refusal(error);
     }
-    if decided_at_cut && !poll_at_cut {
+    if decided_at_cut && !poll_at_cut && event.kind != arkret_wire::EventKind::StrandWatchSet {
         return Ok(AuthoritySubmitOutcome::Accepted {
             status: AuthorityCommitStatus::Committed,
             commit: transaction.commit,
@@ -376,6 +377,7 @@ pub(super) async fn commit_event_unit(
         effect,
         soland_services::projection::ProjectionEffectView::Rejected { .. }
     ) || (!poll_at_cut
+        && event.kind != arkret_wire::EventKind::StrandWatchSet
         && matches!(
             effect,
             soland_services::projection::ProjectionEffectView::Ignored

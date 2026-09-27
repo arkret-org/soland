@@ -22,7 +22,8 @@ use arkret_models_collaboration::exact_current_results::{
 };
 use arkret_models_collaboration::objects::relation::Relation;
 use arkret_models_collaboration::strand_watch_operations::{
-    StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody,
+    StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody, StrandWatchCurrentResult,
+    StrandWatchCurrentSelector, StrandWatchSelectorKind,
 };
 use arkret_wire::{
     AccountId, ActorId, CommitStreamHead, CommitStreamRef, CurrentRevision, DidCoreId, RealmId,
@@ -59,6 +60,8 @@ pub(crate) const MODERATION_CURRENT_SQL: &str = "SELECT s.current_commit_id, s.c
 
 pub(crate) const MEMBER_PRESENT_SQL: &str = "SELECT EXISTS(SELECT 1 FROM member_state_current_results \
      WHERE realm_id=$1 AND member_id=$2 AND membership='join') AS present";
+
+pub(crate) const WATCH_CURRENT_SQL: &str = "SELECT w.current_commit_id,w.current_stream_position,w.value,c.stream_ref FROM strand_watch_current_results w JOIN realm_commits c ON c.commit_id=w.current_commit_id WHERE w.realm_id=$1 AND w.strand_id=$2 AND w.watcher_actor_id=$3 AND c.realm_id=w.realm_id AND c.stream_position=w.current_stream_position";
 
 // Probe the adjacent keys on both sides of the Realm stream. Tuple bounds
 // keep each probe on the Realm-prefixed index. Scalar ORDER BY/LIMIT prevents
@@ -419,7 +422,7 @@ pub(crate) async fn strand_watch_current_for_account(
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         begin_read_cut(conn).await?;
-        match member_cut(conn, &request.realm_id, &caller, issuer).await? {
+        let (generation,head) = match member_cut(conn, &request.realm_id, &caller, issuer).await? {
             MemberCut::NotVisible => return Ok(SelfExactCurrentRead::NotFound),
             MemberCut::ForeignTenure => {
                 return Ok(SelfExactCurrentRead::Unresolved(
@@ -434,11 +437,13 @@ pub(crate) async fn strand_watch_current_for_account(
                     "Circle and Sidecar scope visibility is not proved at this cut",
                 ));
             }
-            MemberCut::Member { .. } => {}
-        }
+            MemberCut::Member { generation, realm_head: Some(head), .. } => (generation,head),
+            MemberCut::Member { .. } => return Ok(SelfExactCurrentRead::Unresolved("watch current stream head is unavailable")),
+        };
         let known_strand = sql_query(
             "SELECT EXISTS(SELECT 1 FROM strand_current_results \
-             WHERE realm_id=$1 AND strand_id=$2) AS present",
+             WHERE realm_id=$1 AND strand_id=$2 AND value->>'state'='active' \
+               AND (NOT value?'scope_circle_id' OR value->'scope_circle_id'='null'::jsonb)) AS present",
         )
         .bind::<Text, _>(request.realm_id.as_str())
         .bind::<Text, _>(request.strand_id.as_str())
@@ -448,9 +453,36 @@ pub(crate) async fn strand_watch_current_for_account(
         if !known_strand {
             return Ok(SelfExactCurrentRead::NotFound);
         }
-        Ok(SelfExactCurrentRead::Unresolved(
-            "no durable strand_watch current result is materialized",
-        ))
+        let confirmed_strand = sql_query("SELECT EXISTS(SELECT 1 FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id JOIN canonical_events e ON e.pk=c.event_pk WHERE s.realm_id=$1 AND s.strand_id=$2 AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id AND e.state='committed' AND c.stream_position<=$3 AND (c.stream_position<$3 OR c.commit_id=$4)) AS present")
+            .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(request.strand_id.as_str()).bind::<BigInt,_>(i64::try_from(head.stream_position).map_err(PersistenceError::database)?).bind::<Text,_>(head.commit_id.as_str())
+            .get_result::<ExistsRow>(&mut *conn).await?.present;
+        if !confirmed_strand { return Ok(SelfExactCurrentRead::Unresolved("Strand current has no confirmed covering Commit in this stream prefix")); }
+        let selector = StrandWatchCurrentSelector { kind: StrandWatchSelectorKind::StrandWatch,
+            strand_id: request.strand_id.clone(), watcher_actor_id: caller.clone() };
+        let row = sql_query(WATCH_CURRENT_SQL)
+            .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(request.strand_id.as_str()).bind::<Text,_>(caller.to_string())
+            .get_result::<CurrentRow>(&mut *conn).await.optional()?;
+        let outcome = if let Some(row) = row {
+            let source_stream_ref: CommitStreamRef = serde_json::from_value(row.stream_ref).map_err(PersistenceError::database)?;
+            let revision = CurrentRevision { commit_id: row.current_commit_id.parse().map_err(PersistenceError::database)?,
+                stream_position: to_u64(row.current_stream_position,"watch current position")? };
+            if source_stream_ref != head.stream_ref || revision.stream_position > head.stream_position
+                || (revision.stream_position==head.stream_position && revision.commit_id!=head.commit_id) {
+                return Ok(SelfExactCurrentRead::Unresolved("watch current does not belong to the confirmed stream prefix"));
+            }
+            StrandWatchCurrentOutcome::Current { realm_id: request.realm_id.clone(), governance_generation: generation, stream_head: head,
+                result: StrandWatchCurrentResult { selector,source_stream_ref,revision,
+                    value: serde_json::from_value(row.value).map_err(PersistenceError::database)? } }
+        } else {
+            let previously_written = sql_query(crate::strand_watch_current_results::WATCH_HISTORY_SQL)
+                .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(request.strand_id.as_str()).bind::<Text,_>(caller.to_string()).bind::<Text,_>("")
+                .get_result::<ExistsRow>(&mut *conn).await?.present;
+            let orphan_current = sql_query("SELECT EXISTS(SELECT 1 FROM strand_watch_current_results WHERE realm_id=$1 AND strand_id=$2 AND watcher_actor_id=$3) AS present")
+                .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(request.strand_id.as_str()).bind::<Text,_>(caller.to_string()).get_result::<ExistsRow>(&mut *conn).await?.present;
+            if previously_written || orphan_current || generation!=0 { return Ok(SelfExactCurrentRead::Unresolved("written watch current or tenure import is unavailable")); }
+            StrandWatchCurrentOutcome::NeverWritten { realm_id: request.realm_id.clone(),governance_generation:generation,stream_head:head,selector }
+        };
+        Ok(SelfExactCurrentRead::Answer(outcome))
     })
     .await
     .map_err(PgTransactionError::into_persistence)
