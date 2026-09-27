@@ -1775,7 +1775,8 @@ impl AgentParticipationService {
 /// on `soland-storage` directly (it is a dev-dependency there): the service
 /// facade is the only boundary the routing code crosses.
 pub use soland_storage::{
-    KeyBackupDeleteChallengeRecord, KeyBackupListPage, KeyBackupListPosition, KeyBackupListQuery,
+    ConfirmedKeyBackupAuthorityBasis, KeyBackupDeleteChallengeRecord, KeyBackupListPage,
+    KeyBackupListPosition, KeyBackupListQuery,
 };
 
 #[async_trait]
@@ -1801,6 +1802,10 @@ pub trait KeyBackupPort: Send + Sync {
         &self,
         account_id: &AccountId,
     ) -> ServiceResult<Option<arkret_models_crypto::BackupActiveSeriesState>>;
+    async fn confirmed_active_series_basis(
+        &self,
+        account_id: &AccountId,
+    ) -> ServiceResult<Option<ConfirmedKeyBackupAuthorityBasis>>;
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,
@@ -2033,6 +2038,13 @@ impl KeyBackupService {
         account_id: &AccountId,
     ) -> ServiceResult<Option<arkret_models_crypto::BackupActiveSeriesState>> {
         self.backups.confirmed_active_series(account_id).await
+    }
+
+    pub async fn confirmed_active_series_basis(
+        &self,
+        account_id: &AccountId,
+    ) -> ServiceResult<Option<ConfirmedKeyBackupAuthorityBasis>> {
+        self.backups.confirmed_active_series_basis(account_id).await
     }
 
     pub async fn confirmed_active_series_for_device(

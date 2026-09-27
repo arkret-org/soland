@@ -32,6 +32,8 @@ struct ConfirmedPointerRow {
     head_commit_id: String,
     #[diesel(sql_type = BigInt)]
     head_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    head_commit_json: Value,
     #[diesel(sql_type = Nullable<Text>)]
     latest_pointer_commit_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -441,6 +443,14 @@ pub(crate) async fn confirmed_key_backup_pointer(
     confirmed_key_backup_pointer_in_connection(&mut conn, account_id).await
 }
 
+pub(crate) async fn confirmed_key_backup_pointer_basis(
+    pool: &PgPool,
+    account_id: &AccountId,
+) -> PersistenceResult<Option<soland_storage::ConfirmedKeyBackupAuthorityBasis>> {
+    let mut conn = pg_conn(pool).await?;
+    confirmed_key_backup_pointer_basis_in_connection(&mut conn, account_id).await
+}
+
 /// The caller owns a repeatable-read snapshot. Device status and the pointer
 /// must name the same accepted PCR head before a self-service read is served.
 pub(crate) async fn confirmed_key_backup_pointer_for_active_device(
@@ -492,13 +502,22 @@ pub(crate) async fn confirmed_key_backup_pointer_in_connection(
     conn: &mut AsyncPgConnection,
     account_id: &AccountId,
 ) -> PersistenceResult<Option<BackupActiveSeriesState>> {
+    Ok(confirmed_key_backup_pointer_basis_in_connection(conn, account_id)
+        .await?
+        .map(|basis| basis.state))
+}
+
+pub(crate) async fn confirmed_key_backup_pointer_basis_in_connection(
+    conn: &mut AsyncPgConnection,
+    account_id: &AccountId,
+) -> PersistenceResult<Option<soland_storage::ConfirmedKeyBackupAuthorityBasis>> {
     let actor = ActorId::account(account_id.clone());
     let current_key =
         derive_key_backup_active_series_current_key(&actor, BackupKind::SecretStorage)
             .map_err(|error| invalid(error.to_string()))?;
     let row = sql_query(
         "SELECT p.pcr_realm_id, h.commit_id AS head_commit_id, \
-                h.stream_position AS head_position, \
+                h.stream_position AS head_position, h.commit_json AS head_commit_json, \
                 latest_pointer.commit_id AS latest_pointer_commit_id, \
                 b.current_commit_id AS pointer_commit_id, \
                 b.current_event_id AS pointer_event_id, \
@@ -507,7 +526,7 @@ pub(crate) async fn confirmed_key_backup_pointer_in_connection(
          FROM principal_resolutions p \
          JOIN realm_authorities a ON a.realm_id=p.pcr_realm_id \
                                   AND a.service_id=p.station_id \
-         JOIN LATERAL (SELECT commit_id,stream_position FROM realm_commits \
+         JOIN LATERAL (SELECT commit_id,stream_position,commit_json FROM realm_commits \
                        WHERE realm_id=p.pcr_realm_id \
                          AND stream_ref=jsonb_build_object('kind','realm','realm_id',p.pcr_realm_id) \
                        ORDER BY stream_position DESC LIMIT 1) h ON TRUE \
@@ -534,6 +553,20 @@ pub(crate) async fn confirmed_key_backup_pointer_in_connection(
         arkret_wire::RealmId::new(row.pcr_realm_id).map_err(|error| invalid(error.to_string()))?;
     let authority_commit_id = arkret_wire::RealmCommitId::new(row.head_commit_id)
         .map_err(|error| invalid(error.to_string()))?;
+    let head_commit: RealmCommit = serde_json::from_value(row.head_commit_json)
+        .map_err(|error| invalid(format!("stored PCR head Commit is invalid: {error}")))?;
+    if head_commit.commit_id != authority_commit_id
+        || head_commit.realm_id != control_realm_id
+        || head_commit.stream_ref
+            != (CommitStreamRef::Realm {
+                realm_id: control_realm_id.clone(),
+            })
+        || head_commit.stream_position
+            != u64::try_from(row.head_position)
+                .map_err(|_| invalid("stored head position is negative"))?
+    {
+        return Err(invalid("stored PCR head provenance is inconsistent"));
+    }
     let pointer = match (
         row.pointer_commit_id,
         row.pointer_event_id,
@@ -583,11 +616,19 @@ pub(crate) async fn confirmed_key_backup_pointer_in_connection(
         }
         _ => return Err(invalid("KeyBackup pointer provenance is incomplete")),
     };
-    Ok(Some(BackupActiveSeriesState {
-        account_id: account_id.clone(),
-        control_realm_id,
-        authority_commit_id,
-        secret_storage: pointer,
+    Ok(Some(soland_storage::ConfirmedKeyBackupAuthorityBasis {
+        committed_ref: arkret_wire::CommittedEventRef {
+            event_id: head_commit.event_ref,
+            commit_id: head_commit.commit_id,
+            stream_ref: head_commit.stream_ref,
+            stream_position: head_commit.stream_position,
+        },
+        state: BackupActiveSeriesState {
+            account_id: account_id.clone(),
+            control_realm_id,
+            authority_commit_id,
+            secret_storage: pointer,
+        },
     }))
 }
 
@@ -727,6 +768,21 @@ mod tests {
             .unwrap();
         assert_eq!(absent.authority_commit_id, genesis_commit.commit_id);
         assert_eq!(absent.secret_storage, BackupActiveSeriesPointer::Absent {});
+        let absent_basis = confirmed_key_backup_pointer_basis(&pool, &account)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(absent_basis.state, absent);
+        assert_eq!(absent_basis.committed_ref.event_id, genesis.event_id);
+        assert_eq!(absent_basis.committed_ref.commit_id, genesis_commit.commit_id);
+        assert_eq!(
+            absent_basis.committed_ref.stream_ref,
+            genesis_commit.stream_ref
+        );
+        assert_eq!(
+            absent_basis.committed_ref.stream_position,
+            genesis_commit.stream_position
+        );
 
         let payload = serde_json::json!({
             "schema":"ak.schema.key_backup_active_series.v1",
@@ -840,6 +896,18 @@ mod tests {
                 ..
             }
         ));
+        let active_basis = confirmed_key_backup_pointer_basis(&pool, &account)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(active_basis.state, active);
+        assert_eq!(active_basis.committed_ref.event_id, event.event_id);
+        assert_eq!(active_basis.committed_ref.commit_id, successor.commit_id);
+        assert_eq!(active_basis.committed_ref.stream_ref, successor.stream_ref);
+        assert_eq!(
+            active_basis.committed_ref.stream_position,
+            successor.stream_position
+        );
 
         // An accepted successor without its typed current projection makes
         // the read unavailable; it must not return the earlier pointer.

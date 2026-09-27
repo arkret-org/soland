@@ -276,6 +276,15 @@ impl KeyBackupStore for PgKeyBackupStore {
         crate::key_backup_current_results::confirmed_key_backup_pointer(&self.pool, account_id)
             .await
     }
+    async fn confirmed_active_series_basis(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<soland_storage::ConfirmedKeyBackupAuthorityBasis>> {
+        crate::key_backup_current_results::confirmed_key_backup_pointer_basis(
+            &self.pool, account_id,
+        )
+        .await
+    }
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,

@@ -1043,6 +1043,16 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
             .confirmed_active_series(account_id)
             .await?)
     }
+    async fn confirmed_active_series_basis(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> crate::ServiceResult<Option<crate::identity::ConfirmedKeyBackupAuthorityBasis>> {
+        Ok(self
+            .0
+            .key_backups()
+            .confirmed_active_series_basis(account_id)
+            .await?)
+    }
     async fn issue_unlock_challenge(
         &self,
         challenge: Value,

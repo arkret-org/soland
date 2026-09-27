@@ -609,7 +609,13 @@ pub(crate) async fn recovery_unlock_manifest(
     state: &AppState,
     account: &arkret_wire::AccountId,
 ) -> Result<Value, AppError> {
-    let pointers = listing::active_pointers(state, account).await?;
+    let basis = state
+        .key_backups()
+        .confirmed_active_series_basis(account)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::internal("confirmed PCR pointer basis is absent"))?;
+    let pointers = basis.state;
     let actor = arkret_wire::ActorId::account(account.clone()).to_string();
     let query = soland_services::identity::KeyBackupListQuery {
         actor_id: actor.clone(),
@@ -669,6 +675,7 @@ pub(crate) async fn recovery_unlock_manifest(
         "actor_id": actor,
         "realm_id": pointers.control_realm_id,
         "authority_commit_id": pointers.authority_commit_id,
+        "committed_ref": basis.committed_ref,
     });
     Ok(frozen)
 }

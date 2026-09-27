@@ -84,6 +84,16 @@ pub struct KeyBackupPointerBasis {
     pub secret_storage: arkret_models_crypto::BackupActiveSeriesPointer,
 }
 
+/// Internal same-cut authority basis for a confirmed active-series read.
+/// `state` is the public projection while `committed_ref` is the exact PCR
+/// head Event/Commit/stream tuple against which a destructive manifest was
+/// frozen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfirmedKeyBackupAuthorityBasis {
+    pub state: arkret_models_crypto::BackupActiveSeriesState,
+    pub committed_ref: arkret_wire::CommittedEventRef,
+}
+
 /// The authority a backup unlock consumes, rechecked in the consuming
 /// transaction.
 #[derive(Clone, Debug, PartialEq)]
@@ -119,6 +129,14 @@ pub trait KeyBackupStore: Send + Sync {
         &self,
         account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<arkret_models_crypto::BackupActiveSeriesState>>;
+    async fn confirmed_active_series_basis(
+        &self,
+        _account_id: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<ConfirmedKeyBackupAuthorityBasis>> {
+        Err(crate::PersistenceError::SchemaViolation(
+            "same-cut KeyBackup authority provenance is unavailable".to_owned(),
+        ))
+    }
     /// Resolve the human device lifecycle and pointer from one PCR snapshot.
     async fn confirmed_active_series_for_device(
         &self,
