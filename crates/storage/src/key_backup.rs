@@ -148,6 +148,19 @@ pub trait KeyBackupStore: Send + Sync {
             "same-cut KeyBackup device authority is unavailable".to_owned(),
         ))
     }
+    /// Account-level metadata cut for a verified recovery authorization.
+    /// The HTTP boundary validates the recovery grant; this read preserves
+    /// the pointer and page in one database snapshot without requiring the
+    /// replacement device to have already been authorized.
+    async fn confirmed_list_page_for_account(
+        &self,
+        _account_id: &arkret_wire::AccountId,
+        _query: &KeyBackupListQuery,
+    ) -> PersistenceResult<ConfirmedKeyBackupListPage> {
+        Err(crate::PersistenceError::SchemaViolation(
+            "same-cut KeyBackup account listing is unavailable".to_owned(),
+        ))
+    }
     async fn confirmed_list_page_for_device(
         &self,
         _account_id: &arkret_wire::AccountId,

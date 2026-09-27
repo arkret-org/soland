@@ -107,8 +107,18 @@ async fn list(
             .map_err(|error| invalid_cursor(error))?,
         limit: Some(limit),
     };
-    let active_series =
-        active_pointers_for_device(state, account, &session.require_human_device_id()).await?;
+    // Recovery authentication has already bound a verified, unexpired session
+    // and policy to this exact Account, grant/JKT and candidate device. That
+    // candidate must not be required to exist in the PCR before completion.
+    let recovery = session.session_grant.as_ref().is_some_and(|grant| {
+        grant.credential_class
+            == arkret_models_identity::SessionGrantCredentialClass::RecoverySession
+    });
+    let active_series = if recovery {
+        active_pointers(state, account).await?
+    } else {
+        active_pointers_for_device(state, account, &session.require_human_device_id()).await?
+    };
     let filter = arkret_server::cursor_filter_digest(&json!({
         "operation":operation, "series_id":query.series_id, "backup_kind":query.backup_kind,
         "order":"backup_kind,series_id,series_seq,backup_id", "active_series":active_series,
@@ -140,22 +150,25 @@ async fn list(
     };
     let device_id = arkret_wire::DeviceId::new(session.require_human_device_id().clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    let confirmed = state
-        .key_backups()
-        .confirmed_list_page_for_device(
-            account,
-            &device_id,
-            chrono::Utc::now(),
-            &StorageQuery {
-                actor_id: actor.to_string(),
-                backup_kind: query.backup_kind.map(|kind| kind.as_str().to_owned()),
-                series_id: query.series_id.as_ref().map(ToString::to_string),
-                after: previous.as_ref().map(|p| p.after.clone()),
-                limit: limit + 1,
-            },
-        )
-        .await
-        .map_err(unavailable)?;
+    let storage_query = StorageQuery {
+        actor_id: actor.to_string(),
+        backup_kind: query.backup_kind.map(|kind| kind.as_str().to_owned()),
+        series_id: query.series_id.as_ref().map(ToString::to_string),
+        after: previous.as_ref().map(|p| p.after.clone()),
+        limit: limit + 1,
+    };
+    let confirmed = if recovery {
+        state
+            .key_backups()
+            .confirmed_list_page_for_account(account, &storage_query)
+            .await
+    } else {
+        state
+            .key_backups()
+            .confirmed_list_page_for_device(account, &device_id, chrono::Utc::now(), &storage_query)
+            .await
+    }
+    .map_err(unavailable)?;
     if confirmed.active_series != active_series {
         return Err(unavailable(
             "KeyBackup PCR cut changed while resolving page cursor",

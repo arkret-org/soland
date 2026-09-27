@@ -198,6 +198,41 @@ async fn list_page_in_connection(
 
 #[async_trait]
 impl KeyBackupStore for PgKeyBackupStore {
+    async fn confirmed_list_page_for_account(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        query: &soland_storage::KeyBackupListQuery,
+    ) -> PersistenceResult<soland_storage::ConfirmedKeyBackupListPage> {
+        if query.actor_id != arkret_wire::ActorId::account(account_id.clone()).to_string() {
+            return Err(PersistenceError::SchemaViolation(
+                "KeyBackup page actor differs from authenticated account".to_owned(),
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let active_series =
+                crate::key_backup_current_results::confirmed_key_backup_pointer_in_connection(
+                    conn, account_id,
+                )
+                .await?
+                .ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "KeyBackup list has no confirmed PCR cut".to_owned(),
+                    )
+                })?;
+            let page = list_page_in_connection(conn, query).await?;
+            Ok(soland_storage::ConfirmedKeyBackupListPage {
+                active_series,
+                page,
+            })
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
+    }
+
     async fn confirmed_list_page_for_device(
         &self,
         account_id: &arkret_wire::AccountId,

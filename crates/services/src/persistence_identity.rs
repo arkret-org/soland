@@ -995,6 +995,18 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
 
 #[async_trait::async_trait]
 impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
+    async fn confirmed_list_page_for_account(
+        &self,
+        account_id: &arkret_wire::AccountId,
+        query: &crate::identity::KeyBackupListQuery,
+    ) -> crate::ServiceResult<soland_storage::ConfirmedKeyBackupListPage> {
+        Ok(self
+            .0
+            .key_backups()
+            .confirmed_list_page_for_account(account_id, query)
+            .await?)
+    }
+
     async fn confirmed_list_page_for_device(
         &self,
         account_id: &arkret_wire::AccountId,

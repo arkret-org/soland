@@ -892,6 +892,29 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .is_err()
     );
 
+    // Recovery metadata is authorized at the HTTP recovery-grant boundary,
+    // and needs the confirmed account cut before its new device is active.
+    let recovery_page = backups
+        .confirmed_list_page_for_account(&account, &list_query)
+        .await
+        .unwrap();
+    assert_eq!(recovery_page.active_series, initial_pointer);
+    assert_eq!(recovery_page.page.revision, confirmed_page.page.revision);
+    assert!(recovery_page.page.payloads.is_empty());
+    assert!(
+        backups
+            .confirmed_list_page_for_account(&account, &wrong_actor)
+            .await
+            .is_err()
+    );
+    let candidate = DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    assert!(
+        backups
+            .confirmed_list_page_for_device(&account, &candidate, at, &list_query)
+            .await
+            .is_err()
+    );
+
     let actor = arkret_wire::ActorId::account(account.clone());
     let series = format!("ak:backup_series:{}", uuid::Uuid::now_v7());
     let first_id = format!("ak:backup:{}", uuid::Uuid::now_v7());

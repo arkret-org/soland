@@ -1579,6 +1579,11 @@ pub use soland_storage::{
 
 #[async_trait]
 pub trait KeyBackupPort: Send + Sync {
+    async fn confirmed_list_page_for_account(
+        &self,
+        account_id: &AccountId,
+        query: &KeyBackupListQuery,
+    ) -> ServiceResult<soland_storage::ConfirmedKeyBackupListPage>;
     async fn confirmed_list_page_for_device(
         &self,
         account_id: &AccountId,
@@ -1863,6 +1868,16 @@ impl KeyBackupService {
         write: soland_storage::KeyBackupActiveSeriesCommitWrite,
     ) -> ServiceResult<soland_storage::KeyBackupActiveSeriesCommitOutcome> {
         self.backups.commit_active_series_pointer(write).await
+    }
+
+    pub async fn confirmed_list_page_for_account(
+        &self,
+        account_id: &AccountId,
+        query: &KeyBackupListQuery,
+    ) -> ServiceResult<soland_storage::ConfirmedKeyBackupListPage> {
+        self.backups
+            .confirmed_list_page_for_account(account_id, query)
+            .await
     }
 
     pub async fn confirmed_list_page_for_device(
