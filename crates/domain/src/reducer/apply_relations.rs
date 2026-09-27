@@ -605,7 +605,7 @@ mod relation_primary_domain_tests {
                     "from_ref": FROM,
                     "to_ref": TO,
                     "rank": "A1",
-                    "fields": {"label": "original"}
+                    "fields": {"label": format!("original-{suffix}")}
                 }
             }),
         )
@@ -638,7 +638,7 @@ mod relation_primary_domain_tests {
     }
 
     #[test]
-    fn corrupt_or_legacy_current_domain_rejects_create() {
+    fn corrupt_current_domain_rejects_create() {
         let now = chrono::Utc::now();
         let candidate = create("000000000011", Value::Null);
         let payload =
@@ -661,6 +661,7 @@ mod relation_primary_domain_tests {
 
         let mut legacy = ProjectionState::default();
         let first = create("000000000012", Value::Null);
+        assert_ne!(first.context.event_id, candidate.context.event_id);
         let first_id =
             arkret_identifiers::RelationId::from_event_id(&first.context.event_id).to_string();
         legacy.apply_relation_create(&first, now);
