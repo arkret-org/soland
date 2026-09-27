@@ -264,3 +264,5 @@ DROP TABLE IF EXISTS public.history_key_response_streams;
 DROP TABLE IF EXISTS public.history_key_requests;
 
 DROP TABLE IF EXISTS device_inventory_station CASCADE;
+DROP VIEW IF EXISTS poll_state_current_votes;
+DROP TABLE IF EXISTS poll_response_inputs;

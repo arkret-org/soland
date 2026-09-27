@@ -174,7 +174,7 @@ pub(super) async fn commit_event_unit(
             .ok_or_else(|| {
             ServiceError::SchemaViolation("self Event projection id is invalid".to_owned())
         })?;
-    let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+    let mut operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         operation_id,
         arkret_wire::OperationKind::Create,
         None,
@@ -205,7 +205,16 @@ pub(super) async fn commit_event_unit(
         )
         .map_err(|reason| ServiceError::SchemaViolation(reason.to_owned()))?;
     }
-    let decided_at_cut = direct_conversation || decided_at_commit_cut(&event.kind);
+    let poll_at_cut = event.kind == arkret_wire::EventKind::MessageCreate
+        && matches!(
+            operation
+                .payload
+                .get("content")
+                .and_then(|content| content.get("kind"))
+                .and_then(serde_json::Value::as_str),
+            Some("ak.content.poll" | "ak.content.poll.response")
+        );
+    let decided_at_cut = direct_conversation || decided_at_commit_cut(&event.kind) || poll_at_cut;
     if !decided_at_cut {
         crate::routing::events::operations::validate_operation_policy(
             state,
@@ -348,18 +357,30 @@ pub(super) async fn commit_event_unit(
         }
         return super::authority_direct_conversation::relay_direct_conversation_refusal(error);
     }
-    if decided_at_cut {
+    if decided_at_cut && !poll_at_cut {
         return Ok(AuthoritySubmitOutcome::Accepted {
             status: AuthorityCommitStatus::Committed,
             commit: transaction.commit,
         });
     }
+    operation = operation
+        .with_committed_ref(arkret_wire::CommittedEventRef {
+            event_id: event.event_id.clone(),
+            commit_id: transaction.commit.commit_id.clone(),
+            stream_ref: transaction.commit.stream_ref.clone(),
+            stream_position: transaction.commit.stream_position,
+        })
+        .map_err(|error| ServiceError::Internal(error.to_string()))?;
     let effect = state.projections().apply_projected(&operation, state.hlc());
-    if matches!(
+    let needs_repair = matches!(
         effect,
         soland_services::projection::ProjectionEffectView::Rejected { .. }
-            | soland_services::projection::ProjectionEffectView::Ignored
-    ) {
+    ) || (!poll_at_cut
+        && matches!(
+            effect,
+            soland_services::projection::ProjectionEffectView::Ignored
+        ));
+    if needs_repair {
         let repair_state = state.clone();
         tokio::spawn(async move {
             let mut delay = std::time::Duration::from_secs(1);

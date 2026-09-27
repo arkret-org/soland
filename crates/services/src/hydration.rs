@@ -129,8 +129,31 @@ fn replay_hydration_record(
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_name: &str,
 ) -> soland_storage::PersistenceResult<()> {
+    replay_hydration_record_with_commit(
+        projection_adapter,
+        proj,
+        record,
+        hydration_hlc,
+        projection_name,
+        None,
+    )
+}
+
+fn replay_hydration_record_with_commit(
+    projection_adapter: &dyn HydrationProjectionAdapter,
+    proj: &mut ProjectionState,
+    record: CanonicalEventRecord,
+    hydration_hlc: &soland_domain::hlc::ServerHlc,
+    projection_name: &str,
+    committed_ref: Option<arkret_wire::CommittedEventRef>,
+) -> soland_storage::PersistenceResult<()> {
     let mut operation =
         operation_from_hydration_record(projection_adapter, &record, projection_name)?;
+    if let Some(reference) = committed_ref {
+        operation = operation
+            .with_committed_ref(reference)
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
+    }
     if record.kind == arkret_wire::EventKind::CircleMemberState.as_str() {
         let payload = operation.payload.as_object_mut().ok_or_else(|| {
             soland_storage::PersistenceError::Internal(format!(
@@ -1277,6 +1300,17 @@ pub async fn hydrate_projections_from_persistence(
             )
         })
         .collect::<Vec<_>>();
+    let (poll_events, replay_events): (Vec<_>, Vec<_>) =
+        replay_events.into_iter().partition(|event| {
+            event.kind == arkret_wire::EventKind::MessageCreate.as_str()
+                && matches!(
+                    event
+                        .envelope
+                        .pointer("/payload/content/kind")
+                        .and_then(Value::as_str),
+                    Some("ak.content.poll" | "ak.content.poll.response")
+                )
+        });
     for event in replay_events {
         replay_hydration_record(
             projection_adapter,
@@ -1284,6 +1318,50 @@ pub async fn hydrate_projections_from_persistence(
             event,
             &hydration_hlc,
             "accepted-event-reducer",
+        )?;
+    }
+    // Resolve the actual accepting Commit instead of assigning synthetic
+    // coordinates to the Event snapshot's delivery order. Definitions and
+    // response heads precede their dependents in this confirmed stream order.
+    let mut ordered_polls = BTreeMap::new();
+    for record in poll_events {
+        let id = arkret_wire::EventId::new(record.event_id.clone())
+            .map_err(soland_storage::PersistenceError::database)?;
+        let accepted = persistence
+            .authority_commits()
+            .committed_event(&id)
+            .await?
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "poll hydration has no accepting Commit".to_owned(),
+                )
+            })?;
+        if serde_json::to_value(&accepted.event)
+            .map_err(soland_storage::PersistenceError::database)?
+            != record.envelope
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "poll hydration canonical Event differs from its Commit binding".to_owned(),
+            ));
+        }
+        let reference = arkret_wire::CommittedEventRef {
+            event_id: id,
+            commit_id: accepted.commit.commit_id,
+            stream_ref: accepted.commit.stream_ref,
+            stream_position: accepted.commit.stream_position,
+        };
+        let scope = arkret_canonical::canonical_json_bytes(&reference.stream_ref)
+            .map_err(soland_storage::PersistenceError::database)?;
+        ordered_polls.insert((scope, reference.stream_position), (record, reference));
+    }
+    for (record, reference) in ordered_polls.into_values() {
+        replay_hydration_record_with_commit(
+            projection_adapter,
+            proj,
+            record,
+            &hydration_hlc,
+            "accepted-poll",
+            Some(reference),
         )?;
     }
     // The default pointer is a singleton last-write-wins result. Replaying

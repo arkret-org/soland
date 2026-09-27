@@ -620,6 +620,8 @@ pub struct PollState {
     /// Event on the same commit stream as the poll, so the latest accepted
     /// response of an actor replaces the previous one outright.
     pub votes: BTreeMap<arkret_wire::ActorId, Vec<String>>,
+    pub responses:
+        BTreeMap<arkret_wire::EventId, arkret_models_collaboration::poll::VerifiedPollResponse>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }

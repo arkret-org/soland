@@ -44,6 +44,18 @@ impl ProjectionState {
             .map(|raw| serde_json::from_value::<PollContentBlock>(raw.clone()));
         let definition = match poll_content {
             Some(Ok(block)) => {
+                if operation
+                    .context
+                    .committed_ref
+                    .as_ref()
+                    .is_none_or(|reference| {
+                        reference.event_id != operation.context.accepted_event_id
+                    })
+                {
+                    return ProjectionEffect::Rejected {
+                        reason: "poll_accepting_commit_unavailable".to_owned(),
+                    };
+                }
                 let scope_realm = match &operation.context.accepted_scope_ref {
                     arkret_wire::ScopeRef::Realm { realm_id }
                     | arkret_wire::ScopeRef::Circle { realm_id, .. } => Some(realm_id),
@@ -112,6 +124,7 @@ impl ProjectionState {
                 scope_circle_id,
                 definition,
                 votes: BTreeMap::new(),
+                responses: BTreeMap::new(),
                 created_at: now,
                 updated_at: now,
             },
@@ -166,6 +179,71 @@ impl ProjectionState {
                 };
             }
         };
+        let Some(accepted_ref) = operation.context.committed_ref.clone() else {
+            return ProjectionEffect::Rejected {
+                reason: "poll_accepting_commit_unavailable".to_owned(),
+            };
+        };
+        let heads = match operation.payload.get("poll_response_heads") {
+            Some(heads) => match serde_json::from_value::<
+                Vec<arkret_models_collaboration::events_payloads::message::PollResponseHead>,
+            >(heads.clone())
+            {
+                Ok(heads) => heads,
+                Err(error) => {
+                    return ProjectionEffect::Rejected {
+                        reason: error.to_string(),
+                    };
+                }
+            },
+            None => Vec::new(),
+        };
+        let partition = arkret_models_collaboration::poll::PollPartition {
+            realm_id: operation.realm_id.clone(),
+            stream_ref: accepted_ref.stream_ref.clone(),
+            poll_ref: response.poll_ref.clone(),
+            poll_event_ref: poll.message_event_id.clone(),
+            actor_id: operation.context.sender.clone(),
+        };
+        let verified = match arkret_models_collaboration::poll::VerifiedPollResponse::new(
+            partition,
+            accepted_ref,
+            &response.selections,
+            &valid,
+            usize::try_from(poll.definition.poll.max_selections).unwrap_or(usize::MAX),
+            heads,
+            |id| {
+                poll.responses
+                    .get(id)
+                    .map(|prior| (prior.partition.clone(), prior.accepted_ref.clone()))
+            },
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: error.to_string(),
+                };
+            }
+        };
+        let mut inputs = arkret_models_collaboration::poll::PollResponseSet::default();
+        for prior in poll
+            .responses
+            .values()
+            .cloned()
+            .chain(std::iter::once(verified.clone()))
+        {
+            if let Err(error) = inputs.insert(prior) {
+                return ProjectionEffect::Rejected {
+                    reason: error.to_string(),
+                };
+            }
+        }
+        // This projection is a cache of verified inputs. The accepting Commit
+        // position wins even when an older response is delivered afterwards.
+        let winner_is_incoming = inputs
+            .project(false)
+            .get(&verified.partition)
+            .is_some_and(|projection| projection.winner.as_ref() == Some(&verified.accepted_ref));
         let poll_ref = response.poll_ref.clone();
         let actor_id = operation.context.sender.clone();
         let Some(poll) = self.polls.get_mut(&poll_ref) else {
@@ -173,10 +251,11 @@ impl ProjectionState {
                 reason: "poll_ref_unknown".to_owned(),
             };
         };
-        // The response rides the same commit stream as every other response to
-        // this poll, so the newest accepted one replaces the actor's previous
-        // selections outright.
-        poll.votes.insert(actor_id, selected);
+        poll.responses
+            .insert(verified.accepted_ref.event_id.clone(), verified);
+        if winner_is_incoming {
+            poll.votes.insert(actor_id, selected);
+        }
         poll.updated_at = poll.updated_at.max(now);
         ProjectionEffect::Ignored
     }
