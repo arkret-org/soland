@@ -111,6 +111,27 @@ fn initial_issue_authorization_ref(
     }
 }
 
+fn returning_issue_authorization_ref(
+    request: &CurrentDeviceCheckRequest,
+    current: Option<&soland_storage::DeviceRevocationGateSelector>,
+    current_generation_ref: Option<u64>,
+    verified: Option<&crate::jws_verify::VerifiedPrincipalDeviceSignatureBinding>,
+) -> Option<CommittedEventRef> {
+    // A returning issue has no predecessor grant. Its independently verified
+    // durable-device proof supplies the exact current binding for the gate.
+    if request.action_class != DeviceRevocationAdmissionAction::ReturningSessionGrantIssue
+        || request.expected_device_authorize_event_id.is_some()
+        || request.expected_device_generation_ref.is_some()
+    {
+        return None;
+    }
+    let current = current?;
+    let verified = verified?;
+    (current.authorization_ref.event_id == verified.authorization_event_id
+        && current_generation_ref == Some(verified.generation_ref))
+    .then(|| current.authorization_ref.clone())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CurrentDeviceCheckOutcome {
@@ -267,7 +288,7 @@ pub(super) async fn check_private_current_device(
     } else {
         None
     };
-    if let Some(verified_binding) = verified_proof_binding
+    if let Some(verified_binding) = verified_proof_binding.as_ref()
         && !origin_current_selector.as_ref().is_some_and(|selector| {
             selector.authorization_ref.event_id == verified_binding.authorization_event_id
                 && current_generation_ref == Some(verified_binding.generation_ref)
@@ -304,7 +325,16 @@ pub(super) async fn check_private_current_device(
                 stream_ref: record.commit.stream_ref,
                 stream_position: record.commit.stream_position,
             }),
-        _ => initial_issue_authorization_ref(&request, origin_current_selector.as_ref()),
+        _ => initial_issue_authorization_ref(&request, origin_current_selector.as_ref()).or_else(
+            || {
+                returning_issue_authorization_ref(
+                    &request,
+                    origin_current_selector.as_ref(),
+                    current_generation_ref,
+                    verified_proof_binding.as_ref(),
+                )
+            },
+        ),
     };
     let linearization = state
         .persistence()
@@ -424,6 +454,74 @@ mod tests {
                 stream_position: 1,
                 event_id,
             },
+        }
+    }
+
+    #[test]
+    fn returning_issue_freezes_only_the_verified_current_device_binding() {
+        let current = selector();
+        let mut request = CurrentDeviceCheckRequest {
+            account_id: AccountId::new(current.principal_id.clone(), current.station_id.clone()),
+            device_id: DeviceId::new(DEVICE).unwrap(),
+            expected_device_authorize_event_id: None,
+            expected_device_generation_ref: None,
+            action_class: DeviceRevocationAdmissionAction::ReturningSessionGrantIssue,
+            intent_digest: Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
+            accepted_device_possession_proof: None,
+            requested_at: Utc::now(),
+        };
+        let verified = crate::jws_verify::VerifiedPrincipalDeviceSignatureBinding {
+            authorization_event_id: current.authorization_ref.event_id.clone(),
+            generation_ref: 1,
+        };
+        let resolve = |request: &CurrentDeviceCheckRequest,
+                       verified: Option<
+            &crate::jws_verify::VerifiedPrincipalDeviceSignatureBinding,
+        >| {
+            returning_issue_authorization_ref(request, Some(&current), Some(1), verified)
+        };
+        let adopted = resolve(&request, Some(&verified));
+        assert_eq!(adopted, Some(current.authorization_ref.clone()));
+        let gate = soland_storage::DeviceRevocationGateLinearizationRequest {
+            principal_id: current.principal_id.clone(),
+            station_id: current.station_id.clone(),
+            device_id: current.device_id.clone(),
+            expected_authorization_ref: adopted,
+            origin_current_selector: Some(current.clone()),
+            action_class: soland_storage::DeviceRevocationGateAction::SessionGrantIssue,
+            intent_digest: request.intent_digest.to_string(),
+            requested_at: request.requested_at,
+        };
+        assert_eq!(
+            soland_storage::selector_comparison_status(&gate, Some(&current)),
+            None
+        );
+        assert!(resolve(&request, None).is_none());
+        assert!(
+            returning_issue_authorization_ref(&request, None, Some(1), Some(&verified)).is_none()
+        );
+        assert!(
+            returning_issue_authorization_ref(&request, Some(&current), Some(2), Some(&verified))
+                .is_none()
+        );
+        let mut foreign = verified.clone();
+        foreign.authorization_event_id = EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(b"different authorization"),
+        );
+        assert!(resolve(&request, Some(&foreign)).is_none());
+        request.expected_device_generation_ref = Some(1);
+        assert!(resolve(&request, Some(&verified)).is_none());
+        request.expected_device_generation_ref = None;
+        request.expected_device_authorize_event_id = Some(verified.authorization_event_id.clone());
+        assert!(resolve(&request, Some(&verified)).is_none());
+        request.expected_device_authorize_event_id = None;
+        for action in [
+            DeviceRevocationAdmissionAction::SessionGrantRefresh,
+            DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
+        ] {
+            request.action_class = action;
+            assert!(resolve(&request, Some(&verified)).is_none());
         }
     }
 
