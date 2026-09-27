@@ -1,0 +1,112 @@
+//! Realm profile replacement and its revision share the Event transaction.
+
+#[path = "support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
+
+use diesel::sql_types::{BigInt, Jsonb, Text};
+use diesel_async::RunQueryDsl;
+use ordinary_realm::{founder, next_request, open_discussion};
+use serde_json::{Value, json};
+use soland_storage::EventCommitUnitOfWork;
+use soland_storage_postgres::PgEventCommitUnitOfWork;
+use soland_storage_postgres::test_database::TestDatabase;
+
+#[derive(diesel::QueryableByName, Debug, PartialEq)]
+struct Current {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct Count {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+async fn current(pool: &soland_storage_postgres::PgPool, realm: &arkret_wire::RealmId) -> Current {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT current_commit_id,current_stream_position,value \
+         FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_profile'",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result(&mut conn)
+    .await
+    .unwrap()
+}
+
+async fn commits(pool: &soland_storage_postgres::PgPool, realm: &arkret_wire::RealmId) -> i64 {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM realm_commits WHERE realm_id=$1")
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<Count>(&mut conn)
+        .await
+        .unwrap()
+        .count
+}
+
+#[tokio::test]
+async fn profile_replacement_unset_replay_and_denial_share_the_pg_cut() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let discussion = open_discussion(&pool, "realm-profile-current").await;
+    let realm = discussion.realm_id();
+    let mut head = discussion.head.authority_commit;
+    for payload in [
+        json!({"schema":"ak.schema.realm_profile.v1","title":"Updated","summary":"Summary"}),
+        json!({"schema":"ak.schema.realm_profile.v1","title":"Cleared"}),
+    ] {
+        let request = next_request(
+            &head,
+            arkret_wire::EventKind::RealmProfile,
+            &founder(),
+            payload.clone(),
+            head.commit.committed_at,
+        );
+        assert!(
+            uow.commit_event(request.clone())
+                .await
+                .unwrap()
+                .event_inserted
+        );
+        let row = current(&pool, &realm).await;
+        assert_eq!(row.value, payload);
+        assert_eq!(
+            row.current_commit_id,
+            request.authority_commit.commit.commit_id.as_str()
+        );
+        assert_eq!(
+            row.current_stream_position,
+            request.authority_commit.commit.stream_position as i64
+        );
+        let count = commits(&pool, &realm).await;
+        assert!(
+            !uow.commit_event(request.clone())
+                .await
+                .unwrap()
+                .event_inserted
+        );
+        assert_eq!(current(&pool, &realm).await, row);
+        assert_eq!(commits(&pool, &realm).await, count);
+        head = request.authority_commit;
+    }
+    let before = current(&pool, &realm).await;
+    let count = commits(&pool, &realm).await;
+    let outsider = arkret_wire::DidCoreId::new("ak:did_core:web:profile-outsider.example").unwrap();
+    let denied = next_request(
+        &head,
+        arkret_wire::EventKind::RealmProfile,
+        &outsider,
+        json!({"schema":"ak.schema.realm_profile.v1","title":"Denied"}),
+        head.commit.committed_at,
+    );
+    assert!(uow.commit_event(denied).await.is_err());
+    assert_eq!(current(&pool, &realm).await, before);
+    assert_eq!(commits(&pool, &realm).await, count);
+}

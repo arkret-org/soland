@@ -54,6 +54,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::ConsentGrant | EventKind::ConsentRevoke => Ok(SelfEventRoute::Consent),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::StrandCreate
+        | EventKind::RealmProfile
         | EventKind::StrandUpdate
         | EventKind::SpaceCreate
         | EventKind::DirectConversationBound
@@ -552,6 +553,7 @@ mod tests {
         }
         for kind in [
             EventKind::StrandCreate,
+            EventKind::RealmProfile,
             EventKind::StrandUpdate,
             EventKind::SpaceCreate,
             EventKind::RealmSetDefaultStrand,
@@ -587,6 +589,7 @@ mod tests {
             EventKind::MlsGenesis,
             EventKind::MlsCommit,
             EventKind::StrandCreate,
+            EventKind::RealmProfile,
             EventKind::StrandUpdate,
             EventKind::SpaceCreate,
             EventKind::DirectConversationBound,

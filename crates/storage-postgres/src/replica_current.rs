@@ -356,6 +356,12 @@ pub(crate) async fn advance_in_connection(
     };
     let payload = || serde_json::to_value(&event.payload).map_err(PersistenceError::database);
     match event.kind {
+        arkret_wire::EventKind::RealmProfile => {
+            crate::realm_bootstrap_current_results::commit_realm_profile_current_result_in_connection(
+                conn, event, commit,
+            )
+            .await?;
+        }
         arkret_wire::EventKind::MemberState
         | arkret_wire::EventKind::InviteAccept
         | arkret_wire::EventKind::RealmPolicyBundle

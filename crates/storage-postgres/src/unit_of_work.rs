@@ -2441,6 +2441,10 @@ async fn commit_one_in_connection(
             .await?;
         }
         commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
+        crate::realm_bootstrap_current_results::commit_realm_profile_authority_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
         crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
         commit_relation_current_result_in_connection(conn, event, commit).await?;
