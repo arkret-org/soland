@@ -103,6 +103,26 @@ pub(crate) async fn commit_strand_create_current_result_in_connection(
     Ok(())
 }
 
+/// Admit a Strand patch with the authorization facts and target value frozen
+/// in the accepting transaction. Replica folds call the value writer below
+/// after verification and never re-adjudicate the authority's permissions.
+pub(crate) async fn commit_strand_update_authority_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::StrandUpdate {
+        return Ok(());
+    }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
+    commit_strand_update_current_result_in_connection(conn, event, commit).await
+}
+
 /// Advance the registered Strand value at the same authority cut as its Event.
 /// The Realm authority row lock held by the UOW serializes all writers; the
 /// target row lock also freezes the exact value used by the optional digest.

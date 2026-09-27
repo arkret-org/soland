@@ -2469,7 +2469,7 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
-        crate::strand_current_results::commit_strand_update_current_result_in_connection(
+        crate::strand_current_results::commit_strand_update_authority_current_result_in_connection(
             conn, event, commit,
         )
         .await?;

@@ -163,10 +163,21 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
         }),
         at,
     );
+    let not_joined = next_request(
+        head,
+        arkret_wire::EventKind::StrandUpdate,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:strand-update-outsider.example").unwrap(),
+        json!({
+            "target_ref": discussion.strand_id,
+            "patch": {"metadata.title": {"$op":"set", "value":"Unauthorized title"}},
+        }),
+        at,
+    );
     for (request, reason) in [
         (stale, "expected_state_digest"),
         (unknown, "target is absent"),
         (forbidden, "forbidden"),
+        (not_joined, "capability_denied"),
     ] {
         let error = uow.commit_event(request).await.unwrap_err().to_string();
         assert!(error.contains(reason), "{error}");

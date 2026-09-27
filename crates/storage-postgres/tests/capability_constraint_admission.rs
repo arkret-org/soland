@@ -507,3 +507,101 @@ async fn an_admission_waiting_on_the_realm_lock_observes_a_concurrent_revocation
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn strand_patch_exact_resource_and_field_grant_are_decided_at_the_pg_cut() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let member = local("strand-field-editor");
+    let discussion = discussion(&pool, "strand-field-grant-cut", &member).await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut permission = grant(
+        &discussion,
+        &discussion.head.authority_commit,
+        &member,
+        &["ak.strand.update"],
+        serde_json::json!([{
+            "constraint_kind":"field_access",
+            "effect":"allow",
+            "allowed_write_fields":["metadata.title"]
+        }]),
+    );
+    permission
+        .authority_commit
+        .event
+        .payload
+        .get_mut("grant")
+        .unwrap()["resources"] = serde_json::json!([arkret_wire::WireResourceSelector::strand(
+        discussion.realm_id.clone(),
+        discussion.strand_id.clone()
+    )]);
+    ordinary_realm::reseal(&mut permission.authority_commit.event);
+    permission = ordinary_realm::request_for_event(
+        &discussion.head.authority_commit,
+        permission.authority_commit.event,
+        discussion.head.authority_commit.commit.committed_at,
+    );
+    uow.commit_event(permission.clone()).await.unwrap();
+    let allowed = by(
+        &permission.authority_commit,
+        arkret_wire::EventKind::StrandUpdate,
+        &member,
+        serde_json::json!({
+            "target_ref": discussion.strand_id,
+            "patch":{"metadata.title":{"$op":"set","value":"Authorized title"}}
+        }),
+    );
+    uow.commit_event(allowed.clone()).await.unwrap();
+    let before = PgAuthorityCommitStore { pool: pool.clone() }
+        .realm_state_snapshot_material(&discussion.realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for payload in [
+        serde_json::json!({
+            "target_ref":discussion.strand_id,
+            "patch":{"metadata.summary":{"$op":"set","value":"Unpermitted field"}}
+        }),
+        serde_json::json!({
+            "target_ref":arkret_wire::StrandId::from_event_id(&permission.authority_commit.event.event_id),
+            "patch":{"metadata.title":{"$op":"set","value":"Unpermitted target"}}
+        }),
+    ] {
+        let refused = by(
+            &allowed.authority_commit,
+            arkret_wire::EventKind::StrandUpdate,
+            &member,
+            payload,
+        );
+        #[derive(diesel::QueryableByName, Debug, PartialEq)]
+        struct Counts {
+            #[diesel(sql_type = BigInt)]
+            events: i64,
+            #[diesel(sql_type = BigInt)]
+            commits: i64,
+        }
+        let mut conn = pool.get().await.unwrap();
+        let query = "SELECT (SELECT COUNT(*) FROM canonical_events WHERE realm_id=$1) AS events, \
+                     (SELECT COUNT(*) FROM realm_commits WHERE realm_id=$1) AS commits";
+        let counts: Counts = diesel::sql_query(query)
+            .bind::<Text, _>(discussion.realm_id.as_str())
+            .get_result(&mut conn)
+            .await
+            .unwrap();
+        assert_refused(&pool, &uow, refused, ConflictCode::CapabilityDenied).await;
+        let after_counts: Counts = diesel::sql_query(query)
+            .bind::<Text, _>(discussion.realm_id.as_str())
+            .get_result(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(counts, after_counts);
+        assert_eq!(
+            PgAuthorityCommitStore { pool: pool.clone() }
+                .realm_state_snapshot_material(&discussion.realm_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            before,
+        );
+    }
+}

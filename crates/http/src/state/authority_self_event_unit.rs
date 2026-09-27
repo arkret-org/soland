@@ -109,6 +109,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
         arkret_wire::EventKind::SpaceCreate
+            | arkret_wire::EventKind::StrandUpdate
             | arkret_wire::EventKind::InviteCreate
             | arkret_wire::EventKind::InviteThirdParty
             | arkret_wire::EventKind::InviteRevoke
