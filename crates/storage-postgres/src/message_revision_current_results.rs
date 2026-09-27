@@ -182,7 +182,8 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     }
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
     let mls_carrier = supported_mls_carrier(&payload);
-    if !mls_carrier && !supported_plain_text(&payload) {
+    let poll = crate::poll_state::supported_plaintext_poll(&payload);
+    if !mls_carrier && !supported_plain_text(&payload) && poll.is_none() {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
     let typed: arkret_models_collaboration::events_payloads::message::MessageCreatePayload =
@@ -244,6 +245,20 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id).await?;
     if !mls_carrier {
         require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    }
+    if let Some(poll) = poll {
+        if crate::poll_state::admit_poll_in_connection(
+            conn,
+            event,
+            commit,
+            poll,
+            &typed.poll_response_heads,
+        )
+        .await?
+        {
+            // A response is an audit Event and a PollState input, never a MessageState.
+            return Ok(());
+        }
     }
     let message_id = arkret_wire::MessageId::from_event_id(&event.event_id);
     let inserted = diesel::sql_query(

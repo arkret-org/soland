@@ -96,6 +96,7 @@ mod pcr_device_status_reader;
 mod pcr_genesis;
 mod pcr_recovery_policy_unit;
 mod policy;
+mod poll_state;
 mod principal_resolution;
 mod projection;
 mod publication_evidence;

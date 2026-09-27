@@ -4570,6 +4570,31 @@ CREATE TABLE realm_set_default_strand_current_results (
 -- `ak.message.create` opens the row; every accepted `ak.message.revise` of the
 -- same MessageId replaces it whole, so the carrier is either the create payload
 -- (naming its Strand) or a revise payload (naming this Message).
+-- Poll response history references its canonical truth in the same acceptance
+-- transaction. No independently mutable selections or Actor claims are stored.
+CREATE TABLE poll_response_inputs (
+ response_event_pk BIGINT PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+ poll_event_pk BIGINT NOT NULL REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+ commit_id TEXT NOT NULL UNIQUE REFERENCES public.realm_commits(commit_id) ON DELETE RESTRICT
+);
+CREATE INDEX poll_response_inputs_poll_idx ON poll_response_inputs (poll_event_pk);
+
+-- Rebuildable current votes: neither arrival order nor producer time can win.
+-- Filtering valid canonical inputs before DISTINCT ON permits rollback to the
+-- previous response when an input leaves the accepted baseline.
+CREATE VIEW poll_state_current_votes AS
+SELECT DISTINCT ON (e.realm_id,c.stream_ref,p.poll_event_pk,e.envelope->'actor_id')
+ e.realm_id,c.stream_ref,p.poll_event_pk,e.envelope->'actor_id' AS actor_id,
+ e.envelope->>'event_id' AS response_event_id,c.commit_id,c.stream_position,
+ e.envelope->'payload'->'content'->'poll_response'->'selections' AS selections,
+ e.envelope->'payload'->'poll_response_heads' AS declared_heads
+FROM poll_response_inputs p
+JOIN public.canonical_events e ON e.pk=p.response_event_pk
+JOIN public.canonical_events original ON original.pk=p.poll_event_pk
+JOIN public.realm_commits c ON c.commit_id=p.commit_id AND c.event_pk=e.pk
+WHERE e.state='committed' AND original.state='committed'
+ORDER BY e.realm_id,c.stream_ref,p.poll_event_pk,e.envelope->'actor_id',c.stream_position DESC;
+
 CREATE TABLE message_revision_current_results (
  realm_id TEXT NOT NULL,
  message_id TEXT NOT NULL PRIMARY KEY,

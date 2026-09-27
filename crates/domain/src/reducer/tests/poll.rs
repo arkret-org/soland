@@ -71,6 +71,7 @@ fn create_poll_with_limit(state: &mut ProjectionState, hlc: &ServerHlc, max_sele
             circle_id: arkret_wire::CircleId::new(circle_id).unwrap(),
         };
     }
+    operation = at_position(operation, 1);
     let effect = state.apply(&operation, hlc);
     assert!(matches!(effect, ProjectionEffect::MessageCreated(_)));
     assert!(state.poll(POLL_ID).is_some());
@@ -114,19 +115,77 @@ fn response_operation_on_strand(
     strand_id: &str,
     selections: Value,
 ) -> arkret_event_draft::ProjectedEventOperation {
-    make_operation(
-        arkret_wire::EventKind::MessageCreate,
-        realm,
-        serde_json::json!({
-            "strand_id": strand_id,
-            "track_name": "discussion",
-            "content": {
-                "kind": "ak.content.poll.response",
-                "body": "vote",
-                "poll_response": {"poll_ref": POLL_ID, "selections": selections}
-            }
-        }),
+    at_position(
+        make_operation(
+            arkret_wire::EventKind::MessageCreate,
+            realm,
+            serde_json::json!({
+                "strand_id": strand_id,
+                "track_name": "discussion",
+                "content": {
+                    "kind": "ak.content.poll.response",
+                    "body": "vote",
+                    "poll_response": {"poll_ref": POLL_ID, "selections": selections}
+                }
+            }),
+        ),
+        2,
     )
+}
+
+fn at_position(
+    operation: arkret_event_draft::ProjectedEventOperation,
+    position: u64,
+) -> arkret_event_draft::ProjectedEventOperation {
+    let stream_ref = arkret_wire::CommitStreamRef::from_scope(
+        &operation.context.accepted_scope_ref,
+        Some(operation.realm_id.clone()),
+    )
+    .unwrap();
+    let reference = arkret_wire::CommittedEventRef {
+        event_id: operation.context.accepted_event_id.clone(),
+        commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            format!("poll-test-{position}-{}", operation.context.event_id).as_bytes(),
+        )),
+        stream_ref,
+        stream_position: position,
+    };
+    operation.with_committed_ref(reference).unwrap()
+}
+
+#[test]
+fn poll_vote_winner_uses_commit_position_when_delivery_is_reversed() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("poll-order-test");
+    create_poll(&mut state, &hlc);
+    let newer = at_position(response_operation(REALM_A, serde_json::json!(["no"])), 3);
+    let older = at_position(response_operation(REALM_A, serde_json::json!(["yes"])), 2);
+    assert!(matches!(
+        state.apply(&newer, &hlc),
+        ProjectionEffect::Ignored
+    ));
+    assert!(matches!(
+        state.apply(&older, &hlc),
+        ProjectionEffect::Ignored
+    ));
+    let poll = state.poll(POLL_ID).unwrap();
+    assert_eq!(poll.responses.len(), 2);
+    assert_eq!(poll.votes.values().next().unwrap(), &vec!["no".to_owned()]);
+    assert_eq!(state.messages.len(), 1);
+}
+
+#[test]
+fn poll_response_without_accepting_commit_fails_closed() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("poll-no-commit-test");
+    create_poll(&mut state, &hlc);
+    let mut operation = response_operation(REALM_A, serde_json::json!(["yes"]));
+    operation.context.committed_ref = None;
+    assert!(
+        matches!(state.apply(&operation,&hlc),ProjectionEffect::Rejected { ref reason } if reason=="poll_accepting_commit_unavailable")
+    );
+    assert!(state.poll(POLL_ID).unwrap().votes.is_empty());
+    assert!(state.poll(POLL_ID).unwrap().responses.is_empty());
 }
 
 #[test]
