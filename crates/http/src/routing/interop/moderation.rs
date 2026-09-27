@@ -520,15 +520,13 @@ async fn validate_moderation_franking_proof(
             "franking_proof verification method has no authenticated historical state: {error}"
         ))
     })?;
-    let signing_bytes = typed_proof
-        .canonical_signing_bytes()
-        .map_err(|error| franking_proof_invalid(error.to_string()))?;
-    crate::jws_verify::verify_ed25519_signature_with_public_key(
-        &signing_bytes,
-        &typed_proof.signature,
-        verification_key.as_bytes(),
+    arkret_signatures::franking_proof::verify_franking_proof_signature(
+        &typed_proof,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: verification_key.as_bytes().to_vec(),
+        },
     )
-    .map_err(franking_proof_invalid)?;
+    .map_err(|error| franking_proof_invalid(error.to_string()))?;
     validate_franking_event_time_anchor(state, realm_id, &typed_proof).await?;
     Ok(Some(franking_proof.clone()))
 }
@@ -583,7 +581,21 @@ async fn validate_franking_event_time_anchor(
     }
     let realm = RealmId::new(realm_id.to_owned())
         .map_err(|error| franking_proof_invalid(format!("invalid Realm ID: {error}")))?;
-    for event_id in [&proof_event.event_id, &target.event_id] {
+    let durable_proof = franking_anchor_event(&proof_event)?;
+    if durable_proof.kind != EventKind::ModerationFrankingProof
+        || durable_proof.actor_id != ActorId::service(proof.received_by.clone())
+        || durable_proof.payload
+            != serde_json::from_value::<std::collections::BTreeMap<String, Value>>(proof_payload)
+                .map_err(|error| {
+                    franking_proof_invalid(format!("franking proof payload decode failed: {error}"))
+                })?
+    {
+        return Err(franking_proof_invalid(
+            "franking proof Event does not bind the receiving service and exact proof",
+        ));
+    }
+    for record in [&proof_event, &target] {
+        let event_id = &record.event_id;
         let committed = state
             .authority_commits()
             .committed_event(&EventId::new(event_id.clone()).map_err(|error| {
@@ -594,14 +606,48 @@ async fn validate_franking_event_time_anchor(
             .ok_or_else(|| {
                 franking_proof_invalid("franking proof or target lacks a covering RealmCommit")
             })?;
-        if committed.commit.realm_id != realm
-            || committed.commit.event_ref != committed.event.event_id
-            || committed.event.event_id.as_str() != event_id
-        {
-            return Err(franking_proof_invalid(
-                "franking proof or target covering RealmCommit is inconsistent",
-            ));
-        }
+        validate_franking_covering_commit(record, &committed, &realm)?;
+    }
+    Ok(())
+}
+
+// Accepted storage is the admission authority. Recompute its content commitment
+// and bind the exact envelope to the covering pair before using it as evidence.
+// This does not turn a signed received_at claim into an existence-time proof.
+fn franking_anchor_event(
+    record: &soland_storage::CanonicalEventRecord,
+) -> Result<arkret_wire::Event, AppError> {
+    let event = crate::routing::events::event_log::canonical_event_for_read(record)
+        .map_err(|error| franking_proof_invalid(error.message))?;
+    let preimage = arkret_canonical::canonical_json_bytes(
+        &event
+            .digest_payload()
+            .map_err(|error| franking_proof_invalid(error.to_string()))?,
+    )
+    .map_err(|error| franking_proof_invalid(error.to_string()))?;
+    if preimage != record.canonical_bytes {
+        return Err(franking_proof_invalid(
+            "franking anchor content commitment is inconsistent",
+        ));
+    }
+    Ok(event)
+}
+
+fn validate_franking_covering_commit(
+    record: &soland_storage::CanonicalEventRecord,
+    committed: &soland_storage::CommittedEventRecord,
+    realm: &RealmId,
+) -> Result<(), AppError> {
+    let event = franking_anchor_event(record)?;
+    if record.realm_id.as_deref() != Some(realm.as_str())
+        || event.realm_id != *realm
+        || committed.event != event
+        || committed.commit.realm_id != *realm
+        || committed.commit.event_ref != event.event_id
+    {
+        return Err(franking_proof_invalid(
+            "franking proof or target covering RealmCommit is inconsistent",
+        ));
     }
     Ok(())
 }
@@ -960,11 +1006,15 @@ mod report_safety_tests {
 
     fn valid_franking(state: &AppState) -> Value {
         let (event_id, ..) = franking_event_fixture();
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            state.notary_signing_key().verifying_key().as_bytes(),
+        );
+        let signer = arkret_wire::Did::new(format!("did:key:{multibase}")).unwrap();
         let mut proof = FrankingProof {
             realm_id: RealmId::new(REALM.to_owned()).unwrap(),
             event_id: EventId::new(event_id).unwrap(),
-            received_by: arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
-            verification_method: state.service_verification_method("notary-key").unwrap(),
+            received_by: arkret_wire::project_did_to_core_id(&signer).unwrap(),
+            verification_method: arkret_wire::DidUrl::new(format!("{signer}#{multibase}")).unwrap(),
             received_at: chrono::DateTime::parse_from_rfc3339(FRANKING_RECEIVED_AT)
                 .unwrap()
                 .with_timezone(&chrono::Utc),
@@ -1072,6 +1122,165 @@ mod report_safety_tests {
         assert_eq!(second.code, ErrorCode::RateLimited);
     }
 
+    fn anchor_fixture() -> (
+        soland_storage::CanonicalEventRecord,
+        soland_storage::CommittedEventRecord,
+    ) {
+        let realm = RealmId::new(REALM).unwrap();
+        let event = crate::test_event::raw_event_at(
+            EventKind::MessageCreate.as_str(),
+            ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            crate::test_actor_id_str("did:web:alice.example"),
+            0,
+            arkret_wire::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            json!({
+                "strand_id": arkret_wire::StrandId::from_event_id(
+                    &EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x31; 32]),
+                ),
+                "track_name": "discussion",
+                "encrypted_content": {
+                    "version": "1.0",
+                    "content_type": "application/vnd.arkret.message+json",
+                    "encryption_context": {
+                        "epoch": 0,
+                        "group_state_ref": EventId::from_digest(
+                            arkret_canonical::DigestSuite::Sha256, [0x32; 32],
+                        ),
+                    },
+                    "ciphertext": "Y2lwaGVydGV4dA",
+                },
+            }),
+            chrono::DateTime::parse_from_rfc3339(FRANKING_RECEIVED_AT)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        )
+        .unwrap();
+        let record = soland_storage::CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: event.actor_id.to_string(),
+            realm_id: Some(realm.to_string()),
+            kind: event.kind.as_str().to_owned(),
+            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(
+                &event.digest_payload().unwrap(),
+            )
+            .unwrap(),
+            envelope: serde_json::to_value(&event).unwrap(),
+            received_at: event.created_at,
+        };
+        // Structural-only accepted-read fixtures exercise commitment binding,
+        // not producer admission or RealmCommit cryptographic verification.
+        let pair = soland_storage::CommittedEventRecord {
+            commit: arkret_wire::RealmCommit {
+                commit_id: arkret_wire::RealmCommitId::from_digest([0x33; 32]),
+                realm_id: realm.clone(),
+                stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id: realm },
+                stream_position: 4,
+                previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest([0x34; 32])),
+                event_ref: event.event_id.clone(),
+                governance_generation: 0,
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x35; 32]),
+                ),
+                committed_at: event.created_at,
+                signature: arkret_wire::DetachedObjectSignature {
+                    context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:web:station.example#authority",
+                    )
+                    .unwrap(),
+                    signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "00".repeat(32)))
+                        .unwrap(),
+                    created_at: event.created_at,
+                    sig: arkret_wire::Base64UrlString::new("c3RydWN0dXJhbA").unwrap(),
+                },
+            },
+            event,
+        };
+        (record, pair)
+    }
+
+    #[test]
+    fn franking_anchor_binds_exact_encrypted_event_content_and_covering_commit() {
+        let (record, pair) = anchor_fixture();
+        validate_franking_covering_commit(&record, &pair, &RealmId::new(REALM).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn franking_anchor_rejects_modified_ciphertext_under_original_event_id() {
+        let (mut record, pair) = anchor_fixture();
+        record.envelope["payload"]["encrypted_content"]["ciphertext"] = json!("bW9kaWZpZWQ");
+        let error =
+            validate_franking_covering_commit(&record, &pair, &RealmId::new(REALM).unwrap())
+                .unwrap_err();
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
+    }
+
+    #[test]
+    fn franking_anchor_rejects_modified_stored_preimage() {
+        let (mut record, pair) = anchor_fixture();
+        record.canonical_bytes.push(b' ');
+        assert!(
+            validate_franking_covering_commit(&record, &pair, &RealmId::new(REALM).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn franking_anchor_rejects_covering_pair_with_different_event_or_realm() {
+        let (record, pair) = anchor_fixture();
+        let realm = RealmId::new(REALM).unwrap();
+        let mut altered = pair.clone();
+        altered.event.payload.get_mut("encrypted_content").unwrap()["ciphertext"] =
+            json!("bW9kaWZpZWQ");
+        assert!(validate_franking_covering_commit(&record, &altered, &realm).is_err());
+        altered = pair.clone();
+        altered.commit.event_ref =
+            EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x36; 32]);
+        assert!(validate_franking_covering_commit(&record, &altered, &realm).is_err());
+        altered = pair;
+        altered.commit.realm_id = arkret_wire::RealmId::from_event_id(&altered.commit.event_ref);
+        assert!(validate_franking_covering_commit(&record, &altered, &realm).is_err());
+    }
+
+    #[tokio::test]
+    async fn franking_valid_signature_cannot_impersonate_another_receiving_service() {
+        let state = test_state();
+        let mut proof: FrankingProof = serde_json::from_value(valid_franking(&state)).unwrap();
+        proof.received_by = arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap();
+        proof.signature = arkret_canonical::base64url_encode(
+            state
+                .notary_signing_key()
+                .sign(&proof.canonical_signing_bytes().unwrap())
+                .to_bytes(),
+        );
+        let error = validate_moderation_franking_proof(
+            &state,
+            REALM,
+            &serde_json::to_value(proof).unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
+        assert!(
+            error.message.contains("does not project to received_by"),
+            "{error:?}"
+        );
+    }
+
     #[tokio::test]
     async fn franking_without_event_time_anchor_is_rejected() {
         let state = test_state();
@@ -1083,6 +1292,10 @@ mod report_safety_tests {
         assert_eq!(
             error.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
+        assert!(
+            error.message.contains("accepted local event anchor"),
+            "{error:?}"
         );
     }
 }
