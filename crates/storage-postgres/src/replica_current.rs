@@ -64,13 +64,17 @@ async fn upsert_singleton(
     revision: &Revision<'_>,
     value: &Value,
 ) -> PersistenceResult<()> {
-    diesel::sql_query(
+    let changed = diesel::sql_query(
         "INSERT INTO realm_bootstrap_current_results \
          (realm_id,result_family,current_commit_id,current_stream_position,value,updated_at) \
          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(realm_id,result_family) DO UPDATE SET \
          current_commit_id=EXCLUDED.current_commit_id, \
          current_stream_position=EXCLUDED.current_stream_position, \
-         value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+         value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
+         WHERE realm_bootstrap_current_results.current_stream_position<EXCLUDED.current_stream_position \
+           OR (realm_bootstrap_current_results.current_stream_position=EXCLUDED.current_stream_position \
+             AND realm_bootstrap_current_results.current_commit_id=EXCLUDED.current_commit_id \
+             AND realm_bootstrap_current_results.value=EXCLUDED.value)",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(family)
@@ -81,7 +85,17 @@ async fn upsert_singleton(
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
-    Ok(())
+    require_one_current_write(changed)
+}
+
+fn require_one_current_write(changed: usize) -> PersistenceResult<()> {
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(PersistenceError::Conflict(
+            "failed_precondition: replica current belongs to another Realm, a later revision or a different value at this revision".to_owned(),
+        ))
+    }
 }
 
 /// Upsert one row of a family keyed by `(realm_id)` or `(realm_id, key)`.
@@ -100,7 +114,12 @@ async fn upsert_keyed(
              VALUES($1,$6,$2,$3,$4,$5) ON CONFLICT({conflict}) DO UPDATE SET \
              current_commit_id=EXCLUDED.current_commit_id, \
              current_stream_position=EXCLUDED.current_stream_position, \
-             value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+             value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
+             WHERE {table}.realm_id=EXCLUDED.realm_id \
+               AND ({table}.current_stream_position<EXCLUDED.current_stream_position \
+                 OR ({table}.current_stream_position=EXCLUDED.current_stream_position \
+                   AND {table}.current_commit_id=EXCLUDED.current_commit_id \
+                   AND {table}.value=EXCLUDED.value))",
             conflict = match table {
                 "strand_current_results" => "strand_id",
                 "space_current_results"
@@ -116,7 +135,11 @@ async fn upsert_keyed(
              VALUES($1,$2,$3,$4,$5) ON CONFLICT(realm_id) DO UPDATE SET \
              current_commit_id=EXCLUDED.current_commit_id, \
              current_stream_position=EXCLUDED.current_stream_position, \
-             value=EXCLUDED.value,updated_at=EXCLUDED.updated_at"
+             value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
+             WHERE {table}.current_stream_position<EXCLUDED.current_stream_position \
+               OR ({table}.current_stream_position=EXCLUDED.current_stream_position \
+                 AND {table}.current_commit_id=EXCLUDED.current_commit_id \
+                 AND {table}.value=EXCLUDED.value)"
         ),
     };
     let query = diesel::sql_query(sql)
@@ -125,12 +148,12 @@ async fn upsert_keyed(
         .bind::<BigInt, _>(revision.stream_position)
         .bind::<Jsonb, _>(value)
         .bind::<Timestamptz, _>(revision.updated_at);
-    match key {
+    let changed = match key {
         Some((_, key)) => query.bind::<Text, _>(key).execute(conn).await,
         None => query.execute(conn).await,
     }
     .map_err(PersistenceError::database)?;
-    Ok(())
+    require_one_current_write(changed)
 }
 
 async fn upsert_member_state(
@@ -145,13 +168,17 @@ async fn upsert_member_state(
         .and_then(Value::as_str)
         .filter(|membership| matches!(*membership, "join" | "knock" | "leave" | "ban"))
         .ok_or_else(|| malformed("member_state has no closed membership"))?;
-    diesel::sql_query(
+    let changed = diesel::sql_query(
         "INSERT INTO member_state_current_results \
          (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
          VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(realm_id,member_id) DO UPDATE SET \
          membership=EXCLUDED.membership,current_commit_id=EXCLUDED.current_commit_id, \
          current_stream_position=EXCLUDED.current_stream_position, \
-         value=EXCLUDED.value,updated_at=EXCLUDED.updated_at",
+         value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
+         WHERE member_state_current_results.current_stream_position<EXCLUDED.current_stream_position \
+           OR (member_state_current_results.current_stream_position=EXCLUDED.current_stream_position \
+             AND member_state_current_results.current_commit_id=EXCLUDED.current_commit_id \
+             AND member_state_current_results.value=EXCLUDED.value)",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(member.to_string())
@@ -163,7 +190,7 @@ async fn upsert_member_state(
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
-    Ok(())
+    require_one_current_write(changed)
 }
 
 /// Replace the member Station's typed current of `realm_id` with a verified
@@ -177,6 +204,16 @@ pub(crate) async fn install_snapshot_in_connection(
     entries: &[arkret_wire::TypedCurrentResult],
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
+    let mut selectors = std::collections::BTreeSet::new();
+    for entry in entries {
+        let arkret_wire::TypedCurrentResult::Value { selector, .. } = entry else {
+            return Err(malformed("a row is not a closed typed value"));
+        };
+        let key = arkret_canonical::canonical_json_bytes(selector).map_err(malformed)?;
+        if !selectors.insert(key) {
+            return Err(malformed("a snapshot repeats a current selector"));
+        }
+    }
     for table in MEMBER_STATION_FAMILIES {
         diesel::sql_query(format!("DELETE FROM {table} WHERE realm_id=$1"))
             .bind::<Text, _>(realm_id.as_str())
@@ -488,6 +525,200 @@ pub(crate) async fn advance_in_connection(
 
 #[cfg(test)]
 mod tests {
+    #[derive(Clone)]
+    enum FixtureWriter {
+        Singleton(&'static str),
+        Keyed(&'static str, Option<(&'static str, String)>),
+        Member(arkret_wire::ActorId),
+    }
+
+    impl FixtureWriter {
+        async fn write(
+            &self,
+            conn: &mut AsyncPgConnection,
+            realm: &arkret_wire::RealmId,
+            revision: &Revision<'_>,
+            value: &Value,
+        ) -> PersistenceResult<()> {
+            match self {
+                Self::Singleton(family) => {
+                    upsert_singleton(conn, realm, family, revision, value).await
+                }
+                Self::Keyed(table, key) => {
+                    upsert_keyed(
+                        conn,
+                        realm,
+                        table,
+                        key.as_ref().map(|(column, key)| (*column, key.as_str())),
+                        revision,
+                        value,
+                    )
+                    .await
+                }
+                Self::Member(actor) => {
+                    upsert_member_state(conn, realm, actor, revision, value).await
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn replica_current_writers_keep_revision_value_and_realm_identity() {
+        let database = TestDatabase::lease().await;
+        let mut conn = database.pool().get().await.unwrap();
+        let id = |byte| {
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [byte; 32])
+        };
+        let realm = arkret_wire::RealmId::from_event_id(&id(1));
+        let foreign = arkret_wire::RealmId::from_event_id(&id(2));
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:member.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let original = Revision {
+            commit_id: "original",
+            stream_position: 7,
+            updated_at: at,
+        };
+        let next = Revision {
+            commit_id: "next",
+            stream_position: 8,
+            updated_at: at,
+        };
+        let stale = Revision {
+            commit_id: "stale",
+            stream_position: 6,
+            updated_at: at,
+        };
+        let fork = Revision {
+            commit_id: "fork",
+            stream_position: 7,
+            updated_at: at,
+        };
+        let mut cases = [
+            "realm_genesis",
+            "realm_profile",
+            "realm_join_rule",
+            "realm_history_access",
+            "realm_discovery",
+            "realm_alias",
+            "realm_plaintext_visible_services",
+        ]
+        .into_iter()
+        .map(|family| {
+            (
+                FixtureWriter::Singleton(family),
+                json!({"original":true}),
+                json!({"changed":true}),
+            )
+        })
+        .collect::<Vec<_>>();
+        let keyed =
+            |table, column, key: &str| FixtureWriter::Keyed(table, Some((column, key.to_owned())));
+        cases.extend([
+            (
+                FixtureWriter::Keyed("realm_policy_bundle_current_results", None),
+                json!({"original":true}),
+                json!({"changed":true}),
+            ),
+            (
+                FixtureWriter::Keyed("realm_set_default_strand_current_results", None),
+                json!({"default_strand_id":"strand"}),
+                json!({"default_strand_id":"next-strand"}),
+            ),
+            (
+                keyed("strand_current_results", "strand_id", "strand"),
+                json!({"id":"strand","realm_id":realm,"title":"original"}),
+                json!({"id":"strand","realm_id":realm,"title":"changed"}),
+            ),
+            (
+                keyed("space_current_results", "space_id", "space"),
+                json!({"id":"space","realm_id":realm,"title":"original"}),
+                json!({"id":"space","realm_id":realm,"title":"changed"}),
+            ),
+            (
+                keyed("space_parent_current_results", "space_id", "space"),
+                json!({"parent_space_id":null}),
+                json!({"parent_space_id":"parent"}),
+            ),
+            (
+                keyed(
+                    "space_child_scope_policy_current_results",
+                    "space_id",
+                    "space",
+                ),
+                Value::Null,
+                json!({"changed":true}),
+            ),
+            (
+                keyed("message_revision_current_results", "message_id", "message"),
+                json!({"strand_id":"strand","track_name":"discussion","text":"original"}),
+                json!({"strand_id":"strand","track_name":"discussion","text":"changed"}),
+            ),
+            (
+                keyed("object_redaction_current_results", "target_ref", "target"),
+                json!({"assertions":[{"tag":"original"}]}),
+                json!({"assertions":[{"tag":"changed"}]}),
+            ),
+            (
+                FixtureWriter::Member(actor),
+                json!({"membership":"join","original":true}),
+                json!({"membership":"join","changed":true}),
+            ),
+        ]);
+        for (writer, value, changed) in cases {
+            writer
+                .write(&mut conn, &realm, &original, &value)
+                .await
+                .unwrap();
+            writer
+                .write(&mut conn, &realm, &original, &value)
+                .await
+                .unwrap();
+            for (revision, candidate) in [(&stale, &value), (&fork, &value), (&original, &changed)]
+            {
+                assert!(matches!(
+                    writer.write(&mut conn, &realm, revision, candidate).await,
+                    Err(PersistenceError::Conflict(_))
+                ));
+            }
+            if matches!(
+                &writer,
+                FixtureWriter::Keyed(
+                    "strand_current_results"
+                        | "space_current_results"
+                        | "space_parent_current_results"
+                        | "space_child_scope_policy_current_results"
+                        | "message_revision_current_results",
+                    Some(_)
+                )
+            ) {
+                // Try a newer receipt from a different Realm, which used to
+                // overwrite shared object identities at the global PK.
+                assert!(
+                    writer
+                        .write(&mut conn, &foreign, &next, &changed)
+                        .await
+                        .is_err()
+                );
+            }
+            writer
+                .write(&mut conn, &realm, &next, &changed)
+                .await
+                .unwrap();
+            writer
+                .write(&mut conn, &realm, &next, &changed)
+                .await
+                .unwrap();
+            assert!(
+                writer
+                    .write(&mut conn, &realm, &original, &value)
+                    .await
+                    .is_err()
+            );
+        }
+    }
     use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
     use serde_json::json;
@@ -863,6 +1094,14 @@ mod tests {
         install_snapshot_in_connection(&mut conn, &realm, &head, &entries, at)
             .await
             .unwrap();
+        // Duplicate selectors must fail before clearing any installed rows,
+        // even when they carry an identical value at an identical revision.
+        let duplicate = [entries[0].clone(), entries[0].clone()];
+        assert!(
+            install_snapshot_in_connection(&mut conn, &realm, &head, &duplicate, at)
+                .await
+                .is_err()
+        );
         for (board, expected) in [
             (&board_a, serde_json::to_value(&placed).unwrap()),
             (&board_b, Value::Null),

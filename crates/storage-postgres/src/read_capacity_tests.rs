@@ -292,6 +292,54 @@ async fn seed_current(conn: &mut AsyncPgConnection, first: i64, last: i64, width
                 '{{}}'::jsonb, now()
          FROM generate_series({first},{last}) r, generate_series(1,{width}) m;"
     )).await.unwrap();
+    seed_snapshot_families(conn, first, last, width).await;
+}
+
+// Every table in the production snapshot union is populated. These are
+// physical query-plan fixtures, not signed admission or disclosure evidence.
+async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: i64, width: i64) {
+    let rows = format!("FROM generate_series({first},{last}) r, generate_series(1,{width}) m");
+    let realm = "'ak:realm:capacity-' || r";
+    let commit = "'capacity-' || r || '-0'";
+    let key = "r || '-' || m";
+    for (table, columns, expressions, value) in [
+        ("policy_current_results", "policy_id,current_event_id", format!("'policy-' || {key}, 'event-' || {key}"), "'{}'::jsonb".to_owned()),
+        ("strand_current_results", "strand_id", format!("'strand-' || {key}"), format!("jsonb_build_object('id','strand-' || {key},'realm_id',{realm})")),
+        ("strand_position_current_results", "board_space_id,strand_id", format!("'board-' || {key},'strand-' || {key}"), "jsonb_build_object('list_space_id','list','rank','a')".to_owned()),
+        ("space_current_results", "space_id", format!("'space-' || {key}"), format!("jsonb_build_object('id','space-' || {key},'realm_id',{realm})")),
+        ("space_parent_current_results", "space_id", format!("'space-' || {key}"), "jsonb_build_object('parent_space_id',NULL)".to_owned()),
+        ("space_child_scope_policy_current_results", "space_id", format!("'space-' || {key}"), "'null'::jsonb".to_owned()),
+        ("mls_group_current_results", "scope_key,mls_group_id,public_state", format!("'scope-' || {key},'group-' || {key},'\\x00'::bytea"), format!("jsonb_build_object('effective_scope',jsonb_build_object('kind','realm','realm_id',{realm}),'covered_key_access_revision',0,'current_key_access_revision',0)")),
+        // Reports have distinct covering Commits. They cannot all share position 0.
+        ("moderation_report_current_results", "report_event_id", format!("'report-' || {key}"), format!("jsonb_build_object('realm_id',{realm},'target_ref','target-' || m,'reporter_id','reporter')")),
+        ("object_redaction_current_results", "target_ref", "'target-' || m".to_owned(), "jsonb_build_object('assertions',jsonb_build_array(jsonb_build_object('tag_id','dot')))".to_owned()),
+        ("invite_lifecycle_current_results", "invite_id", format!("'invite-' || {key}"), "'\"pending\"'::jsonb".to_owned()),
+        ("invite_live_target_current_results", "invitee_account_id", "jsonb_build_object('account',m)::text".to_owned(), format!("jsonb_build_object('create_event_id','create-' || {key})")),
+        ("invite_directed_invitee_current_results", "invite_id", format!("'invite-' || {key}"), "jsonb_build_object('invitee_account_id',jsonb_build_object('account',m))".to_owned()),
+        ("capability_grant_current_results", "grant_id,status,current_event_id,current_stream_ref", format!("'grant-' || {key},'active','event-' || {key},'{{}}'::jsonb"), format!("jsonb_build_object('id','grant-' || {key},'schema','ak.schema.capability.v1','status','active')")),
+        ("mimi_room_binding_current_results", "mimi_room_uri,current_event_id", format!("'mimi-' || {key},'event-' || {key}"), format!("jsonb_build_object('mimi_room_uri','mimi-' || {key},'binding_scope',jsonb_build_object('realm_id',{realm}))")),
+        ("agent_status_current_results", "current_key,agent_id,actor_id", format!("'agent-' || {key},'agent-' || {key},'{{}}'::jsonb"), "'\"active\"'::jsonb".to_owned()),
+        ("agent_key_current_results", "current_key,agent_id,agent_key_id", format!("'key-' || {key},'agent-' || {key},'key-' || {key}"), "jsonb_build_object('authorizations','[]'::jsonb)".to_owned()),
+    ] {
+        let (covering, position) = if table == "moderation_report_current_results" {
+            ("'capacity-' || r || '-' || (m-1)", "m-1")
+        } else {
+            (commit, "0")
+        };
+        conn.batch_execute(&format!("INSERT INTO {table}(realm_id,{columns},current_commit_id,current_stream_position,value,updated_at) SELECT {realm},{expressions},{covering},{position},{value},now() {rows}"))
+            .await.unwrap_or_else(|error| panic!("capacity seed {table}: {error}"));
+    }
+    conn.batch_execute(&format!(
+        "INSERT INTO realm_bootstrap_current_results(realm_id,result_family,current_commit_id,current_stream_position,value,updated_at)
+         SELECT {realm},f,{commit},0,'{{}}'::jsonb,now() FROM generate_series({first},{last}) r,
+         unnest(ARRAY['realm_genesis','realm_profile','realm_join_rule','realm_history_access','realm_discovery','realm_alias','realm_plaintext_visible_services']) f;
+         INSERT INTO realm_authority_root_current_results(realm_id,controller_actor_id,controller_epoch,authority_generation,authority_event_ref,current_commit_id,current_stream_position,updated_at)
+         SELECT {realm},'{{}}'::jsonb,0,0,'event',{commit},0,now() FROM generate_series({first},{last}) r;
+         INSERT INTO realm_policy_bundle_current_results(realm_id,current_commit_id,current_stream_position,value,updated_at)
+         SELECT {realm},{commit},0,'{{}}'::jsonb,now() FROM generate_series({first},{last}) r;
+         INSERT INTO realm_set_default_strand_current_results(realm_id,current_commit_id,current_stream_position,value,updated_at)
+         SELECT {realm},{commit},0,jsonb_build_object('default_strand_id','strand'),now() FROM generate_series({first},{last}) r;"
+    )).await.unwrap();
 }
 
 fn measured_current(plan: Value, label: &str, bound: f64) {
@@ -333,6 +381,52 @@ fn measured_current(plan: Value, label: &str, bound: f64) {
     );
 }
 
+fn assert_each_snapshot_family_bounded(
+    node: &Value,
+    width: f64,
+    observed: &mut std::collections::BTreeSet<String>,
+) {
+    if let Some(table) = node["Relation Name"]
+        .as_str()
+        .filter(|table| table.ends_with("_current_results"))
+    {
+        observed.insert(table.to_owned());
+        let output = match table {
+            "realm_bootstrap_current_results" => 7.0,
+            "realm_authority_root_current_results"
+            | "realm_policy_bundle_current_results"
+            | "realm_set_default_strand_current_results" => 1.0,
+            _ => width,
+        };
+        let visited = [
+            "Actual Rows",
+            "Rows Removed by Filter",
+            "Rows Removed by Index Recheck",
+        ]
+        .into_iter()
+        .filter_map(|field| node[field].as_f64())
+        .sum::<f64>()
+            * node["Actual Loops"].as_f64().unwrap_or(1.0);
+        assert_eq!(
+            node["Actual Rows"].as_f64().unwrap_or(0.0)
+                * node["Actual Loops"].as_f64().unwrap_or(1.0),
+            output,
+            "nonempty family {table}"
+        );
+        // A small singleton table can fit in two heap pages at 100 Realms,
+        // where a sequential scan is cheaper than an index probe. Its fixed
+        // 128-row allowance stays independent of Realm count; 1000 Realms
+        // must switch to a bounded probe, without disabling seqscan.
+        assert!(
+            visited <= 4.0 * output + 128.0,
+            "{table}: visited={visited}, output={output}: {node}"
+        );
+    }
+    for child in node["Plans"].as_array().into_iter().flatten() {
+        assert_each_snapshot_family_bounded(child, width, observed);
+    }
+}
+
 #[tokio::test]
 async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_thousand_realms() {
     let database = crate::test_database::TestDatabase::lease().await;
@@ -361,18 +455,30 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
             .await
             .unwrap()
             .plan;
-            // Three published families plus their covering Commit probes.
-            // Relation is read by its exact endpoint, not this snapshot union.
             let width = if realm == "ak:realm:capacity-1" {
                 1000.0
             } else {
                 20.0
             };
-            assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(3.0 * width));
+            let mut observed = std::collections::BTreeSet::new();
+            assert_each_snapshot_family_bounded(&plan[0]["Plan"], width, &mut observed);
+            // Derive the expected table inventory from the actual production
+            // SQL: a new union branch cannot silently retain an empty fixture.
+            let expected = crate::authority_commit::SNAPSHOT_CURRENT_SQL
+                .split("FROM ")
+                .skip(1)
+                .filter_map(|part| part.split_whitespace().next())
+                .filter(|table| table.ends_with("_current_results"))
+                .map(str::to_owned)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(observed, expected);
+            assert_eq!(observed.len(), 23);
+            let output = 19.0 * width + 10.0;
+            assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan
             // or a scan that grows with unrelated Realms.
-            measured_current(plan, &label, 12.0 * width + 32.0);
+            measured_current(plan, &label, 4.0 * output + 32.0);
             for (name, sql, key) in [
                 (
                     "member present",

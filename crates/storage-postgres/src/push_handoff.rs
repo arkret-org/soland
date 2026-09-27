@@ -2119,7 +2119,7 @@ mod tests {
             cnf_jkt: "fixture-jkt".to_owned(),
             auth_side_confirmed: false,
             completed_at: None,
-            created_at: chrono::Utc::now(),
+            created_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         };
         assert_eq!(
             store.reserve_hard_logout_journal(&record).await.unwrap(),
