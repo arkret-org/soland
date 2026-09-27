@@ -865,17 +865,7 @@ diesel::table! {
     }
 }
 
-diesel::table! {
-    member_identity_events (event_id) {
-        event_id -> Text,
-        realm_id -> Text,
-        actor_id -> Text,
-        segment -> Text,
-        payload_digest -> Text,
-        replaces -> Jsonb,
-        raw_event -> Jsonb,
-    }
-}
+
 
 diesel::table! {
     member_identity_handle_claims (subject_id, digest) {
@@ -1947,7 +1937,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     invite_locators,
     invite_receive_policies,
     key_backups,
-    member_identity_events,
     member_identity_handle_claims,
     messages,
     mls_key_packages,

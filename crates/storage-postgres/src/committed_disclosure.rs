@@ -43,43 +43,86 @@ struct AllowedRow {
     allowed: bool,
 }
 
-/// Circle creation occupies a Realm Commit slot, but its complete signed
-/// object is private to current members of that Circle. Both memberships and
-/// their accepted Commit coordinates are read in the caller's MVCC cut.
-async fn circle_create_full_for_member(
+/// Decide canonical byte visibility after the caller's stream interval is proved.
+pub(crate) async fn full_event_for_member_in_connection(
     conn: &mut AsyncPgConnection,
     row: &CommittedEventFullView,
     caller: &arkret_wire::ActorId,
+    at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<bool> {
-    let circle_id = arkret_wire::CircleId::from_event_id(&row.event.event_id);
-    let visible = sql_query(
-        "SELECT EXISTS(SELECT 1 FROM circle_current_results circle \
-         JOIN circle_member_state_current_results circle_member \
-           ON circle_member.circle_id=circle.circle_id AND circle_member.realm_id=circle.realm_id \
-         JOIN realm_commits circle_commit ON circle_commit.commit_id=circle_member.current_commit_id \
-           AND circle_commit.stream_position=circle_member.current_stream_position \
-           AND circle_commit.stream_ref=circle_member.source_stream_ref \
-         JOIN member_state_current_results realm_member ON realm_member.realm_id=circle.realm_id \
-           AND realm_member.member_id=circle_member.member_id \
-         JOIN realm_commits realm_commit ON realm_commit.commit_id=realm_member.current_commit_id \
-           AND realm_commit.stream_position=realm_member.current_stream_position \
-           AND realm_commit.stream_ref->>'kind'='realm' \
-           AND realm_commit.stream_ref->>'realm_id'=realm_member.realm_id \
-         WHERE circle.realm_id=$1 AND circle.circle_id=$2 AND circle.create_event_id=$3 \
-           AND circle_member.member_id=$4 AND circle_member.membership='join' \
-           AND circle_commit.stream_ref->>'kind'='circle' \
-           AND circle_commit.stream_ref->>'circle_id'=circle.circle_id \
-           AND circle_commit.stream_ref->>'realm_id'=circle.realm_id \
-           AND realm_member.membership='join') AS allowed",
-    )
-    .bind::<Text, _>(row.event.realm_id.as_str())
-    .bind::<Text, _>(circle_id.as_str())
-    .bind::<Text, _>(row.event.event_id.as_str())
-    .bind::<Text, _>(caller.to_string())
-    .get_result::<AllowedRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    Ok(visible.allowed)
+    let event = &row.event;
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::SelfModerationReport
+            | arkret_wire::EventKind::ModerationFrankingProof
+    ) {
+        let scope = if event.kind == arkret_wire::EventKind::ModerationFrankingProof {
+            let proof: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(PersistenceError::database)?;
+            crate::moderation_franking_proof_current_results::franking_target_scope_in_connection(
+                conn,
+                &event.realm_id,
+                &proof.event_id,
+            )
+            .await?
+        } else {
+            event.scope_ref.clone()
+        };
+        let actions = [
+            arkret_wire::CapabilityActionId::POLICY_MANAGE,
+            arkret_wire::CapabilityActionId::MODERATION_DECISION,
+        ];
+        if crate::moderation_report_current_results::scope_moderator(
+            conn,
+            &event.realm_id,
+            &scope,
+            caller,
+            &actions,
+            at,
+        )
+        .await?
+        {
+            return Ok(true);
+        }
+        return crate::replica_authorization::scope_moderator(
+            conn,
+            &event.realm_id,
+            caller,
+            &scope,
+            &actions,
+            at,
+        )
+        .await;
+    }
+    let circle = if event.kind == arkret_wire::EventKind::CircleCreate {
+        Some(arkret_wire::CircleId::from_event_id(&event.event_id))
+    } else if let arkret_wire::ScopeRef::Circle { circle_id, .. } = &event.scope_ref {
+        Some(circle_id.clone())
+    } else {
+        None
+    };
+    if let Some(circle_id) = circle {
+        let Some(floor) = crate::account_stream_scan::caller_circle_floor_in_connection(
+            conn,
+            &event.realm_id,
+            &circle_id,
+            caller,
+        )
+        .await?
+        else {
+            return Ok(false);
+        };
+        if event.kind != arkret_wire::EventKind::CircleCreate
+            && row.commit.stream_position < floor.oldest_position
+        {
+            return Ok(false);
+        }
+    }
+    Ok(&event.actor_id == caller
+        || crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS.contains(&event.kind))
 }
 
 /// Commits among `$1` whose Event this Station withholds.
@@ -152,12 +195,8 @@ pub(crate) async fn disclose_to_member_in_connection(
             disclosed.push(item);
             continue;
         };
-        let full = if row.event.kind == arkret_wire::EventKind::CircleCreate {
-            circle_create_full_for_member(conn, &row, caller).await?
-        } else {
-            &row.event.actor_id == caller
-                || crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS.contains(&row.event.kind)
-        };
+        let full =
+            full_event_for_member_in_connection(conn, &row, caller, chrono::Utc::now()).await?;
         disclosed.push(if full {
             CommittedEventView::Full(row)
         } else {

@@ -1039,6 +1039,7 @@ fn franking_event_request(
     soland_storage::EventCommitRequest {
         authority_commit,
         self_producer_guard: None,
+        applet_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,
@@ -1652,6 +1653,7 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     };
     let commit = |event, nonce| EventBatchCommitRequest {
         events: vec![event],
+        realm_organization_proof: None,
         franking_replay_nonce: Some(nonce),
         applet_record: None,
         applet_authoring_preview: None,
@@ -1872,6 +1874,7 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
     ));
     let failing_batch = EventBatchCommitRequest {
         events: vec![target.clone(), proof.clone()],
+        realm_organization_proof: None,
         franking_replay_nonce: None,
         applet_record: None,
         applet_authoring_preview: None,
@@ -1905,6 +1908,7 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
     ));
     let clean_batch = EventBatchCommitRequest {
         events: vec![target, proof],
+        realm_organization_proof: None,
         franking_replay_nonce: None,
         applet_record: None,
         applet_authoring_preview: None,
@@ -1951,6 +1955,7 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
     let batch = |event| EventBatchCommitRequest {
         events: vec![event],
+        realm_organization_proof: None,
         franking_replay_nonce: None,
         applet_record: None,
         applet_authoring_preview: None,

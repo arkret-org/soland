@@ -3,9 +3,9 @@
 //! `governance/content-moderation.md` §3.3 makes the accepted
 //! `ak.self.moderation.report` Event itself the canonical fact: the subject is
 //! the Event's own id and the value is the complete signed payload. The
-//! supported carrier is the reporter-authored self report on the Realm stream;
-//! Circle-scope reports and MIMI facade reports need their own authority cut
-//! and remain closed.
+//! reporter-authored self report is accepted on its exact Realm or Circle stream.
+//! Membership and target visibility are read at the accepting authority cut;
+//! MIMI facade reports remain outside this self-ingress.
 
 use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
@@ -141,15 +141,10 @@ pub(crate) async fn commit_moderation_report_current_result_in_connection(
     }
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    let realm_stream = arkret_wire::CommitStreamRef::Realm {
-        realm_id: event.realm_id.clone(),
-    };
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-        || commit.stream_ref != realm_stream
-        || commit.event_ref != event.event_id
-    {
+    let stream = moderation_stream(event)?;
+    if commit.stream_ref != stream || commit.event_ref != event.event_id {
         return Err(conflict(
-            "moderation report current writer requires the Realm source stream",
+            "moderation report source stream differs from signed scope",
         ));
     }
     if event.executed_by.is_some() || event.authorization_ref.is_some() || event.applet_id.is_some()
@@ -168,34 +163,22 @@ pub(crate) async fn commit_moderation_report_current_result_in_connection(
     if typed.realm_id != event.realm_id {
         return Err(target_not_found());
     }
-    if typed.effective_scope.as_ref().is_some_and(|scope| {
-        !matches!(scope, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-    }) {
+    let effective_scope =
+        typed
+            .effective_scope
+            .clone()
+            .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
+                realm_id: event.realm_id.clone(),
+            });
+    if effective_scope != event.scope_ref {
         return Err(target_not_found());
     }
     let before = position(commit)?;
-    // The reporter must be a confirmed joined member at this same cut. The
-    // Realm authority row is already locked by the just-installed Commit, so a
-    // concurrent membership transition waits for this transaction.
-    let member = present(
+    ensure_scope_member(conn, &event.realm_id, &event.scope_ref, &event.actor_id).await?;
+    ensure_scope_target(
         conn,
-        "SELECT EXISTS (SELECT 1 FROM member_state_current_results m \
-         JOIN realm_commits c ON c.commit_id=m.current_commit_id \
-         WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join' \
-           AND c.stream_position<$3 \
-           AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id) AS present",
-        event.realm_id.as_str(),
-        &event.actor_id.to_string(),
-        before,
-    )
-    .await?;
-    if !member {
-        return Err(target_not_found());
-    }
-    ensure_realm_scope_target(
-        conn,
-        event.realm_id.as_str(),
+        &event.realm_id,
+        &event.scope_ref,
         typed.target_ref.as_str(),
         before,
     )
@@ -220,4 +203,133 @@ pub(crate) async fn commit_moderation_report_current_result_in_connection(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn moderation_stream(
+    event: &arkret_wire::Event,
+) -> PersistenceResult<arkret_wire::CommitStreamRef> {
+    match &event.scope_ref {
+        arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id => {
+            Ok(arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            })
+        }
+        arkret_wire::ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } if realm_id == &event.realm_id => Ok(arkret_wire::CommitStreamRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: circle_id.clone(),
+        }),
+        _ => Err(target_not_found()),
+    }
+}
+
+pub(crate) async fn ensure_scope_member(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    scope: &arkret_wire::ScopeRef,
+    actor: &arkret_wire::ActorId,
+) -> PersistenceResult<()> {
+    if scope_member_in_connection(conn, realm, scope, actor).await? {
+        Ok(())
+    } else {
+        Err(target_not_found())
+    }
+}
+
+/// Membership is an internal authorization fact. The consuming operation owns
+/// its refusal category; database and other storage failures propagate intact.
+pub(crate) async fn scope_member_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    scope: &arkret_wire::ScopeRef,
+    actor: &arkret_wire::ActorId,
+) -> PersistenceResult<bool> {
+    if crate::member_state_admission::locked_membership(conn, realm, actor).await? != "join" {
+        return Ok(false);
+    }
+    if let arkret_wire::ScopeRef::Circle { circle_id, .. } = scope {
+        let joined = diesel::sql_query(
+            "SELECT EXISTS (SELECT 1 FROM circle_member_state_current_results m \
+            JOIN circle_current_results c ON c.circle_id=m.circle_id AND c.realm_id=m.realm_id \
+            WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
+            AND c.value->>'state'='active') AS present",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .bind::<Text, _>(circle_id.as_str())
+        .bind::<Text, _>(actor.to_string())
+        .get_result::<PresentRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .present;
+        if !joined {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) async fn ensure_scope_target(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    scope: &arkret_wire::ScopeRef,
+    target: &str,
+    before: i64,
+) -> PersistenceResult<()> {
+    let arkret_wire::ScopeRef::Circle { circle_id, .. } = scope else {
+        return ensure_realm_scope_target(conn, realm.as_str(), target, before).await;
+    };
+    let found = diesel::sql_query("SELECT EXISTS (
+        SELECT 1 FROM circle_current_results WHERE realm_id=$1 AND circle_id=$2 AND circle_id=$3
+        UNION ALL SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk
+         WHERE c.realm_id=$1 AND c.stream_ref->>'circle_id'=$2 AND c.stream_ref->>'kind'='circle'
+          AND c.stream_position<$4 AND e.state='committed' AND c.commit_json->>'event_ref'=$3
+        UNION ALL SELECT 1 FROM message_revision_current_results m JOIN realm_commits c ON c.commit_id=m.current_commit_id
+         WHERE m.realm_id=$1 AND m.message_id=$3 AND c.stream_ref->>'circle_id'=$2
+          AND c.stream_ref->>'kind'='circle' AND c.stream_position<$4
+        UNION ALL SELECT 1 FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id
+         WHERE s.realm_id=$1 AND s.strand_id=$3 AND s.value->>'scope_circle_id'=$2
+          AND c.stream_ref->>'kind'='circle' AND c.stream_ref->>'circle_id'=$2 AND c.stream_position<$4
+        ) AS present")
+        .bind::<Text,_>(realm.as_str()).bind::<Text,_>(circle_id.as_str()).bind::<Text,_>(target)
+        .bind::<BigInt,_>(before).get_result::<PresentRow>(&mut *conn).await
+        .map_err(PersistenceError::database)?.present;
+    if found {
+        Ok(())
+    } else {
+        Err(target_not_found())
+    }
+}
+
+pub(crate) async fn scope_moderator(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    scope: &arkret_wire::ScopeRef,
+    actor: &arkret_wire::ActorId,
+    actions: &[&str],
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<bool> {
+    let cut =
+        crate::realm_authorization_cut::RealmAuthorizationCut::read(conn, realm, actor).await?;
+    let target = match scope {
+        arkret_wire::ScopeRef::Realm { realm_id } if realm_id == realm => {
+            if cut.actor_is_root_controller() {
+                return Ok(true);
+            }
+            arkret_wire::WireResourceSelector::realm(realm.clone())
+        }
+        arkret_wire::ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } if realm_id == realm => {
+            arkret_wire::WireResourceSelector::circle(realm.clone(), circle_id.clone())
+        }
+        _ => return Ok(false),
+    };
+    let facts = soland_storage::OperationFacts::default();
+    Ok(!cut
+        .evaluate(actions, &target, &facts, at)
+        .unreserved()
+        .is_empty())
 }

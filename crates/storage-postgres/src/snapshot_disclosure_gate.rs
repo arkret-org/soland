@@ -1,49 +1,21 @@
-//! Caller-aware Realm State Snapshot disclosure
-//! (`realm-state-snapshot-schema.md` §3, `current-results.md` §1 and §3,
-//! `history-visibility.md` §3.1 and §6).
+//! Caller-aware snapshots from one REPEATABLE READ authority cut.
 //!
-//! The governing Station materializes every typed current result in the same
-//! transaction that commits its Event, so the rows, stream heads and floors of
-//! a Snapshot are read from those durable families at one `REPEATABLE READ`
-//! cut. This module decides, for one requesting Account, which of them it may
-//! receive, and refuses the whole cut when any part is not provably
-//! disclosable:
+//! Realm membership and exact Circle membership determine visible streams;
+//! hidden Circle objects, member rows, heads and floors are omitted together.
+//! Current rows retain their source stream and revision, including state
+//! below that stream's history floor. Message content is constrained by its
+//! original accepted scope, covering position and redaction overlay.
+//! Reports and franking proofs additionally require exact target-scope
+//! moderator authority; a Realm-stream proof never broadens a Circle target.
 //!
-//! - every installed `*_current_results` family has a disclosure rule here, and families without
-//!   one (moderator-only reports, grants, links, Agent and PCR state) hold no row of this Realm;
-//! - every accepted Event of the Realm is of a kind whose result writes land only in disclosed
-//!   families, so no admitted Event can have produced state this subset omits;
-//! - no Event of the Realm is retention-expired: a `message_revision` row would otherwise carry the
-//!   content that committed-event reads withhold, and no typed row states the expiry;
-//! - a redacted Message is disclosed as its `object_redaction` row only: its `message_revision` row
-//!   carries the content every other read path withholds, so it is outside the caller's visible
-//!   range and not part of the disclosed cut (`strand-and-message.md` §9.2);
-//! - the Realm has only its Realm stream (Circle and Sidecar visibility is not proved here) and is
-//!   in its genesis tenure (a planned handoff import of current families is not proved here);
-//! - the Account is currently joined and its readable floor on the Realm stream is proved at this
-//!   cut by the same function the Account stream scan uses: the genesis Commit for the founding
-//!   member and under `all_history_for_current_members`, its current join Commit under `since_join`
-//!   (decision 0108 §1045). The Snapshot floor is exactly that value.
-//!
-//! Per family, a joined member receives:
-//!
-//! - every Realm singleton, every `member_state` row, every Realm-scoped Strand and Space (with its
-//!   separate parent and child-scope-policy current families), every `invite_lifecycle`,
-//!   `invite_live_target`, `invite_directed_invitee` and `capability_grant` row, and the
-//!   Realm-scope `mls_group` row (the public MLS group every member's send gate reads,
-//!   encryption-and-audit.md §2.5.3). These are Realm-stream state written by durable shared Events
-//!   that federation fans out to every joined member (`federation.md` §4.1.1); membership, not a
-//!   grant, decides a member's reads (`capabilities.md` §9) and a Realm promises no read isolation
-//!   among its joined members (`realm-and-space.md` §1). A row below the caller's floor is current
-//!   state the signed Snapshot commits to (`realm-state-snapshot-schema.md` §3);
-//! - a `message_revision` row only when its covering Commit is within the caller's readable
-//!   interval. Its value is the accepted carrier Event's payload, i.e. history content, and a
-//!   Snapshot must satisfy the history policy (`history-visibility.md` §6). A row below the floor
-//!   is a selector the caller may not read and is omitted (`current-results.md` §3).
+//! Every installed current family is audited. Unsupported families, Sidecar
+//! streams, retention-expired content and imported handoff tenures remain
+//! unproved, so those cuts cannot be signed. Bootstrap changes only its own
+//! join stream's history floor (`federation.md` section 4.1.1).
 
 use arkret_wire::{
-    AccountId, ActorId, CommitStreamRef, CurrentSelector, EventKind, ReadableFloor, RealmId,
-    StreamHistoryFloor, TypedCurrentResult,
+    AccountId, ActorId, CircleId, CommitStreamRef, CurrentSelector, EventKind, ReadableFloor,
+    RealmId, StreamHistoryFloor, TypedCurrentResult,
 };
 use diesel::sql_types::Text as SqlText;
 
@@ -65,6 +37,8 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmAlias,
     EventKind::RealmPlaintextVisibleServices,
     EventKind::MemberState,
+    EventKind::MemberIdentityUpdate,
+    EventKind::AppletRegistration,
     EventKind::InviteCreate,
     EventKind::InviteRevoke,
     EventKind::InviteCancel,
@@ -86,6 +60,14 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::MessageRedact,
     EventKind::MlsGenesis,
     EventKind::MlsCommit,
+    EventKind::CircleCreate,
+    EventKind::CircleMemberState,
+    EventKind::ModerationDecision,
+    EventKind::ModerationDecisionLift,
+    EventKind::SelfModerationReport,
+    EventKind::ModerationFrankingProof,
+    EventKind::RealmOrganization,
+    EventKind::CallCreate,
 ];
 
 /// Every typed-current table this Station installs. A new family could be
@@ -101,10 +83,12 @@ const AUDITED_FAMILIES: &[&str] = &[
     "mimi_room_binding_current_results",
     "realm_link_current_results",
     "member_state_current_results",
-    // Private child-stream rows are not in the Realm snapshot disclosure
-    // subset. Audit the installed tables, then refuse cuts that hold them.
+    "member_identity_updates_current_results",
+    "applet_registration_current_results",
+    // Circle rows are classified by exact membership; Sidecar is unproved.
     "circle_current_results",
     "circle_member_state_current_results",
+    "call_state_current_results",
     "sidecar_current_results",
     "sidecar_context_current_results",
     "strand_current_results",
@@ -121,10 +105,11 @@ const AUDITED_FAMILIES: &[&str] = &[
     "invite_lifecycle_current_results",
     "invite_live_target_current_results",
     "invite_directed_invitee_current_results",
-    // Moderator-only (content-moderation.md §3.3): these refuse the cut below
-    // while any row exists, never silently omitted from a signed cut.
+    // Reports and proofs have a separate exact-scope moderator disclosure gate.
     "moderation_report_current_results",
+    "moderation_franking_proof_current_results",
     "moderation_state_current_results",
+    "realm_organization_current_results",
     "realm_bootstrap_current_results",
     "agent_status_current_results",
     "agent_key_current_results",
@@ -194,6 +179,15 @@ struct KindRow {
 /// What one cut says about the Realm and the caller beyond its candidate
 /// material.
 pub(crate) struct DisclosureFacts {
+    /// Original accepted Message creation scopes, including revised carriers.
+    pub(crate) message_streams: std::collections::BTreeMap<arkret_wire::MessageId, CommitStreamRef>,
+    pub(crate) call_creations: std::collections::BTreeMap<arkret_wire::CallId, CallCreationFact>,
+    /// Exact current Circle memberships and readable floors at this same cut.
+    pub(crate) circle_floors: std::collections::BTreeMap<CircleId, ReadableFloor>,
+    /// Report subjects whose exact scope's moderator grant is proved at this cut.
+    pub(crate) report_subjects: std::collections::BTreeSet<arkret_wire::EventId>,
+    /// Encrypted target subjects authorized through their actual signed scopes.
+    pub(crate) franking_subjects: std::collections::BTreeSet<arkret_wire::EventId>,
     /// The caller's readable floor on the Realm stream, `None` when the caller
     /// is not a currently joined member or the floor is not provable.
     pub(crate) caller_floor: Option<ReadableFloor>,
@@ -202,6 +196,11 @@ pub(crate) struct DisclosureFacts {
     /// A family without a disclosure rule holds a row of this Realm, or an
     /// Event of this Realm is retention-expired.
     pub(crate) undisclosed_family_row: bool,
+}
+
+pub(crate) struct CallCreationFact {
+    stream: CommitStreamRef,
+    initial_state: arkret_models_collaboration::events_payloads::call::CallLifecycleState,
 }
 
 /// Read the candidate material and the disclosure facts from one MVCC cut.
@@ -285,11 +284,13 @@ pub async fn issue_account_snapshot(
 struct JoinPositionRow {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     current_stream_position: i64,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    stream_ref: serde_json::Value,
 }
 
 /// Material for `ak.peer.realm_join.read.bootstrap.v1` (`federation.md`
 /// §4.1.1, member Station bootstrap): the member Account's complete
-/// disclosure at one cut, with the Realm stream floor at the member's own
+/// disclosure at one cut, with the exact join stream floor at the member's own
 /// join Commit -- the prefix evidence the member Station anchors its held
 /// stream on. `None` unless `membership_commit_id` is still the member's
 /// current joined membership.
@@ -305,8 +306,14 @@ pub async fn member_station_bootstrap_material(
             .execute(&mut *conn)
             .await?;
         let Some(join) = sql_query(
-            "SELECT current_stream_position FROM member_state_current_results \
-             WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3",
+            "SELECT membership.current_stream_position,covering.stream_ref FROM ( \
+             SELECT current_stream_position,current_commit_id FROM member_state_current_results \
+             WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3 \
+             UNION ALL SELECT current_stream_position,current_commit_id FROM circle_member_state_current_results \
+             WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3 \
+             ) membership JOIN realm_commits covering ON covering.realm_id=$1 \
+             AND covering.commit_id=membership.current_commit_id \
+             AND covering.stream_position=membership.current_stream_position",
         )
         .bind::<Text, _>(realm_id.as_str())
         .bind::<Text, _>(ActorId::account(account.clone()).to_string())
@@ -325,26 +332,50 @@ pub async fn member_station_bootstrap_material(
         let join_position = u64::try_from(join.current_stream_position).map_err(|_| {
             PersistenceError::Internal("stored join position is negative".to_owned())
         })?;
-        material.current_state_entries.retain(|row| {
-            !matches!(
-                row,
-                TypedCurrentResult::Value {
-                    selector: CurrentSelector::MessageRevision { .. },
-                    revision,
-                    ..
-                } if revision.stream_position < join_position
-            )
-        });
-        material.retention_and_history_floor.stream_floors = vec![StreamHistoryFloor {
-            stream_ref: CommitStreamRef::Realm {
-                realm_id: realm_id.clone(),
-            },
-            oldest_position: join_position,
-        }];
+        let stream: CommitStreamRef = serde_json::from_value(join.stream_ref)
+            .map_err(PersistenceError::database)?;
+        anchor_bootstrap_join(&mut material, &stream, membership_commit_id, join_position)?;
         Ok(Some(material))
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+/// A bootstrap prefix anchors only its exact stream; other readable streams
+/// retain their independent positions and history floors.
+fn anchor_bootstrap_join(
+    material: &mut soland_storage::RealmStateSnapshotMaterial,
+    stream: &CommitStreamRef,
+    commit_id: &arkret_wire::RealmCommitId,
+    position: u64,
+) -> PersistenceResult<()> {
+    if stream.realm_id() != &material.realm_id {
+        return Err(rejected("bootstrap join is outside its Realm"));
+    }
+    let head = material
+        .visible_stream_heads
+        .iter()
+        .find(|head| &head.stream_ref == stream)
+        .ok_or_else(|| rejected("bootstrap join stream is not visible"))?;
+    if position > head.stream_position
+        || (position == head.stream_position && commit_id != &head.commit_id)
+    {
+        return Err(rejected(
+            "bootstrap join is outside the visible stream prefix",
+        ));
+    }
+    let floor = material
+        .retention_and_history_floor
+        .stream_floors
+        .iter_mut()
+        .find(|floor| &floor.stream_ref == stream)
+        .ok_or_else(|| rejected("bootstrap join stream has no authorized floor"))?;
+    floor.oldest_position = position;
+    material.current_state_entries.retain(|row| !matches!(row,
+        TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { .. }, source_stream_ref, revision, .. }
+        if source_stream_ref == stream && revision.stream_position < position
+    ));
+    Ok(())
 }
 
 /// The Account's disclosed material on the caller's cut.
@@ -372,7 +403,7 @@ pub(crate) async fn account_snapshot_material_in_connection(
     {
         return Err(rejected("an unaudited typed-current family is installed"));
     }
-    let facts = disclosure_facts_in_connection(conn, realm_id, account).await?;
+    let facts = disclosure_facts_in_connection(conn, realm_id, account, &material).await?;
     disclose_to_account(material, account, &facts).map(Some)
 }
 
@@ -380,11 +411,10 @@ async fn disclosure_facts_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
     account: &AccountId,
+    material: &soland_storage::RealmStateSnapshotMaterial,
 ) -> PersistenceResult<DisclosureFacts> {
     let undisclosed_family_row = sql_query(
         "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM circle_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM circle_member_state_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM sidecar_context_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM rsvp_current_results WHERE realm_id=$1) \
@@ -404,8 +434,6 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM direct_conversation_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM consent_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM moderation_report_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM moderation_state_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
@@ -439,20 +467,286 @@ async fn disclosure_facts_in_connection(
         &ActorId::account(account.clone()),
     )
     .await?;
+    let mut message_streams = std::collections::BTreeMap::new();
+    for entry in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector: CurrentSelector::MessageRevision { message_id },
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        message_streams.insert(
+            message_id.clone(),
+            message_creation_stream(conn, realm_id, message_id).await?,
+        );
+    }
+    let mut call_creations = std::collections::BTreeMap::new();
+    for entry in &material.current_state_entries {
+        if let TypedCurrentResult::Value {
+            selector: CurrentSelector::CallState { call_id },
+            ..
+        } = entry
+        {
+            call_creations.insert(
+                call_id.clone(),
+                call_creation_fact(conn, realm_id, call_id).await?,
+            );
+        }
+    }
+    let caller = ActorId::account(account.clone());
+    let mut circle_floors = std::collections::BTreeMap::new();
+    for entry in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector:
+                CurrentSelector::CircleMemberState {
+                    circle_id,
+                    member_actor_id,
+                },
+            source_stream_ref,
+            revision,
+            value,
+        } = entry
+        else {
+            continue;
+        };
+        if member_actor_id != &caller {
+            continue;
+        }
+        let membership: arkret_wire::CircleMemberStateCurrent =
+            serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+        if membership.membership != arkret_wire::MembershipState::Join {
+            continue;
+        }
+        let stream = CommitStreamRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: circle_id.clone(),
+        };
+        if source_stream_ref != &stream {
+            return Err(rejected(
+                "Circle member current has a different source stream",
+            ));
+        }
+        let object = material
+            .current_state_entries
+            .iter()
+            .find_map(|entry| match entry {
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::Circle { circle_id: subject },
+                    value,
+                    ..
+                } if subject == circle_id => Some(value),
+                _ => None,
+            })
+            .ok_or_else(|| rejected("Circle membership has no Circle object current"))?;
+        let circle: arkret_models_collaboration::governance::circle::Circle =
+            serde_json::from_value(object.clone()).map_err(PersistenceError::database)?;
+        if circle.id.as_ref() != Some(circle_id) || &circle.realm_id != realm_id {
+            return Err(rejected("Circle object differs from its typed subject"));
+        }
+        let page = crate::authority_commit::stream_page_in_connection(
+            conn,
+            &arkret_wire::StreamScanRequest {
+                realm_id: realm_id.clone(),
+                stream_ref: stream.clone(),
+                direction: arkret_wire::StreamScanDirection::After(None),
+                limit: 1,
+            },
+        )
+        .await?;
+        let Some(mut floor) = page.readable_floor else {
+            return Err(rejected("joined Circle stream has no provable floor"));
+        };
+        if circle.history_access == arkret_wire::HistoryAccess::SinceJoin {
+            floor = ReadableFloor {
+                oldest_position: revision.stream_position,
+                floor_commit_id: revision.commit_id.clone(),
+                floor_reason: arkret_wire::ReadableFloorReason::MembershipJoin,
+            };
+        }
+        circle_floors.insert(circle_id.clone(), floor);
+    }
+    let mut report_subjects = std::collections::BTreeSet::new();
+    let at = chrono::Utc::now();
+    for entry in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector: CurrentSelector::ModerationReport { event_id },
+            source_stream_ref,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let scope = match source_stream_ref {
+            CommitStreamRef::Realm { realm_id: realm } if realm == realm_id => {
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                }
+            }
+            CommitStreamRef::Circle {
+                realm_id: realm,
+                circle_id,
+            } if realm == realm_id && circle_floors.contains_key(circle_id) => {
+                arkret_wire::ScopeRef::Circle {
+                    realm_id: realm.clone(),
+                    circle_id: circle_id.clone(),
+                }
+            }
+            _ => continue,
+        };
+        if crate::moderation_report_current_results::scope_moderator(
+            conn,
+            realm_id,
+            &scope,
+            &caller,
+            &[
+                arkret_wire::CapabilityActionId::POLICY_MANAGE,
+                arkret_wire::CapabilityActionId::MODERATION_DECISION,
+            ],
+            at,
+        )
+        .await?
+        {
+            report_subjects.insert(event_id.clone());
+        }
+    }
+    let mut franking_subjects = std::collections::BTreeSet::new();
+    for entry in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector: CurrentSelector::ModerationFrankingProof { event_id },
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let scope =
+            crate::moderation_franking_proof_current_results::franking_target_scope_in_connection(
+                conn, realm_id, event_id,
+            )
+            .await?;
+        if crate::moderation_report_current_results::scope_moderator(
+            conn,
+            realm_id,
+            &scope,
+            &caller,
+            &[
+                arkret_wire::CapabilityActionId::POLICY_MANAGE,
+                arkret_wire::CapabilityActionId::MODERATION_DECISION,
+            ],
+            at,
+        )
+        .await?
+        {
+            franking_subjects.insert(event_id.clone());
+        }
+    }
     Ok(DisclosureFacts {
+        message_streams,
+        call_creations,
+        circle_floors,
+        report_subjects,
+        franking_subjects,
         caller_floor,
         undisclosed_kind,
         undisclosed_family_row,
     })
 }
 
+#[derive(QueryableByName)]
+struct MessageCreationScopeRow {
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    envelope: serde_json::Value,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    stream_ref: serde_json::Value,
+}
+
+async fn message_creation_stream(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    message_id: &arkret_wire::MessageId,
+) -> PersistenceResult<CommitStreamRef> {
+    let event_id = message_id.event_id();
+    let token = crate::ids::parse_event_id(event_id.as_str())
+        .ok_or_else(|| rejected("Message creation identity is invalid"))?;
+    let row = sql_query(
+        "SELECT e.envelope,c.stream_ref FROM canonical_events e \
+        JOIN realm_commits c ON c.event_pk=e.pk WHERE e.id=$1 AND e.realm_id=$2 \
+        AND c.realm_id=$2 AND e.kind='ak.message.create' AND e.state='committed'",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<MessageCreationScopeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| rejected("Message current has no accepted creation"))?;
+    let event: arkret_wire::Event =
+        serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
+    let stream: CommitStreamRef =
+        serde_json::from_value(row.stream_ref).map_err(PersistenceError::database)?;
+    if event.event_id != event_id
+        || event.realm_id != *realm_id
+        || CommitStreamRef::from_scope(&event.scope_ref, None)
+            .map_err(PersistenceError::database)?
+            != stream
+    {
+        return Err(rejected("Message creation is bound to a different stream"));
+    }
+    Ok(stream)
+}
+
 fn rejected(reason: &str) -> PersistenceError {
     PersistenceError::SchemaViolation(format!("snapshot disclosure is unproved: {reason}"))
 }
 
+async fn call_creation_fact(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    call_id: &arkret_wire::CallId,
+) -> PersistenceResult<CallCreationFact> {
+    let event_id = arkret_wire::EventId::from_token_bytes(call_id.token_bytes())
+        .map_err(PersistenceError::database)?;
+    let token = crate::ids::parse_event_id(event_id.as_str())
+        .ok_or_else(|| rejected("Call creation identity is invalid"))?;
+    let row = sql_query(
+        "SELECT e.envelope,c.stream_ref FROM canonical_events e \
+         JOIN realm_commits c ON c.event_pk=e.pk WHERE e.id=$1 AND e.realm_id=$2 \
+         AND c.realm_id=$2 AND e.kind='ak.call.create' AND e.state='committed'",
+    )
+    .bind::<diesel::sql_types::Binary, _>(token.to_vec())
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<MessageCreationScopeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| rejected("Call current has no accepted creation"))?;
+    let event: arkret_wire::Event =
+        serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
+    let stream: CommitStreamRef =
+        serde_json::from_value(row.stream_ref).map_err(PersistenceError::database)?;
+    if event.event_id != event_id
+        || event.realm_id != *realm_id
+        || CommitStreamRef::from_scope(&event.scope_ref, None)
+            .map_err(PersistenceError::database)?
+            != stream
+    {
+        return Err(rejected("Call creation is bound to a different stream"));
+    }
+    let payload: arkret_models_collaboration::events_payloads::call::CallCreatePayload =
+        serde_json::from_value(
+            serde_json::to_value(event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?;
+    payload.validate().map_err(rejected)?;
+    Ok(CallCreationFact {
+        stream,
+        initial_state: payload.initial_state,
+    })
+}
+
 /// Decide the Account's complete disclosure of one candidate cut, or refuse
-/// it whole. The returned material carries the Account's own readable floor
-/// and omits only the `message_revision` rows below it.
+/// it whole. Invisible families are omitted, and content rows respect the
+/// Account's independent readable floor on each disclosed stream.
 pub(crate) fn disclose_to_account(
     mut material: soland_storage::RealmStateSnapshotMaterial,
     account: &AccountId,
@@ -482,14 +776,163 @@ pub(crate) fn disclose_to_account(
     let realm_stream = CommitStreamRef::Realm {
         realm_id: material.realm_id.clone(),
     };
-    let head = match material.visible_stream_heads.as_slice() {
-        [head] if head.stream_ref == realm_stream => head.clone(),
-        _ => {
+    if material
+        .visible_stream_heads
+        .iter()
+        .any(|head| matches!(head.stream_ref, CommitStreamRef::Sidecar { .. }))
+    {
+        return Err(rejected(
+            "Sidecar stream visibility is not proved at this cut",
+        ));
+    }
+    material
+        .visible_stream_heads
+        .retain(|head| match &head.stream_ref {
+            CommitStreamRef::Realm { realm_id } => realm_id == &material.realm_id,
+            CommitStreamRef::Circle {
+                realm_id,
+                circle_id,
+            } => realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id),
+            _ => false,
+        });
+    if !material
+        .visible_stream_heads
+        .iter()
+        .any(|head| head.stream_ref == realm_stream)
+    {
+        return Err(rejected("the disclosed cut has no Realm stream head"));
+    }
+    for (circle_id, floor) in &facts.circle_floors {
+        if !material.visible_stream_heads.iter().any(|head| {
+            head.stream_ref
+                == (CommitStreamRef::Circle {
+                    realm_id: material.realm_id.clone(),
+                    circle_id: circle_id.clone(),
+                })
+        }) {
+            return Err(rejected("a joined Circle has no visible stream head"));
+        }
+        let head = material
+            .visible_stream_heads
+            .iter()
+            .find(|head| {
+                head.stream_ref
+                    == (CommitStreamRef::Circle {
+                        realm_id: material.realm_id.clone(),
+                        circle_id: circle_id.clone(),
+                    })
+            })
+            .unwrap();
+        if floor.oldest_position > head.stream_position
+            || (floor.oldest_position == head.stream_position
+                && floor.floor_commit_id != head.commit_id)
+        {
             return Err(rejected(
-                "Circle and Sidecar stream visibility is not proved at this cut",
+                "a Circle readable floor is outside its visible stream prefix",
             ));
         }
-    };
+    }
+    for row in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector,
+            source_stream_ref,
+            value,
+            ..
+        } = row
+        else {
+            continue;
+        };
+        let scope_stream = |circle: Option<CircleId>| match circle {
+            Some(circle_id) => CommitStreamRef::Circle {
+                realm_id: material.realm_id.clone(),
+                circle_id,
+            },
+            None => realm_stream.clone(),
+        };
+        let object_scope = |value: &serde_json::Value| -> PersistenceResult<CommitStreamRef> {
+            let circle = value
+                .get("scope_circle_id")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    serde_json::from_value::<CircleId>(value.clone())
+                        .map_err(PersistenceError::database)
+                })
+                .transpose()?;
+            Ok(scope_stream(circle))
+        };
+        let expected = match selector {
+            CurrentSelector::CircleMemberState { circle_id, .. } => {
+                Some(scope_stream(Some(circle_id.clone())))
+            }
+            CurrentSelector::Strand { .. } | CurrentSelector::Space { .. } => {
+                Some(object_scope(value)?)
+            }
+            CurrentSelector::MlsGroup { scope_ref } => Some(
+                CommitStreamRef::from_scope(scope_ref, None).map_err(PersistenceError::database)?,
+            ),
+            CurrentSelector::MessageRevision { message_id } => Some(
+                facts
+                    .message_streams
+                    .get(message_id)
+                    .ok_or_else(|| rejected("Message current has no accepted creation scope"))?
+                    .clone(),
+            ),
+            CurrentSelector::CallState { call_id } => Some(
+                facts
+                    .call_creations
+                    .get(call_id)
+                    .ok_or_else(|| rejected("Call current has no accepted creation scope"))?
+                    .stream
+                    .clone(),
+            ),
+            CurrentSelector::AppletRegistration { .. }
+            | CurrentSelector::ModerationReport { .. }
+            | CurrentSelector::ModerationState { .. }
+            | CurrentSelector::CapabilityGrant { .. }
+            | CurrentSelector::ObjectRedaction { .. } => None,
+            _ => Some(realm_stream.clone()),
+        };
+        if source_stream_ref.realm_id() != &material.realm_id
+            || expected
+                .as_ref()
+                .is_some_and(|expected| expected != source_stream_ref)
+        {
+            return Err(rejected(
+                "a current family is bound to a different security scope",
+            ));
+        }
+    }
+    material.current_state_entries.retain(|row| match row {
+        TypedCurrentResult::Value {
+            selector,
+            source_stream_ref,
+            ..
+        } => {
+            let visible_stream = match source_stream_ref {
+                CommitStreamRef::Realm { realm_id } => realm_id == &material.realm_id,
+                CommitStreamRef::Circle {
+                    realm_id,
+                    circle_id,
+                } => realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id),
+                _ => false,
+            };
+            visible_stream
+                && match selector {
+                    CurrentSelector::Circle { circle_id }
+                    | CurrentSelector::CircleMemberState { circle_id, .. } => {
+                        facts.circle_floors.contains_key(circle_id)
+                    }
+                    CurrentSelector::ModerationReport { event_id } => {
+                        facts.report_subjects.contains(event_id)
+                    }
+                    CurrentSelector::ModerationFrankingProof { event_id } => {
+                        facts.franking_subjects.contains(event_id)
+                    }
+                    _ => true,
+                }
+        }
+        _ => true,
+    });
     let mut genesis = false;
     let mut root = false;
     let mut history_access = None;
@@ -508,16 +951,136 @@ pub(crate) fn disclose_to_account(
         else {
             return Err(rejected("a current row is not a closed typed value"));
         };
-        if source_stream_ref != &realm_stream
-            || revision.stream_position > head.stream_position
-            || (revision.stream_position == head.stream_position
-                && revision.commit_id != head.commit_id)
+        let source_head = material
+            .visible_stream_heads
+            .iter()
+            .find(|head| &head.stream_ref == source_stream_ref)
+            .ok_or_else(|| rejected("a current row has no visible source head"))?;
+        if revision.stream_position > source_head.stream_position
+            || (revision.stream_position == source_head.stream_position
+                && revision.commit_id != source_head.commit_id)
         {
             return Err(rejected(
-                "a current row is not sourced from the disclosed Realm stream prefix",
+                "a current row is not sourced from its disclosed stream prefix",
             ));
         }
         match selector {
+            CurrentSelector::CallState { call_id } => {
+                let current: arkret_models_collaboration::events_payloads::call::CallStateCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                current.validate().map_err(rejected)?;
+                let creation = facts
+                    .call_creations
+                    .get(call_id)
+                    .ok_or_else(|| rejected("Call current has no accepted creation"))?;
+                if current.from.is_some() || current.to != creation.initial_state {
+                    return Err(rejected("Call current differs from its accepted creation"));
+                }
+            }
+            CurrentSelector::AppletRegistration { applet_id } => {
+                let registration: arkret_models_integration::AppletRegistrationPayload =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if registration.applet_id != *applet_id {
+                    return Err(rejected(
+                        "Applet registration differs from its current selector",
+                    ));
+                }
+            }
+            CurrentSelector::MemberIdentityUpdates { member_id, segment } => {
+                let assertions = value
+                    .get("assertions")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| rejected("member identity current is not an assertion set"))?;
+                let mut dots = std::collections::BTreeSet::new();
+                for assertion in assertions {
+                    let tag = assertion
+                        .get("tag_id")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| rejected("member identity assertion has no dot"))?;
+                    let id = tag
+                        .strip_suffix(":0")
+                        .ok_or_else(|| rejected("member identity assertion has an invalid dot"))?;
+                    arkret_wire::EventId::new(id).map_err(PersistenceError::database)?;
+                    if !dots.insert(tag) {
+                        return Err(rejected("member identity assertion repeats a dot"));
+                    }
+                    let payload: arkret_models_identity::MemberIdentityUpdatePayload =
+                        serde_json::from_value(
+                            assertion.get("value").cloned().ok_or_else(|| {
+                                rejected("member identity assertion has no payload")
+                            })?,
+                        )
+                        .map_err(PersistenceError::database)?;
+                    if payload.realm_id != material.realm_id
+                        || payload.member_id != *member_id
+                        || payload.segment != *segment
+                    {
+                        return Err(rejected(
+                            "member identity assertion differs from its current tuple",
+                        ));
+                    }
+                }
+            }
+            CurrentSelector::Circle { circle_id } => {
+                let circle: arkret_models_collaboration::governance::circle::Circle =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if circle.id.as_ref() != Some(circle_id)
+                    || circle.realm_id != material.realm_id
+                    || source_stream_ref != &realm_stream
+                {
+                    return Err(rejected(
+                        "Circle metadata differs from its accepted Realm source",
+                    ));
+                }
+            }
+            CurrentSelector::CircleMemberState { circle_id, .. } => {
+                serde_json::from_value::<arkret_wire::CircleMemberStateCurrent>(value.clone())
+                    .map_err(PersistenceError::database)?;
+                if source_stream_ref
+                    != &(CommitStreamRef::Circle {
+                        realm_id: material.realm_id.clone(),
+                        circle_id: circle_id.clone(),
+                    })
+                {
+                    return Err(rejected(
+                        "Circle member current differs from its Circle source",
+                    ));
+                }
+            }
+            CurrentSelector::ModerationReport { .. } => {}
+            CurrentSelector::ModerationFrankingProof { event_id } => {
+                let proof: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if proof.event_id != *event_id
+                    || proof.realm_id != material.realm_id
+                    || source_stream_ref != &realm_stream
+                {
+                    return Err(rejected(
+                        "franking current differs from its target or accepted Realm source",
+                    ));
+                }
+            }
+            CurrentSelector::RealmOrganization {
+                organization_id,
+                relationship,
+            } => {
+                let statement: arkret_models_collaboration::events_payloads::realm::RealmOrganizationPayload =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if statement.organization_id != *organization_id
+                    || statement.relationship != *relationship
+                    || statement.realm_id != material.realm_id
+                {
+                    return Err(rejected(
+                        "organization statement differs from its typed relationship cell",
+                    ));
+                }
+            }
+            CurrentSelector::ModerationState { .. } => {
+                serde_json::from_value::<
+                    arkret_models_collaboration::exact_current_results::ModerationStateCurrentValue,
+                >(value.clone())
+                .map_err(PersistenceError::database)?;
+            }
             CurrentSelector::RealmGenesis => genesis = true,
             CurrentSelector::RealmAuthorityRoot => root = true,
             CurrentSelector::RealmHistoryAccess => {
@@ -533,16 +1096,7 @@ pub(crate) fn disclose_to_account(
             CurrentSelector::StrandWatch { .. } => {
                 let _: arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
             }
-            CurrentSelector::Strand { .. } => {
-                if value
-                    .get("scope_circle_id")
-                    .is_some_and(|circle| !circle.is_null())
-                {
-                    return Err(rejected(
-                        "a Circle-scoped Strand's visibility is not proved",
-                    ));
-                }
-            }
+            CurrentSelector::Strand { .. } => {}
             CurrentSelector::StrandPosition {
                 board_space_id,
                 strand_id,
@@ -588,7 +1142,15 @@ pub(crate) fn disclose_to_account(
                 *space_families.entry(space_id.clone()).or_insert(0_u8) |= 4;
             }
             CurrentSelector::MessageRevision { message_id } => {
-                if revision.stream_position < floor.oldest_position {
+                let source_floor = match source_stream_ref {
+                    CommitStreamRef::Realm { .. } => floor,
+                    CommitStreamRef::Circle { circle_id, .. } => facts
+                        .circle_floors
+                        .get(circle_id)
+                        .ok_or_else(|| rejected("a Circle Message has no readable floor"))?,
+                    _ => return Err(rejected("Message source visibility is not proved")),
+                };
+                if revision.stream_position < source_floor.oldest_position {
                     below_floor.insert(message_id.clone());
                 }
             }
@@ -606,9 +1168,11 @@ pub(crate) fn disclose_to_account(
             CurrentSelector::MlsGroup { scope_ref } => {
                 if !matches!(scope_ref, arkret_wire::ScopeRef::Realm { realm_id }
                     if realm_id == &material.realm_id)
+                    && !matches!(scope_ref, arkret_wire::ScopeRef::Circle { realm_id, circle_id }
+                        if realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id))
                 {
                     return Err(rejected(
-                        "a Circle or Sidecar MLS group's visibility is not proved",
+                        "the MLS group's exact scope visibility is not proved",
                     ));
                 }
             }
@@ -717,12 +1281,26 @@ pub(crate) fn disclose_to_account(
             } if redacted.contains(message_id.as_str()) || below_floor.contains(message_id)
         )
     });
+    let mut stream_floors = vec![StreamHistoryFloor {
+        stream_ref: realm_stream,
+        oldest_position: floor.oldest_position,
+    }];
+    stream_floors.extend(
+        facts
+            .circle_floors
+            .iter()
+            .map(|(circle_id, floor)| StreamHistoryFloor {
+                stream_ref: CommitStreamRef::Circle {
+                    realm_id: material.realm_id.clone(),
+                    circle_id: circle_id.clone(),
+                },
+                oldest_position: floor.oldest_position,
+            }),
+    );
+    stream_floors.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
     material.retention_and_history_floor = arkret_wire::RetentionAndHistoryFloor {
         history_access,
-        stream_floors: vec![StreamHistoryFloor {
-            stream_ref: realm_stream,
-            oldest_position: floor.oldest_position,
-        }],
+        stream_floors,
     };
     Ok(material)
 }
@@ -922,6 +1500,17 @@ mod tests {
             },
         };
         let facts = DisclosureFacts {
+            message_streams: [(
+                MessageId::from_event_id(&event_id(0x33)),
+                CommitStreamRef::Realm {
+                    realm_id: realm_id(),
+                },
+            )]
+            .into(),
+            circle_floors: Default::default(),
+            report_subjects: Default::default(),
+            franking_subjects: Default::default(),
+            call_creations: Default::default(),
             caller_floor: Some(ReadableFloor {
                 oldest_position: 0,
                 floor_commit_id: RealmCommitId::from_digest([1; 32]),
@@ -990,6 +1579,25 @@ mod tests {
         material.visible_stream_heads[0].stream_position = 13;
         material.visible_stream_heads[0].commit_id = RealmCommitId::from_digest([14; 32]);
         let facts = DisclosureFacts {
+            message_streams: [
+                (
+                    MessageId::from_event_id(&event_id(0x33)),
+                    CommitStreamRef::Realm {
+                        realm_id: realm_id(),
+                    },
+                ),
+                (
+                    MessageId::from_event_id(&event_id(0x46)),
+                    CommitStreamRef::Realm {
+                        realm_id: realm_id(),
+                    },
+                ),
+            ]
+            .into(),
+            circle_floors: Default::default(),
+            report_subjects: Default::default(),
+            franking_subjects: Default::default(),
+            call_creations: Default::default(),
             caller_floor: Some(ReadableFloor {
                 oldest_position: 11,
                 floor_commit_id: RealmCommitId::from_digest([12; 32]),
@@ -1018,7 +1626,13 @@ mod tests {
             }]
         );
         // The founder's floor is the genesis Commit: every row, both Messages.
-        let (founder, _, founder_facts) = fixture();
+        let (founder, _, mut founder_facts) = fixture();
+        founder_facts.message_streams.insert(
+            MessageId::from_event_id(&event_id(0x46)),
+            CommitStreamRef::Realm {
+                realm_id: realm_id(),
+            },
+        );
         let disclosed = disclose_to_account(material.clone(), &founder, &founder_facts).unwrap();
         assert_eq!(
             disclosed.current_state_entries,
@@ -1278,7 +1892,7 @@ mod tests {
     }
 
     #[test]
-    fn undisclosed_kinds_families_and_selectors_refuse_the_whole_cut() {
+    fn undisclosed_kinds_and_families_refuse_the_whole_cut() {
         let (founder, material, mut facts) = fixture();
         facts.undisclosed_kind = Some("ak.moderation.decision".to_owned());
         assert!(disclose_to_account(material, &founder, &facts).is_err());
@@ -1294,11 +1908,18 @@ mod tests {
             9,
             json!({}),
         ));
-        assert!(disclose_to_account(material, &founder, &facts).is_err());
+        let disclosed = disclose_to_account(material, &founder, &facts).unwrap();
+        assert!(!disclosed.current_state_entries.iter().any(|row| matches!(
+            row,
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::ModerationReport { .. },
+                ..
+            }
+        )));
     }
 
     #[test]
-    fn hidden_streams_foreign_sources_and_later_tenures_are_refused() {
+    fn hidden_streams_are_omitted_and_foreign_sources_and_later_tenures_are_refused() {
         let circle = CommitStreamRef::Circle {
             realm_id: realm_id(),
             circle_id: arkret_wire::CircleId::from_event_id(&event_id(0x55)),
@@ -1309,7 +1930,9 @@ mod tests {
             stream_position: 0,
             commit_id: RealmCommitId::from_digest([0x66; 32]),
         });
-        assert!(disclose_to_account(material, &founder, &facts).is_err());
+        let disclosed = disclose_to_account(material, &founder, &facts).unwrap();
+        assert_eq!(disclosed.visible_stream_heads.len(), 1);
+        assert_eq!(disclosed.retention_and_history_floor.stream_floors.len(), 1);
         let (founder, mut material, facts) = fixture();
         if let TypedCurrentResult::Value {
             source_stream_ref, ..
@@ -1344,5 +1967,166 @@ mod tests {
                 "row {missing}"
             );
         }
+    }
+
+    fn circle_fixture() -> (
+        AccountId,
+        soland_storage::RealmStateSnapshotMaterial,
+        DisclosureFacts,
+    ) {
+        let (caller, mut material, mut facts) = fixture();
+        let circle_id = CircleId::from_event_id(&event_id(0x51));
+        let stream = CommitStreamRef::Circle {
+            realm_id: realm_id(),
+            circle_id: circle_id.clone(),
+        };
+        let strand_id = StrandId::from_event_id(&event_id(0x52));
+        material.current_state_entries.push(row(CurrentSelector::Circle { circle_id: circle_id.clone() }, 7,
+            json!({"id":circle_id,"schema":"ak.schema.circle.v1","realm_id":realm_id(),
+                "title":"Private","display":{"short_name":"Private","color_token":"blue","symbol":{"glyph":"lock"}},
+                "directory_visibility":"members","join_rule":"public","history_access":"since_join",
+                "state":"active","created_by":ActorId::account(caller.clone()),"created_at":"2026-09-28T00:00:00.000Z"})));
+        let mut circle_row = |selector, position, value| {
+            let mut result = row(selector, position, value);
+            if let TypedCurrentResult::Value {
+                source_stream_ref, ..
+            } = &mut result
+            {
+                *source_stream_ref = stream.clone();
+            }
+            material.current_state_entries.push(result);
+        };
+        circle_row(
+            CurrentSelector::CircleMemberState {
+                circle_id: circle_id.clone(),
+                member_actor_id: ActorId::account(caller.clone()),
+            },
+            2,
+            json!({"membership":"join","effective_at":"2026-09-28T00:00:00.000Z"}),
+        );
+        circle_row(
+            CurrentSelector::Strand {
+                strand_id: strand_id.clone(),
+            },
+            0,
+            json!({"id":strand_id,"scope_circle_id":circle_id}),
+        );
+        for (byte, position) in [(0x53, 1), (0x54, 3)] {
+            let message_id = MessageId::from_event_id(&event_id(byte));
+            circle_row(
+                CurrentSelector::MessageRevision {
+                    message_id: message_id.clone(),
+                },
+                position,
+                json!({"message_id":message_id,"content":{"kind":"ak.content.text","format":"plain","body":"revised"}}),
+            );
+            facts.message_streams.insert(message_id, stream.clone());
+        }
+        material.visible_stream_heads.push(CommitStreamHead {
+            stream_ref: stream,
+            stream_position: 4,
+            commit_id: RealmCommitId::from_digest([5; 32]),
+        });
+        facts.circle_floors.insert(
+            circle_id,
+            ReadableFloor {
+                oldest_position: 2,
+                floor_commit_id: RealmCommitId::from_digest([3; 32]),
+                floor_reason: ReadableFloorReason::MembershipJoin,
+            },
+        );
+        (caller, material, facts)
+    }
+
+    #[test]
+    fn circle_metadata_and_content_use_exact_membership_and_independent_history_floor() {
+        let (caller, material, facts) = circle_fixture();
+        let disclosed = disclose_to_account(material.clone(), &caller, &facts).unwrap();
+        assert_eq!(disclosed.visible_stream_heads.len(), 2);
+        assert_eq!(disclosed.retention_and_history_floor.stream_floors.len(), 2);
+        assert!(!disclosed.current_state_entries.iter().any(|row| matches!(row,
+            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+                if message_id == &MessageId::from_event_id(&event_id(0x53))
+        )));
+        assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
+            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+                if message_id == &MessageId::from_event_id(&event_id(0x33))
+        )));
+        assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
+            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+                if message_id == &MessageId::from_event_id(&event_id(0x54))
+        )));
+        let mut outsider_facts = facts;
+        outsider_facts.circle_floors.clear();
+        let outsider = disclose_to_account(material, &caller, &outsider_facts).unwrap();
+        assert_eq!(outsider.visible_stream_heads.len(), 1);
+        assert_eq!(outsider.retention_and_history_floor.stream_floors.len(), 1);
+        assert!(!outsider.current_state_entries.iter().any(|row| matches!(
+            row,
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::Circle { .. }
+                    | CurrentSelector::CircleMemberState { .. },
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn bootstrap_join_changes_only_its_own_stream_floor_and_content_interval() {
+        let (caller, material, facts) = circle_fixture();
+        let mut disclosed = disclose_to_account(material, &caller, &facts).unwrap();
+        let stream = CommitStreamRef::Circle {
+            realm_id: realm_id(),
+            circle_id: CircleId::from_event_id(&event_id(0x51)),
+        };
+        anchor_bootstrap_join(
+            &mut disclosed,
+            &stream,
+            &RealmCommitId::from_digest([4; 32]),
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            disclosed
+                .retention_and_history_floor
+                .stream_floors
+                .iter()
+                .find(|floor| floor.stream_ref == stream)
+                .unwrap()
+                .oldest_position,
+            3
+        );
+        assert_eq!(
+            disclosed
+                .retention_and_history_floor
+                .stream_floors
+                .iter()
+                .find(|floor| matches!(floor.stream_ref, CommitStreamRef::Realm { .. }))
+                .unwrap()
+                .oldest_position,
+            0
+        );
+        assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
+            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+                if message_id==&MessageId::from_event_id(&event_id(0x33))
+        )));
+        assert!(
+            anchor_bootstrap_join(
+                &mut disclosed,
+                &stream,
+                &RealmCommitId::from_digest([9; 32]),
+                4
+            )
+            .is_err()
+        );
+        assert!(
+            anchor_bootstrap_join(
+                &mut disclosed,
+                &stream,
+                &RealmCommitId::from_digest([9; 32]),
+                5
+            )
+            .is_err()
+        );
     }
 }

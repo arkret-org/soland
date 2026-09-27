@@ -680,6 +680,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
                 recipient_queue_capacity: 0,
             },
             self_producer_guard: None,
+            applet_producer_guard: None,
             forwarded_producer_evidence: None,
             parent_membership_admission: None,
             event: record,

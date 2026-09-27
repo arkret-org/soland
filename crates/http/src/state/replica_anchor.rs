@@ -52,7 +52,14 @@ static IN_FLIGHT: LazyLock<Mutex<BTreeSet<(String, String)>>> =
 /// anchor it when it is pending, then fill it up to the governing Station's
 /// head. At most one convergence per Realm runs at a time.
 pub(crate) fn spawn_converge(state: &AppState, realm_id: RealmId) {
-    let key = (state.service_id().to_owned(), realm_id.to_string());
+    spawn_converge_stream(state, CommitStreamRef::Realm { realm_id });
+}
+
+pub(crate) fn spawn_converge_stream(state: &AppState, stream: CommitStreamRef) {
+    let key = (
+        state.service_id().to_owned(),
+        arkret_canonical::canonical_json_string(&stream).unwrap_or_default(),
+    );
     {
         let Ok(mut in_flight) = IN_FLIGHT.lock() else {
             return;
@@ -63,8 +70,8 @@ pub(crate) fn spawn_converge(state: &AppState, realm_id: RealmId) {
     }
     let state = state.clone();
     tokio::spawn(async move {
-        if let Err(reason) = converge(&state, &realm_id).await {
-            tracing::warn!(%realm_id, %reason, "held Realm replica did not converge");
+        if let Err(reason) = converge(&state, &stream).await {
+            tracing::warn!(?stream, %reason, "held replica did not converge");
         }
         if let Ok(mut in_flight) = IN_FLIGHT.lock() {
             in_flight.remove(&key);
@@ -82,14 +89,10 @@ pub fn spawn_pending_anchor_sweeper(state: AppState) -> Option<tokio::task::Join
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            match state
-                .authority_commits()
-                .pending_replica_stream_anchors()
-                .await
-            {
+            match state.authority_commits().pending_replica_streams().await {
                 Ok(pending) => {
-                    for realm_id in pending {
-                        spawn_converge(&state, realm_id);
+                    for stream in pending {
+                        spawn_converge_stream(&state, stream);
                     }
                 }
                 Err(error) => {
@@ -100,10 +103,11 @@ pub fn spawn_pending_anchor_sweeper(state: AppState) -> Option<tokio::task::Join
     }))
 }
 
-async fn converge(state: &AppState, realm_id: &RealmId) -> Result<(), String> {
+async fn converge(state: &AppState, stream: &CommitStreamRef) -> Result<(), String> {
+    let realm_id = stream.realm_id();
     let commits = state.authority_commits();
     let Some(anchor) = commits
-        .replica_stream_anchor(realm_id)
+        .replica_anchor_for_stream(stream)
         .await
         .map_err(|error| error.to_string())?
     else {
@@ -122,10 +126,7 @@ async fn converge(state: &AppState, realm_id: &RealmId) -> Result<(), String> {
     )
     .await
     .map_err(|error| error.message)?;
-    let anchored = match anchor.anchored_head.clone() {
-        Some(head) => head,
-        None => anchor_stream(state, &anchor, &governance, &mut located).await?,
-    };
+    let anchored = anchor_stream(state, &anchor, &governance, &mut located).await?;
     fill_to_head(state, realm_id, &governance, &anchored, &mut located).await
 }
 
@@ -270,9 +271,7 @@ async fn anchor_stream(
     RealmJoinBootstrapAssembly::new(outcome.clone()).map_err(temporary)?;
     let snapshot = &outcome.snapshot;
     verify_snapshot(state, located, snapshot).await?;
-    let realm_stream = CommitStreamRef::Realm {
-        realm_id: realm_id.clone(),
-    };
+    let realm_stream = join.stream_ref.clone();
     // The prefix evidence: the Realm stream floor is the join itself and the
     // snapshot head is not below it.
     let floor = snapshot
@@ -301,6 +300,7 @@ async fn anchor_stream(
             realm_id: realm_id.clone(),
             join_commit_id: join.commit_id.clone(),
             snapshot_head: head.clone(),
+            visible_stream_heads: snapshot.visible_stream_heads.clone(),
             current_state_entries: snapshot.current_state_entries.clone(),
         })
         .await
@@ -319,9 +319,7 @@ async fn fill_to_head(
     anchored: &CommitStreamHead,
     located: &mut LocatedRealmAuthority,
 ) -> Result<(), String> {
-    let realm_stream = CommitStreamRef::Realm {
-        realm_id: realm_id.clone(),
-    };
+    let realm_stream = anchored.stream_ref.clone();
     loop {
         let mut held = state
             .authority_commits()

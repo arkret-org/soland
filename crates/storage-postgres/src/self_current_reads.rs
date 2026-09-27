@@ -274,7 +274,7 @@ pub(crate) async fn exact_current_result_for_account(
             MemberCut::Member {
                 scoped_streams: true,
                 ..
-            } => {
+            } if matches!(request.selector, ExactCurrentResultSelector::Relation(_)) => {
                 return Ok(SelfExactCurrentRead::Unresolved(
                     "Circle and Sidecar scope visibility is not proved at this cut",
                 ));
@@ -295,8 +295,15 @@ pub(crate) async fn exact_current_result_for_account(
         let selector = match &request.selector {
             ExactCurrentResultSelector::Relation(selector) => selector,
             ExactCurrentResultSelector::ModerationState(selector) => {
-                return moderation_state_read(conn, &request.realm_id, generation, head, selector)
-                    .await;
+                return moderation_state_read(
+                    conn,
+                    &request.realm_id,
+                    generation,
+                    head,
+                    &caller,
+                    selector,
+                )
+                .await;
             }
         };
         let domain_key = arkret_canonical::canonical_json_string(&selector.primary_conflict_domain)
@@ -365,6 +372,7 @@ async fn moderation_state_read(
     realm_id: &RealmId,
     generation: u64,
     head: CommitStreamHead,
+    caller: &ActorId,
     selector: &ModerationStateExactCurrentSelector,
 ) -> Result<SelfExactCurrentRead<ExactCurrentResultsReadOutcome>, PgTransactionError> {
     let Some(row) = sql_query(MODERATION_CURRENT_SQL)
@@ -384,10 +392,53 @@ async fn moderation_state_read(
         })?;
     let source_stream_ref = serde_json::from_value::<CommitStreamRef>(row.stream_ref)
         .map_err(|error| corrupt(format!("stored RealmCommit stream is invalid: {error}")))?;
-    if source_stream_ref != head.stream_ref {
-        return Ok(SelfExactCurrentRead::Unresolved(
-            "the moderated target's scope visibility is not proved at this cut",
-        ));
+    let head = match &source_stream_ref {
+        CommitStreamRef::Realm {
+            realm_id: source_realm,
+        } if source_realm == realm_id => head,
+        CommitStreamRef::Circle {
+            realm_id: source_realm,
+            circle_id,
+        } if source_realm == realm_id => {
+            let scope = ScopeRef::Circle {
+                realm_id: realm_id.clone(),
+                circle_id: circle_id.clone(),
+            };
+            match crate::moderation_report_current_results::ensure_scope_member(
+                conn, realm_id, &scope, caller,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(PersistenceError::NotFound(_)) => return Ok(SelfExactCurrentRead::NotFound),
+                Err(error) => return Err(error.into()),
+            }
+            let key = crate::authority_commit::stream_key(&source_stream_ref)?;
+            let Some(row) = sql_query("SELECT commit_id,stream_position FROM realm_commits WHERE realm_id=$1 AND stream_key=$2 ORDER BY stream_position DESC LIMIT 1")
+                .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(key).get_result::<HeadRow>(&mut *conn).await.optional()? else {
+                return Ok(SelfExactCurrentRead::Unresolved("the Circle stream has no established head"));
+            };
+            CommitStreamHead {
+                stream_ref: source_stream_ref.clone(),
+                commit_id: row
+                    .commit_id
+                    .parse()
+                    .map_err(|error| corrupt(format!("invalid Circle head: {error}")))?,
+                stream_position: to_u64(row.stream_position, "Circle head")?,
+            }
+        }
+        _ => {
+            return Ok(SelfExactCurrentRead::Unresolved(
+                "the moderated target's scope visibility is not proved at this cut",
+            ));
+        }
+    };
+    if to_u64(
+        row.current_stream_position,
+        "moderation_state stream position",
+    )? > head.stream_position
+    {
+        return Err(corrupt("moderation_state revision exceeds its exact source head").into());
     }
     let revision = CurrentRevision {
         commit_id: row.current_commit_id.parse().map_err(|error| {

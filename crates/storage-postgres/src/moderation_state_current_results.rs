@@ -6,11 +6,9 @@
 //! carries the complete payload, and neither writer removes an element. The
 //! active-decision fold and the queue item status are read-side derivations.
 //!
-//! The supported carrier is a Realm-scope decision on the Realm stream whose
-//! issuer holds the moderation capability at this same cut: the current Realm
-//! root controller, or an active Capability Grant naming the issuer for the
-//! decision action on this Realm. Circle-scope targets need their own
-//! authority cut and remain closed.
+//! A decision uses the signed Realm or Circle source stream. Its issuer holds
+//! the exact scope's moderation action at the accepting cut; a Realm root
+//! identity alone does not authorize a Circle decision.
 
 use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
@@ -22,6 +20,8 @@ use soland_storage::{PersistenceError, PersistenceResult};
 struct StateRow {
     #[diesel(sql_type = Jsonb)]
     value: Value,
+    #[diesel(sql_type = Jsonb)]
+    stream_ref: Value,
     #[diesel(sql_type = Text)]
     current_commit_id: String,
     #[diesel(sql_type = BigInt)]
@@ -70,8 +70,9 @@ async fn locked_state(
     target_ref: &str,
 ) -> PersistenceResult<Option<StateRow>> {
     diesel::sql_query(
-        "SELECT value, current_commit_id, current_stream_position \
-         FROM moderation_state_current_results WHERE realm_id=$1 AND target_ref=$2 FOR UPDATE",
+        "SELECT s.value, s.current_commit_id, s.current_stream_position, c.stream_ref \
+         FROM moderation_state_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id \
+         WHERE s.realm_id=$1 AND s.target_ref=$2 FOR UPDATE OF s",
     )
     .bind::<Text, _>(realm_id)
     .bind::<Text, _>(target_ref)
@@ -96,17 +97,19 @@ async fn ensure_report_target(
     realm_id: &str,
     report_event_id: &str,
     before_position: i64,
+    stream: &arkret_wire::CommitStreamRef,
 ) -> PersistenceResult<()> {
     let present = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM moderation_report_current_results r \
          JOIN realm_commits c ON c.commit_id=r.current_commit_id \
          WHERE r.realm_id=$1 AND r.report_event_id=$2 AND c.stream_position<$3 \
            AND c.realm_id=r.realm_id AND c.stream_position=r.current_stream_position \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=r.realm_id) AS present",
+           AND c.stream_ref=$4) AS present",
     )
     .bind::<Text, _>(realm_id)
     .bind::<Text, _>(report_event_id)
     .bind::<BigInt, _>(before_position)
+    .bind::<Jsonb, _>(serde_json::to_value(stream).map_err(PersistenceError::database)?)
     .get_result::<PresentRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?
@@ -130,15 +133,10 @@ pub(crate) async fn commit_moderation_state_current_result_in_connection(
     };
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    let realm_stream = arkret_wire::CommitStreamRef::Realm {
-        realm_id: event.realm_id.clone(),
-    };
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-        || commit.stream_ref != realm_stream
-        || commit.event_ref != event.event_id
-    {
+    let stream = crate::moderation_report_current_results::moderation_stream(event)?;
+    if commit.stream_ref != stream || commit.event_ref != event.event_id {
         return Err(conflict(
-            "moderation_state current writer requires the Realm source stream",
+            "moderation_state source stream differs from signed scope",
         ));
     }
     if event.executed_by.is_some() || event.applet_id.is_some() {
@@ -153,9 +151,10 @@ pub(crate) async fn commit_moderation_state_current_result_in_connection(
     } else {
         arkret_wire::CapabilityActionId::MODERATION_DECISION
     };
-    if !crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
+    if !crate::moderation_report_current_results::scope_moderator(
         conn,
         &event.realm_id,
+        &event.scope_ref,
         &event.actor_id,
         &[arkret_wire::CapabilityActionId::POLICY_MANAGE, action],
         commit.committed_at,
@@ -183,11 +182,13 @@ pub(crate) async fn commit_moderation_state_current_result_in_connection(
             ));
         }
         if typed.decision == "dismiss" {
-            ensure_report_target(conn, realm_id, typed.target_ref.as_str(), before).await?;
+            ensure_report_target(conn, realm_id, typed.target_ref.as_str(), before, &stream)
+                .await?;
         } else {
-            crate::moderation_report_current_results::ensure_realm_scope_target(
+            crate::moderation_report_current_results::ensure_scope_target(
                 conn,
-                realm_id,
+                &event.realm_id,
+                &event.scope_ref,
                 typed.target_ref.as_str(),
                 before,
             )
@@ -196,6 +197,12 @@ pub(crate) async fn commit_moderation_state_current_result_in_connection(
         typed.target_ref
     };
     let current = locked_state(conn, realm_id, target_ref.as_str()).await?;
+    if current
+        .as_ref()
+        .is_some_and(|row| row.stream_ref != serde_json::to_value(&stream).unwrap())
+    {
+        return Err(target_not_found());
+    }
     let mut entries = match &current {
         Some(row) => assertions(&row.value)?,
         None => Vec::new(),

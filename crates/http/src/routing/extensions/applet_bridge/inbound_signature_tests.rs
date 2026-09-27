@@ -51,8 +51,8 @@ fn delivery_authentication_record_digest_binds_closed_verified_material() {
     .unwrap();
     let digest = |epoch: &str, key: &ed25519_dalek::VerifyingKey| {
         applet_delivery_authentication_record_digest(
-            "did:web:app",
-            "did:web:edge",
+            "ak:did_core:web:app",
+            "ak:did_core:web:edge",
             "idem-1",
             "sha-256=:abc=:",
             "did:web:app#applet-service-key",
@@ -75,8 +75,8 @@ fn delivery_authentication_record_digest_binds_closed_verified_material() {
     let record = json!({
         "operation_id": "ak.edge.applet.command.transaction.v1",
         "direction": "applet_to_arkret_inbound",
-        "source_id": "did:web:app",
-        "destination_id": "did:web:edge",
+        "source_id": "ak:did_core:web:app",
+        "destination_id": "ak:did_core:web:edge",
         "signature_label": "sig1",
         "verification_method": "did:web:app#applet-service-key",
         "verification_key_digest": arkret_canonical::sha256_digest(key.to_bytes()),
@@ -88,8 +88,11 @@ fn delivery_authentication_record_digest_binds_closed_verified_material() {
         "created": 1,
         "expires": 60,
     });
-    let bytes = arkret_canonical::canonical_json_bytes(&record).unwrap();
     assert_eq!(actual_record, record);
+    let mut stable = record.clone();
+    stable.as_object_mut().unwrap().remove("created");
+    stable.as_object_mut().unwrap().remove("expires");
+    let bytes = arkret_canonical::canonical_json_bytes(&stable).unwrap();
     assert_eq!(
         base,
         arkret_canonical::sha256_digest_from_slices(&[
@@ -97,4 +100,32 @@ fn delivery_authentication_record_digest_binds_closed_verified_material() {
             &bytes,
         ])
     );
+}
+
+#[test]
+fn refreshed_delivery_time_keeps_stable_binding_after_independent_authentication() {
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+    let epoch = format!("sha256:{}", "a".repeat(64));
+    let binding = |created, expires| {
+        let input = arkret_signatures::http_signature::parse_signature_input(&format!(
+            "sig1={}",
+            params(created, expires)
+        ))
+        .unwrap();
+        applet_delivery_authentication_record_digest(
+            "ak:did_core:web:app",
+            "ak:did_core:web:edge",
+            "retry-1",
+            "sha-256=:abc=:",
+            "did:web:app#applet-service-key",
+            &epoch,
+            &key,
+            &input,
+        )
+        .unwrap()
+    };
+    let first = binding(1, 60);
+    let retry = binding(61, 120);
+    assert_ne!(first.0, retry.0);
+    assert_eq!(first.1, retry.1);
 }

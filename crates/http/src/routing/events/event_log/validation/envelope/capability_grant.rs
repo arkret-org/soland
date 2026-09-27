@@ -25,7 +25,7 @@ pub(super) fn validate_capability_grant_body(
     if &payload.grant.issuer_id != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "invalid_proof",
+            "capability_denied",
             "capability grant issuer must equal the Event actor",
         ));
     }

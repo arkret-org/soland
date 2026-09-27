@@ -90,14 +90,14 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "authorization_ref_missing",
+                "param_missing",
                 "applet-originated Event requires authorization_ref",
             )
         })?;
     if !authorization_ref.starts_with("ak:grant:") {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "authorization_ref_invalid",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             "applet-originated Event authorization_ref must reference an accepted capability grant",
         ));
     }
@@ -106,7 +106,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     if record.portal_realm_id.as_str() != realm_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "applet_effective_scope_mismatch",
+            "capability_denied",
             "applet Event realm_id is outside the installed effective scope",
         ));
     }
@@ -114,7 +114,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     if !applet_executor_in_subject_set(&record, package.service_id.as_str(), &executed_by_actor) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "applet_namespace_mismatch",
+            "capability_denied",
             "executed_by is outside the installed applet subject set",
         ));
     }
@@ -129,7 +129,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "applet_namespace_mismatch",
+            "capability_denied",
             "actor_id is outside the installed applet actor namespace",
         ));
     }
@@ -144,14 +144,14 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
-                "authorization_ref_inactive",
+                "capability_denied",
                 "authorization_ref does not identify an active grant for executed_by",
             )
         })?;
     if !grant.actions.iter().any(|action| action == kind) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "authorization_ref_scope",
+            "capability_denied",
             "authorization_ref grant does not cover this Event kind",
         ));
     }
@@ -164,7 +164,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "authorization_ref_scope",
+            "capability_denied",
             "authorization_ref grant does not cover this Event resource",
         ));
     }
@@ -174,7 +174,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "authorization_ref_scope",
+            "capability_denied",
             "native-principal applet delegation must be issued by the acted-for actor_id",
         ));
     }
@@ -448,7 +448,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
         if selected_scope_seen {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
-                "authorization_ref_scope",
+                "capability_denied",
                 "Applet-managed actor write requires an active exact grant covering its selected scope",
             ));
         }
@@ -586,7 +586,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
             tracing::debug!(%reason, %applet_id, "applet registration_epoch DID resolution failed");
             event_validation_error(
                 StatusCode::FORBIDDEN,
-                "applet_registration_epoch_evidence_mismatch",
+                "capability_denied",
                 "installed applet service DID document could not be resolved",
             )
         })?;
@@ -596,7 +596,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
             tracing::debug!(%reason, %applet_id, "applet registration_epoch evidence mismatch");
             event_validation_error(
                 StatusCode::FORBIDDEN,
-                "applet_registration_epoch_evidence_mismatch",
+                "capability_denied",
                 "installed applet registration_epoch evidence does not match the current service DID document",
             )
         })?;
@@ -606,8 +606,8 @@ pub(super) async fn validate_applet_registration_epoch_binding(
         && !evidence.contains_signing_key(&verification_method)
     {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "applet_registration_epoch_signing_key_mismatch",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             "event proof signing key is outside the applet registration_epoch evidence",
         ));
     }

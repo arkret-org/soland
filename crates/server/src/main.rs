@@ -278,6 +278,9 @@ async fn run() -> anyhow::Result<()> {
     // Member Station replica anchors a restart or an unreachable governing
     // Station left pending (`federation.md` section 4.1.1).
     let _replica_anchor_sweeper = soland_http::state::spawn_pending_anchor_sweeper(state.clone());
+    let _franking_sweeper = soland_http::state::spawn_pending_franking_sweeper(state.clone());
+    let _applet_completion_sweeper =
+        soland_http::state::spawn_pending_applet_completion_sweeper(state.clone());
     tracing::info!(
         worker = "federation_outbox",
         enabled = state.config().federation_outbound_enabled,

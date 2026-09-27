@@ -76,13 +76,45 @@ fn measure(plan: Value, label: &str) -> Measured {
 }
 
 async fn seed(conn: &mut AsyncPgConnection, first: i64, last: i64, history: i64) {
+    seed_history(conn, first, last, history, false).await;
+}
+
+async fn seed_history(
+    conn: &mut AsyncPgConnection,
+    first: i64,
+    last: i64,
+    history: i64,
+    diverse_kinds: bool,
+) {
+    // Physical query-plan fixtures, not semantically admitted Events. Cold
+    // Realms exercise a populated kind-summary index through the real Commit
+    // trigger, rather than an unrealistically two-kind, two-page summary.
+    // The hot Realm and the history-read matrix retain their original skew.
+    let event_kind = if diverse_kinds {
+        let kinds = crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS
+            .iter()
+            .take(COLD_HISTORY as usize)
+            .map(|kind| format!("'{}'", kind.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(kinds.len(), COLD_HISTORY as usize);
+        assert_eq!(
+            kinds
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            kinds.len()
+        );
+        format!("(ARRAY[{}])[p::integer + 1]", kinds.join(","))
+    } else {
+        "CASE WHEN p = 0 THEN 'ak.realm.create' ELSE 'ak.message.create' END".to_owned()
+    };
     conn.batch_execute(&format!(
         "INSERT INTO canonical_events \
            (id, digest_suite, digest, actor_id, realm_id, scope_ref, kind, canonical_bytes, \
             envelope, state, committed_at) \
          SELECT '\\x01'::bytea || d.digest, 1, d.digest, 'actor', 'ak:realm:capacity-' || r, \
                 '{{}}'::jsonb, \
-                CASE WHEN p = 0 THEN 'ak.realm.create' ELSE 'ak.message.create' END, \
+                {event_kind}, \
                 '\\x00'::bytea, \
                 jsonb_build_object('event_id', 'ak:event:capacity-' || r || '-' || p, \
                                    'payload', '{{}}'::jsonb), \
@@ -311,6 +343,13 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
             .await.unwrap();
     }
     for (table, columns, expressions, value) in [
+        ("applet_registration_current_results", "applet_id", format!("'applet-' || {key}"), "'{}'::jsonb".to_owned()),
+        ("member_identity_updates_current_results", "member_id,segment", "jsonb_build_object('member',m)::text,'member_identity'".to_owned(), "jsonb_build_object('assertions','[]'::jsonb)".to_owned()),
+        ("circle_current_results", "circle_id,create_event_id,source_stream_ref,short_name_folded", format!("'circle-' || {key},'circle-event-' || {key},jsonb_build_object('kind','realm','realm_id',{realm}),'circle-' || m"), format!("jsonb_build_object('id','circle-' || {key},'realm_id',{realm})")),
+        ("circle_member_state_current_results", "circle_id,member_id,membership,source_stream_ref", format!("'circle-' || {key},jsonb_build_object('member',m)::text,'join',jsonb_build_object('kind','circle','realm_id',{realm},'circle_id','circle-' || {key})"), "jsonb_build_object('membership','join')".to_owned()),
+        ("call_state_current_results", "call_id,create_event_id,source_stream_ref", format!("'call-' || {key},'call-event-' || {key},jsonb_build_object('kind','realm','realm_id',{realm})"), "jsonb_build_object('from',NULL,'to','ringing')".to_owned()),
+        ("moderation_franking_proof_current_results", "target_event_id,source_stream_ref", format!("'franking-target-' || {key},jsonb_build_object('kind','realm','realm_id',{realm})"), "'{}'::jsonb".to_owned()),
+        ("realm_organization_current_results", "organization_id,relationship,organization_public_key", format!("'organization-' || {key},'owner',decode(repeat('00',32),'hex')"), format!("jsonb_build_object('realm_id',{realm},'organization_id','organization-' || {key},'relationship','owner')")),
         ("policy_current_results", "policy_id,current_event_id", format!("'policy-' || {key}, 'event-' || {key}"), "'{}'::jsonb".to_owned()),
         ("strand_current_results", "strand_id", format!("'strand-' || {key}"), format!("jsonb_build_object('id','strand-' || {key},'realm_id',{realm})")),
         ("strand_watch_current_results", "strand_id,watcher_actor_id", format!("'strand-' || {key},jsonb_build_object('watcher','actor-' || {key})::text"), "jsonb_build_object('level','all')".to_owned()),
@@ -445,7 +484,7 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
     let mut seeded = 1;
     for realms in [1_i64, 100, 1000] {
         if realms > seeded {
-            seed(&mut conn, seeded + 1, realms, COLD_HISTORY).await;
+            seed_history(&mut conn, seeded + 1, realms, COLD_HISTORY, true).await;
             seed_current(&mut conn, seeded + 1, realms, 20).await;
             seeded = realms;
         }
@@ -481,8 +520,15 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                 .map(str::to_owned)
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(observed, expected);
-            assert_eq!(observed.len(), 24);
-            let output = 20.0 * width + 10.0;
+            // The union has 27 width-sized families: member, message and
+            // moderation plus the 24 seed_snapshot_families loop entries.
+            // Relation is seeded for the exact self-read matrix only and is
+            // absent from this union. StrandWatch contributes one family,
+            // not another row for each accepted replacement in its history.
+            // The other four tables emit seven bootstrap facets and three
+            // singleton rows per Realm.
+            assert_eq!(observed.len(), 31);
+            let output = 27.0 * width + 10.0;
             assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan

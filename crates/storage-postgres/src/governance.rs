@@ -432,6 +432,42 @@ pub struct PgRealmOrganizationStatementStore {
 }
 #[async_trait]
 impl RealmOrganizationStatementStore for PgRealmOrganizationStatementStore {
+    async fn accepted_relationships(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::realm_governance::RealmOrganizationRelationshipRow>>{
+        use diesel_async::AsyncConnection as _;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+            crate::realm_authorization_cut::lock_realm_authorization_cut(conn, realm_id).await?;
+            crate::organization_moderation_gate::accepted_relationships_in_connection(
+                conn, realm_id, at,
+            )
+            .await
+            .map_err(crate::PgTransactionError::from)
+        })
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)
+    }
+    async fn require_moderation_authority(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        use diesel_async::AsyncConnection as _;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+            crate::realm_authorization_cut::lock_realm_authorization_cut(conn, realm_id).await?;
+            crate::organization_moderation_gate::require_organization_moderation_authority_in_connection(
+                conn, realm_id, None, at,
+            ).await.map_err(crate::PgTransactionError::from)
+        }).await.map_err(crate::PgTransactionError::into_persistence)
+    }
     async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await

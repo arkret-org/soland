@@ -20,8 +20,8 @@ pub(in crate::routing) fn event_semantic_refs(
         || arkret_wire::event_envelope::validate_semantic_ref_count(values.len()).is_err()
     {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "semantic_refs_too_large",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             "semantic_refs[] exceeds the v1 maximum of 128 entries",
         ));
     }
@@ -65,8 +65,8 @@ pub(in crate::routing) fn event_semantic_refs(
     if arkret_wire::event_envelope::validate_authorized_by_ref_count(authorized_refs.len()).is_err()
     {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "semantic_refs_too_large",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             "authorized_by semantic refs exceed the v1 maximum of 64 entries",
         ));
     }
@@ -84,8 +84,8 @@ fn event_for_canonical_digest(envelope: &Value) -> Result<Event, EventValidation
     }
     serde_json::from_value(value).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_event_envelope",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             format!("event envelope is not an SDK Event: {error}"),
         )
     })
@@ -97,15 +97,15 @@ pub(in crate::routing) fn event_canonical_bytes(
     let event = event_for_canonical_digest(envelope)?;
     let payload = event.digest_payload().map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_event_envelope",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             format!("event digest payload cannot be built: {error}"),
         )
     })?;
     canonical::canonical_json_bytes(&payload).map_err(|_| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_event_envelope",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             "event envelope cannot be canonicalized",
         )
     })
@@ -447,32 +447,6 @@ fn event_visibility_metadata(
 /// realm binding itself is enforced by
 /// `validate_principal_control_realm_binding`; payload field presence by
 /// the registry payload schema.
-pub(in crate::routing) fn validate_device_revoke_submission(
-    session: &SessionRecord,
-    envelope: &Value,
-) -> Result<String, SubmitOneError> {
-    let payload = envelope.get("payload").cloned().unwrap_or(Value::Null);
-    let device_id = payload
-        .get("device_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if device_id.is_empty() {
-        return Err(SubmitOneError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "schema_violation",
-            "ak.device.revoke payload.device_id is required",
-        ));
-    }
-    if device_id == session.require_human_device_id() {
-        return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "cannot_self_revoke",
-            "a device cannot revoke itself; revoke from a peer device",
-        ));
-    }
-    Ok(device_id.to_owned())
-}
-
 pub(crate) fn canonical_realm_id_for_record(record: &AcceptedEvent) -> Option<String> {
     if record.kind == arkret_wire::EventKind::RealmCreate.as_str() {
         return record
@@ -804,7 +778,8 @@ mod refs_limit_tests {
             .collect();
         let err =
             event_semantic_refs(&semantic_refs_object(json!(refs)), MAX_SEMANTIC_REFS).unwrap_err();
-        assert_eq!(err.code, "semantic_refs_too_large");
+        assert_eq!(err.code, "schema_violation");
+        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     // §2 — `authorized_by` role ≤ 64 within the 128 total.
@@ -825,7 +800,8 @@ mod refs_limit_tests {
             .collect();
         let err =
             event_semantic_refs(&semantic_refs_object(json!(refs)), MAX_SEMANTIC_REFS).unwrap_err();
-        assert_eq!(err.code, "semantic_refs_too_large");
+        assert_eq!(err.code, "schema_violation");
+        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]

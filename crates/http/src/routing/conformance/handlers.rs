@@ -250,33 +250,6 @@ pub struct ChaosOperationOutcome {
     consistent: bool,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmBasisRequest {
-    realm_id: String,
-    subject: String,
-    data_plane_actions: Vec<String>,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct RealmBasisOutcome {
-    seal_id: String,
-    control_event_set_root: String,
-    state_root: String,
-}
-
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-pub struct SignalMlsBasisRequest {
-    genesis_event: Value,
-    creator_device_id: String,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct SignalMlsBasisOutcome {
-    group_state_ref: String,
-    mls_group_id: String,
-    epoch: u64,
-}
-
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct CanonicalEventDiagnostic {
     event_id: String,
@@ -345,43 +318,6 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
     })
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.conformance.realm_basis",
-    tags("conformance")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.realm_basis"))]
-pub async fn realm_basis(
-    _depot: &mut Depot,
-    _body: JsonBody<RealmBasisRequest>,
-) -> JsonResult<RealmBasisOutcome> {
-    super::ensure_enabled()?;
-    Err(AppError::from_rejection(
-        soland_http::error::ErrorCode::ServiceUnavailable,
-        "conformance Realm fixture requires a registered Event/Commit authority unit",
-    )
-    .with_rejection_code("service_unavailable"))
-}
-/// Refuse the retired synthetic MLS fixture until a committed Genesis Event
-/// and its authority cut can be installed through the current contract.
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.conformance.signal_mls_basis",
-    tags("conformance")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.conformance.signal_mls_basis")
-)]
-pub async fn signal_mls_basis(
-    _depot: &mut Depot,
-    _body: JsonBody<SignalMlsBasisRequest>,
-) -> JsonResult<SignalMlsBasisOutcome> {
-    super::ensure_enabled()?;
-    Err(AppError::from_rejection(
-        soland_http::error::ErrorCode::ServiceUnavailable,
-        "conformance MLS fixture requires a committed Genesis Event and authority cut",
-    )
-    .with_rejection_code("service_unavailable"))
-}
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.conformance.sign",
     tags("conformance")

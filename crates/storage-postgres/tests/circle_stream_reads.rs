@@ -1,0 +1,303 @@
+#[path = "support/accepted_human_profile.rs"]
+mod accepted_human_profile;
+#[path = "../../test-support/src/device_authorization_history.rs"]
+#[allow(dead_code)]
+mod device_authorization_history;
+#[path = "support/ordinary_realm.rs"]
+mod ordinary_realm;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
+
+use arkret_wire::{
+    ActorId, CommitStreamRef, CurrentSelector, EventKind, StreamScanDirection, StreamScanRequest,
+    TypedCurrentResult,
+};
+use soland_storage::{
+    AccountStreamScan, AuthorityCommitStore, AuthorityCommitTransaction, EventCommitUnitOfWork,
+    MemberCommittedEventRead,
+};
+use soland_storage_postgres::test_database::TestDatabase;
+use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork};
+
+fn membership(
+    previous: &AuthorityCommitTransaction,
+    circle: &arkret_wire::CircleId,
+    actor: &ActorId,
+    state: &str,
+    expected: Option<&str>,
+) -> soland_storage::EventCommitRequest {
+    let scope = arkret_wire::ScopeRef::Circle {
+        realm_id: previous.event.realm_id.clone(),
+        circle_id: circle.clone(),
+    };
+    let event = ordinary_realm::event_for_actor(
+        EventKind::CircleMemberState,
+        scope,
+        actor.clone(),
+        serde_json::json!({"circle_id":circle,"member_id":actor,"membership":state,"expected_membership":expected}),
+        previous.commit.committed_at,
+    );
+    let mut request =
+        ordinary_realm::request_for_event(previous, event, previous.commit.committed_at);
+    let stream = CommitStreamRef::Circle {
+        realm_id: previous.event.realm_id.clone(),
+        circle_id: circle.clone(),
+    };
+    if previous.commit.stream_ref != stream {
+        request.authority_commit.commit.stream_position = 0;
+        request.authority_commit.commit.previous_commit_ref = None;
+    }
+    request.authority_commit.commit.stream_ref = stream;
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        request.authority_commit.event.clone(),
+    ));
+    request
+}
+
+fn page(result: AccountStreamScan) -> arkret_wire::StreamScanOutcome {
+    match result {
+        AccountStreamScan::Page(page) => page,
+        other => panic!("expected an authorized Circle page: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn exact_circle_membership_bounds_snapshot_bootstrap_scan_and_point_reads() {
+    check_circle_reads("since_join").await;
+}
+
+#[tokio::test]
+async fn circle_all_history_requires_current_membership_and_uses_its_own_genesis() {
+    check_circle_reads("all_history_for_current_members").await;
+}
+
+async fn check_circle_reads(history: &str) {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let did = device_authorization_history::did_web_station(&ordinary_realm::station());
+    let actor = accepted_human_profile::accepted_human_profile(&pool, did.clone()).await;
+    let account = actor.as_account_id().unwrap();
+    let unit = ordinary_realm::bootstrap_unit_for_account(
+        &uuid::Uuid::now_v7().to_string(),
+        account,
+        &did,
+    );
+    let head = unit.transactions.last().unwrap();
+    let at = head.commit.committed_at;
+    let realm = head.event.realm_id.clone();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool);
+    let create = ordinary_realm::next_request_for_actor(
+        head,
+        EventKind::CircleCreate,
+        actor.clone(),
+        serde_json::json!({"object":{"schema":"ak.schema.circle.v1","realm_id":realm,
+            "title":"Private membership cut","display":{"short_name":"Private","color_token":"blue","symbol":{"glyph":"lock"}},
+            "directory_visibility":"members","join_rule":"public","history_access":history,"state":"active",
+            "created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)}}),
+        at,
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let circle = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
+    let stream = CommitStreamRef::Circle {
+        realm_id: realm.clone(),
+        circle_id: circle.clone(),
+    };
+    let request = StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: stream.clone(),
+        direction: StreamScanDirection::After(None),
+        limit: 32,
+    };
+    let issuer = ordinary_realm::station();
+    assert!(matches!(
+        store
+            .scan_stream_for_account(&request, account, &issuer)
+            .await
+            .unwrap(),
+        AccountStreamScan::NotAuthorized
+    ));
+    let hidden = store
+        .realm_state_snapshot_material_for_account(&realm, account)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!hidden.current_state_entries.iter().any(|row| matches!(
+        row,
+        TypedCurrentResult::Value {
+            selector: CurrentSelector::Circle { .. },
+            ..
+        }
+    )));
+    let join = membership(&create.authority_commit, &circle, &actor, "join", None);
+    uow.commit_event(join.clone()).await.unwrap();
+    let first = page(
+        store
+            .scan_stream_for_account(&request, account, &issuer)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(first.committed_events.len(), 1);
+    assert_eq!(first.committed_events[0].commit().stream_ref, stream);
+    assert_eq!(first.readable_floor.as_ref().unwrap().oldest_position, 0);
+    assert!(matches!(
+        store
+            .committed_event_for_member(&join.authority_commit.event.event_id, &actor, &issuer)
+            .await
+            .unwrap(),
+        MemberCommittedEventRead::Read(_)
+    ));
+    let bootstrap = store
+        .member_station_bootstrap_material(&realm, account, &join.authority_commit.commit.commit_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        bootstrap
+            .retention_and_history_floor
+            .stream_floors
+            .iter()
+            .find(|floor| floor.stream_ref == stream)
+            .unwrap()
+            .oldest_position,
+        0
+    );
+    assert_ne!(
+        bootstrap
+            .retention_and_history_floor
+            .stream_floors
+            .iter()
+            .find(|floor| matches!(floor.stream_ref, CommitStreamRef::Realm { .. }))
+            .unwrap()
+            .oldest_position,
+        head.commit.stream_position,
+        "Circle join must not replace the parent Realm's floor"
+    );
+    let leave = membership(
+        &join.authority_commit,
+        &circle,
+        &actor,
+        "leave",
+        Some("join"),
+    );
+    uow.commit_event(leave.clone()).await.unwrap();
+    assert!(matches!(
+        store
+            .scan_stream_for_account(&request, account, &issuer)
+            .await
+            .unwrap(),
+        AccountStreamScan::NotAuthorized
+    ));
+    assert!(matches!(
+        store
+            .committed_event_for_member(&join.authority_commit.event.event_id, &actor, &issuer)
+            .await
+            .unwrap(),
+        MemberCommittedEventRead::NotVisible
+    ));
+    assert!(
+        store
+            .member_station_bootstrap_material(
+                &realm,
+                account,
+                &join.authority_commit.commit.commit_id
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let ended = page(
+        store
+            .scan_stream_for_peer(&request, &issuer, &issuer)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        ended.committed_events.last().unwrap().commit().commit_id,
+        leave.authority_commit.commit.commit_id
+    );
+    assert!(matches!(
+        ended.committed_events.last().unwrap(),
+        arkret_wire::CommittedEventView::Full(_)
+    ));
+    assert!(
+        store
+            .committed_event_for_peer(&leave.authority_commit.event.event_id, &issuer, &issuer)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let rejoin = membership(
+        &leave.authority_commit,
+        &circle,
+        &actor,
+        "join",
+        Some("leave"),
+    );
+    uow.commit_event(rejoin.clone()).await.unwrap();
+    let current = page(
+        store
+            .scan_stream_for_account(&request, account, &issuer)
+            .await
+            .unwrap(),
+    );
+    let expected_floor = if history == "since_join" { 2 } else { 0 };
+    assert_eq!(
+        current.readable_floor.as_ref().unwrap().oldest_position,
+        expected_floor
+    );
+    assert_eq!(
+        current.committed_events.len(),
+        if history == "since_join" { 1 } else { 3 }
+    );
+    assert_eq!(
+        current.committed_events.last().unwrap().commit().commit_id,
+        rejoin.authority_commit.commit.commit_id
+    );
+    let prior_read = store
+        .committed_event_for_member(&join.authority_commit.event.event_id, &actor, &issuer)
+        .await
+        .unwrap();
+    if history == "since_join" {
+        assert!(matches!(prior_read, MemberCommittedEventRead::NotVisible));
+    } else {
+        assert!(matches!(prior_read, MemberCommittedEventRead::Read(_)));
+    }
+    let peer = page(
+        store
+            .scan_stream_for_peer(&request, &issuer, &issuer)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        peer.readable_floor.as_ref().unwrap().oldest_position,
+        expected_floor
+    );
+    assert!(
+        store
+            .member_station_bootstrap_material(
+                &realm,
+                account,
+                &join.authority_commit.commit.commit_id
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .member_station_bootstrap_material(
+                &realm,
+                account,
+                &rejoin.authority_commit.commit.commit_id
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

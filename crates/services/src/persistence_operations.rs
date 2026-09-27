@@ -386,6 +386,17 @@ impl crate::governance::ModerationPort for PersistenceModeration {
             .queue_view_for_actor(actor, realm_id)
             .await?)
     }
+    async fn management_view_for_actor(
+        &self,
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> crate::ServiceResult<soland_storage::ModerationManagementView> {
+        Ok(self
+            .0
+            .moderation()
+            .management_view_for_actor(actor, realm_id)
+            .await?)
+    }
     async fn report_count(&self) -> crate::ServiceResult<u64> {
         Ok(self.0.moderation().report_count().await?)
     }

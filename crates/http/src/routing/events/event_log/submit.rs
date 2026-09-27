@@ -24,9 +24,7 @@ static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = Once
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod ghost_provision;
-pub(in crate::routing) use ghost_provision::{
-    submit_applet_install_batch, submit_ghost_provision_batch,
-};
+pub(in crate::routing) use ghost_provision::{applet_committed_ref, submit_applet_authoring_unit};
 mod sidecar_ensure;
 pub(crate) use sidecar_ensure::submit_sidecar_ensure_batch;
 mod agent_membership_cascade;
@@ -248,9 +246,6 @@ enum InternalEventBinding {
     MimiProvider {
         binding_ref: String,
     },
-    ServiceFrankingProof {
-        target_event_id: String,
-    },
     AppletFormal {
         event_id: String,
         applet_id: arkret_wire::AppletId,
@@ -305,25 +300,6 @@ impl InternalEventAdmission {
             device_id: String::new(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
-            },
-        }
-    }
-
-    pub(in crate::routing) fn service_franking_proof(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        target_event_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: arkret_wire::EventKind::ModerationFrankingProof
-                .as_str()
-                .to_owned(),
-            device_id: String::new(),
-            binding: InternalEventBinding::ServiceFrankingProof {
-                target_event_id: target_event_id.into(),
             },
         }
     }
@@ -493,13 +469,6 @@ impl InternalEventAdmission {
                         .and_then(Value::as_str)
                         == Some(binding_ref.as_str())
                 }
-                InternalEventBinding::ServiceFrankingProof { target_event_id } => {
-                    object
-                        .get("payload")
-                        .and_then(|payload| payload.get("event_id"))
-                        .and_then(Value::as_str)
-                        == Some(target_event_id.as_str())
-                }
                 InternalEventBinding::AppletFormal {
                     event_id,
                     applet_id,
@@ -647,11 +616,8 @@ impl InternalEventAdmission {
         session: &SessionRecord,
         object: &serde_json::Map<String, Value>,
     ) -> bool {
-        matches!(
-            self.binding,
-            InternalEventBinding::MimiProvider { .. }
-                | InternalEventBinding::ServiceFrankingProof { .. }
-        ) && self.matches(session, object)
+        matches!(self.binding, InternalEventBinding::MimiProvider { .. })
+            && self.matches(session, object)
     }
 
     pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(
@@ -898,14 +864,6 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     AppError::from_rejection(mapped, message).with_internal_reason(code)
 }
 
-fn realm_already_exists_error() -> SubmitOneError {
-    SubmitOneError::new(
-        StatusCode::CONFLICT,
-        "realm_already_exists",
-        "realm already exists",
-    )
-}
-
 fn cbs_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
     if reason == "cell_bottom_state" {
         ("failed_bottom", "cell_in_bottom_state")
@@ -1102,8 +1060,8 @@ async fn validate_identity_creation_control_proof(
         || proof.audience_id.as_str() != state.service_id().as_str()
     {
         return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             "identity creation control proof is expired or has the wrong audience",
         ));
     }
@@ -1112,16 +1070,16 @@ async fn validate_identity_creation_control_proof(
     )
     .map_err(|error| {
         SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             format!("principal registration anchor is invalid: {error}"),
         )
     })?;
     arkret_signatures::webvh::verify_identity_creation_control_proof(&validated_anchor, proof)
         .map_err(|error| {
             SubmitOneError::new(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
+                StatusCode::UNAUTHORIZED,
+                "signature_invalid",
                 format!("identity creation proof is invalid: {error}"),
             )
         })?;
@@ -1195,7 +1153,7 @@ use post_commit::*;
 pub(super) use value::validate_membership_compensation_live_state;
 use value::*;
 pub(in crate::routing) use value::{
-    prepare_service_franking_proof_event_value, submit_event_value, submit_initial_event_submission,
+    submit_applet_revoke_event_submission, submit_event_value, submit_initial_event_submission,
 };
 // `submit_one_error_to_app_error` is defined in this module, so it needs no
 // re-export here; `event_log.rs` names it directly.

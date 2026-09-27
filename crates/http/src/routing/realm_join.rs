@@ -9,6 +9,7 @@ use arkret_models_collaboration::governance::realm_join_intake::{
 };
 use arkret_wire::{ActorId, AuthorityBundleRequest, Base64UrlString, CommitStreamRef, EventKind};
 use salvo::prelude::*;
+use serde_json::Value;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -19,8 +20,8 @@ mod preview;
 
 pub(in crate::routing) use authority::resolve_verified_authority;
 pub(crate) use authority::{
-    LocatedRealmAuthority, insert_method_key, resolve_verified_authority_of_service,
-    verify_served_bundle,
+    LocatedRealmAuthority, fetch_authority_bundle_of_service, insert_method_key,
+    resolve_verified_authority_of_service, verify_served_bundle,
 };
 
 pub(super) fn self_router() -> Router {
@@ -53,7 +54,7 @@ pub(crate) fn nonce_for_request(
 /// This Station's own nonce-bound bundle for a Realm it currently governs.
 /// A Realm governed elsewhere fails here, so the result is never a claim of
 /// authority this Station does not hold.
-async fn local_authority_bundle(
+pub(crate) async fn local_authority_bundle(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     nonce: &Base64UrlString,
@@ -145,9 +146,8 @@ async fn peer_bootstrap(
         .map_err(unavailable)?
         .ok_or_else(|| AppError::not_found("Realm join bootstrap not found"))?;
     let event = &accepted.event;
-    let expected_stream = CommitStreamRef::Realm {
-        realm_id: body.realm_id.clone(),
-    };
+    let expected_stream =
+        CommitStreamRef::from_scope(&event.scope_ref, None).map_err(invalid_request)?;
     if event.realm_id != body.realm_id || accepted.commit.stream_ref != expected_stream {
         return Err(AppError::not_found("Realm join bootstrap not found"));
     }
@@ -161,6 +161,26 @@ async fn peer_bootstrap(
             .is_some_and(|payload| {
                 payload.member_id == member && payload.membership == MembershipPayloadState::Join
             }),
+        EventKind::CircleMemberState => {
+            let arkret_wire::ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            } = &event.scope_ref
+            else {
+                return Err(AppError::not_found("Realm join bootstrap not found"));
+            };
+            realm_id == &body.realm_id
+                && event.actor_id == member
+                && event.payload.get("circle_id").and_then(Value::as_str)
+                    == Some(circle_id.as_str())
+                && event.payload.get("membership").and_then(Value::as_str) == Some("join")
+                && event
+                    .payload
+                    .get("member_id")
+                    .and_then(|value| serde_json::from_value::<ActorId>(value.clone()).ok())
+                    .as_ref()
+                    == Some(&member)
+        }
         EventKind::InviteAccept => event.actor_id == member,
         _ => false,
     };

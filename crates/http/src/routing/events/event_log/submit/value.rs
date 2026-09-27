@@ -64,9 +64,6 @@ impl SubmitCommitOptions<'_> {
 /// transactions. Every path through this mode currently refuses writes.
 pub(super) enum SubmitMode<'a> {
     Commit(Box<SubmitCommitOptions<'a>>),
-    /// Admit an internally-authored Event through the ordinary canonical
-    /// lane, but return its commit command to a larger atomic aggregate.
-    PrepareInternal(&'a mut Option<soland_services::events::CommitAcceptedEventCommand>),
 }
 
 /// Classify a failed origin-selector derivation on the origin Station's own `/_arkret/self/*` write
@@ -179,6 +176,63 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     })
 }
 
+/// Submit only the caller-signed Event effects listed in an Applet revoke
+/// plan. The Applet endpoint has already bound each submission to the current
+/// plan; the ordinary self authority port still verifies its producer and
+/// commits the Event, covering RealmCommit, and current result together.
+pub(in crate::routing) async fn submit_applet_revoke_event_submission(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventAdmissionSubmission,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    submission.validate().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            format!("invalid Applet revoke Event submission: {error}"),
+        )
+    })?;
+    let event = &submission.event;
+    if !matches!(
+        event.kind,
+        arkret_wire::EventKind::CapabilityRevoke | arkret_wire::EventKind::MemberState
+    ) || !matches!(
+        &event.scope_ref,
+        arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id
+    ) {
+        return Err(SubmitOneError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            "Applet revoke effects require an exact Realm-scope CapabilityRevoke or MemberState Event",
+        ));
+    }
+    let request = arkret_wire::AuthoritySubmitRequest::Event(submission.clone());
+    let event_id = event.event_id.to_string();
+    let outcome = state
+        .authority()
+        .submit_self_event(session, submission)
+        .await
+        .map_err(guarded_unit_error)?;
+    outcome.validate_for_request(&request).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Applet revoke authority outcome is invalid: {error}"),
+        )
+    })?;
+    let arkret_wire::AuthoritySubmitOutcome::Accepted { status, .. } = outcome else {
+        return Err(SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "guarded Applet revoke Event unit returned a non-accepted outcome",
+        ));
+    };
+    Ok(SubmittedEventOutcome {
+        event_id,
+        duplicate: status == arkret_wire::AuthorityCommitStatus::Duplicate,
+    })
+}
+
 /// Map a guarded unit failure onto the registered top-level wire codes.
 fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
     use soland_services::ServiceError;
@@ -209,39 +263,6 @@ fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
         }
     };
     SubmitOneError::new(status, code, message)
-}
-
-pub(in crate::routing) async fn prepare_service_franking_proof_event_value(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: Value,
-    realm_id: &str,
-    target_event_id: &str,
-) -> Result<soland_services::events::CommitAcceptedEventCommand, SubmitOneError> {
-    let admission = InternalEventAdmission::service_franking_proof(
-        realm_id,
-        arkret_wire::ActorId::service(state.service_core_id().clone()),
-        target_event_id,
-    );
-    let mut prepared = None;
-    submit_event_value_with_context(
-        state,
-        session,
-        envelope,
-        SubmitEventContext {
-            internal_admission: Some(&admission),
-            ..SubmitEventContext::empty()
-        },
-        SubmitMode::PrepareInternal(&mut prepared),
-    )
-    .await?;
-    prepared.ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::CONFLICT,
-            "duplicate_conflict",
-            "franking proof preparation encountered an already accepted Event",
-        )
-    })
 }
 
 /// Attach the STORED ingress receipt to a submit outcome.
@@ -567,188 +588,4 @@ pub(super) async fn preflight_moderation_dismiss(
         ));
     }
     Ok(())
-}
-
-/// client-sync.md 8.1: the optional `expected_state_digest` on
-/// `ak.member.identity.update` is an optimistic-concurrency guard over the
-/// current effective-set digest for the same `(realm_id, member_id, segment)`.
-/// A mismatch MUST reject the Event rather than apply it as a valid
-/// replacement, so the guard runs at admission with zero writes instead of
-/// being discovered after acceptance, where dropping the projection would leave
-/// an accepted Event that no reader can see.
-pub(super) fn preflight_member_identity_state_guard(
-    state: &AppState,
-    operation: &arkret_event_draft::ProjectedEventOperation,
-) -> Result<(), SubmitOneError> {
-    if operation.event_kind != arkret_wire::EventKind::MemberIdentityUpdate {
-        return Ok(());
-    }
-    let Some(expected) = operation
-        .payload
-        .get("expected_state_digest")
-        .and_then(Value::as_str)
-    else {
-        return Ok(());
-    };
-    let (Some(realm_id), Some(actor_id)) = (
-        operation.payload.get("realm_id").and_then(Value::as_str),
-        operation
-            .payload
-            .get("actor_id")
-            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()),
-    ) else {
-        // Shape validation owns the missing-carrier case and reports it as a
-        // schema violation; the guard has nothing to compare against.
-        return Ok(());
-    };
-    let current = state.member_identity_state_digest(realm_id, &actor_id.to_string());
-    match current.as_deref() {
-        // The effective set, empty or not, always has a digest
-        // (`current-results.md` §2); a failure to compute it is not a
-        // precondition the writer can satisfy, so it is retryable.
-        None => Err(SubmitOneError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "temporarily_unavailable",
-            "the member identity effective-set digest could not be computed",
-        )),
-        Some(current) if current == expected => Ok(()),
-        Some(current) => Err(SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
-            arkret_wire::ReasonCode::MEMBER_IDENTITY_STATE_MISMATCH,
-            "expected_state_digest does not match the current member identity effective set",
-        )
-        .with_details(json!({ "current_state_digest": current }))),
-    }
-}
-
-#[cfg(test)]
-mod member_identity_state_guard_tests {
-    use super::*;
-
-    const GUARD_REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-
-    fn guard_actor() -> arkret_wire::ActorId {
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            crate::test_event::station_id(),
-        ))
-    }
-
-    fn guard_state() -> AppState {
-        use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
-        let state = AppState::new(
-            crate::config::AppConfig::test_default(),
-            soland_storage_postgres::Db { pool: None },
-        );
-        let identity_payload = json!({
-            "member_identity": {
-                "subject_actor_id": guard_actor(),
-                "display_profile": { "display_name": "Alice" }
-            }
-        });
-        let payload_digest = arkret_canonical::sha256_digest(
-            arkret_canonical::canonical_json_bytes(&identity_payload).unwrap(),
-        );
-        state.test_insert_member_identity(MemberIdentityEventRecord {
-            event_id: "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx".to_owned(),
-            subject: MemberIdentitySubjectKey {
-                realm_id: GUARD_REALM.to_owned(),
-                actor_id: guard_actor().to_string(),
-                segment: "member_identity".to_owned(),
-            },
-            payload_digest,
-            replaces: Vec::new(),
-            raw_event: json!({
-                "event_id": "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx",
-                "payload": {
-                    "realm_id": GUARD_REALM,
-                    "actor_id": guard_actor(),
-                    "segment": "member_identity",
-                    "identity_payload": identity_payload,
-                }
-            }),
-        });
-        state
-    }
-
-    fn guard_operation(expected_state_digest: Option<&str>) -> Operation {
-        let mut payload = json!({
-            "realm_id": GUARD_REALM,
-            "actor_id": guard_actor(),
-            "segment": "member_identity",
-            "identity_payload": {"member_identity": {"subject_actor_id": guard_actor()}},
-        });
-        if let Some(digest) = expected_state_digest {
-            payload["expected_state_digest"] = json!(digest);
-        }
-        arkret_event_draft::test_support::raw_projected_operation(
-            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-00000000000a")
-                .unwrap(),
-            arkret_wire::RealmId::new(GUARD_REALM).unwrap(),
-            arkret_wire::EventKind::MemberIdentityUpdate.as_str(),
-            payload,
-        )
-    }
-
-    #[test]
-    fn a_stale_expected_state_digest_is_refused_at_admission() {
-        let state = guard_state();
-        let error = preflight_member_identity_state_guard(
-            &state,
-            &guard_operation(Some(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            )),
-        )
-        .expect_err("a stale writer must not be admitted");
-        let rejection = error.rejection().expect("guard rejects, never quarantines");
-        assert_eq!(rejection.wire_code(), "failed_precondition");
-        assert_eq!(
-            rejection.reason_code.as_deref(),
-            Some(arkret_wire::ReasonCode::MEMBER_IDENTITY_STATE_MISMATCH)
-        );
-    }
-
-    #[test]
-    fn the_observed_effective_set_digest_is_admitted() {
-        let state = guard_state();
-        let current = state
-            .member_identity_state_digest(GUARD_REALM, &guard_actor().to_string())
-            .expect("the seeded record has an effective-set digest");
-        assert!(
-            preflight_member_identity_state_guard(&state, &guard_operation(Some(&current))).is_ok()
-        );
-    }
-
-    #[test]
-    fn a_first_write_guards_the_empty_effective_set() {
-        let state = AppState::new(
-            crate::config::AppConfig::test_default(),
-            soland_storage_postgres::Db { pool: None },
-        );
-        let empty = "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
-        assert_eq!(
-            state
-                .member_identity_state_digest(GUARD_REALM, &guard_actor().to_string())
-                .as_deref(),
-            Some(empty)
-        );
-        assert!(
-            preflight_member_identity_state_guard(&state, &guard_operation(Some(empty))).is_ok()
-        );
-        assert!(
-            preflight_member_identity_state_guard(
-                &state,
-                &guard_operation(Some(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-                )),
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn an_absent_guard_stays_optional() {
-        let state = guard_state();
-        assert!(preflight_member_identity_state_guard(&state, &guard_operation(None)).is_ok());
-    }
 }

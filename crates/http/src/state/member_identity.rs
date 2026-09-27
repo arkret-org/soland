@@ -9,31 +9,10 @@ pub use soland_storage::{
     MemberIdentitySubjectKey,
 };
 
-/// R3.1/R3.2 (arkret-spec @ b56cab1) — Realm-scoped MemberIdentity event
-/// registry. Stores every accepted `ak.member.identity.update` event by
-/// `(realm_id, actor_id, segment)`, computes the current effective set
-/// per the SDK helper `effective_identity_events`, and materializes the
-/// `expected_state_digest` guard (`member_identity_effective_set_digest`
-/// over the exact signed payloads, `current-results.md` §2). The reducer
-/// (`reducer::apply_member_identity_update`) consults the guard for the
-/// optimistic-concurrency check (`expected_state_digest`) and writes
-/// accepted events back. Demand sync currently emits only bounded membership
-/// rows; disclosure-aware identity enrichment needs a bounded durable reader.
-///
-/// This registry is the synchronous in-memory projection surface; the
-/// durable copy lives in the `member_identity_events` /
-/// `member_identity_handle_claims` Pg tables behind
-/// [`soland_storage::MemberIdentityStore`]. Writers
-/// (`AppState::record_member_identity_update` / `cache_handle_claim` /
-/// `invalidate_cached_handle_claims_for_subject`) persist through that store
-/// before touching this registry, and `AppState::hydrate` rebuilds the
-/// registry from it on startup so restart loses nothing.
-/// Plaintext Ed25519 `MemberIdentityProof` verification runs on the
-/// event-ingest path before records reach this registry. Encrypted
-/// carriers and non-Ed25519 proof algorithms are currently refused
-/// fail-closed rather than stored after shape-only validation. Reducer-
-/// shape validation (segment whitelist, replacement-digest binding,
-/// cross-(realm,actor, segment) guard) IS real per MID-2.
+/// Disposable Realm/member identity projection. Hydration rebuilds every
+/// assertion from accepted canonical Events joined to their RealmCommits.
+/// The accepting domain writer owns the expected-state guard; inner display
+/// proofs and replacement edges remain consumer verification semantics.
 #[derive(Clone, Debug, Default)]
 pub struct MemberIdentityRegistry {
     /// All accepted events, keyed by `event_id`.

@@ -61,6 +61,9 @@ struct AdminModerationQueueOutcome {
     /// `moderation-queue-item.schema.json` View items.
     #[salvo(schema(value_type = Vec<serde_json::Value>))]
     items: Vec<arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem>,
+    /// Original accepted Events whose require_review add is still active.
+    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+    pending_review_events: Vec<arkret_wire::Event>,
     total: usize,
     generated_at: String,
 }
@@ -433,15 +436,16 @@ async fn get_moderation_queue(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = admin.session()?;
     let session = require_admin_principal(state, session)?;
-    let items = crate::routing::interop::moderation::moderation_queue_for_session(
+    let view = crate::routing::interop::moderation::moderation_management_view_for_session(
         state,
         &session.actor,
         None,
     )
     .await?;
-    let total = items.len();
+    let total = view.items.len() + view.pending_review_events.len();
     json_ok(AdminModerationQueueOutcome {
-        items,
+        items: view.items,
+        pending_review_events: view.pending_review_events,
         total,
         generated_at: arkret_canonical::format_timestamp_canonical(super::now()),
     })

@@ -91,9 +91,10 @@ pub(super) async fn admit_mls_event(
     if let Some(outcome) = super::authority_self_event_unit::exact_replay(state, event).await? {
         return Ok(outcome);
     }
-    if !matches!(&event.scope_ref, ScopeRef::Realm { realm_id } if realm_id == &event.realm_id) {
+    if !matches!(&event.scope_ref, ScopeRef::Realm { realm_id } | ScopeRef::Circle { realm_id, .. } if realm_id == &event.realm_id)
+    {
         return Err(ServiceError::Internal(
-            "Circle and Sidecar MLS groups have no scope authority cut".to_owned(),
+            "the MLS effective scope has no supported authority cut".to_owned(),
         ));
     }
     let (installation, added_leaves) = match event.kind {

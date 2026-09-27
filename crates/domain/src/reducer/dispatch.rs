@@ -702,7 +702,7 @@ fn apply_member_identity_update_dispatch(
         .to_owned();
     let actor_id = op
         .payload
-        .get("actor_id")
+        .get("member_id")
         .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
         .map(|actor| actor.to_string())
         .unwrap_or_default();
@@ -1069,7 +1069,7 @@ mod tests {
                 EventKind::MemberIdentityUpdate.as_str(),
                 serde_json::json!({
                     "realm_id": realm_id,
-                    "actor_id": actor,
+                    "member_id": actor,
                     "segment": "member_identity",
                 }),
             );

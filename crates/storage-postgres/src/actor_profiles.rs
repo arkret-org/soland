@@ -586,13 +586,30 @@ pub(crate) async fn admit_profile_in_connection(
     }
 
     commit_verified(conn, &write.commit, write.queued_at, WHAT).await?;
-    let profile_id = next
+    write_profile_current_in_connection(conn, event, commit, &next).await?;
+    Ok(ActorProfileAdmissionOutcome::Committed(
+        ActorProfileResultRecord {
+            profile: next,
+            event: event.clone(),
+            commit: commit.clone(),
+        },
+    ))
+}
+
+/// Project a fully admitted SDK Actor Profile at its actual covering Commit.
+pub(crate) async fn write_profile_current_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &RealmCommit,
+    profile: &ActorProfile,
+) -> Result<(), PgTransactionError> {
+    let profile_id = profile
         .id
         .as_ref()
         .ok_or_else(|| corrupt("materialized Actor Profile has no id"))?
         .as_str()
         .to_owned();
-    let value = serde_json::to_value(&next).map_err(PersistenceError::database)?;
+    let value = serde_json::to_value(profile).map_err(PersistenceError::database)?;
     let position = i64::try_from(commit.stream_position)
         .map_err(|_| corrupt("Commit stream position is out of range"))?;
     let advanced = sql_query(
@@ -626,13 +643,7 @@ pub(crate) async fn admit_profile_in_connection(
     .bind::<Jsonb, _>(&value)
     .execute(&mut *conn)
     .await?;
-    Ok(ActorProfileAdmissionOutcome::Committed(
-        ActorProfileResultRecord {
-            profile: next,
-            event: event.clone(),
-            commit: commit.clone(),
-        },
-    ))
+    Ok(())
 }
 
 /// Write one `identity_accountability` row with its accepting Commit. The

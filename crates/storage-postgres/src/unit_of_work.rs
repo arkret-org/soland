@@ -2142,7 +2142,7 @@ async fn commit_franking_replay_nonce(
 /// Install one Applet installation aggregate: the managed-identity winner, the
 /// per-scope installation record, its namespace claims, and every managed
 /// authority anchor it introduces.
-async fn commit_applet_record(
+pub(crate) async fn commit_applet_record(
     conn: &mut AsyncPgConnection,
     mutation: soland_storage::AppletRecordCommit,
 ) -> PersistenceResult<()> {
@@ -2360,6 +2360,7 @@ async fn commit_one_in_connection(
     conn: &mut AsyncPgConnection,
     request: EventCommitRequest,
     applet_record: Option<&soland_storage::AppletRecordCommit>,
+    realm_organization_proof: Option<&soland_storage::RealmOrganizationProofCommit>,
     outcome: &mut EventCommitOutcome,
 ) -> Result<(), PgTransactionError> {
     if request.event.event_id != request.authority_commit.event.event_id.as_str() {
@@ -2386,10 +2387,56 @@ async fn commit_one_in_connection(
         .await?;
     }
 
+    // Producer identity comes from verified holder evidence, never Profile display fields.
+    if event.applet_id.is_none()
+        && matches!(
+            event.kind,
+            arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
+        )
+        && matches!(
+            request.self_producer_guard.as_ref(),
+            Some(soland_storage::SelfProducerCommitGuard::Agent { .. })
+        )
+    {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: Agent Message authoring requires its dedicated admission cut"
+                .to_owned(),
+        )
+        .into());
+    }
+
+    if let Some(guard) = request.applet_producer_guard.as_ref() {
+        if request.self_producer_guard.is_some() || request.forwarded_producer_evidence.is_some() {
+            return Err(PersistenceError::SchemaViolation(
+                "Applet Service and Human producer guards are exclusive".to_owned(),
+            )
+            .into());
+        }
+        crate::managed_message_actor::require_applet_producer_in_connection(
+            conn,
+            event,
+            guard,
+            request.authority_commit.commit.committed_at,
+        )
+        .await?;
+    } else if event.applet_id.is_some() {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: Applet Event requires its exact Service producer guard"
+                .to_owned(),
+        )
+        .into());
+    }
+
     // contact-and-direct-conversation.md section 8.4: the profile table of a
     // Direct Conversation Realm precedes every action authority and writer.
     crate::direct_conversation_admission::admit_direct_conversation_event_in_connection(
         conn, event,
+    )
+    .await?;
+    crate::organization_moderation_gate::require_organization_join_gate_in_connection(
+        conn,
+        event,
+        &request.authority_commit.commit,
     )
     .await?;
     prepare_parent_membership_transaction(conn, &request).await?;
@@ -2445,6 +2492,8 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::organization_moderation_gate::commit_realm_organization_current_result_in_connection(conn, event, commit, realm_organization_proof).await?;
+        crate::call_state_current_results::commit_in_connection(conn, event, commit).await?;
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
         crate::strand_watch_current_results::commit_in_connection(conn, event, commit).await?;
         crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
@@ -2493,6 +2542,7 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::mls_group_current_results::require_mls_send_gate_in_connection(conn, event).await?;
+        crate::member_identity_current_results::commit_in_connection(conn, event, commit).await?;
         crate::message_revision_current_results::commit_message_create_current_result_in_connection(
             conn, event, commit,
         )
@@ -2511,6 +2561,14 @@ async fn commit_one_in_connection(
         .await?;
         crate::moderation_state_current_results::commit_moderation_state_current_result_in_connection(
             conn, event, commit,
+        )
+        .await?;
+        crate::moderation_franking_proof_current_results::commit_franking_current_result_in_connection(conn, event, commit).await?;
+        crate::moderation_franking_proof_current_results::enqueue_franking_in_connection(
+            conn,
+            event,
+            &request.authority_commit.expected_authority.service_id,
+            request.event.received_at,
         )
         .await?;
         if crate::account_summary::changes_account_summary_inputs(&event.kind) {
@@ -2619,7 +2677,14 @@ async fn commit_batch_in_connection(
 
     let mut outcome = EventCommitOutcome::default();
     for event in request.events {
-        commit_one_in_connection(conn, event, request.applet_record.as_ref(), &mut outcome).await?;
+        commit_one_in_connection(
+            conn,
+            event,
+            request.applet_record.as_ref(),
+            request.realm_organization_proof.as_ref(),
+            &mut outcome,
+        )
+        .await?;
     }
 
     if let Some(nonce) = request.franking_replay_nonce.as_ref() {
@@ -2662,6 +2727,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
     ) -> PersistenceResult<EventCommitOutcome> {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
+            realm_organization_proof: None,
             franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,

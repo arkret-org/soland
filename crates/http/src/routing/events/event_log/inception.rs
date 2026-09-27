@@ -105,7 +105,7 @@ pub(super) async fn resolve_event_root_anchor_method(
         .map_err(|error| {
             event_validation_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "stale_did_document",
+                "temporarily_unavailable",
                 format!("original DID inception is unavailable: {error}"),
             )
         })?;
@@ -113,7 +113,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     let entry = entries.next().ok_or_else(|| {
         event_validation_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "stale_did_document",
+            "temporarily_unavailable",
             "original DID inception is missing",
         )
     })?;
@@ -121,28 +121,36 @@ pub(super) async fn resolve_event_root_anchor_method(
         || entry.operation.get("versionId").and_then(Value::as_str) != Some(anchor_id)
     {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             "critical inception reference does not select the unique original DID entry",
         ));
     }
     let operation: std::collections::BTreeMap<String, Value> =
         serde_json::from_value(entry.operation.clone()).map_err(|error| {
-            event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
+            event_validation_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
+                error.to_string(),
+            )
         })?;
     let normalized_did_document = operation
         .get("state")
         .cloned()
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::FORBIDDEN,
-                "invalid_proof",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
                 "DID inception omits its normalized state",
             )
         })
         .and_then(|state| {
             serde_json::from_value(state).map_err(|error| {
-                event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
+                event_validation_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
+                    error.to_string(),
+                )
             })
         })?;
     let anchor = arkret_models_identity::PrincipalRegistrationAnchor::WebvhRegistration {
@@ -161,12 +169,16 @@ pub(super) async fn resolve_event_root_anchor_method(
     };
     let root =
         arkret_identity::validate_principal_registration_anchor(&anchor).map_err(|error| {
-            event_validation_error(StatusCode::FORBIDDEN, "invalid_proof", error.to_string())
+            event_validation_error(
+                StatusCode::UNAUTHORIZED,
+                "signature_invalid",
+                error.to_string(),
+            )
         })?;
     if root.principal_id != actor_core_id {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             "verified inception root does not bind the Event Account",
         ));
     }
@@ -196,8 +208,8 @@ fn principal_control_genesis_resolution_did(
         })?;
     if !arkret_wire::project_did_to_core_id(&did).is_ok_and(|core_id| core_id == *actor_core_id) {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "invalid_proof",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             "principal-control genesis initial_resolution.did must project to actor_id",
         ));
     }

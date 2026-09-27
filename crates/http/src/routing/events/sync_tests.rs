@@ -872,6 +872,7 @@ impl CommittedRealm {
             .commit_event(soland_storage::EventCommitRequest {
                 authority_commit: transaction.clone(),
                 self_producer_guard: None,
+                applet_producer_guard: None,
                 forwarded_producer_evidence: None,
                 event: record,
                 parent_membership_admission: None,

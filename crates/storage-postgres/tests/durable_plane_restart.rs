@@ -17,8 +17,7 @@ use soland_storage::contract_tests::{
     assert_realm_meta_store_contract,
 };
 use soland_storage::{
-    DeviceKeyStore, MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey,
-    MessageRecord, MessageStore, OneTimeKeyStore, RealmMetaRecord, RealmMetaStore,
+    DeviceKeyStore, MessageRecord, MessageStore, OneTimeKeyStore, RealmMetaRecord, RealmMetaStore,
 };
 use soland_storage_postgres::{
     Db, PgDeviceKeyStore, PgMemberIdentityStore, PgMessageStore, PgOneTimeKeyStore, PgPool,
@@ -241,42 +240,13 @@ async fn postgres_one_time_keys_claim_survives_restart() {
 }
 
 #[tokio::test]
-async fn postgres_member_identity_survives_restart() {
+async fn postgres_member_identity_handle_claim_cache_contract() {
     let _db_guard = DB_GUARD.lock().await;
     let pool = fresh_pool().await;
     let store = PgMemberIdentityStore { pool: pool.clone() };
     let namespace = format!("postgres-member-identity-{}", uuid::Uuid::now_v7());
     assert_member_identity_store_contract(&store, &namespace).await;
 
-    // The contract invalidates its handle claims at the end; stage one
-    // restart-specific event to read back through a fresh pool.
-    let restart_event = MemberIdentityEventRecord {
-        event_id: format!("ak:event:{namespace}-restart"),
-        subject: MemberIdentitySubjectKey {
-            realm_id: format!("ak:realm:{namespace}"),
-            actor_id: format!("ak:did_core:web:{namespace}.example"),
-            segment: "member_identity".to_owned(),
-        },
-        payload_digest: format!("sha256:{}", "d".repeat(64)),
-        replaces: Vec::new(),
-        raw_event: serde_json::json!({"event_id": format!("ak:event:{namespace}-restart")}),
-    };
-    store
-        .put_event(&restart_event)
-        .await
-        .expect("write member identity event before restart");
-    drop(pool);
-
-    let restarted_pool = fresh_pool().await;
-    let restarted = PgMemberIdentityStore {
-        pool: restarted_pool,
-    };
-    let events = restarted
-        .snapshot_events()
-        .await
-        .expect("snapshot member identity events after restart");
-    assert!(
-        events.iter().any(|event| event == &restart_event),
-        "accepted member identity events must survive restart"
-    );
+    // Accepted identity restart coverage lives in the production UoW target;
+    // this contract exercises only the independent handle-claim cache.
 }

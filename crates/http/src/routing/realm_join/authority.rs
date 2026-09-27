@@ -217,6 +217,33 @@ pub(crate) async fn verify_served_bundle(
 /// Verify the Realm authority an authenticated peer Station serves: its
 /// verified route is the only locator, and the verified chain must name that
 /// Station as the current governance Station.
+pub(crate) async fn fetch_authority_bundle_of_service(
+    state: &AppState,
+    realm_id: &RealmId,
+    service_id: &arkret_wire::DidCoreId,
+    nonce: &Base64UrlString,
+) -> Result<RealmAuthorityBundle, AppError> {
+    let endpoint = crate::routing::federation::resolved_peer_route(
+        state,
+        service_id.as_str(),
+        "station",
+        false,
+    )
+    .await
+    .map_err(unavailable)?
+    .base_url()
+    .to_owned();
+    fetch_candidate(
+        state,
+        &endpoint,
+        &AuthorityBundleRequest {
+            realm_id: realm_id.clone(),
+            nonce: nonce.clone(),
+        },
+    )
+    .await
+}
+
 pub(crate) async fn resolve_verified_authority_of_service(
     state: &AppState,
     realm_id: &RealmId,

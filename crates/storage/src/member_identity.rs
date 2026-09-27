@@ -1,7 +1,7 @@
 use super::{PersistenceResult, Value, async_trait};
 
 /// Cell subject key for the member-identity registry. Mirrors the composite
-/// `(payload.realm_id, payload.actor_id, payload.segment)` cell subject from
+/// `(payload.realm_id, payload.member_id, payload.segment)` cell subject from
 /// `event-kind-registry.json`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MemberIdentitySubjectKey {
@@ -55,18 +55,10 @@ pub struct HandleClaimEvidenceRecord {
     pub envelope: Value,
 }
 
-/// Durable member-identity registry store (mirror of the
-/// `member_identity_events` + `member_identity_handle_claims` tables).
-///
-/// The in-memory `MemberIdentityRegistry` in `soland-http` stays the
-/// synchronous read/projection surface; writers go through this store first
-/// and `AppState::hydrate` rebuilds the registry from it on startup, so the
-/// MID effective-set digests and roster projection survive restart.
+/// Accepted identity Event/Commit hydration plus local handle-claim evidence.
+/// Identity assertions are written only by the accepting Event unit of work.
 #[async_trait]
 pub trait MemberIdentityStore: Send + Sync {
-    /// Idempotent upsert keyed by `event_id` (replay re-projection lands the
-    /// same row again).
-    async fn put_event(&self, record: &MemberIdentityEventRecord) -> PersistenceResult<()>;
     /// Full event snapshot for startup hydration.
     async fn snapshot_events(&self) -> PersistenceResult<Vec<MemberIdentityEventRecord>>;
     /// Idempotent upsert keyed by `(subject_id, digest)`.

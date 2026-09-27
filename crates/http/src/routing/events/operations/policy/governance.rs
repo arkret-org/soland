@@ -49,16 +49,6 @@ pub(super) async fn validate_member_state_policy(
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
         let target = membership_target(operation);
-        if let Some(ref member) = target
-            && crate::routing::organizations::organization_policy_blocks_join(
-                state,
-                operation.realm_id.as_str(),
-                member,
-            )
-            .await
-        {
-            return Err("organization_policy_denied");
-        }
         let actor = &operation.context.sender;
         let Some(target) = target else {
             return Err("invalid_membership_target");
@@ -354,10 +344,10 @@ pub(super) async fn verify_realm_organization_proof_signature(
     if signer_core_id != payload.organization_id {
         return Err("organization_statement_unverified");
     }
-    let resolved = crate::jws_verify::resolve_ed25519_verification_key_for_did(
+    let public_key = crate::jws_verify::resolve_ed25519_pubkey_at(
         state,
-        &signer_did,
         payload.authorization.verification_method.as_str(),
+        payload.authorization.signed_at,
     )
     .await
     .map_err(|_| "organization_statement_unverified")?;
@@ -365,8 +355,7 @@ pub(super) async fn verify_realm_organization_proof_signature(
     let signing_bytes =
         arkret_models_collaboration::realm_organization_statement_signing_bytes(payload)
             .map_err(|_| "organization_statement_unverified")?;
-    resolved
-        .public_key
+    public_key
         .verify_strict(&signing_bytes, &signature)
         .map_err(|_| "organization_statement_unverified")
 }
@@ -403,13 +392,9 @@ pub(super) async fn validate_realm_organization_policy(
     .map_err(|_| "organization_statement_unverified")?;
 
     // Cryptographic organization-side proof verification (model C): the proof
-    // MUST be a real detached signature by a verification method in the
-    // organization's OWN DID document, which soland (the DID server) hosts and
-    // resolves. Skipped in development_mode — consistent with jws_verify's
-    // dev/prod split — where statements ride placeholder proofs.
-    if !state.config().development_mode {
-        verify_realm_organization_proof_signature(state, &payload).await?;
-    }
+    // MUST be a real detached signature at the organization's historical
+    // signed_at state, including in development deployments.
+    verify_realm_organization_proof_signature(state, &payload).await?;
 
     // Realm side — explicit `ak.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is

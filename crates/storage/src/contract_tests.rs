@@ -30,8 +30,7 @@ use super::{
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
     FederationOutboxTransition, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
-    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
+    InviteReceivePolicyStore, MemberIdentityStore, MessageRecord, MessageStore,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
@@ -1455,6 +1454,7 @@ fn contract_applet_event_request(
     EventCommitRequest {
         authority_commit: stream.accept(&event),
         self_producer_guard: None,
+        applet_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,
@@ -1513,6 +1513,7 @@ fn contract_applet_batch(
     let expected_identity = expected_record.as_ref().map(|_| identity.clone());
     EventBatchCommitRequest {
         events,
+        realm_organization_proof: None,
         franking_replay_nonce: None,
         applet_record: Some(AppletRecordCommit {
             applet_id: applet_id.clone(),
@@ -2535,6 +2536,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let contact_commit = EventCommitRequest {
         authority_commit: stream.accept(&contact_event),
         self_producer_guard: None,
+        applet_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: Some(ContactProjectionCommit {
@@ -2630,6 +2632,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         .commit_event(EventCommitRequest {
             authority_commit: stream.accept(&failed_contact_event),
             self_producer_guard: None,
+            applet_producer_guard: None,
             forwarded_producer_evidence: None,
             parent_membership_admission: None,
             contact_projection: Some(ContactProjectionCommit {
@@ -3172,6 +3175,7 @@ pub async fn assert_federation_outbox_store_contract(
                 member_id: arkret_wire::ActorId::service(
                     DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
                 ),
+                circle_membership_event_ref: None,
                 membership_event_ref: source_event.event_id.clone(),
             }],
         },
@@ -4650,55 +4654,6 @@ pub async fn assert_member_identity_store_contract(
     store: &dyn MemberIdentityStore,
     namespace: &str,
 ) {
-    let subject = MemberIdentitySubjectKey {
-        realm_id: format!("ak:realm:{namespace}"),
-        actor_id: format!("ak:did_core:web:{namespace}.example"),
-        segment: "member_identity".to_owned(),
-    };
-    let first = MemberIdentityEventRecord {
-        event_id: format!("ak:event:{namespace}-first"),
-        subject: subject.clone(),
-        payload_digest: format!("sha256:{}", "a".repeat(64)),
-        replaces: Vec::new(),
-        raw_event: serde_json::json!({"event_id": format!("ak:event:{namespace}-first")}),
-    };
-    let second = MemberIdentityEventRecord {
-        event_id: format!("ak:event:{namespace}-second"),
-        subject: subject.clone(),
-        payload_digest: format!("sha256:{}", "b".repeat(64)),
-        replaces: vec![MemberIdentityReplacementEdge {
-            event_id: first.event_id.clone(),
-            payload_digest: first.payload_digest.clone(),
-        }],
-        raw_event: serde_json::json!({"event_id": format!("ak:event:{namespace}-second")}),
-    };
-    store
-        .put_event(&first)
-        .await
-        .expect("write first identity event");
-    store
-        .put_event(&second)
-        .await
-        .expect("write second identity event");
-    // Replay re-projection must be idempotent.
-    store
-        .put_event(&first)
-        .await
-        .expect("replay first identity event");
-    let events = store
-        .snapshot_events()
-        .await
-        .expect("snapshot identity events");
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.subject == subject)
-            .cloned()
-            .collect::<Vec<_>>(),
-        vec![first.clone(), second.clone()],
-        "snapshot returns every stored event once, in event_id order"
-    );
-
     let claim = HandleClaimEvidenceRecord {
         digest: format!("sha256:{}", "c".repeat(64)),
         subject_id: arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))

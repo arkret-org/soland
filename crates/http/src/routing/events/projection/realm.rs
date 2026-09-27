@@ -296,7 +296,7 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
         .and_then(Value::as_str)
         .map(str::to_owned);
     let actor_id = payload
-        .get("actor_id")
+        .get("member_id")
         .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
         .map(|actor| actor.to_string());
     let segment = payload
@@ -306,7 +306,7 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
     let (Some(realm_id), Some(actor_id), Some(segment)) = (realm_id, actor_id, segment) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            "ak.member.identity.update missing realm_id/actor_id/segment; skipping projection"
+            "ak.member.identity.update missing realm_id/member_id/segment; skipping projection"
         );
         return;
     };
@@ -363,32 +363,6 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
                 .collect()
         })
         .unwrap_or_default();
-
-    // MID-4 / MIU-SOL-3 (R3.2): optimistic-concurrency guard. When
-    // `expected_state_digest` is present, it MUST equal the current
-    // per-actor writer-observed effective-set digest
-    // (`member_identity_effective_set_digest` over the exact signed payloads,
-    // `current-results.md` §2) BEFORE
-    // this event lands. Admission refuses the mismatch with
-    // `failed_precondition` + `reason_code=member_identity_state_mismatch`
-    // (`preflight_member_identity_state_guard`), so reaching this branch means
-    // the digest moved between admission and projection. Dropping the write
-    // keeps the digest from advancing under a stale writer.
-    if let Some(expected) = payload.get("expected_state_digest").and_then(Value::as_str) {
-        let current = state.member_identity_state_digest(&realm_id, &actor_id);
-        if current.as_deref().is_some_and(|c| c != expected) {
-            tracing::warn!(
-                operation_id = %operation.operation_id,
-                %realm_id,
-                %actor_id,
-                expected,
-                actual = %current.as_deref().unwrap_or(""),
-                error_code = "member_identity_state_mismatch",
-                "ak.member.identity.update optimistic-concurrency guard tripped"
-            );
-            return;
-        }
-    }
 
     // Inline evidence must remain the original accepted signed Event, not an
     // Operation-shaped reconstruction without its actor and proofs.

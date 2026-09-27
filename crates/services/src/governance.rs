@@ -39,6 +39,11 @@ pub trait ModerationPort: Send + Sync {
     ) -> ServiceResult<
         Vec<arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem>,
     >;
+    async fn management_view_for_actor(
+        &self,
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> ServiceResult<soland_storage::ModerationManagementView>;
     async fn report_count(&self) -> ServiceResult<u64>;
 }
 
@@ -266,6 +271,15 @@ impl GovernanceService {
     > {
         self.moderation.queue_view_for_actor(actor, realm_id).await
     }
+    pub async fn moderation_management_view_for_actor(
+        &self,
+        actor: &arkret_wire::ActorId,
+        realm_id: Option<&arkret_wire::RealmId>,
+    ) -> ServiceResult<soland_storage::ModerationManagementView> {
+        self.moderation
+            .management_view_for_actor(actor, realm_id)
+            .await
+    }
     pub async fn moderation_report_count(&self) -> ServiceResult<u64> {
         self.moderation.report_count().await
     }
@@ -443,6 +457,13 @@ mod tests {
             Vec<arkret_models_collaboration::governance::moderation_queue::ModerationQueueItem>,
         > {
             Ok(Vec::new())
+        }
+        async fn management_view_for_actor(
+            &self,
+            _actor: &arkret_wire::ActorId,
+            _realm_id: Option<&arkret_wire::RealmId>,
+        ) -> ServiceResult<soland_storage::ModerationManagementView> {
+            Ok(soland_storage::ModerationManagementView::default())
         }
         async fn report_count(&self) -> ServiceResult<u64> {
             Ok(0)

@@ -86,25 +86,46 @@ pub(crate) async fn scan_stream_for_account(
         {
             return Ok(AccountStreamScan::NotAuthorized);
         }
-        if request.stream_ref
-            != (CommitStreamRef::Realm {
-                realm_id: request.realm_id.clone(),
-            })
-        {
-            return Ok(AccountStreamScan::Unproved(
-                "Circle and Sidecar stream visibility is not proved at this cut",
-            ));
-        }
         let caller_actor = ActorId::account(account.clone());
-        let floor = if tenure.service_id == issuer.as_str() {
-            caller_realm_floor_in_connection(conn, &request.realm_id, &caller_actor).await?
-        } else {
-            match replica_realm_floor_in_connection(conn, &request.realm_id, &caller_actor).await? {
-                Ok(floor) => Some(floor),
-                Err(reason) => return Ok(AccountStreamScan::Unproved(reason)),
+        let floor = match (&request.stream_ref, tenure.service_id == issuer.as_str()) {
+            (CommitStreamRef::Realm { .. }, true) => {
+                caller_realm_floor_in_connection(conn, &request.realm_id, &caller_actor).await?
+            }
+            (CommitStreamRef::Circle { circle_id, .. }, true) => {
+                caller_circle_floor_in_connection(conn, &request.realm_id, circle_id, &caller_actor)
+                    .await?
+            }
+            (CommitStreamRef::Realm { .. }, false) => {
+                match replica_realm_floor_in_connection(conn, &request.realm_id, &caller_actor)
+                    .await?
+                {
+                    Ok(floor) => Some(floor),
+                    Err(reason) => return Ok(AccountStreamScan::Unproved(reason)),
+                }
+            }
+            (CommitStreamRef::Circle { circle_id, .. }, false) => {
+                match replica_circle_floor_in_connection(
+                    conn,
+                    &request.realm_id,
+                    circle_id,
+                    &caller_actor,
+                )
+                .await?
+                {
+                    Ok(floor) => Some(floor),
+                    Err(reason) => return Ok(AccountStreamScan::Unproved(reason)),
+                }
+            }
+            _ => {
+                return Ok(AccountStreamScan::Unproved(
+                    "the requested stream has no proved disclosure rule",
+                ));
             }
         };
         let Some(floor) = floor else {
+            if matches!(request.stream_ref, CommitStreamRef::Circle { .. }) {
+                return Ok(AccountStreamScan::NotAuthorized);
+            }
             return Ok(AccountStreamScan::Unproved(
                 "the caller's join or history floor is not proved at this cut",
             ));
@@ -338,6 +359,192 @@ struct ReplicaAnchorRow {
     join_position: i64,
 }
 
+async fn circle_history_access(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    circle_id: &arkret_wire::CircleId,
+) -> PersistenceResult<Option<arkret_wire::HistoryAccess>> {
+    let Some(row) =
+        sql_query("SELECT value FROM circle_current_results WHERE realm_id=$1 AND circle_id=$2")
+            .bind::<Text, _>(realm_id.as_str())
+            .bind::<Text, _>(circle_id.as_str())
+            .get_result::<ValueRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+    else {
+        return Ok(None);
+    };
+    let circle: arkret_models_collaboration::governance::circle::Circle =
+        serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+    if circle.id.as_ref() != Some(circle_id) || circle.realm_id != *realm_id {
+        return Err(PersistenceError::SchemaViolation(
+            "Circle history subject differs from its accepted current".to_owned(),
+        ));
+    }
+    Ok(Some(circle.history_access))
+}
+
+async fn current_circle_join(
+    conn: &mut AsyncPgConnection,
+    stream: &CommitStreamRef,
+    caller: &ActorId,
+) -> PersistenceResult<Option<JoinRow>> {
+    let CommitStreamRef::Circle {
+        realm_id,
+        circle_id,
+    } = stream
+    else {
+        return Ok(None);
+    };
+    Ok(sql_query(
+        "SELECT m.membership,m.current_commit_id,m.current_stream_position \
+        FROM circle_member_state_current_results m \
+        WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
+        AND m.value->>'membership'='join' AND m.source_stream_ref=$5 \
+        AND (EXISTS (SELECT 1 FROM realm_commits c WHERE c.realm_id=m.realm_id \
+             AND c.commit_id=m.current_commit_id AND c.stream_position=m.current_stream_position \
+             AND c.stream_key=$4 AND c.stream_ref=m.source_stream_ref) \
+          OR EXISTS (SELECT 1 FROM replica_stream_anchors a WHERE a.realm_id=m.realm_id \
+             AND a.stream_key=$4 AND a.anchor_commit_id IS NOT NULL \
+             AND a.anchor_stream_position>=m.current_stream_position))",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(caller.to_string())
+    .bind::<Text, _>(crate::authority_commit::stream_key(stream)?)
+    .bind::<Jsonb, _>(serde_json::to_value(stream).map_err(PersistenceError::database)?)
+    .get_result::<JoinRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?)
+}
+
+async fn circle_join_floor(
+    conn: &mut AsyncPgConnection,
+    stream: &CommitStreamRef,
+    join: &JoinRow,
+    history: arkret_wire::HistoryAccess,
+) -> PersistenceResult<Option<ReadableFloor>> {
+    let Some(genesis) = crate::authority_commit::stream_page_in_connection(
+        conn,
+        &StreamScanRequest {
+            realm_id: stream.realm_id().clone(),
+            stream_ref: stream.clone(),
+            direction: arkret_wire::StreamScanDirection::After(None),
+            limit: 1,
+        },
+    )
+    .await?
+    .readable_floor
+    else {
+        return Ok(None);
+    };
+    match history {
+        arkret_wire::HistoryAccess::AllHistoryForCurrentMembers => Ok(Some(genesis)),
+        arkret_wire::HistoryAccess::SinceJoin => {
+            let join_position = u64::try_from(join.current_stream_position).map_err(|_| {
+                PersistenceError::SchemaViolation("Circle join position is negative".to_owned())
+            })?;
+            if genesis.oldest_position > join_position {
+                return Ok(Some(genesis));
+            }
+            if join_position == 0 {
+                if join.current_commit_id != genesis.floor_commit_id.as_str() {
+                    return Err(PersistenceError::SchemaViolation(
+                        "Circle opening join does not match its stream-start Commit".to_owned(),
+                    ));
+                }
+                return Ok(Some(genesis));
+            }
+            Ok(Some(ReadableFloor {
+                oldest_position: join_position,
+                floor_commit_id: join
+                    .current_commit_id
+                    .parse()
+                    .map_err(PersistenceError::database)?,
+                floor_reason: ReadableFloorReason::MembershipJoin,
+            }))
+        }
+    }
+}
+
+/// A Circle's interval requires current parent-Realm and exact Circle joins.
+/// Each Circle position is independent of the parent's Realm position.
+pub(crate) async fn caller_circle_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    circle_id: &arkret_wire::CircleId,
+    caller: &ActorId,
+) -> PersistenceResult<Option<ReadableFloor>> {
+    if !crate::authority_commit::accepted_current_member_joined_in_connection(
+        conn, realm_id, caller,
+    )
+    .await?
+    {
+        return Ok(None);
+    }
+    let stream = CommitStreamRef::Circle {
+        realm_id: realm_id.clone(),
+        circle_id: circle_id.clone(),
+    };
+    let Some(join) = current_circle_join(conn, &stream, caller).await? else {
+        return Ok(None);
+    };
+    let Some(history) = circle_history_access(conn, realm_id, circle_id).await? else {
+        return Ok(None);
+    };
+    circle_join_floor(conn, &stream, &join, history).await
+}
+
+async fn replica_circle_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    circle_id: &arkret_wire::CircleId,
+    caller: &ActorId,
+) -> PersistenceResult<Result<ReadableFloor, &'static str>> {
+    let stream = CommitStreamRef::Circle {
+        realm_id: realm_id.clone(),
+        circle_id: circle_id.clone(),
+    };
+    let Some(anchor) = sql_query(
+        "SELECT a.anchor_commit_id,c.stream_position AS join_position \
+        FROM replica_stream_anchors a JOIN realm_commits c ON c.commit_id=a.join_commit_id \
+        WHERE a.realm_id=$1 AND a.stream_key=$2 AND c.stream_key=a.stream_key",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(crate::authority_commit::stream_key(&stream)?)
+    .get_result::<ReplicaAnchorRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    else {
+        return Ok(Err("the Circle stream is not held here"));
+    };
+    if anchor.anchor_commit_id.is_none() {
+        return Ok(Err("the Circle stream is pending its bootstrap anchor"));
+    }
+    let history = circle_history_access(conn, realm_id, circle_id).await?;
+    let Some(join) = current_circle_join(conn, &stream, caller).await? else {
+        return Ok(Err("the caller has no held Circle join"));
+    };
+    if history == Some(arkret_wire::HistoryAccess::SinceJoin)
+        && join.current_stream_position < anchor.join_position
+    {
+        return Ok(Err("the caller's Circle join precedes the held stream"));
+    }
+    let Some(floor) = caller_circle_floor_in_connection(conn, realm_id, circle_id, caller).await?
+    else {
+        return Ok(Err("the held Circle membership scope is unproved"));
+    };
+    if history == Some(arkret_wire::HistoryAccess::AllHistoryForCurrentMembers)
+        && floor.oldest_position != 0
+    {
+        return Ok(Err("the Circle's complete history is not held here"));
+    }
+    Ok(Ok(floor))
+}
+
 /// The caller's readable floor on a Realm stream this member Station holds
 /// as an anchored replica: under `since_join` its own held join Commit, at
 /// or after the join that opened the held stream. Earlier history is not
@@ -350,9 +557,14 @@ async fn replica_realm_floor_in_connection(
     let Some(anchor) = sql_query(
         "SELECT a.anchor_commit_id, c.stream_position AS join_position \
          FROM replica_stream_anchors a JOIN realm_commits c ON c.commit_id=a.join_commit_id \
-         WHERE a.realm_id=$1",
+         WHERE a.realm_id=$1 AND a.stream_key=$2 AND c.stream_key=a.stream_key",
     )
     .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(crate::authority_commit::stream_key(
+        &CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+    )?)
     .get_result::<ReplicaAnchorRow>(&mut *conn)
     .await
     .optional()
@@ -539,21 +751,121 @@ async fn peer_intervals(
     Ok((intervals, joined))
 }
 
+/// A Circle replication interval uses only coordinates on that Circle.
+/// A parent membership is a prerequisite, never a child-stream cursor.
+async fn peer_circle_intervals(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    circle_id: &arkret_wire::CircleId,
+    peer: &DidCoreId,
+) -> PersistenceResult<(Vec<PeerInterval>, Vec<ActorId>)> {
+    let stream = CommitStreamRef::Circle {
+        realm_id: realm_id.clone(),
+        circle_id: circle_id.clone(),
+    };
+    let key = crate::authority_commit::stream_key(&stream)?;
+    let Some(history) = circle_history_access(conn, realm_id, circle_id).await? else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let rows = sql_query(
+        "SELECT m.member_id,m.membership,m.current_commit_id,m.current_stream_position \
+         FROM circle_member_state_current_results m JOIN realm_commits c \
+           ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id \
+           AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref \
+         WHERE m.realm_id=$1 AND m.circle_id=$2 AND c.stream_key=$3 \
+           AND m.value->>'membership'=m.membership ORDER BY m.member_id",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(&key)
+    .load::<HostedMemberRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let mut intervals = Vec::new();
+    let mut joined = Vec::new();
+    for row in rows {
+        let member: ActorId =
+            serde_json::from_str(&row.member_id).map_err(PersistenceError::database)?;
+        if member.route_service_id() != peer
+            || !crate::authority_commit::accepted_current_member_joined_in_connection(
+                conn, realm_id, &member,
+            )
+            .await?
+        {
+            continue;
+        }
+        let (join, last) = match row.membership.as_str() {
+            "join" => (
+                JoinRow {
+                    membership: row.membership.clone(),
+                    current_commit_id: row.current_commit_id.clone(),
+                    current_stream_position: row.current_stream_position,
+                },
+                None,
+            ),
+            "leave" | "ban" => {
+                let Some(prior) = sql_query(
+                    "SELECT c.commit_id,c.stream_position,e.kind,e.envelope->'payload'->>'membership' AS membership \
+                     FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+                     WHERE c.stream_key=$1 AND c.stream_position<$2 AND e.state='committed' \
+                       AND e.kind='ak.circle.member.state' AND e.envelope->'payload'->'member_id'=$3::jsonb \
+                     ORDER BY c.stream_position DESC LIMIT 1",
+                ).bind::<Text,_>(&key).bind::<BigInt,_>(row.current_stream_position).bind::<Text,_>(&row.member_id)
+                    .get_result::<PriorJoinRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+                else { continue; };
+                if prior.membership.as_deref() != Some("join") {
+                    continue;
+                }
+                (
+                    JoinRow {
+                        membership: "join".to_owned(),
+                        current_commit_id: prior.commit_id,
+                        current_stream_position: prior.stream_position,
+                    },
+                    Some(u64::try_from(row.current_stream_position).map_err(|_| {
+                        PersistenceError::SchemaViolation(
+                            "Circle terminal position is negative".to_owned(),
+                        )
+                    })?),
+                )
+            }
+            _ => continue,
+        };
+        if let Some(floor) = circle_join_floor(conn, &stream, &join, history).await? {
+            intervals.push(PeerInterval { floor, last });
+            if last.is_none() {
+                joined.push(member);
+            }
+        }
+    }
+    Ok((intervals, joined))
+}
+
+async fn peer_stream_intervals(
+    conn: &mut AsyncPgConnection,
+    stream: &CommitStreamRef,
+    peer: &DidCoreId,
+) -> PersistenceResult<(Vec<PeerInterval>, Vec<ActorId>)> {
+    match stream {
+        CommitStreamRef::Realm { realm_id } => peer_intervals(conn, realm_id, peer).await,
+        CommitStreamRef::Circle {
+            realm_id,
+            circle_id,
+        } => peer_circle_intervals(conn, realm_id, circle_id, peer).await,
+        _ => Ok((Vec::new(), Vec::new())),
+    }
+}
+
 /// Whether `peer` may hold the complete canonical bytes of `event` at this
 /// cut: the same content rule the fanout target set applies.
 async fn peer_holds_full_event(
     conn: &mut AsyncPgConnection,
-    event: &arkret_wire::Event,
+    row: &arkret_wire::CommittedEventFullView,
     peer: &DidCoreId,
     joined: &[ActorId],
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<bool> {
-    // Circle create is on the Realm stream, but its signed payload contains
-    // the complete Circle object. A remote Realm member is not thereby a
-    // Circle member. Preserve the Commit slot and withhold Event bytes.
-    if event.kind == arkret_wire::EventKind::CircleCreate {
-        return Ok(false);
-    }
+    let event = &row.event;
     if crate::realm_fanout::plaintext_message(event) {
         let services = sql_query(
             "SELECT value FROM realm_bootstrap_current_results \
@@ -570,26 +882,45 @@ async fn peer_holds_full_event(
             return Ok(false);
         }
     }
-    if event.kind == arkret_wire::EventKind::SelfModerationReport {
-        for member in joined {
-            if crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
-                conn,
-                &event.realm_id,
-                member,
-                &[
-                    arkret_wire::CapabilityActionId::POLICY_MANAGE,
-                    arkret_wire::CapabilityActionId::MODERATION_DECISION,
-                ],
-                at,
-            )
-            .await?
-            {
-                return Ok(true);
-            }
+    // The interval already proves this peer's right through a leave/ban.
+    // Its terminating membership fact must remain consumable after the
+    // member ceases to be current; no content right follows from it.
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::MemberState | arkret_wire::EventKind::CircleMemberState
+    ) && matches!(
+        event
+            .payload
+            .get("membership")
+            .and_then(serde_json::Value::as_str),
+        Some("leave" | "ban")
+    ) && let Some(target) = event.payload.get("member_id")
+    {
+        let member: ActorId =
+            serde_json::from_value(target.clone()).map_err(PersistenceError::database)?;
+        if member.route_service_id() == peer {
+            return Ok(true);
         }
-        return Ok(false);
     }
-    Ok(true)
+    if matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. })
+        && !matches!(
+            event.kind,
+            arkret_wire::EventKind::CircleCreate
+                | arkret_wire::EventKind::SelfModerationReport
+                | arkret_wire::EventKind::ModerationFrankingProof
+        )
+        && crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS.contains(&event.kind)
+    {
+        return Ok(true);
+    }
+    for member in joined {
+        if crate::committed_disclosure::full_event_for_member_in_connection(conn, row, member, at)
+            .await?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[derive(QueryableByName)]
@@ -642,23 +973,19 @@ pub(crate) async fn committed_event_for_peer(
             .await
             .optional()?
             .is_some_and(|tenure| tenure.service_id == issuer.as_str());
-        if !governs
-            || commit.stream_ref
-                != (CommitStreamRef::Realm {
-                    realm_id: event.realm_id.clone(),
-                })
-        {
+        if !governs || commit.stream_ref.realm_id() != &event.realm_id {
             return Ok(None);
         }
-        let (intervals, joined) = peer_intervals(conn, &event.realm_id, peer).await?;
+        let (intervals, joined) = peer_stream_intervals(conn, &commit.stream_ref, peer).await?;
+        let full = arkret_wire::CommittedEventFullView { commit, event };
         if !intervals
             .iter()
-            .any(|interval| interval.covers(commit.stream_position))
-            || !peer_holds_full_event(conn, &event, peer, &joined, chrono::Utc::now()).await?
+            .any(|interval| interval.covers(full.commit.stream_position))
+            || !peer_holds_full_event(conn, &full, peer, &joined, chrono::Utc::now()).await?
         {
             return Ok(None);
         }
-        Ok(Some(arkret_wire::CommittedEventFullView { commit, event }))
+        Ok(Some(full))
     })
     .await
     .map_err(PgTransactionError::into_persistence)
@@ -745,8 +1072,9 @@ pub(crate) async fn committed_event_for_member(
         };
         let realm_id = commit.realm_id.clone();
         let anchor =
-            sql_query("SELECT anchor_commit_id FROM replica_stream_anchors WHERE realm_id=$1")
+            sql_query("SELECT anchor_commit_id FROM replica_stream_anchors WHERE realm_id=$1 AND stream_key=$2")
                 .bind::<Text, _>(realm_id.as_str())
+                .bind::<Text, _>(crate::authority_commit::stream_key(&commit.stream_ref)?)
                 .get_result::<AnchorStateRow>(&mut *conn)
                 .await
                 .optional()?;
@@ -755,6 +1083,29 @@ pub(crate) async fn committed_event_for_member(
             .is_some_and(|row| row.anchor_commit_id.is_none())
         {
             return Ok(Read::PendingAnchor);
+        }
+        if let CommitStreamRef::Circle { circle_id, .. } = &commit.stream_ref {
+            let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
+                .bind::<Text,_>(realm_id.as_str()).get_result::<TenureRow>(&mut *conn).await.optional()?
+            else { return Ok(Read::NotVisible); };
+            let floor = if tenure.service_id == issuer.as_str() {
+                caller_circle_floor_in_connection(conn,&realm_id,circle_id,caller).await?
+            } else {
+                match replica_circle_floor_in_connection(conn,&realm_id,circle_id,caller).await? {
+                    Ok(floor) => Some(floor),Err(_) => None,
+                }
+            };
+            if floor.is_none_or(|floor| commit.stream_position<floor.oldest_position) {
+                return Ok(Read::NotVisible);
+            }
+            return Ok(Read::Read(match event {
+                Some(event) => single_row(crate::committed_disclosure::disclose_to_member_in_connection(
+                    conn,vec![arkret_wire::CommittedEventFullView { commit,event }],caller,
+                ).await?)?,
+                None => CommittedEventView::Withheld(arkret_wire::CommittedEventWithheldView {
+                    commit,event_disclosure:arkret_wire::EventDisclosure { status:arkret_wire::EventDisclosureStatus::Withheld },
+                }),
+            }));
         }
         if commit.stream_ref
             != (CommitStreamRef::Realm {
@@ -775,7 +1126,7 @@ pub(crate) async fn committed_event_for_member(
                 event: event.clone(),
             };
             return Ok(Read::Read(single_row(
-                crate::committed_disclosure::disclose_in_connection(conn, vec![full]).await?,
+                crate::committed_disclosure::disclose_to_member_in_connection(conn, vec![full], caller).await?,
             )?));
         }
         let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
@@ -877,22 +1228,13 @@ pub(crate) async fn scan_stream_for_peer(
                 "this Station does not hold the Realm's governing tenure",
             ));
         }
-        let (intervals, joined) = peer_intervals(conn, &request.realm_id, peer).await?;
+        let (intervals, joined) = peer_stream_intervals(conn, &request.stream_ref, peer).await?;
         let Some(lowest) = intervals
             .iter()
             .min_by_key(|interval| interval.floor.oldest_position)
         else {
             return Ok(AccountStreamScan::NotAuthorized);
         };
-        if request.stream_ref
-            != (CommitStreamRef::Realm {
-                realm_id: request.realm_id.clone(),
-            })
-        {
-            return Ok(AccountStreamScan::Unproved(
-                "Circle and Sidecar stream visibility is not proved at this cut",
-            ));
-        }
         let floor = lowest.floor.clone();
         let last = if intervals.iter().any(|interval| interval.last.is_none()) {
             None
@@ -943,7 +1285,7 @@ pub(crate) async fn scan_stream_for_peer(
                     "a governing stream page holds only full rows".to_owned(),
                 )));
             };
-            if !peer_holds_full_event(conn, &view.event, peer, &joined, at).await? {
+            if !peer_holds_full_event(conn, view, peer, &joined, at).await? {
                 withheld.insert(view.commit.commit_id.clone());
             }
             full.push(view.clone());

@@ -3,6 +3,9 @@ mod accepted_human_profile;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
+#[path = "support/human_profile.rs"]
+#[allow(dead_code)]
+mod human_profile;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
@@ -32,6 +35,12 @@ use soland_storage_postgres::{
 async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     // Plain-text messages need the Station in the plaintext-services facet.
     let unit = unit_with_plaintext_service();
@@ -89,9 +98,9 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         .execute(&mut conn)
         .await
         .unwrap();
-    // An installed but empty Circle family must not disable unrelated Realm
-    // snapshots. Once a Circle row exists, its private disclosure still
-    // refuses the whole cut until the Circle snapshot rules are implemented.
+    // An unrelated Circle row grants no membership or visibility. It must
+    // neither disable the Realm cut nor appear in the caller snapshot.
+    // This injected row is an isolation probe, not accepted Circle evidence.
     let circle_id = arkret_wire::CircleId::from_event_id(&unit.transactions[0].event.event_id);
     diesel::sql_query(
         "INSERT INTO circle_current_results \
@@ -105,10 +114,16 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
     .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"kind":"realm","realm_id":realm_id}))
     .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"id":circle_id,"realm_id":realm_id}))
     .execute(&mut conn).await.unwrap();
+    let isolated = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(isolated.current_state_entries.len(), 9);
     assert!(
-        account_snapshot_material(&pool, &realm_id, &creator)
-            .await
-            .is_err()
+        isolated
+            .visible_stream_heads
+            .iter()
+            .all(|head| matches!(head.stream_ref, arkret_wire::CommitStreamRef::Realm { .. }))
     );
     diesel::sql_query("DELETE FROM circle_current_results WHERE realm_id=$1")
         .bind::<Text, _>(realm_id.as_str())
@@ -226,6 +241,12 @@ async fn issuance_count(
 async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -662,8 +683,8 @@ fn signature(
 fn unit() -> OrdinaryRealmBootstrapCommitUnit {
     let at =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
-    let actor = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-actor.example").unwrap();
     let station = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap();
+    let actor = human_profile::account(&station, "bootstrap-actor").principal_id;
     let genesis = event(
         arkret_wire::EventKind::RealmCreate,
         arkret_wire::ScopeRef::RealmGenesis,
@@ -909,6 +930,7 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
             recipient_queue_capacity: 0,
         },
         self_producer_guard: None,
+        applet_producer_guard: None,
         forwarded_producer_evidence: None,
         event: record,
         parent_membership_admission: None,
@@ -1181,6 +1203,12 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
 async fn confirmed_bootstrap_recovers_after_postcommit_projection_install_is_lost() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -1262,6 +1290,12 @@ async fn confirmed_bootstrap_recovers_after_postcommit_projection_install_is_los
 async fn strand_create_writes_registered_current_result_and_rejects_remote_unplanned_target() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let bootstrap_store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let at = unit.transactions[0].commit.committed_at;
@@ -1412,6 +1446,12 @@ async fn strand_create_writes_registered_current_result_and_rejects_remote_unpla
 async fn default_strand_writes_exact_current_at_commit_and_rejects_dangling_and_stale_pointer() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     store
@@ -1548,6 +1588,12 @@ async fn account_summary_follows_bootstrap_and_default_strand_in_the_commit_tran
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let cursors = soland_storage_postgres::PgSyncCursorStore { pool: pool.clone() };
     let unit = unit();
@@ -1650,6 +1696,8 @@ async fn account_summary_follows_bootstrap_and_default_strand_in_the_commit_tran
 async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_strand() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    // PG authoring uses the internal structural TCB boundary here. A display
+    // Profile is optional and supplies no producer authentication evidence.
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     unit.validate().unwrap();
@@ -1809,6 +1857,12 @@ async fn snapshot_issuance_racing_a_handoff_is_retryable_unavailability() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -1926,6 +1980,12 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let cursors = soland_storage_postgres::PgSyncCursorStore { pool: pool.clone() };
     let unit = unit();
@@ -2267,6 +2327,12 @@ async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -2385,7 +2451,7 @@ async fn account_stream_scan_serves_only_the_proved_sole_founder_interval() {
     };
     assert!(matches!(
         scan(circle, creator.clone()).await,
-        AccountStreamScan::Unproved(_)
+        AccountStreamScan::NotAuthorized
     ));
     let stranger_actor = arkret_wire::ActorId::account(stranger.clone()).to_string();
     let mut conn = pool.get().await.unwrap();
@@ -2444,6 +2510,12 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -2583,6 +2655,12 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -2796,6 +2874,12 @@ async fn issued_snapshots_and_window_reservations_stay_within_their_caps() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let cursors = soland_storage_postgres::PgSyncCursorStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
@@ -3007,6 +3091,12 @@ async fn account_scan_withholds_expired_and_redacted_messages_on_their_commits()
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -3161,6 +3251,12 @@ async fn peer_stream_scan_refuses_non_hosting_peers_and_serves_a_hosting_peer_it
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -3262,7 +3358,7 @@ async fn peer_stream_scan_refuses_non_hosting_peers_and_serves_a_hosting_peer_it
     };
     assert!(matches!(
         scan(circle, remote.clone()).await,
-        AccountStreamScan::Unproved(_)
+        AccountStreamScan::NotAuthorized
     ));
     let other_station =
         arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
@@ -3360,6 +3456,7 @@ fn franking_nonce(
 ) -> soland_storage::EventBatchCommitRequest {
     soland_storage::EventBatchCommitRequest {
         events: vec![request.clone()],
+        realm_organization_proof: None,
         franking_replay_nonce: Some(soland_storage::FrankingReplayNonceCommit {
             realm_id: request.authority_commit.event.realm_id.to_string(),
             received_by: received_by.clone(),
@@ -3401,6 +3498,12 @@ async fn franking_nonce_count(pool: &soland_storage_postgres::PgPool) -> i64 {
 async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writes() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     unit.validate().unwrap();
@@ -3640,13 +3743,18 @@ async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writ
     assert_eq!(report_row_count(&pool).await, 3);
 }
 
-/// Real PostgreSQL: a committed moderation report is moderator-only, so the
-/// founder disclosure refuses the whole cut
-/// instead of signing a snapshot that omits or discloses it.
+/// Real PostgreSQL: the Realm root controller sees the accepted scope report
+/// with its actual covering Commit; ordinary members gain no report access.
 #[tokio::test]
-async fn moderation_report_row_refuses_the_founder_disclosure_cut() {
+async fn moderation_report_row_is_disclosed_to_the_realm_root_controller() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -3681,15 +3789,23 @@ async fn moderation_report_row_refuses_the_founder_disclosure_cut() {
         &creator.principal_id,
         report_payload(&realm_id, strand_id.as_str(), &creator.principal_id),
     );
-    uow.commit_event(report).await.unwrap();
+    uow.commit_event(report.clone()).await.unwrap();
     assert_eq!(report_row_count(&pool).await, 1);
-    let error = account_snapshot_material(&pool, &realm_id, &creator)
+    let material = account_snapshot_material(&pool, &realm_id, &creator)
         .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("outside the disclosure subset"),
-        "{error}"
-    );
+        .unwrap()
+        .unwrap();
+    assert_eq!(material.current_state_entries.len(), 11);
+    assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::ModerationReport { event_id },
+            source_stream_ref, revision, value,
+        } if event_id == &report.authority_commit.event.event_id
+            && source_stream_ref == &report.authority_commit.commit.stream_ref
+            && revision.commit_id == report.authority_commit.commit.commit_id
+            && revision.stream_position == report.authority_commit.commit.stream_position
+            && value == &serde_json::to_value(&report.authority_commit.event.payload).unwrap()
+    )));
 }
 
 async fn event_row_count(pool: &soland_storage_postgres::PgPool, event_id: &str) -> i64 {
@@ -3712,6 +3828,12 @@ async fn event_row_count(pool: &soland_storage_postgres::PgPool, event_id: &str)
 async fn concurrent_self_reports_on_one_stream_head_leave_one_winner_and_a_retryable_loser() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     store
@@ -3823,6 +3945,12 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let queue = soland_storage_postgres::PgModerationStore { pool: pool.clone() };
     let unit = unit();
@@ -4162,6 +4290,12 @@ async fn self_current_reads_answer_only_the_provable_cut() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let realm_id = unit.transactions[0].event.realm_id.clone();
@@ -4490,6 +4624,51 @@ fn creator_account(unit: &OrdinaryRealmBootstrapCommitUnit) -> arkret_wire::Acco
         .clone()
 }
 
+async fn admit_joined_human(
+    pool: &soland_storage_postgres::PgPool,
+    uow: &PgEventCommitUnitOfWork,
+    previous: &EventCommitRequest,
+    unit: &OrdinaryRealmBootstrapCommitUnit,
+    label: &str,
+    nonce: char,
+) -> (arkret_wire::AccountId, EventCommitRequest) {
+    let station = &unit.transactions[0].expected_authority.service_id;
+    let account = human_profile::admit(pool, station, label).await;
+    admit_joined_account(uow, previous, unit, account, nonce).await
+}
+
+async fn admit_joined_account(
+    uow: &PgEventCommitUnitOfWork,
+    previous: &EventCommitRequest,
+    unit: &OrdinaryRealmBootstrapCommitUnit,
+    account: arkret_wire::AccountId,
+    nonce: char,
+) -> (arkret_wire::AccountId, EventCommitRequest) {
+    let invite = realm_event_request_as(
+        previous,
+        &creator_account(unit),
+        arkret_wire::EventKind::InviteCreate,
+        invite_create_payload(
+            &account,
+            nonce,
+            previous.authority_commit.commit.committed_at,
+        ),
+    );
+    uow.commit_event(invite.clone()).await.unwrap();
+    let joined = realm_event_request_as(
+        &invite,
+        &account,
+        arkret_wire::EventKind::InviteAccept,
+        serde_json::json!({
+            "invite_id": arkret_wire::InviteId::from_event_id(&invite.authority_commit.event.event_id),
+            "previous_state": "pending",
+            "invitee_account_id": account,
+        }),
+    );
+    uow.commit_event(joined.clone()).await.unwrap();
+    (account, joined)
+}
+
 fn bootstrap_tail(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommitRequest {
     // A request shaped on the last bootstrap Commit: the next Event of the
     // Realm stream is sequenced right after it.
@@ -4668,6 +4847,12 @@ async fn assert_refused_with_zero_writes(
 async fn invite_create_writes_three_families_and_rejects_occupied_live_target() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let at = unit.transactions[0].commit.committed_at;
@@ -4807,6 +4992,12 @@ async fn invite_create_writes_three_families_and_rejects_occupied_live_target() 
 async fn third_party_invite_create_reads_from_committed_event_and_lifecycle() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let at = unit.transactions[0].commit.committed_at;
@@ -5017,6 +5208,12 @@ fn circle_self_member_request(
 async fn circle_create_and_self_join_write_same_cut_current() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let at = unit.transactions[0].commit.committed_at;
@@ -5242,6 +5439,12 @@ async fn circle_create_and_self_join_write_same_cut_current() {
 async fn invite_create_without_invite_capability_is_capability_denied_with_zero_writes() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let at = unit.transactions[0].commit.committed_at;
@@ -5435,6 +5638,12 @@ async fn invite_create_without_invite_capability_is_capability_denied_with_zero_
 async fn invite_revoke_releases_live_target_and_stale_previous_state_fails() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit();
     let at = unit.transactions[0].commit.committed_at;
@@ -5777,6 +5986,12 @@ fn plain_revision(message_id: &arkret_wire::MessageId, body: &str) -> serde_json
 async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     let at = unit.transactions[0].commit.committed_at;
@@ -5876,18 +6091,15 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
     }
 
     let station = unit.transactions[0].expected_authority.service_id.clone();
-    let member = invite_account(
-        "member.example",
-        &station.as_str()["ak:did_core:web:".len()..],
-    );
+    let (member, membership_head) =
+        admit_joined_human(&pool, &uow, &revised, &unit, "message-member", 'a').await;
     let stranger = invite_account(
         "stranger.example",
         &station.as_str()["ak:did_core:web:".len()..],
     );
-    inject_joined_member(&pool, &unit, &member).await;
     for actor in [&member, &stranger] {
         let foreign = realm_event_request_as(
-            &revised,
+            &membership_head,
             actor,
             arkret_wire::EventKind::MessageRevise,
             plain_revision(&message_id, "not yours"),
@@ -5906,7 +6118,7 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
     // edit right over the creator's Message.
     let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
     let own = invite_grant_request(
-        &revised,
+        &membership_head,
         &unit,
         &root_event_ref,
         &member,
@@ -5956,13 +6168,10 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
     // The author path: a member holding `ak.message.create` and
     // `ak.message.revise.own` under a 15-minute edit window edits its own
     // Message inside the window and is `failed_precondition` once it closed.
-    let author = invite_account(
-        "author.example",
-        &station.as_str()["ak:did_core:web:".len()..],
-    );
-    inject_joined_member(&pool, &unit, &author).await;
+    let (author, author_join_head) =
+        admit_joined_human(&pool, &uow, &moderated, &unit, "message-author", 'b').await;
     let mut windowed = invite_grant_request(
-        &moderated,
+        &author_join_head,
         &unit,
         &root_event_ref,
         &author,
@@ -5977,7 +6186,7 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
         "message_edit_window": "PT15M"
     }]);
     windowed = realm_event_request_as(
-        &moderated,
+        &author_join_head,
         &creator,
         arkret_wire::EventKind::CapabilityGrant,
         payload,
@@ -6059,6 +6268,12 @@ async fn message_redact_writes_object_redaction_and_withholds_on_scan() {
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let unit = unit_with_plaintext_service();
     let at = unit.transactions[0].commit.committed_at;
@@ -6249,4 +6464,527 @@ async fn message_redact_writes_object_redaction_and_withholds_on_scan() {
         Some(soland_storage::ConflictCode::CapabilityDenied),
     )
     .await;
+}
+
+async fn admitted_message_discussion(
+    pool: &soland_storage_postgres::PgPool,
+) -> (
+    OrdinaryRealmBootstrapCommitUnit,
+    EventCommitRequest,
+    arkret_wire::StrandId,
+) {
+    let unit = unit_with_plaintext_service();
+    let creator = creator_account(&unit);
+    assert_eq!(
+        human_profile::admit(pool, &creator.station_id, "bootstrap-actor").await,
+        creator
+    );
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let strand = strand_create_request(&unit);
+    uow.commit_event(strand.clone()).await.unwrap();
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let default = set_default_strand_request(&strand, &strand_id, None);
+    uow.commit_event(default.clone()).await.unwrap();
+    (unit, default, strand_id)
+}
+
+#[tokio::test]
+async fn poll_responses_keep_accepted_history_and_reject_invalid_partition_heads() {
+    use arkret_models_collaboration::poll::{PollPartition, PollResponseSet, VerifiedPollResponse};
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (unit, head, strand_id) = admitted_message_discussion(&pool).await;
+    let creator = creator_account(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let anchor = realm_event_request_as(
+        &head,
+        &creator,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion",
+            "content":{"kind":"ak.content.text","format":"plain","body":"Poll reply anchor"}}),
+    );
+    uow.commit_event(anchor.clone()).await.unwrap();
+    let anchor_id = arkret_wire::MessageId::from_event_id(&anchor.authority_commit.event.event_id);
+    let definition = realm_event_request_as(
+        &anchor,
+        &creator,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion","reply_to_id":anchor_id,"content":{
+            "kind":"ak.content.poll","body":"Choose","poll":{"kind":"disclosed","max_selections":2,
+            "answers":[{"id":"a","text":{"kind":"ak.content.text","body":"A"}},
+                       {"id":"b","text":{"kind":"ak.content.text","body":"B"}}]}}}),
+    );
+    uow.commit_event(definition.clone()).await.unwrap();
+    let poll_event = definition.authority_commit.event.event_id.clone();
+    let poll_id = arkret_wire::MessageId::from_event_id(&poll_event);
+    let response =
+        |previous: &EventCommitRequest, selections: serde_json::Value, heads: serde_json::Value| {
+            let mut payload = serde_json::json!({"strand_id":strand_id,"track_name":"discussion",
+            "reply_to_id":poll_id,"content":{"kind":"ak.content.poll.response","body":"vote",
+            "poll_response":{"poll_ref":poll_id,"selections":selections}}});
+            if heads.as_array().is_some_and(|items| !items.is_empty()) {
+                payload["poll_response_heads"] = heads;
+            }
+            realm_event_request_as(
+                previous,
+                &creator,
+                arkret_wire::EventKind::MessageCreate,
+                payload,
+            )
+        };
+    let first = response(
+        &definition,
+        serde_json::json!(["a", "b"]),
+        serde_json::json!([]),
+    );
+    uow.commit_event(first.clone()).await.unwrap();
+    let valid_head = serde_json::json!([{"poll_event_ref":poll_event,
+        "response_event_ref":first.authority_commit.event.event_id}]);
+    let second = response(&first, serde_json::json!(["b"]), valid_head.clone());
+    uow.commit_event(second.clone()).await.unwrap();
+    let material = store
+        .realm_state_snapshot_material(&unit.transactions[0].event.realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    for response_event in [
+        &first.authority_commit.event.event_id,
+        &second.authority_commit.event.event_id,
+    ] {
+        let response_id = arkret_wire::MessageId::from_event_id(response_event);
+        assert!(!material.current_state_entries.iter().any(|entry| matches!(entry,
+            arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::MessageRevision { message_id }, .. }
+                if message_id == &response_id)));
+    }
+    let before = message_families(&pool, &head.authority_commit.event.realm_id).await;
+    uow.commit_event(second.clone()).await.unwrap();
+    assert_eq!(
+        message_families(&pool, &head.authority_commit.event.realm_id).await,
+        before
+    );
+    for (selections, heads) in [
+        (serde_json::json!(["unknown"]), valid_head.clone()),
+        (serde_json::json!(["a", "a"]), valid_head.clone()),
+        (
+            serde_json::json!(["a"]),
+            serde_json::json!([{"poll_event_ref":poll_event,
+            "response_event_ref":head.authority_commit.event.event_id}]),
+        ),
+        (
+            serde_json::json!(["a"]),
+            serde_json::json!([{"poll_event_ref":first.authority_commit.event.event_id,
+            "response_event_ref":first.authority_commit.event.event_id}]),
+        ),
+    ] {
+        let rejected = response(&second, selections, heads);
+        let saved = message_families(&pool, &head.authority_commit.event.realm_id).await;
+        assert!(uow.commit_event(rejected.clone()).await.is_err());
+        assert!(
+            store
+                .committed_event(&rejected.authority_commit.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            message_families(&pool, &head.authority_commit.event.realm_id).await,
+            saved
+        );
+    }
+    let page = scanned_page(
+        store
+            .scan_stream_for_account(
+                &scan_request(
+                    &head.authority_commit.event.realm_id,
+                    arkret_wire::StreamScanDirection::After(None),
+                    100,
+                ),
+                &creator,
+                &creator.station_id,
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        positions(&page),
+        (0..=second.authority_commit.commit.stream_position).collect::<Vec<_>>()
+    );
+    let partition = PollPartition {
+        realm_id: head.authority_commit.event.realm_id.clone(),
+        stream_ref: second.authority_commit.commit.stream_ref.clone(),
+        poll_ref: poll_id,
+        poll_event_ref: poll_event,
+        actor_id: second.authority_commit.event.actor_id.clone(),
+    };
+    let accepted = |commit: &arkret_wire::RealmCommit| arkret_wire::CommittedEventRef {
+        event_id: commit.event_ref.clone(),
+        commit_id: commit.commit_id.clone(),
+        stream_ref: commit.stream_ref.clone(),
+        stream_position: commit.stream_position,
+    };
+    let mut folded = PollResponseSet::default();
+    // Reverse delivery and duplicate delivery must retain all responses and
+    // choose the authority position winner, independently of Event time.
+    for item in page.committed_events.iter().rev() {
+        let Some(event) = item.reducer_input() else {
+            continue;
+        };
+        if event.kind != arkret_wire::EventKind::MessageCreate {
+            continue;
+        }
+        let Ok(payload) = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::message::MessageCreatePayload,
+        >(serde_json::to_value(&event.payload).unwrap()) else {
+            continue;
+        };
+        let Some(content) = payload.content else {
+            continue;
+        };
+        let Ok(arkret_models_collaboration::events_payloads::poll::PollContentBlock::Response(
+            content,
+        )) = serde_json::from_value(serde_json::to_value(content).unwrap())
+        else {
+            continue;
+        };
+        let input = VerifiedPollResponse::new(
+            partition.clone(),
+            accepted(item.commit()),
+            &content.poll_response.selections,
+            &["a".to_owned(), "b".to_owned()].into_iter().collect(),
+            2,
+            payload.poll_response_heads,
+            |id| {
+                (id == &first.authority_commit.event.event_id)
+                    .then(|| (partition.clone(), accepted(&first.authority_commit.commit)))
+            },
+        )
+        .unwrap();
+        folded.insert(input.clone()).unwrap();
+        folded.insert(input).unwrap();
+    }
+    let projection = folded.project(true);
+    assert_eq!(
+        projection[&partition].winner,
+        Some(accepted(&second.authority_commit.commit))
+    );
+    assert_eq!(
+        projection[&partition].selections,
+        ["b".to_owned()].into_iter().collect()
+    );
+    assert!(!projection[&partition].provisional);
+    assert!(
+        store
+            .committed_event(&first.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn replies_and_direct_mentions_require_accepted_visible_full_accounts() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (unit, head, strand_id) = admitted_message_discussion(&pool).await;
+    let creator = creator_account(&unit);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let target = message_create_request(&head, &strand_id, "target");
+    uow.commit_event(target.clone()).await.unwrap();
+    let message_id = arkret_wire::MessageId::from_event_id(&target.authority_commit.event.event_id);
+    let reply = realm_event_request_as(
+        &target,
+        &creator,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion","reply_to_id":message_id,
+            "content":{"kind":"ak.content.text","body":"reply","mentions":[{
+                "kind":"mention","subject_account_id":creator,"display_name_at_time":"untrusted audit"}]}}),
+    );
+    uow.commit_event(reply.clone()).await.unwrap();
+    let mut other_station = creator.clone();
+    other_station.station_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+    for payload in [
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion",
+            "reply_to_id":arkret_wire::MessageId::from_event_id(&unit.transactions[0].event.event_id),
+            "content":{"kind":"ak.content.text","body":"missing target"}}),
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion",
+            "content":{"kind":"ak.content.text","body":"same principal elsewhere","mentions":[{
+                "kind":"mention","subject_account_id":other_station}]}}),
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion","reply_to":message_id,
+            "content":{"kind":"ak.content.text","body":"legacy alias"}}),
+    ] {
+        let request = realm_event_request_as(
+            &reply,
+            &creator,
+            arkret_wire::EventKind::MessageCreate,
+            payload,
+        );
+        let before = message_families(&pool, &head.authority_commit.event.realm_id).await;
+        assert!(uow.commit_event(request.clone()).await.is_err());
+        assert!(
+            store
+                .committed_event(&request.authority_commit.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            message_families(&pool, &head.authority_commit.event.realm_id).await,
+            before
+        );
+    }
+    // The exact Account joins through accepted Invite/Accept facts without
+    // a display Profile. Mention admission is bound to membership and scope;
+    // Profile absence or classification cannot substitute for Agent gates.
+    let account_without_profile =
+        invite_account("reply-late-member.example", "bootstrap-station.example");
+    let mut conn = pool.get().await.unwrap();
+    let profiles = diesel::sql_query("SELECT count(*) AS count FROM actor_profile_current_results WHERE value->>'principal_id'=$1")
+        .bind::<Text, _>(account_without_profile.principal_id.as_str())
+        .get_result::<CountRow>(&mut *conn).await.unwrap().count;
+    assert_eq!(
+        profiles, 0,
+        "membership and mention do not require a display Profile"
+    );
+    drop(conn);
+    let (late_member, joined) =
+        admit_joined_account(&uow, &reply, &unit, account_without_profile, 'c').await;
+    let root = realm_root_authority_event_ref(&pool, &head.authority_commit.event.realm_id).await;
+    let grant = invite_grant_request(&joined, &unit, &root, &late_member, &["ak.message.create"]);
+    uow.commit_event(grant.clone()).await.unwrap();
+    let hidden_reply = realm_event_request_as(
+        &grant,
+        &late_member,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion","reply_to_id":message_id,
+            "content":{"kind":"ak.content.text","body":"before my membership floor"}}),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &hidden_reply,
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+    )
+    .await;
+    let mention_member = realm_event_request_as(
+        &grant,
+        &creator,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion",
+            "content":{"kind":"ak.content.text","body":"joined exact account","mentions":[{
+                "kind":"mention","subject_account_id":late_member}]}}),
+    );
+    uow.commit_event(mention_member.clone()).await.unwrap();
+    let redaction = realm_event_request_as(
+        &mention_member,
+        &creator,
+        arkret_wire::EventKind::MessageRedact,
+        serde_json::json!({"message_id":message_id}),
+    );
+    uow.commit_event(redaction.clone()).await.unwrap();
+    let refused = realm_event_request_as(
+        &redaction,
+        &creator,
+        arkret_wire::EventKind::MessageCreate,
+        serde_json::json!({"strand_id":strand_id,"track_name":"discussion","reply_to_id":message_id,
+            "content":{"kind":"ak.content.text","body":"reply to unavailable target"}}),
+    );
+    assert_message_write_refused(
+        &uow,
+        &store,
+        &pool,
+        &refused,
+        Some(soland_storage::ConflictCode::FailedPrecondition),
+    )
+    .await;
+}
+
+fn identity_payload(unit: &OrdinaryRealmBootstrapCommitUnit, name: &str) -> serde_json::Value {
+    let actor = &unit.transactions[0].event.actor_id;
+    let realm = &unit.transactions[0].event.realm_id;
+    serde_json::json!({
+        "realm_id": realm, "member_id":actor,"segment":"member_identity","replaces":[],
+        "identity_payload":{"member_identity":{
+            "schema":"ak.schema.member_identity.v1","realm_id":realm,"actor_id":actor,
+            "subject_actor_id":actor,"display_profile":{"display_name":name},
+            "asserted_at":arkret_canonical::format_timestamp_canonical(unit.transactions[0].commit.committed_at),
+            "proof":{"verification_method":"did:web:bootstrap-actor.example#key",
+                "signature_algorithm":"Ed25519","payload_digest":format!("sha256:{}","0".repeat(64)),
+                "signature":"AAAA"}
+        }}
+    })
+}
+
+#[tokio::test]
+async fn member_identity_accepted_assertions_keep_bad_proofs_edges_and_restart_exact_payloads() {
+    use soland_storage::MemberIdentityStore as _;
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (unit, head, _) = admitted_message_discussion(&pool).await;
+    let actor = creator_account(&unit);
+    let realm = unit.transactions[0].event.realm_id.clone();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut first_payload = identity_payload(&unit, "Unverified first");
+    first_payload["expected_state_digest"] = serde_json::json!(
+        arkret_models_identity::member_identity_effective_set_digest(&[]).unwrap()
+    );
+    let first = realm_event_request_as(
+        &head,
+        &actor,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        first_payload.clone(),
+    );
+    uow.commit_event(first.clone()).await.unwrap();
+    assert!(
+        !uow.commit_event(first.clone())
+            .await
+            .unwrap()
+            .event_inserted
+    );
+    let mut second_payload = identity_payload(&unit, "Unverified second");
+    second_payload["replaces"] = serde_json::json!([{
+        "event_id":first.authority_commit.event.event_id,"payload_digest":format!("sha256:{}","1".repeat(64))
+    }]);
+    second_payload["expected_state_digest"] = serde_json::json!(
+        arkret_models_identity::member_identity_effective_set_digest(&[(
+            &first.authority_commit.event.event_id,
+            &first_payload
+        )])
+        .unwrap()
+    );
+    let second = realm_event_request_as(
+        &first,
+        &actor,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        second_payload.clone(),
+    );
+    uow.commit_event(second.clone()).await.unwrap();
+    // A wrong edge does not remove first: the next guard names both exact payloads.
+    let effective = vec![
+        (&first.authority_commit.event.event_id, &first_payload),
+        (&second.authority_commit.event.event_id, &second_payload),
+    ];
+    let mut third_payload = identity_payload(&unit, "Replacement");
+    third_payload["expected_state_digest"] = serde_json::json!(
+        arkret_models_identity::member_identity_effective_set_digest(&effective).unwrap()
+    );
+    third_payload["replaces"] = serde_json::json!([{
+        "event_id":first.authority_commit.event.event_id,
+        "payload_digest":arkret_canonical::canonical_sha256(&first_payload["identity_payload"]).unwrap()
+    }]);
+    let third = realm_event_request_as(
+        &second,
+        &actor,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        third_payload.clone(),
+    );
+    uow.commit_event(third.clone()).await.unwrap();
+    let selector = arkret_wire::CurrentSelector::MemberIdentityUpdates {
+        member_id: unit.transactions[0].event.actor_id.clone(),
+        segment: arkret_wire::MemberIdentitySegment::MemberIdentity,
+    };
+    let material = PgAuthorityCommitStore { pool: pool.clone() }
+        .realm_state_snapshot_material(&realm)
+        .await
+        .unwrap()
+        .unwrap();
+    let entry = material.current_state_entries.iter().find(|entry| matches!(entry,arkret_wire::TypedCurrentResult::Value{selector:found,..} if found == &selector)).unwrap();
+    let arkret_wire::TypedCurrentResult::Value {
+        revision, value, ..
+    } = entry
+    else {
+        unreachable!()
+    };
+    assert_eq!(revision.commit_id, third.authority_commit.commit.commit_id);
+    assert_eq!(value["assertions"].as_array().unwrap().len(), 3);
+    for (request, payload) in [
+        (&first, &first_payload),
+        (&second, &second_payload),
+        (&third, &third_payload),
+    ] {
+        let tag = format!("{}:0", request.authority_commit.event.event_id);
+        assert_eq!(
+            value["assertions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["tag_id"] == tag)
+                .unwrap()["value"],
+            *payload
+        );
+    }
+    // Recreate the durable reader; hydration reads every accepted assertion,
+    // including unverified display carriers, directly from Event/Commit facts.
+    let restarted = soland_storage_postgres::PgMemberIdentityStore { pool: pool.clone() };
+    let records = restarted
+        .snapshot_events()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.subject.realm_id == realm.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().any(|record| record.event_id
+        == first.authority_commit.event.event_id.as_str()
+        && record.raw_event["payload"] == first_payload));
+    let mut stale = identity_payload(&unit, "stale");
+    stale["expected_state_digest"] = serde_json::json!(
+        arkret_models_identity::member_identity_effective_set_digest(&[]).unwrap()
+    );
+    let request = realm_event_request_as(
+        &third,
+        &actor,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        stale,
+    );
+    let error = uow.commit_event(request.clone()).await.unwrap_err();
+    assert!(
+        error.to_string().contains("member_identity_state_mismatch"),
+        "{error}"
+    );
+    assert_eq!(
+        event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
+        0
+    );
+    let after = PgAuthorityCommitStore { pool: pool.clone() }
+        .realm_state_snapshot_material(&realm)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.current_state_entries, material.current_state_entries);
+    let mut wrong_member = identity_payload(&unit, "wrong member");
+    wrong_member["member_id"] = serde_json::json!(arkret_wire::ActorId::account(invite_account(
+        "other.example",
+        "bootstrap-station.example"
+    )));
+    let request = realm_event_request_as(
+        &third,
+        &actor,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        wrong_member,
+    );
+    let error = uow.commit_event(request.clone()).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("self-authored exact Realm tuple"),
+        "{error}"
+    );
+    assert_eq!(
+        event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
+        0
+    );
+    let after = PgAuthorityCommitStore { pool: pool.clone() }
+        .realm_state_snapshot_material(&realm)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.current_state_entries, material.current_state_entries);
 }

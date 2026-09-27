@@ -79,9 +79,7 @@ fn hosted_member_join(
 ) -> Option<arkret_wire::AccountId> {
     let event = &item.event_submission.event;
     if item.source_commit.stream_ref
-        != (CommitStreamRef::Realm {
-            realm_id: event.realm_id.clone(),
-        })
+        != arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None).ok()?
     {
         return None;
     }
@@ -99,6 +97,30 @@ fn hosted_member_join(
                 return None;
             }
             payload.member_id
+        }
+        arkret_wire::EventKind::CircleMemberState => {
+            let arkret_wire::ScopeRef::Circle { circle_id, .. } = &event.scope_ref else {
+                return None;
+            };
+            if event
+                .payload
+                .get("circle_id")
+                .and_then(serde_json::Value::as_str)
+                != Some(circle_id.as_str())
+                || event
+                    .payload
+                    .get("membership")
+                    .and_then(serde_json::Value::as_str)
+                    != Some("join")
+            {
+                return None;
+            }
+            let member: arkret_wire::ActorId =
+                serde_json::from_value(event.payload.get("member_id")?.clone()).ok()?;
+            if member != event.actor_id {
+                return None;
+            }
+            member
         }
         arkret_wire::EventKind::InviteAccept => event.actor_id.clone(),
         _ => return None,
@@ -162,7 +184,10 @@ async fn replicate_one(
     let event = &item.event_submission.event;
     super::authority_port::refuse_actor_private_event(&event.kind)?;
     let commit = &item.source_commit;
-    if !matches!(commit.stream_ref, CommitStreamRef::Realm { .. }) {
+    if !matches!(
+        commit.stream_ref,
+        CommitStreamRef::Realm { .. } | CommitStreamRef::Circle { .. }
+    ) {
         return Err(ServiceError::UnsupportedEventKind(
             "Circle and Sidecar replicas need their own scope membership basis".to_owned(),
         ));
@@ -213,6 +238,34 @@ async fn replicate_one(
     let located = authorities
         .get_mut(&event.realm_id)
         .ok_or_else(|| ServiceError::internal("verified Realm authority vanished"))?;
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::SelfModerationReport
+            | arkret_wire::EventKind::ModerationFrankingProof
+    ) {
+        let realm_stream = CommitStreamRef::Realm {
+            realm_id: event.realm_id.clone(),
+        };
+        let cached = state
+            .authority_commits()
+            .replica_authorization_head(&realm_stream)
+            .await?;
+        let latest = &located.bundle.realm_stream_head;
+        let current = cached.as_ref().is_some_and(|head| {
+            head == latest
+                || (commit.stream_ref == realm_stream
+                    && latest.commit_id == commit.commit_id
+                    && latest.stream_position == commit.stream_position
+                    && commit.previous_commit_ref.as_ref() == Some(&head.commit_id)
+                    && commit.stream_position == head.stream_position + 1)
+        });
+        if !current {
+            return Err(ServiceError::Conflict(format!(
+                "{}: a fresh signed authorization snapshot is required",
+                ConflictCode::DependencyMissing
+            )));
+        }
+    }
     if arkret_identity::RealmAuthorityKeyDirectory::public_key(
         &located.keys,
         &commit.signature.verification_method,
@@ -286,14 +339,11 @@ pub(super) async fn receive(
     let mut replication_outcomes = Vec::with_capacity(request.replications.len());
     let mut converge = std::collections::BTreeSet::new();
     for item in &request.replications {
-        let realm_id = &item.event_submission.event.realm_id;
         let record = match replicate_one(state, peer, &mut authorities, item).await {
             Ok(CommittedReplicaOutcome::Stored) => {
                 // A stored join that opened the stream leaves it pending
                 // anchor; anchoring it is this Station's next step.
-                if hosted_member_join(state, item).is_some() {
-                    converge.insert(realm_id.clone());
-                }
+                converge.insert(item.source_commit.stream_ref.clone());
                 PeerCommittedReplicationOutcomeRecord::Stored {}
             }
             Ok(CommittedReplicaOutcome::Duplicate) => {
@@ -304,15 +354,15 @@ pub(super) async fn receive(
                 // A pending anchor or a gap in front of the item: pull the
                 // missing prefix so the sender's retry can be stored.
                 if reason_code == ConflictCode::DependencyMissing.as_str() {
-                    converge.insert(realm_id.clone());
+                    converge.insert(item.source_commit.stream_ref.clone());
                 }
                 PeerCommittedReplicationOutcomeRecord::Rejected { reason_code }
             }
         };
         replication_outcomes.push(record);
     }
-    for realm_id in converge {
-        super::replica_anchor::spawn_converge(state, realm_id);
+    for stream in converge {
+        super::replica_anchor::spawn_converge_stream(state, stream);
     }
     Ok(PeerCommittedReplicationOutcome {
         branch: CommittedReplicationBranch::CommittedReplication,

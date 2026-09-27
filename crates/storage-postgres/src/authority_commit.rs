@@ -668,6 +668,28 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM member_state_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'applet_registration'::text AS selector_kind, to_jsonb(applet_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM applet_registration_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'member_identity_updates'::text AS selector_kind, \
+                jsonb_build_object('kind','member_identity_updates','member_id',member_id::jsonb,'segment',segment) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM member_identity_updates_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'circle'::text AS selector_kind, to_jsonb(circle_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM circle_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'circle_member_state'::text AS selector_kind, \
+                jsonb_build_object('kind','circle_member_state','circle_id',circle_id,'member_actor_id',member_id::jsonb) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM circle_member_state_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'call_state'::text AS selector_kind, to_jsonb(call_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM call_state_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'strand'::text AS selector_kind, to_jsonb(strand_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
@@ -710,6 +732,10 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM moderation_report_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'moderation_franking_proof'::text AS selector_kind, to_jsonb(target_event_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM moderation_franking_proof_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'moderation_state'::text AS selector_kind, to_jsonb(target_ref) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM moderation_state_current_results WHERE realm_id = $1 \
@@ -733,6 +759,11 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
          SELECT 'capability_grant'::text AS selector_kind, to_jsonb(grant_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM capability_grant_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'realm_organization'::text AS selector_kind, \
+                jsonb_build_object('kind','realm_organization','organization_id',organization_id,'relationship',relationship) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM realm_organization_current_results WHERE realm_id = $1 \
          UNION ALL \
          SELECT 'mimi_room_binding'::text AS selector_kind, to_jsonb(mimi_room_uri) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
@@ -824,6 +855,21 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         ))
                     })?,
                 },
+                ("member_identity_updates", Some(selector)) => serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
+                    .map_err(|error| PersistenceError::Internal(format!("stored member identity selector is invalid: {error}")))?,
+                ("applet_registration", Some(applet_id)) => arkret_wire::CurrentSelector::AppletRegistration {
+                    applet_id: serde_json::from_value(applet_id).map_err(PersistenceError::database)?,
+                },
+                ("circle", Some(circle_id)) => arkret_wire::CurrentSelector::Circle {
+                    circle_id: serde_json::from_value(circle_id).map_err(|error| {
+                        PersistenceError::Internal(format!("stored Circle selector identity is invalid: {error}"))
+                    })?,
+                },
+                ("circle_member_state", Some(selector)) => serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
+                    .map_err(|error| PersistenceError::Internal(format!("stored Circle member selector is invalid: {error}")))?,
+                ("call_state", Some(call_id)) => arkret_wire::CurrentSelector::CallState {
+                    call_id: serde_json::from_value(call_id).map_err(PersistenceError::database)?,
+                },
                 ("strand", Some(strand_id)) => arkret_wire::CurrentSelector::Strand {
                     strand_id: serde_json::from_value(strand_id).map_err(|error| {
                         PersistenceError::Internal(format!(
@@ -883,6 +929,15 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                             ))
                         })?,
                     }
+                }
+                ("moderation_franking_proof", Some(event_id)) => {
+                    arkret_wire::CurrentSelector::ModerationFrankingProof {
+                        event_id: serde_json::from_value(event_id).map_err(PersistenceError::database)?,
+                    }
+                }
+                ("realm_organization", Some(selector)) => {
+                    serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
+                        .map_err(PersistenceError::database)?
                 }
                 ("moderation_state", Some(target_ref)) => {
                     arkret_wire::CurrentSelector::ModerationState {
@@ -1054,7 +1109,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     }))
 }
 
-async fn locked_authority(
+pub(crate) async fn locked_authority(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
 ) -> Result<Option<CurrentRealmAuthority>, PgTransactionError> {
@@ -1283,6 +1338,17 @@ enum VerifiedPcrUnit {
     AgentPcrGenesis,
     AgentControl,
     Consent,
+    Applet,
+}
+
+/// The closed Applet authoring aggregate independently verifies its fixed set
+/// before writing accepted Events and their typed results on this connection.
+pub(crate) async fn commit_verified_applet_in_connection(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+) -> Result<AuthorityCommitWriteOutcome, PgTransactionError> {
+    commit_transaction_in_connection_with_device_guard(conn, transaction, VerifiedPcrUnit::Applet)
+        .await
 }
 
 pub(crate) async fn commit_verified_consent_in_connection(
@@ -1356,12 +1422,32 @@ async fn commit_transaction_in_connection_with_device_guard(
         arkret_wire::EventKind::ProfileCreate
             | arkret_wire::EventKind::ProfileUpdate
             | arkret_wire::EventKind::IdentityAccountabilityGrant
-    ) && verified_unit != VerifiedPcrUnit::ProfileOrAccountability
-    {
+    ) && !matches!(
+        verified_unit,
+        VerifiedPcrUnit::ProfileOrAccountability | VerifiedPcrUnit::Applet
+    ) {
         return Err(PersistenceError::Conflict(
             "actor_profile_or_accountability_unit_required".to_owned(),
         )
         .into());
+    }
+    let applet_genesis = transaction.event.kind == arkret_wire::EventKind::RealmCreate
+        && transaction
+            .event
+            .payload
+            .get("object")
+            .and_then(|object| object.get("purpose"))
+            .and_then(serde_json::Value::as_str)
+            == Some("applet_managed_control");
+    if (applet_genesis
+        || matches!(
+            transaction.event.kind,
+            arkret_wire::EventKind::AppletRegistration
+                | arkret_wire::EventKind::AppletManagedActorProvision
+        ))
+        && verified_unit != VerifiedPcrUnit::Applet
+    {
+        return Err(PersistenceError::Conflict("applet_authoring_unit_required".to_owned()).into());
     }
     // An Agent PCR genesis is admitted only by the unit that reverse-looks-up
     // its accepted provision declaration (key-management.md section 3.6.3).
@@ -1958,11 +2044,15 @@ pub(crate) async fn accepted_current_member_joined_in_connection(
                              AND c.stream_ref->>'realm_id' = m.realm_id) \
                    OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
                               WHERE a.realm_id = m.realm_id \
+                                AND a.stream_key=$3 \
                                 AND a.anchor_stream_position >= m.current_stream_position))\
          ) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(member.to_string())
+    .bind::<Text, _>(stream_key(&arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    })?)
     .get_result::<PresenceRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
@@ -2488,6 +2578,98 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn pending_franking_proofs(
+        &self,
+        receiver: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<Vec<soland_storage::PendingFrankingProof>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::moderation_franking_proof_current_results::pending_franking_in_connection(
+            &mut conn, receiver,
+        )
+        .await
+    }
+
+    async fn fix_franking_proof(
+        &self,
+        prepared: &soland_storage::PreparedFrankingProof,
+    ) -> PersistenceResult<arkret_wire::Event> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            Ok(
+                crate::moderation_franking_proof_current_results::fix_franking_in_connection(
+                    conn, prepared,
+                )
+                .await?,
+            )
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn complete_franking_proof(
+        &self,
+        realm: &arkret_wire::RealmId,
+        target: &arkret_wire::EventId,
+        proof_event: &arkret_wire::EventId,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::moderation_franking_proof_current_results::complete_franking_in_connection(
+            &mut conn,
+            realm,
+            target,
+            proof_event,
+        )
+        .await
+    }
+
+    async fn replica_anchor_for_stream(
+        &self,
+        stream: &arkret_wire::CommitStreamRef,
+    ) -> PersistenceResult<Option<soland_storage::ReplicaStreamAnchor>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        replica::replica_anchor_for_stream_in_connection(&mut conn, stream)
+            .await
+            .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn circle_views_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::circle::CircleView>> {
+        crate::circle_reads::circle_views_for_actor(&self.pool, realm_id, actor).await
+    }
+
+    async fn circle_view_for_actor(
+        &self,
+        circle_id: &arkret_wire::CircleId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<arkret_models_collaboration::governance::circle::CircleView>>
+    {
+        crate::circle_reads::circle_view_for_actor(&self.pool, circle_id, actor).await
+    }
+
+    async fn replica_authorization_head(
+        &self,
+        stream: &arkret_wire::CommitStreamRef,
+    ) -> PersistenceResult<Option<arkret_wire::CommitStreamHead>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::replica_authorization::verified_head(&mut conn, stream).await
+    }
+
+    async fn pending_replica_streams(
+        &self,
+    ) -> PersistenceResult<Vec<arkret_wire::CommitStreamRef>> {
+        #[derive(QueryableByName)]
+        struct StreamRow {
+            #[diesel(sql_type=Jsonb)]
+            stream_ref: serde_json::Value,
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("SELECT c.stream_ref FROM replica_stream_anchors a JOIN realm_commits c ON c.commit_id=a.join_commit_id WHERE a.anchor_commit_id IS NULL OR NOT EXISTS(SELECT 1 FROM replica_authorization_cuts cut WHERE cut.realm_id=a.realm_id AND cut.source_stream_ref=jsonb_build_object('kind','realm','realm_id',a.realm_id)) ORDER BY a.stream_key")
+            .load::<StreamRow>(&mut conn).await.map_err(PersistenceError::database)?.into_iter().map(|row| decode_json(row.stream_ref, "pending replica stream")).collect()
+    }
+
     async fn pending_replica_stream_anchors(&self) -> PersistenceResult<Vec<arkret_wire::RealmId>> {
         #[derive(QueryableByName)]
         struct RealmRow {
@@ -2690,10 +2872,13 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                               AND c.stream_ref->>'kind' = 'realm' \
                               AND c.stream_ref->>'realm_id' = b.realm_id) \
                     OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
-                               WHERE a.realm_id = b.realm_id \
+                               WHERE a.realm_id = b.realm_id AND a.stream_key = $2 \
                                  AND a.anchor_stream_position >= b.current_stream_position))",
         )
         .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(stream_key(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        })?)
         .get_result::<ValueRow>(&mut *conn)
         .await
         .optional()
@@ -3027,6 +3212,34 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
         crate::agent_current_results::read_agent_current_result(&self.pool, realm_id, selector)
             .await
+    }
+
+    async fn signal_scope_authority(
+        &self,
+        scope: &arkret_wire::ScopeRef,
+        authority_commit_id: &arkret_wire::RealmCommitId,
+        sender: &arkret_wire::ActorId,
+        signal_class: arkret_wire::SignalClass,
+        sent_at: chrono::DateTime<chrono::Utc>,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<soland_storage::SignalScopeAuthority>> {
+        crate::signal_scope_authority::read(
+            &self.pool,
+            scope,
+            authority_commit_id,
+            sender,
+            signal_class,
+            sent_at,
+            at,
+        )
+        .await
+    }
+
+    async fn signal_recipient_realms(
+        &self,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<arkret_wire::RealmId>> {
+        crate::signal_scope_authority::recipient_realms(&self.pool, actor).await
     }
 
     async fn realm_stream_heads(

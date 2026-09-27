@@ -15,6 +15,7 @@ pub mod extensions;
 pub mod federation;
 pub(crate) mod identity;
 mod interop;
+pub(crate) use interop::moderation::validate_franking_covering_commit;
 pub(crate) mod invites;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;

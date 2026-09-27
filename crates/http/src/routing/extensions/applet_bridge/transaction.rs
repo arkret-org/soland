@@ -7,12 +7,10 @@ use arkret_models_integration::{
 use arkret_wire::{CommittedEventRef, Event};
 use soland_http::error::AppError;
 use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
-use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::record::applet_record;
 use super::signature::VerifiedAppletServiceSignature;
 use super::types::AppletRecord;
-use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
 pub(super) async fn process_verified_transaction(
@@ -77,38 +75,42 @@ pub(super) async fn process_verified_transaction(
             rejected.push(rejected_event(&event_id, reason_code));
             continue;
         }
-        let envelope = match serde_json::to_value(&event) {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(%error, %event_id, "applet transaction event serialization failed");
-                rejected.push(rejected_event(&event_id, "json_invalid"));
-                continue;
-            }
-        };
-        let session = applet_event_session(state, &event);
-        match submit_event_value(state, &session, envelope).await {
+        let registration: arkret_models_integration::AppletRegistrationPayload =
+            serde_json::from_value(
+                serde_json::to_value(&install.registration_event.payload)
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+            )
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let document = crate::jws_verify::resolve_did_document(
+            state,
+            &registration.manifest.registration_epoch_evidence.did,
+        )
+        .map_err(AppError::param_invalid)?;
+        match crate::state::submit_applet_event(state, event.clone(), document).await {
             Ok(outcome) => {
                 committed_event_refs.push(
-                    durable_transaction_event_ref(state, &event.event_id, &outcome.event_id)
+                    durable_transaction_event_ref(state, &event.event_id, event.event_id.as_str())
                         .await?,
                 );
                 tracing::debug!(
-                    event_id = %outcome.event_id,
-                    duplicate = outcome.duplicate,
+                    event_id = %event.event_id,
+                    outcome = ?outcome,
                     "applet transaction event accepted"
                 );
             }
             Err(error) => {
                 tracing::warn!(
                     event_id = %event_id,
-                    code = %error.code(),
-                    message = %error.message(),
+                    error = %error,
                     "applet transaction event rejected"
                 );
                 rejected.push(rejected_event_with_detail(
                     &event_id,
-                    error.code(),
-                    error.message(),
+                    error
+                        .conflict_code()
+                        .map(|code| code.as_str())
+                        .unwrap_or("schema_violation"),
+                    &error.to_string(),
                 ));
             }
         }
@@ -182,11 +184,24 @@ fn replayed_transaction_outcome(
     existing: AppletTransactionReplayState,
     verified: &VerifiedAppletServiceSignature,
 ) -> Result<AppletTransactionOutcome, AppError> {
-    if existing.request_digest != verified.request_digest
-        || existing.delivery_authentication_record != verified.delivery_authentication_record
-        || existing.delivery_authentication_record_digest
-            != verified.delivery_authentication_record_digest
+    let stored: arkret_models_integration::AppletDeliveryAuthenticationRecord =
+        serde_json::from_value(existing.delivery_authentication_record.clone()).map_err(
+            |error| AppError::internal(format!("stored delivery record is invalid: {error}")),
+        )?;
+    let current: arkret_models_integration::AppletDeliveryAuthenticationRecord =
+        serde_json::from_value(verified.delivery_authentication_record.clone()).map_err(
+            |error| AppError::internal(format!("verified delivery record is invalid: {error}")),
+        )?;
+    let stored_digest = stored.stable_digest().map_err(AppError::internal)?;
+    let current_digest = current.stable_digest().map_err(AppError::internal)?;
+    if stored_digest.as_str() != existing.delivery_authentication_record_digest
+        || current_digest.as_str() != verified.delivery_authentication_record_digest
     {
+        return Err(AppError::internal(
+            "delivery authentication digest does not bind its record",
+        ));
+    }
+    if existing.request_digest != verified.request_digest || stored_digest != current_digest {
         return Err(AppError::conflict(
             "Idempotency-Key was already used for a different applet transaction",
         )
@@ -203,25 +218,6 @@ fn replayed_transaction_outcome(
             "stored applet transaction outcome invalid: {error}"
         ))
     })
-}
-
-fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
-    let now = chrono::Utc::now();
-    SessionRecord {
-        token_hash: "applet-transaction-source-signature".to_owned(),
-        account_pk: None,
-        actor: event.actor_id.signing_principal_id().to_string(),
-        // An applet service is not a device. This session authenticates the
-        // source service signature, so it names no device rather than a
-        // literal that no device directory can resolve.
-        endpoint: soland_services::identity::SessionEndpointState::ServiceSynthetic,
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        session_grant: None,
-        expires_at: now + chrono::Duration::minutes(5),
-        created_at: now,
-        revoked_at: None,
-    }
 }
 
 fn validate_transaction_event_binding(
@@ -254,7 +250,11 @@ fn validate_transaction_event_binding(
         return Err("authorization_ref_missing");
     }
     let actor_id = event.actor_id.signing_principal_id().as_str();
-    if event.actor_id == arkret_wire::ActorId::service(package.service_id.clone())
+    if event.actor_id
+        == arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            package.service_id.clone(),
+            install.bot_actor_id.route_service_id().clone(),
+        ))
         || event.actor_id == install.bot_actor_id
     {
         return Ok(());

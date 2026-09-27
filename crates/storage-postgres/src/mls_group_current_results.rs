@@ -11,7 +11,7 @@
 //! revision the binding names, and every Welcome's claim ledger row, recipient
 //! authorization and queue capacity. Any refusal rolls the whole Commit back.
 //!
-//! Only Realm-scope groups have an authority cut here. Circle and Sidecar
+//! Realm and Circle groups use their exact membership and authority cut. Sidecar
 //! groups need their own scope membership basis and stay closed.
 
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
@@ -177,11 +177,19 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             "an MLS Event commits only with its verified public transition".to_owned(),
         )
     })?;
-    if !matches!(&event.scope_ref, ScopeRef::Realm { realm_id } if realm_id == &event.realm_id) {
+    if !matches!(&event.scope_ref, ScopeRef::Realm { realm_id } | ScopeRef::Circle { realm_id, .. } if realm_id == &event.realm_id)
+    {
         return Err(PersistenceError::Internal(
-            "Circle and Sidecar MLS groups have no scope authority cut".to_owned(),
+            "the MLS effective scope has no supported authority cut".to_owned(),
         ));
     }
+    crate::moderation_report_current_results::ensure_scope_member(
+        conn,
+        &event.realm_id,
+        &event.scope_ref,
+        &event.actor_id,
+    )
+    .await?;
     crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
         conn,
         event,
@@ -199,7 +207,7 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
                     "the scope's MLS Genesis is already accepted",
                 ));
             }
-            require_since_join_history(conn, &event.realm_id).await?;
+            require_since_join_history(conn, &event.scope_ref).await?;
             let payload: MlsGenesisPayload = serde_json::from_value(payload)
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             let binding = &payload.governance_binding;
@@ -283,8 +291,13 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         .map_err(PersistenceError::database)?
         .pk;
     for welcome in &transaction.welcomes {
-        require_joined_recipient(conn, &event.realm_id, &welcome.delivery.recipient_actor_id)
-            .await?;
+        require_joined_recipient(
+            conn,
+            &event.realm_id,
+            &event.scope_ref,
+            &welcome.delivery.recipient_actor_id,
+        )
+        .await?;
         // A remote recipient's Welcome rides the Commit's committed
         // replication; `crate::realm_fanout` writes it into that intent.
         let Some(claim) = welcome.claim.as_ref() else {
@@ -373,7 +386,13 @@ async fn queue_one_replicated_welcome(
             "a replicated Welcome names another Commit".to_owned(),
         ));
     }
-    require_joined_recipient(conn, &event.realm_id, &delivery.recipient_actor_id).await?;
+    require_joined_recipient(
+        conn,
+        &event.realm_id,
+        &event.scope_ref,
+        &delivery.recipient_actor_id,
+    )
+    .await?;
     if claim_welcome_binding_in_connection(conn, delivery.keypackage_claim_ref.as_str())
         .await?
         .is_some()
@@ -512,47 +531,42 @@ async fn store_genesis_blobs(
 /// accepted only while its current `history_access` is `since_join`.
 async fn require_since_join_history(
     conn: &mut AsyncPgConnection,
-    realm_id: &arkret_wire::RealmId,
+    scope: &ScopeRef,
 ) -> PersistenceResult<()> {
-    let history = sql_query(
-        "SELECT value FROM realm_bootstrap_current_results \
-         WHERE realm_id=$1 AND result_family='realm_history_access' FOR SHARE",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .get_result::<HistoryAccessRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?;
+    let history = match scope {
+        ScopeRef::Realm { realm_id } => sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_history_access' FOR SHARE")
+            .bind::<Text, _>(realm_id.as_str()).get_result::<HistoryAccessRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?,
+        ScopeRef::Circle { realm_id, circle_id } => sql_query("SELECT value->'history_access' AS value FROM circle_current_results WHERE realm_id=$1 AND circle_id=$2 AND value->>'state'='active' FOR SHARE")
+            .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).get_result::<HistoryAccessRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?,
+        _ => None,
+    };
     if history.as_ref().and_then(|row| row.value.as_str()) != Some("since_join") {
         return Err(failed_precondition(
-            "MLS activation requires the Realm history_access since_join",
+            "MLS activation requires the scope history_access since_join",
         ));
     }
     Ok(())
 }
 
-/// encryption-and-audit.md §2.2: an Add admits a current member of the scope.
+/// A Welcome belongs to the exact scope's current membership intersection.
 async fn require_joined_recipient(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
+    scope: &ScopeRef,
     recipient: &arkret_wire::ActorId,
 ) -> PersistenceResult<()> {
-    let joined = sql_query(
-        "SELECT EXISTS(SELECT 1 FROM member_state_current_results \
-         WHERE realm_id=$1 AND member_id=$2 AND membership='join') AS present",
+    if crate::moderation_report_current_results::scope_member_in_connection(
+        conn, realm_id, scope, recipient,
     )
-    .bind::<Text, _>(realm_id.as_str())
-    .bind::<Text, _>(recipient.to_string())
-    .get_result::<crate::ExistsRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?
-    .present;
-    if !joined {
-        return Err(failed_precondition(
-            "the Welcome recipient is not a joined member of the Realm",
-        ));
+    .await?
+    {
+        Ok(())
+    } else {
+        Err(PersistenceError::Conflict(
+            "failed_precondition: MLS Welcome recipient is not joined to its exact scope"
+                .to_owned(),
+        ))
     }
-    Ok(())
 }
 
 /// The claim ledger row a Welcome was verified against must still hold the
@@ -596,7 +610,10 @@ pub(crate) async fn require_mls_send_gate_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
 ) -> PersistenceResult<()> {
-    if event.kind != EventKind::MessageCreate {
+    if !matches!(
+        event.kind,
+        EventKind::MessageCreate | EventKind::MessageRevise
+    ) {
         return Ok(());
     }
     let envelopes = soland_storage::message_create_envelopes(&event.payload)
@@ -631,12 +648,13 @@ pub(crate) async fn advance_key_access_revision_in_connection(
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<()> {
-    if !matches!(event.kind, EventKind::MemberState | EventKind::InviteAccept) {
+    if !matches!(
+        event.kind,
+        EventKind::MemberState | EventKind::InviteAccept | EventKind::CircleMemberState
+    ) {
         return Ok(());
     }
-    let scope = ScopeRef::Realm {
-        realm_id: event.realm_id.clone(),
-    };
+    let scope = event.scope_ref.clone();
     let key = scope_key(&scope)?;
     let Some(current) = locked_group(conn, &key).await? else {
         return Ok(());

@@ -7,13 +7,6 @@ use super::payload_shape::{
     validate_space_container_lifecycle_payload,
 };
 
-const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [
-    arkret_wire::SchemaId::EVENT_V1,
-    arkret_wire::ProfileId::CORE_EVENT_STORE_V1,
-    arkret_wire::ProofContextId::EVENT_PROOF_V1,
-    arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE,
-];
-
 pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
     canonical::canonical_sha256(value).ok()
 }
@@ -173,9 +166,6 @@ use control_move::*;
 pub(in crate::routing) use envelope_core::{
     PrivateInviteEnvelope, validate_private_invite_envelope,
 };
-pub(crate) use features_schema::{
-    event_requirements_schema_id, validate_event_critical_features,
-    validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
-};
+pub(crate) use features_schema::validate_event_schema_and_payload;
 pub(crate) use join_gate_proofs::validate_join_gate_proof_signatures;
 pub(crate) use proofs::validate_event_proofs;

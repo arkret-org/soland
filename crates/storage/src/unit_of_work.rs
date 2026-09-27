@@ -69,6 +69,13 @@ pub struct AccountDataCasCommit {
     pub conflict_code: String,
 }
 
+/// Fresh Service document for one Applet Event, re-bound to the accepted epoch
+/// and verified inside its accepting domain transaction. This is not a verdict.
+#[derive(Clone, Debug)]
+pub struct AppletEventProducerGuard {
+    pub service_did_document: arkret_identity::DidDocument,
+}
+
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
     /// Current-authority transaction that orders the producer Event on its
@@ -77,6 +84,7 @@ pub struct EventCommitRequest {
     /// Current producer authorization rechecked under this same Event/Commit,
     /// projection and CAS transaction for self submissions.
     pub self_producer_guard: Option<crate::SelfProducerCommitGuard>,
+    pub applet_producer_guard: Option<AppletEventProducerGuard>,
     /// Cross-Station human-device producer evidence verified from an
     /// `authority_forward`; retained only with the Event's first Commit.
     pub forwarded_producer_evidence: Option<crate::ForwardedProducerDeviceEvidence>,
@@ -391,6 +399,14 @@ pub struct ManagedAuthorityClaim {
 
 /// All durable writes produced by accepting a closed multi-Event aggregate.
 #[derive(Clone, Debug)]
+pub struct RealmOrganizationProofCommit {
+    pub event_id: arkret_wire::EventId,
+    pub verification_method: arkret_wire::DidUrl,
+    pub signed_at: DateTime<Utc>,
+    pub public_key: [u8; 32],
+}
+
+#[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
     /// One moderation franking nonce consumed by a report Event in this
@@ -398,6 +414,7 @@ pub struct EventBatchCommitRequest {
     /// commit consumes nothing, and a concurrent replay can commit at most
     /// once across processes.
     pub franking_replay_nonce: Option<FrankingReplayNonceCommit>,
+    pub realm_organization_proof: Option<RealmOrganizationProofCommit>,
     pub applet_record: Option<AppletRecordCommit>,
     pub applet_authoring_preview: Option<AppletAuthoringPreviewCommit>,
     pub agent_membership_cascade: Option<crate::AgentMembershipCascadeCommit>,

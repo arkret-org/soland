@@ -53,7 +53,10 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::IdentityAccountabilityGrant => Ok(SelfEventRoute::AccountabilityGrant),
         EventKind::ConsentGrant | EventKind::ConsentRevoke => Ok(SelfEventRoute::Consent),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
-        EventKind::StrandCreate
+        EventKind::CircleCreate
+        | EventKind::RealmOrganization
+        | EventKind::CircleMemberState
+        | EventKind::StrandCreate
         | EventKind::RealmProfile
         | EventKind::StrandUpdate
         | EventKind::StrandArchive
@@ -63,6 +66,8 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::SpaceCreate
         | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
+        | EventKind::MemberIdentityUpdate
+        | EventKind::CallCreate
         | EventKind::MessageCreate
         | EventKind::MemberState
         | EventKind::CapabilityGrant
@@ -135,7 +140,15 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
             "Event approval signatures are not verified".to_owned(),
         ));
     }
-    if !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. }) {
+    if !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. })
+        && !(matches!(event.scope_ref, arkret_wire::ScopeRef::Circle { .. })
+            && matches!(
+                event.kind,
+                arkret_wire::EventKind::CircleMemberState
+                    | arkret_wire::EventKind::ModerationDecision
+                    | arkret_wire::EventKind::ModerationDecisionLift
+            ))
+    {
         return Err(ServiceError::Conflict(
             "only a Realm-scope Event has a source target cut".to_owned(),
         ));
@@ -556,6 +569,10 @@ mod tests {
             assert_eq!(self_event_route(&kind).unwrap(), SelfEventRoute::Mls);
         }
         for kind in [
+            EventKind::CircleCreate,
+            EventKind::CircleMemberState,
+            EventKind::MemberIdentityUpdate,
+            EventKind::RealmOrganization,
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
@@ -565,6 +582,7 @@ mod tests {
             EventKind::StrandWatchSet,
             EventKind::SpaceCreate,
             EventKind::RealmSetDefaultStrand,
+            EventKind::CallCreate,
             EventKind::MessageCreate,
             EventKind::MemberState,
             EventKind::CapabilityGrant,
@@ -596,6 +614,10 @@ mod tests {
             EventKind::IdentityAccountabilityGrant,
             EventKind::MlsGenesis,
             EventKind::MlsCommit,
+            EventKind::CircleCreate,
+            EventKind::CircleMemberState,
+            EventKind::MemberIdentityUpdate,
+            EventKind::RealmOrganization,
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
@@ -606,6 +628,7 @@ mod tests {
             EventKind::SpaceCreate,
             EventKind::DirectConversationBound,
             EventKind::RealmSetDefaultStrand,
+            EventKind::CallCreate,
             EventKind::MessageCreate,
             EventKind::MemberState,
             EventKind::CapabilityGrant,

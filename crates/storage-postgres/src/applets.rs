@@ -84,6 +84,88 @@ pub struct PgAppletStore {
 }
 #[async_trait]
 impl AppletStore for PgAppletStore {
+    async fn pending_authoring_completions(
+        &self,
+        limit: u32,
+    ) -> PersistenceResult<Vec<soland_storage::AppletAuthoringCompletion>> {
+        #[derive(QueryableByName)]
+        struct CompletionRow {
+            #[diesel(sql_type=Text)]
+            applet_id: String,
+            #[diesel(sql_type=Text)]
+            request_digest: String,
+            #[diesel(sql_type=Text)]
+            source_id: String,
+            #[diesel(sql_type=Text)]
+            destination_id: String,
+            #[diesel(sql_type=Text)]
+            endpoint: String,
+            #[diesel(sql_type=Text)]
+            idempotency_key: String,
+            #[diesel(sql_type=Jsonb)]
+            context: Value,
+            #[diesel(sql_type=Jsonb)]
+            projection_attestation: Value,
+        }
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows=sql_query("SELECT applet_id,request_digest,source_id,destination_id,endpoint,idempotency_key,context,projection_attestation FROM applet_authoring_completions WHERE delivered_at IS NULL ORDER BY accepted_at,applet_id,request_digest LIMIT $1")
+            .bind::<diesel::sql_types::BigInt,_>(i64::from(limit.min(128)))
+            .load::<CompletionRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(soland_storage::AppletAuthoringCompletion {
+                    applet_id: row.applet_id.parse().map_err(PersistenceError::database)?,
+                    request_digest: row
+                        .request_digest
+                        .parse()
+                        .map_err(PersistenceError::database)?,
+                    source_id: row.source_id.parse().map_err(PersistenceError::database)?,
+                    destination_id: row
+                        .destination_id
+                        .parse()
+                        .map_err(PersistenceError::database)?,
+                    endpoint: row.endpoint,
+                    idempotency_key: row.idempotency_key,
+                    context: serde_json::from_value(row.context)
+                        .map_err(PersistenceError::database)?,
+                    projection_attestation: serde_json::from_value(row.projection_attestation)
+                        .map_err(PersistenceError::database)?,
+                })
+            })
+            .collect()
+    }
+    async fn acknowledge_authoring_completion(
+        &self,
+        applet_id: &arkret_wire::AppletId,
+        request_digest: &arkret_wire::Hash,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let updated=sql_query("UPDATE applet_authoring_completions SET delivered_at=COALESCE(delivered_at,$3) WHERE applet_id=$1 AND request_digest=$2")
+            .bind::<Text,_>(applet_id.as_str()).bind::<Text,_>(request_digest.as_str()).bind::<Timestamptz,_>(at)
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        if updated != 1 {
+            return Err(PersistenceError::NotFound(
+                "accepted Applet completion is absent".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    async fn admit_authoring_unit(
+        &self,
+        input: soland_storage::AppletAuthoringUnitWrite,
+        author: soland_storage::AppletCommitAuthor,
+        attester: soland_storage::AppletResolutionAttester,
+        finalize: soland_storage::AppletUnitFinalizer,
+    ) -> PersistenceResult<soland_storage::AppletAuthoringUnitOutcome> {
+        crate::applet_admission::admit_authoring_unit(&self.pool, input, author, attester, finalize)
+            .await
+    }
+
     async fn get_identity(
         &self,
         applet_id: &str,
@@ -280,6 +362,7 @@ impl AppletStore for PgAppletStore {
         &self,
         record: AppletTransactionReplayRecord,
     ) -> PersistenceResult<AppletTransactionReplayBegin> {
+        validate_delivery_binding(&record)?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -305,7 +388,7 @@ impl AppletStore for PgAppletStore {
         if inserted == 1 {
             return Ok(AppletTransactionReplayBegin::Fresh);
         }
-        sql_query(applet_transaction_replay_select_sql())
+        let existing = sql_query(applet_transaction_replay_select_sql())
             .bind::<Text, _>(record.applet_id.as_str())
             .bind::<Text, _>(&record.source_id)
             .bind::<Text, _>(&record.idempotency_key)
@@ -314,12 +397,22 @@ impl AppletStore for PgAppletStore {
             .optional()
             .map_err(PersistenceError::database)?
             .map(AppletTransactionReplayRecord::from)
-            .map(AppletTransactionReplayBegin::Existing)
             .ok_or_else(|| {
                 PersistenceError::Internal(
                     "applet transaction conflict row disappeared after insert".to_owned(),
                 )
-            })
+            })?;
+        validate_delivery_binding(&existing)?;
+        if record.delivery_authentication_record_digest
+            != existing.delivery_authentication_record_digest
+            || record.request_digest != existing.request_digest
+        {
+            return Err(PersistenceError::Conflict(
+                "duplicate_conflict: Applet transaction body or authenticated identity changed"
+                    .to_owned(),
+            ));
+        }
+        Ok(AppletTransactionReplayBegin::Existing(existing))
     }
 
     async fn complete_transaction_replay(
@@ -431,6 +524,25 @@ impl AppletStore for PgAppletStore {
     }
 }
 
+fn validate_delivery_binding(record: &AppletTransactionReplayRecord) -> PersistenceResult<()> {
+    let typed: arkret_models_integration::AppletDeliveryAuthenticationRecord =
+        serde_json::from_value(record.delivery_authentication_record.clone())
+            .map_err(PersistenceError::database)?;
+    let digest = typed.stable_digest().map_err(PersistenceError::database)?;
+    if digest.as_str() != record.delivery_authentication_record_digest
+        || typed.source_id.as_str() != record.source_id
+        || typed.idempotency_key != record.idempotency_key
+        || typed.operation_id != arkret_wire::ServiceOperationId::EdgeAppletCommandTransactionV1
+        || typed.direction
+            != arkret_models_integration::AppletDeliveryDirection::AppletToArkretInbound
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: delivery record and stable replay binding disagree".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,7 +565,7 @@ mod tests {
             "verification_method": "did:web:applet.example#key-1",
             "verification_key_digest": format!("sha256:{}", "a".repeat(64)),
             "signature_algorithm": "ed25519",
-            "registration_epoch": "epoch-1",
+            "registration_epoch": format!("sha256:{}", "c".repeat(64)),
             "idempotency_key": idempotency_key,
             "content_digest": "sha-256=:Zm94:",
             "covered_components": [
@@ -464,12 +576,9 @@ mod tests {
             "created": 1_790_000_000,
             "expires": 1_790_000_300,
         });
-        let canonical =
-            arkret_canonical::canonical_json_bytes(&delivery_authentication_record).unwrap();
-        let delivery_authentication_record_digest = arkret_canonical::sha256_digest_from_slices(&[
-            b"ak.applet.delivery_authentication_record.v1\n",
-            &canonical,
-        ]);
+        let typed: arkret_models_integration::AppletDeliveryAuthenticationRecord =
+            serde_json::from_value(delivery_authentication_record.clone()).unwrap();
+        let delivery_authentication_record_digest = typed.stable_digest().unwrap().to_string();
         let record = AppletTransactionReplayRecord {
             applet_id: arkret_wire::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
                 .unwrap(),
@@ -489,10 +598,11 @@ mod tests {
                 .unwrap(),
             AppletTransactionReplayBegin::Fresh
         ));
-        let AppletTransactionReplayBegin::Existing(replay) = store
-            .begin_transaction_replay(record.clone())
-            .await
-            .unwrap()
+        let mut fresh = record.clone();
+        fresh.delivery_authentication_record["created"] = serde_json::json!(1_790_000_060);
+        fresh.delivery_authentication_record["expires"] = serde_json::json!(1_790_000_360);
+        let AppletTransactionReplayBegin::Existing(replay) =
+            store.begin_transaction_replay(fresh.clone()).await.unwrap()
         else {
             panic!("the second delivery must read the durable replay record")
         };
@@ -505,5 +615,24 @@ mod tests {
             record.delivery_authentication_record_digest
         );
         assert_eq!(replay.request_digest, record.request_digest);
+        let mut changed_key = fresh.clone();
+        changed_key.delivery_authentication_record["verification_key_digest"] =
+            serde_json::json!(format!("sha256:{}", "d".repeat(64)));
+        let typed: arkret_models_integration::AppletDeliveryAuthenticationRecord =
+            serde_json::from_value(changed_key.delivery_authentication_record.clone()).unwrap();
+        changed_key.delivery_authentication_record_digest =
+            typed.stable_digest().unwrap().to_string();
+        assert!(
+            matches!(store.begin_transaction_replay(changed_key.clone()).await,
+            Err(PersistenceError::Conflict(detail)) if detail.starts_with("duplicate_conflict:"))
+        );
+        changed_key.delivery_authentication_record_digest =
+            fresh.delivery_authentication_record_digest.clone();
+        assert!(matches!(store.begin_transaction_replay(changed_key).await,
+            Err(PersistenceError::Conflict(detail)) if detail.starts_with("schema_violation:")));
+        let mut changed_body = fresh;
+        changed_body.request_digest = format!("sha256:{}", "e".repeat(64));
+        assert!(matches!(store.begin_transaction_replay(changed_body).await,
+            Err(PersistenceError::Conflict(detail)) if detail.starts_with("duplicate_conflict:")));
     }
 }

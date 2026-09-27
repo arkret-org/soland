@@ -4,45 +4,18 @@ use super::{
     QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, pg_conn, sql_query,
 };
 
-/// PostgreSQL-backed member-identity registry store. `soland-http` keeps its
-/// synchronous in-memory effective-set projection and writes through to this
-/// store; startup hydration rebuilds the projection from these rows.
+/// Reads accepted Event/Commit facts for identity hydration and stores local
+/// handle-claim evidence. It cannot manufacture accepted identity assertions.
 pub struct PgMemberIdentityStore {
     pub pool: PgPool,
 }
 
 #[derive(QueryableByName)]
-struct MemberIdentityEventRow {
+struct AcceptedIdentityRow {
     #[diesel(sql_type = Text)]
     event_id: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-    #[diesel(sql_type = Text)]
-    actor_id: String,
-    #[diesel(sql_type = Text)]
-    segment: String,
-    #[diesel(sql_type = Text)]
-    payload_digest: String,
-    #[diesel(sql_type = Jsonb)]
-    replaces: Value,
     #[diesel(sql_type = Jsonb)]
     raw_event: Value,
-}
-
-impl From<MemberIdentityEventRow> for MemberIdentityEventRecord {
-    fn from(row: MemberIdentityEventRow) -> Self {
-        Self {
-            event_id: row.event_id,
-            subject: MemberIdentitySubjectKey {
-                realm_id: row.realm_id,
-                actor_id: row.actor_id.to_string(),
-                segment: row.segment,
-            },
-            payload_digest: row.payload_digest,
-            replaces: serde_json::from_value(row.replaces).unwrap_or_default(),
-            raw_event: row.raw_event,
-        }
-    }
 }
 
 #[derive(QueryableByName)]
@@ -91,55 +64,55 @@ const HANDLE_CLAIM_COLUMNS: &str = "digest, subject_id, issuer_id, audience, \
 
 #[async_trait]
 impl MemberIdentityStore for PgMemberIdentityStore {
-    async fn put_event(&self, record: &MemberIdentityEventRecord) -> PersistenceResult<()> {
-        let replaces = serde_json::to_value(&record.replaces).map_err(|error| {
-            PersistenceError::Internal(format!("cannot encode member identity replaces: {error}"))
-        })?;
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        // Upsert: replay re-projection lands the same `event_id` row again.
-        sql_query(
-            "INSERT INTO member_identity_events \
-             (event_id, realm_id, actor_id, segment, payload_digest, replaces, raw_event) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (event_id) DO UPDATE SET \
-                realm_id = EXCLUDED.realm_id, \
-                actor_id = EXCLUDED.actor_id, \
-                segment = EXCLUDED.segment, \
-                payload_digest = EXCLUDED.payload_digest, \
-                replaces = EXCLUDED.replaces, \
-                raw_event = EXCLUDED.raw_event",
-        )
-        .bind::<Text, _>(&record.event_id)
-        .bind::<Text, _>(&record.subject.realm_id)
-        .bind::<Text, _>(&record.subject.actor_id)
-        .bind::<Text, _>(&record.subject.segment)
-        .bind::<Text, _>(&record.payload_digest)
-        .bind::<Jsonb, _>(&replaces)
-        .bind::<Jsonb, _>(&record.raw_event)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
     async fn snapshot_events(&self) -> PersistenceResult<Vec<MemberIdentityEventRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT event_id, realm_id, actor_id, segment, payload_digest, replaces, raw_event \
-             FROM member_identity_events ORDER BY event_id",
+        let rows = sql_query(
+            "SELECT c.commit_json->>'event_ref' AS event_id,e.envelope AS raw_event \
+             FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+             WHERE e.kind='ak.member.identity.update' AND e.state='committed' \
+               AND c.realm_id=e.realm_id AND c.stream_ref->>'kind'='realm' \
+               AND c.stream_ref->>'realm_id'=e.realm_id ORDER BY c.commit_json->>'event_ref'",
         )
-        .load::<MemberIdentityEventRow>(&mut *conn)
+        .load::<AcceptedIdentityRow>(&mut *conn)
         .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(MemberIdentityEventRecord::from)
-                .collect()
-        })
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        rows.into_iter()
+            .map(|row| {
+                let payload = row.raw_event.get("payload").ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "accepted identity payload missing".to_owned(),
+                    )
+                })?;
+                let typed: arkret_models_identity::MemberIdentityUpdatePayload =
+                    serde_json::from_value(payload.clone()).map_err(PersistenceError::database)?;
+                let carrier = payload.get("identity_payload").ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "accepted identity carrier missing".to_owned(),
+                    )
+                })?;
+                Ok(MemberIdentityEventRecord {
+                    event_id: row.event_id,
+                    subject: MemberIdentitySubjectKey {
+                        realm_id: typed.realm_id.to_string(),
+                        actor_id: typed.member_id.to_string(),
+                        segment: "member_identity".to_owned(),
+                    },
+                    payload_digest: arkret_canonical::canonical_sha256(carrier)
+                        .map_err(PersistenceError::database)?,
+                    replaces: typed
+                        .replaces
+                        .into_iter()
+                        .map(|edge| soland_storage::MemberIdentityReplacementEdge {
+                            event_id: edge.event_id.to_string(),
+                            payload_digest: edge.payload_digest.to_string(),
+                        })
+                        .collect(),
+                    raw_event: row.raw_event,
+                })
+            })
+            .collect()
     }
 
     async fn put_handle_claim(&self, record: &HandleClaimEvidenceRecord) -> PersistenceResult<()> {

@@ -251,3 +251,29 @@ fn poll_reducer_rejects_unknown_poll_instead_of_silently_ignoring() {
         ProjectionEffect::Rejected { ref reason } if reason == "poll_ref_unknown"
     ));
 }
+
+#[test]
+fn poll_response_with_reply_does_not_materialize_timeline_or_reply_relation() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("poll-response-reply");
+    create_poll(&mut state, &hlc);
+    let response = at_position(
+        make_operation(
+            arkret_wire::EventKind::MessageCreate,
+            REALM_A,
+            serde_json::json!({"strand_id":STRAND_A,"track_name":"discussion","reply_to_id":POLL_ID,
+            "content":{"kind":"ak.content.poll.response","body":"vote",
+                "poll_response":{"poll_ref":POLL_ID,"selections":["yes"]}}}),
+        ),
+        2,
+    );
+    let messages_before = state.messages.len();
+    let relations_before = state.relations.len();
+    assert!(matches!(
+        state.apply(&response, &hlc),
+        ProjectionEffect::Ignored
+    ));
+    assert_eq!(state.messages.len(), messages_before);
+    assert_eq!(state.relations.len(), relations_before);
+    assert_eq!(state.poll(POLL_ID).unwrap().responses.len(), 1);
+}

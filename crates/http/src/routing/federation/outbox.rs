@@ -1158,6 +1158,7 @@ impl FederationDispatcher {
                 &binding.realm_id,
                 &row.delivery.peer_id,
             )
+            .await
         {
             tracing::warn!(
                 target = "federation_outbox",

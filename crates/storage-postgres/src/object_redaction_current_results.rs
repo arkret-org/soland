@@ -70,6 +70,16 @@ pub(crate) async fn commit_message_redact_current_result_in_connection(
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_governed_member(&event.kind)?;
     let target = locked_message_target(conn, &event.realm_id, &payload.message_id).await?;
+    if target.scope_ref != event.scope_ref {
+        return Err(PersistenceError::NotFound("message not found".to_owned()));
+    }
+    crate::moderation_report_current_results::ensure_scope_member(
+        conn,
+        &event.realm_id,
+        &event.scope_ref,
+        &event.actor_id,
+    )
+    .await?;
     cut.require_authored_target_in_connection(
         conn,
         event,
@@ -89,7 +99,8 @@ pub(crate) async fn commit_message_redact_current_result_in_connection(
     }
     // `strand-and-message.md` §4: a Message of a Strand whose discussion
     // track is not active is refused for redact as for create and revise.
-    require_active_discussion_strand(conn, &event.realm_id, &target.strand_id).await?;
+    require_active_discussion_strand(conn, &event.realm_id, &target.strand_id, &event.scope_ref)
+        .await?;
     let value = message_redaction_current_value(event, payload)?;
     value
         .validate_for_subject(target.message_id.as_str())

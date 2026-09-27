@@ -13,7 +13,8 @@ use arkret_wire::{
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
-use soland_http::{config::AppConfig, service};
+use soland_http::config::AppConfig;
+use soland_http::service;
 use soland_test_support::AppStateTestExt as _;
 
 const SCAN_PATH: &str = "/_arkret/self/streams/scan";
@@ -72,7 +73,8 @@ fn next(
     let mut request = ordinary_realm::next_request(
         previous,
         kind,
-        &ordinary_realm::founder(),
+        &ordinary_realm::human_profile::account(&ordinary_realm::station(), "ordinary-founder")
+            .principal_id,
         payload,
         previous.commit.committed_at,
     );
@@ -88,11 +90,14 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         ..soland_test_support::app_config()
     };
     config.jws_replay_window_seconds = 0;
-    let state = soland_test_support::app_state(config);
+    let (state, pool) = soland_test_support::app_state_with_pool(config);
+    let human =
+        ordinary_realm::human_profile::admit(&pool, &state.service_core_id(), "ordinary-founder")
+            .await;
     let persistence = state.test_persistence();
-    let unit = ordinary_realm::bootstrap_unit_for_station(
+    let unit = ordinary_realm::bootstrap_unit_for_account(
         &format!("http-redaction-{}", uuid::Uuid::now_v7()),
-        &state.service_core_id(),
+        &human,
         &state.service_did(),
     );
     unit.validate()
@@ -105,7 +110,7 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
 
     let initial = unit.transactions.last().expect("bootstrap head");
     let realm_id = initial.event.realm_id.clone();
-    let founder = ordinary_realm::founder();
+    let founder = human.principal_id;
     let token = dev_session(&state, &founder).await;
     let outsider = dev_session(
         &state,

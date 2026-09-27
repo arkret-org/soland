@@ -497,14 +497,16 @@ pub(super) fn applet_delivery_authentication_record_digest(
         "created": signature_input.created,
         "expires": signature_input.expires,
     });
-    let bytes = canonical::canonical_json_bytes(&record).map_err(|error| {
-        applet_signature_error_invalid(format!("invalid delivery authentication record: {error}"))
-    })?;
-    let digest = canonical::sha256_digest_from_slices(&[
-        b"ak.applet.delivery_authentication_record.v1\n",
-        &bytes,
-    ]);
-    Ok((record, digest))
+    let typed: arkret_models_integration::AppletDeliveryAuthenticationRecord =
+        serde_json::from_value(record.clone()).map_err(|error| {
+            applet_signature_error_invalid(format!(
+                "invalid delivery authentication record: {error}"
+            ))
+        })?;
+    let digest = typed
+        .stable_digest()
+        .map_err(applet_signature_error_invalid)?;
+    Ok((record, digest.to_string()))
 }
 
 pub(super) fn applet_required_header(req: &Request, name: &str) -> Result<String, AppError> {
@@ -677,6 +679,36 @@ mod tests {
         assert_eq!(
             error.reason_detail.as_deref(),
             Some("applet_effective_scope_ambiguous")
+        );
+    }
+}
+
+#[cfg(test)]
+mod delivery_freshness_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_retry_window_passes_but_expired_signature_keeps_registered_401_code() {
+        let policy = SignatureVerificationPolicy::for_scenario(
+            HttpSignatureScenario::AppletTransactionV1,
+            &[],
+        )
+        .unwrap();
+        let input = |created, expires| {
+            arkret_signatures::http_signature::parse_signature_input(
+            &format!("sig1=(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"arkret-operation\" \"source-service-id\" \"destination-service-id\" \"idempotency-key\");created={created};expires={expires};keyid=\"did:web:app#key\";alg=\"ed25519\""),
+        ).unwrap()
+        };
+        policy
+            .validate(&input(200, 260), Some("sha-256=:abc=:"), 200)
+            .unwrap();
+        let error = policy
+            .validate(&input(100, 160), Some("sha-256=:abc=:"), 200)
+            .unwrap_err();
+        let problem = applet_verification_error(HttpMessageVerificationError::Policy(error));
+        assert_eq!(
+            problem.code,
+            soland_http::error::ErrorCode::SignatureWindowInvalid
         );
     }
 }

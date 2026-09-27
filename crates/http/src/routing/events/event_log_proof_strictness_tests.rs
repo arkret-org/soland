@@ -97,194 +97,6 @@ fn session() -> SessionRecord {
     }
 }
 
-fn did_key_for(signing_key: &ed25519_dalek::SigningKey) -> String {
-    let mut bytes = Vec::with_capacity(34);
-    bytes.extend_from_slice(&[0xed, 0x01]);
-    bytes.extend_from_slice(signing_key.verifying_key().as_bytes());
-    format!("did:key:z{}", bs58::encode(bytes).into_string())
-}
-
-fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (String, Value) {
-    use ed25519_dalek::Signer as _;
-
-    let did = did_key_for(signing_key);
-    let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{did}#{did_key_fragment}")).expect("fixture DID URL");
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned(),
-    )
-    .unwrap();
-    let actor_id =
-        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(did.clone()).unwrap())
-            .unwrap();
-    let actor = arkret_wire::ActorId::service(actor_id.clone());
-    let zero_hash = arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-    let mut identity = arkret_models_identity::member_identity::MemberIdentity::new(
-        realm_id.clone(),
-        actor.clone(),
-        actor.clone(),
-        arkret_models_identity::member_identity::DisplayProfile {
-            display_name: "Alice".to_owned(),
-            avatar_blob_ref: None,
-        },
-        chrono::Utc::now(),
-        arkret_models_identity::member_identity::MemberIdentityProof {
-            verification_method,
-            signature_algorithm:
-                arkret_models_identity::member_identity::MemberIdentitySignatureAlgorithm::Ed25519,
-            payload_digest: zero_hash,
-            signature: "AA".to_owned(),
-        },
-    );
-    let canonical_bytes = identity.canonical_payload_bytes().unwrap();
-    identity.proof.payload_digest =
-        arkret_identifiers::Hash::new(identity.canonical_payload_sha256().unwrap()).unwrap();
-    identity.proof.signature =
-        URL_SAFE_NO_PAD.encode(signing_key.sign(&canonical_bytes).to_bytes());
-    let payload = json!({
-        "realm_id": realm_id.as_str(),
-        "actor_id": actor,
-        "segment": "member_identity",
-        "identity_payload": {
-            "member_identity": identity
-        }
-    });
-    (did, payload)
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn member_identity_plaintext_ed25519_proof_verifies() {
-    let state = make_state(false);
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
-    let (_, payload) = signed_member_identity_payload(&signing_key);
-
-    validate_member_identity_proof(&state, &payload)
-        .await
-        .expect("valid MemberIdentity proof should verify");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn member_identity_tampered_payload_fails_closed() {
-    let state = make_state(false);
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
-    let (_, mut payload) = signed_member_identity_payload(&signing_key);
-    payload["identity_payload"]["member_identity"]["display_profile"]["display_name"] =
-        json!("Mallory");
-
-    let err = validate_member_identity_proof(&state, &payload)
-        .await
-        .expect_err("tampered MemberIdentity payload must fail");
-    assert_eq!(err.code, "member_identity_proof_invalid");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn member_identity_unsupported_signature_algorithm_is_422() {
-    let state = make_state(false);
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-    let (_, mut payload) = signed_member_identity_payload(&signing_key);
-    payload["identity_payload"]["member_identity"]["proof"]["signature_algorithm"] = json!("ES256");
-
-    let err = validate_member_identity_proof(&state, &payload)
-        .await
-        .expect_err("unsupported MemberIdentity signature algorithm must fail closed");
-    let code = soland_http::error::ErrorCode::UnsupportedSignatureAlg;
-    assert_eq!(err.status, soland_http::error::error_http_status(code));
-    assert_eq!(err.code, code.as_str());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
-    let state = make_state(false);
-    let payload = json!({
-        "realm_id": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
-        "actor_id": "ak:did_core:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
-        "segment": "member_identity",
-        "identity_payload": {
-            "encrypted_payload": {
-                "encryption_algorithm": "stub"
-            }
-        }
-    });
-
-    let err = validate_member_identity_proof(&state, &payload)
-        .await
-        .expect_err("encrypted MemberIdentity proof verification is not wired");
-    assert_eq!(err.code, "unsupported_feature");
-}
-
-#[test]
-fn unknown_fail_closed_critical_extension_is_not_implemented() {
-    let state = make_state(true);
-    let envelope = json!({
-        "requirements": {
-            "critical_extensions": [{
-                "id": "ak.extension.unknown",
-                "fail_closed": true
-            }]
-        }
-    });
-    let object = envelope.as_object().unwrap();
-
-    let err = validate_event_critical_features(&state, object)
-        .expect_err("unknown fail-closed extensions must reject writes");
-
-    assert_eq!(err.status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(err.code, "unsupported_feature");
-}
-
-#[test]
-fn unknown_advisory_critical_extension_is_ignored() {
-    let state = make_state(true);
-    let envelope = json!({
-        "requirements": {
-            "critical_extensions": [{
-                "id": "ak.extension.unknown",
-                "fail_closed": false
-            }]
-        }
-    });
-    let object = envelope.as_object().unwrap();
-
-    validate_event_critical_features(&state, object)
-        .expect("non-fail-closed extensions are advisory and may be ignored");
-}
-
-#[test]
-fn unknown_required_feature_is_unsupported_feature() {
-    let state = make_state(true);
-    let envelope = json!({
-        "requirements": {
-            "features": ["ak.feature.mimi_room_passthrough.v1"]
-        }
-    });
-    let object = envelope.as_object().unwrap();
-
-    let err = validate_event_critical_features(&state, object)
-        .expect_err("unknown requirements.features entries must fail closed");
-
-    assert_eq!(err.status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(err.code, "unsupported_feature");
-}
-
-#[test]
-fn declared_required_feature_is_accepted() {
-    let state = make_state(true);
-    let envelope = json!({
-        "requirements": {
-            "features": ["ak.feature.blob.resumable_upload.tus.v1"]
-        }
-    });
-    let object = envelope.as_object().unwrap();
-
-    validate_event_critical_features(&state, object)
-        .expect("declared ServiceDescribe features may be required by events");
-}
-
-/// The Realm's plaintext-visible services are read from this Station's
-/// accepted typed current alone: the local metadata mirror, which a member
-/// Station never populates, grants nothing, while a payload declaring this
-/// Station for `media_plaintext` still does.
 #[tokio::test]
 async fn media_plaintext_service_is_not_read_from_the_realm_meta_mirror() {
     let state = make_state(true);
@@ -732,59 +544,61 @@ async fn applet_registration_requires_realm_admin() {
 }
 
 #[test]
-fn production_requires_canonical_event_time_fields() {
-    let state = make_state(false);
-    let mut object = serde_json::Map::new();
-
-    let err =
-        validate_event_time_fields(&state, &object).expect_err("production requires created_at");
-    assert_eq!(err.code, "param_missing");
-    assert!(err.message.contains("created_at"));
-
-    object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00Z"));
-    let err = validate_event_time_fields(&state, &object)
-        .expect_err("whole-second shorthand is not canonical milliseconds");
-    assert_eq!(err.code, "param_invalid");
-
-    object.insert(
-        "created_at".to_owned(),
-        json!("2026-05-17T00:00:00.000123Z"),
+fn closed_event_contract_requires_canonical_time_and_rejects_retired_aliases() {
+    let original = typed_event_envelope(
+        "ak.message.create",
+        json!({
+            "strand_id": "ak:strand:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "track_name": "discussion", "content": {"kind":"ak.content.text","body":"hello"}
+        }),
     );
-    let err = validate_event_time_fields(&state, &object)
-        .expect_err("microseconds are not canonical milliseconds");
-    assert_eq!(err.code, "param_invalid");
-
-    // The Event envelope carries no producer HLC: the governance Station's
-    // RealmCommit is the single clock, so a canonical created_at suffices.
-    object.insert("created_at".to_owned(), json!("2026-05-17T00:00:00.000Z"));
-    validate_event_time_fields(&state, &object).expect("canonical timestamps accepted");
-}
-
-#[test]
-fn development_allows_fixtures_to_omit_time_fields() {
-    let state = make_state(true);
-    let object = serde_json::Map::new();
-    validate_event_time_fields(&state, &object)
-        .expect("development fixtures may omit event time fields");
-}
-
-#[test]
-fn production_requires_requirements_schema() {
-    let state = make_state(false);
-    let mut object = serde_json::Map::new();
-
-    let err = event_requirements_schema_id(&state, &object)
-        .expect_err("production requires requirements.schema[]");
-    assert_eq!(err.code, "param_missing");
-
-    object.insert(
-        "requirements".to_owned(),
-        json!({ "schema": ["ak.schema.event.v1"] }),
-    );
-    assert_eq!(
-        event_requirements_schema_id(&state, &object).unwrap(),
-        "ak.schema.event.v1"
-    );
+    serde_json::from_value::<arkret_wire::Event>(original.clone()).unwrap();
+    // Use the production envelope validator before payload validation.
+    for development in [false, true] {
+        let state = make_state(development);
+        for timestamp in [None, Some(json!("2026-09-28T00:00:00+00:00"))] {
+            let mut invalid = original.clone();
+            match timestamp {
+                Some(value) => {
+                    invalid["created_at"] = value;
+                }
+                None => {
+                    invalid.as_object_mut().unwrap().remove("created_at");
+                }
+            }
+            assert!(
+                validate_event_schema_and_payload(
+                    &state,
+                    "ak.message.create",
+                    arkret_wire::SchemaId::EVENT_V1,
+                    &invalid,
+                    invalid.as_object().unwrap()
+                )
+                .is_err()
+            );
+        }
+        for alias in [
+            "crit",
+            "critical",
+            "critical_features",
+            "requirements",
+            "schema_id",
+        ] {
+            let mut invalid = original.clone();
+            invalid[alias] = json!([]);
+            assert!(
+                validate_event_schema_and_payload(
+                    &state,
+                    "ak.message.create",
+                    arkret_wire::SchemaId::EVENT_V1,
+                    &invalid,
+                    invalid.as_object().unwrap()
+                )
+                .is_err(),
+                "retired alias {alias}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -859,7 +673,7 @@ fn event_canonical_bytes_reject_fractional_numbers() {
     envelope["payload"]["rank"] = json!(1.5);
     let err = event_canonical_bytes(&envelope)
         .expect_err("Arkret canonical JSON rejects fractional numbers");
-    assert_eq!(err.code, "invalid_event_envelope");
+    assert_eq!(err.code, "schema_violation");
 }
 
 #[test]
@@ -1168,8 +982,8 @@ async fn production_rejects_dev_proof_type_field() {
     )
     .await
     .expect_err("production must reject dev-proof shape");
-    // Missing strict-JWS fields trips `invalid_proof` first.
-    assert_eq!(err.code, "invalid_proof");
+    // Missing strict-JWS fields violates the SDK proof schema before verification.
+    assert_eq!(err.code, "schema_violation");
 }
 
 #[tokio::test]
@@ -1200,5 +1014,5 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
     )
     .await
     .expect_err("development mode must reject the non-SDK proof shape");
-    assert_eq!(error.code, "invalid_proof");
+    assert_eq!(error.code, "schema_violation");
 }

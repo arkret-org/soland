@@ -48,7 +48,7 @@ pub(super) fn validate_audit_accessed_payload(
     if writer.as_ref() != Some(&payload.writer_actor_id) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "actor_session_mismatch",
+            "capability_denied",
             "ak.audit.accessed writer_actor_id must match actor_id",
         ));
     }
@@ -521,7 +521,7 @@ mod tests {
             impersonating.as_object().unwrap(),
         )
         .expect_err("an audit cannot record a write as someone else");
-        assert_eq!(error.code, "actor_session_mismatch");
+        assert_eq!(error.code, arkret_wire::ErrorCode::CAPABILITY_DENIED);
 
         validate_audit_accessed_payload(
             arkret_wire::EventKind::AuditAccessed.as_str(),

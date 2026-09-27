@@ -118,13 +118,6 @@ pub(crate) fn message_content_from_payload(
         .cloned()
         .unwrap_or_else(|| payload.clone());
     if let Some(object) = content.as_object_mut() {
-        for key in ["reply_to", "in_reply_to"] {
-            if !object.contains_key(key)
-                && let Some(value) = payload.get(key)
-            {
-                object.insert(key.to_owned(), value.clone());
-            }
-        }
         // Stamp the scope accepted by admission, never the client's content field.
         object.remove("scope_circle_id");
         if let Some(value) = scope_circle_id {

@@ -20,6 +20,7 @@
 //! Event id, the public RFC 9420 tracker); a member Station keeps none of
 //! them and never reads them.
 
+use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
@@ -40,6 +41,12 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
     "object_redaction_current_results",
+    "circle_member_state_current_results",
+    "circle_current_results",
+    "call_state_current_results",
+    "moderation_report_current_results",
+    "moderation_state_current_results",
+    "moderation_franking_proof_current_results",
 ];
 
 fn position(value: u64) -> PersistenceResult<i64> {
@@ -99,6 +106,81 @@ fn require_one_current_write(changed: usize) -> PersistenceResult<()> {
     }
 }
 
+/// A verified snapshot/replica carries authority; this projection never
+/// reevaluates the governing Station's current capabilities.
+async fn upsert_call_genesis(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    call: &arkret_wire::CallId,
+    source: &arkret_wire::CommitStreamRef,
+    revision: &Revision<'_>,
+    value: &Value,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::call::{
+        CallCreatePayload, CallStateCurrentValue,
+    };
+    let current: CallStateCurrentValue =
+        serde_json::from_value(value.clone()).map_err(malformed)?;
+    current.validate().map_err(malformed)?;
+    if current.from.is_some()
+        || source.realm_id() != realm
+        || !matches!(
+            source,
+            arkret_wire::CommitStreamRef::Realm { .. }
+                | arkret_wire::CommitStreamRef::Circle { .. }
+        )
+    {
+        return Err(malformed(
+            "Call replica currently requires a genesis value in its exact Realm",
+        ));
+    }
+    let create = arkret_wire::EventId::new(call.as_str().replacen("ak:call:", "ak:event:", 1))
+        .map_err(malformed)?;
+    #[derive(diesel::QueryableByName)]
+    struct AcceptedRow {
+        #[diesel(sql_type = Jsonb)]
+        envelope: Value,
+        #[diesel(sql_type = Jsonb)]
+        commit_json: Value,
+    }
+    // Bootstrap may legitimately precede retained create history. If the
+    // covering accepted Event is available, it must prove every coordinate.
+    let accepted = diesel::sql_query("SELECT e.envelope,c.commit_json FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE c.commit_id=$1 AND e.state='committed'")
+        .bind::<Text,_>(revision.commit_id).get_result::<AcceptedRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if let Some(record) = accepted {
+        let event: arkret_wire::Event =
+            serde_json::from_value(record.envelope).map_err(malformed)?;
+        let commit: arkret_wire::RealmCommit =
+            serde_json::from_value(record.commit_json).map_err(malformed)?;
+        let payload: CallCreatePayload =
+            serde_json::from_value(serde_json::json!(&event.payload)).map_err(malformed)?;
+        payload.validate().map_err(malformed)?;
+        if event.kind != arkret_wire::EventKind::CallCreate
+            || event.event_id != create
+            || event.realm_id != *realm
+            || arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None)
+                .map_err(malformed)?
+                != *source
+            || commit.event_ref != create
+            || commit.realm_id != *realm
+            || commit.stream_ref != *source
+            || commit.commit_id.as_str() != revision.commit_id
+            || position(commit.stream_position)? != revision.stream_position
+            || current.to != payload.initial_state
+        {
+            return Err(malformed(
+                "Call current differs from its accepted genesis Event and Commit",
+            ));
+        }
+    }
+    let changed = diesel::sql_query("INSERT INTO call_state_current_results (realm_id,call_id,create_event_id,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(realm_id,call_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE call_state_current_results.create_event_id=EXCLUDED.create_event_id AND call_state_current_results.source_stream_ref=EXCLUDED.source_stream_ref AND call_state_current_results.value=EXCLUDED.value AND (call_state_current_results.current_stream_position<EXCLUDED.current_stream_position OR (call_state_current_results.current_stream_position=EXCLUDED.current_stream_position AND call_state_current_results.current_commit_id=EXCLUDED.current_commit_id))")
+        .bind::<Text,_>(realm.as_str()).bind::<Text,_>(call.as_str()).bind::<Text,_>(create.as_str())
+        .bind::<Jsonb,_>(serde_json::to_value(source).map_err(malformed)?).bind::<Text,_>(revision.commit_id)
+        .bind::<BigInt,_>(revision.stream_position).bind::<Jsonb,_>(value).bind::<Timestamptz,_>(revision.updated_at)
+        .execute(conn).await.map_err(PersistenceError::database)?;
+    require_one_current_write(changed)
+}
+
 /// Upsert one row of a family keyed by `(realm_id)` or `(realm_id, key)`.
 async fn upsert_keyed(
     conn: &mut AsyncPgConnection,
@@ -127,6 +209,7 @@ async fn upsert_keyed(
                 | "space_parent_current_results"
                 | "space_child_scope_policy_current_results" => "space_id",
                 "message_revision_current_results" => "message_id",
+                "moderation_report_current_results" => "realm_id,report_event_id",
                 _ => "realm_id,target_ref",
             },
         ),
@@ -198,10 +281,30 @@ async fn upsert_member_state(
 /// bootstrap snapshot's rows. Every row must come from the Realm stream at or
 /// below `head`; a family this module does not keep is left out, and a
 /// selector outside the bootstrap disclosure subset refuses the install.
+#[cfg(test)]
 pub(crate) async fn install_snapshot_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
     head: &arkret_wire::CommitStreamHead,
+    entries: &[arkret_wire::TypedCurrentResult],
+    installed_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    install_snapshot_at_heads_in_connection(
+        conn,
+        realm_id,
+        head,
+        std::slice::from_ref(head),
+        entries,
+        installed_at,
+    )
+    .await
+}
+
+pub(crate) async fn install_snapshot_at_heads_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    head: &arkret_wire::CommitStreamHead,
+    visible_heads: &[arkret_wire::CommitStreamHead],
     entries: &[arkret_wire::TypedCurrentResult],
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
@@ -215,16 +318,32 @@ pub(crate) async fn install_snapshot_in_connection(
             return Err(malformed("a snapshot repeats a current selector"));
         }
     }
-    for table in MEMBER_STATION_FAMILIES {
-        diesel::sql_query(format!("DELETE FROM {table} WHERE realm_id=$1"))
-            .bind::<Text, _>(realm_id.as_str())
-            .execute(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
+    if head.stream_ref.realm_id() != realm_id || !visible_heads.contains(head) {
+        return Err(malformed(
+            "snapshot target head is not in its verified visible heads",
+        ));
     }
-    let realm_stream = arkret_wire::CommitStreamRef::Realm {
-        realm_id: realm_id.clone(),
-    };
+    for source_head in visible_heads {
+        if source_head.stream_ref.realm_id() != realm_id {
+            return Err(malformed("a visible head crosses Realm"));
+        }
+        crate::replica_authorization::install_verified_head(conn, source_head, installed_at)
+            .await?;
+        let source =
+            serde_json::to_value(&source_head.stream_ref).map_err(PersistenceError::database)?;
+        for table in MEMBER_STATION_FAMILIES {
+            diesel::sql_query(format!("DELETE FROM {table} WHERE realm_id=$1 AND current_commit_id IN (SELECT current_commit_id FROM replica_authorization_rows WHERE realm_id=$1 AND source_stream_ref=$2)"))
+                .bind::<Text, _>(realm_id.as_str()).bind::<Jsonb, _>(&source).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        }
+        diesel::sql_query(
+            "DELETE FROM replica_authorization_rows WHERE realm_id=$1 AND source_stream_ref=$2",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Jsonb, _>(&source)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    }
     for entry in entries {
         let arkret_wire::TypedCurrentResult::Value {
             selector,
@@ -235,15 +354,18 @@ pub(crate) async fn install_snapshot_in_connection(
         else {
             return Err(malformed("a row is not a closed typed value"));
         };
-        if source_stream_ref != &realm_stream
-            || revision.stream_position > head.stream_position
-            || (revision.stream_position == head.stream_position
-                && revision.commit_id != head.commit_id)
+        let source_head = visible_heads
+            .iter()
+            .find(|candidate| &candidate.stream_ref == source_stream_ref)
+            .ok_or_else(|| malformed("row source stream is not disclosed"))?;
+        if source_stream_ref.realm_id() != realm_id
+            || revision.stream_position > source_head.stream_position
+            || (revision.stream_position == source_head.stream_position
+                && revision.commit_id != source_head.commit_id)
         {
-            return Err(malformed(
-                "a row is not sourced from the snapshot's Realm stream prefix",
-            ));
+            return Err(malformed("row exceeds its exact snapshot source head"));
         }
+        crate::replica_authorization::save_row(conn, realm_id, entry, installed_at).await?;
         let commit_id = revision.commit_id.to_string();
         let row = Revision {
             commit_id: &commit_id,
@@ -266,6 +388,64 @@ pub(crate) async fn install_snapshot_in_connection(
             continue;
         }
         match selector {
+            S::CallState { call_id } => {
+                upsert_call_genesis(conn, realm_id, call_id, source_stream_ref, &row, value)
+                    .await?;
+            }
+            S::Circle { circle_id } => {
+                let create_id = arkret_wire::EventId::new(circle_id.as_str().replacen(
+                    "ak:circle:",
+                    "ak:event:",
+                    1,
+                ))
+                .map_err(malformed)?;
+                let name = value
+                    .pointer("/display/short_name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| malformed("Circle display name is absent"))?
+                    .to_ascii_lowercase();
+                diesel::sql_query("INSERT INTO circle_current_results (realm_id,circle_id,create_event_id,current_commit_id,current_stream_position,source_stream_ref,short_name_folded,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(circle_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,source_stream_ref=EXCLUDED.source_stream_ref,short_name_folded=EXCLUDED.short_name_folded,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at")
+                    .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).bind::<Text, _>(create_id.as_str()).bind::<Text, _>(row.commit_id).bind::<BigInt, _>(row.stream_position).bind::<Jsonb, _>(serde_json::to_value(source_stream_ref).map_err(malformed)?).bind::<Text, _>(name).bind::<Jsonb, _>(value).bind::<Timestamptz, _>(installed_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            }
+            S::CircleMemberState {
+                circle_id,
+                member_actor_id,
+            } => {
+                let current: arkret_wire::CircleMemberStateCurrent =
+                    serde_json::from_value(value.clone()).map_err(malformed)?;
+                let membership = serde_json::to_value(current.membership).map_err(malformed)?;
+                let membership = membership
+                    .as_str()
+                    .ok_or_else(|| malformed("Circle membership is not a name"))?;
+                diesel::sql_query("INSERT INTO circle_member_state_current_results (realm_id,circle_id,member_id,membership,current_commit_id,current_stream_position,source_stream_ref,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(circle_id,member_id) DO UPDATE SET membership=EXCLUDED.membership,current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,source_stream_ref=EXCLUDED.source_stream_ref,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at")
+                    .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).bind::<Text, _>(member_actor_id.to_string()).bind::<Text, _>(membership).bind::<Text, _>(row.commit_id).bind::<BigInt, _>(row.stream_position).bind::<Jsonb, _>(serde_json::to_value(source_stream_ref).map_err(malformed)?).bind::<Jsonb, _>(value).bind::<Timestamptz, _>(installed_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            }
+            S::ModerationState { target_ref } => {
+                upsert_keyed(
+                    conn,
+                    realm_id,
+                    "moderation_state_current_results",
+                    Some(("target_ref", target_ref.as_str())),
+                    &row,
+                    value,
+                )
+                .await?;
+            }
+            S::ModerationReport { event_id } => {
+                upsert_keyed(
+                    conn,
+                    realm_id,
+                    "moderation_report_current_results",
+                    Some(("report_event_id", event_id.as_str())),
+                    &row,
+                    value,
+                )
+                .await?;
+            }
+            S::ModerationFrankingProof { event_id } => {
+                diesel::sql_query("INSERT INTO moderation_franking_proof_current_results (realm_id,target_event_id,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(realm_id,target_event_id) DO UPDATE SET source_stream_ref=EXCLUDED.source_stream_ref,current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at")
+                    .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(event_id.as_str()).bind::<Jsonb, _>(serde_json::to_value(source_stream_ref).map_err(malformed)?).bind::<Text, _>(row.commit_id).bind::<BigInt, _>(row.stream_position).bind::<Jsonb, _>(value).bind::<Timestamptz, _>(installed_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            }
             S::RealmPolicyBundle => {
                 upsert_keyed(
                     conn,
@@ -408,7 +588,131 @@ pub(crate) async fn advance_in_connection(
         updated_at: commit.committed_at,
     };
     let payload = || serde_json::to_value(&event.payload).map_err(PersistenceError::database);
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::CapabilityGrant
+            | arkret_wire::EventKind::CapabilityRevoke
+            | arkret_wire::EventKind::CapabilityRelinquish
+            | arkret_wire::EventKind::RealmPolicyBundle
+            | arkret_wire::EventKind::RealmOwnerTransfer
+            | arkret_wire::EventKind::RealmAuthorityReset
+    ) {
+        diesel::sql_query("DELETE FROM replica_authorization_cuts WHERE realm_id=$1")
+            .bind::<Text, _>(event.realm_id.as_str())
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        diesel::sql_query("DELETE FROM replica_authorization_rows WHERE realm_id=$1 AND selector->>'kind' IN ('realm_authority_root','realm_policy_bundle')").bind::<Text, _>(event.realm_id.as_str()).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+    }
+
     match event.kind {
+        arkret_wire::EventKind::CallCreate => {
+            use arkret_models_collaboration::events_payloads::call::{
+                CallCreatePayload, CallStateCurrentValue,
+            };
+            if event.realm_id != commit.realm_id
+                || event.event_id != commit.event_ref
+                || arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None)
+                    .map_err(malformed)?
+                    != commit.stream_ref
+            {
+                return Err(malformed("Call replica Event and covering Commit differ"));
+            }
+            let body: CallCreatePayload = serde_json::from_value(payload()?).map_err(malformed)?;
+            body.validate().map_err(malformed)?;
+            let value = serde_json::to_value(CallStateCurrentValue {
+                from: None,
+                to: body.initial_state,
+                failure_reason_code: None,
+            })
+            .map_err(malformed)?;
+            let call_id = arkret_wire::CallId::from_event_id(&event.event_id);
+            upsert_call_genesis(
+                conn,
+                &event.realm_id,
+                &call_id,
+                &commit.stream_ref,
+                &row,
+                &value,
+            )
+            .await?;
+            let entry = arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::CallState { call_id },
+                source_stream_ref: commit.stream_ref.clone(),
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: commit.commit_id.clone(),
+                    stream_position: commit.stream_position,
+                },
+                value,
+            };
+            crate::replica_authorization::save_row(
+                conn,
+                &event.realm_id,
+                &entry,
+                commit.committed_at,
+            )
+            .await?;
+        }
+        arkret_wire::EventKind::CircleCreate | arkret_wire::EventKind::CircleMemberState => {
+            crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
+        }
+        arkret_wire::EventKind::SelfModerationReport => {
+            upsert_keyed(
+                conn,
+                &event.realm_id,
+                "moderation_report_current_results",
+                Some(("report_event_id", event.event_id.as_str())),
+                &row,
+                &payload()?,
+            )
+            .await?;
+        }
+        arkret_wire::EventKind::ModerationFrankingProof => {
+            let proof: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
+                serde_json::from_value(payload()?).map_err(malformed)?;
+            diesel::sql_query("INSERT INTO moderation_franking_proof_current_results (realm_id,target_event_id,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(realm_id,target_event_id) DO UPDATE SET source_stream_ref=EXCLUDED.source_stream_ref,current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at")
+                .bind::<Text, _>(event.realm_id.as_str()).bind::<Text, _>(proof.event_id.as_str()).bind::<Jsonb, _>(serde_json::to_value(&commit.stream_ref).map_err(malformed)?).bind::<Text, _>(row.commit_id).bind::<BigInt, _>(row.stream_position).bind::<Jsonb, _>(payload()?).bind::<Timestamptz, _>(row.updated_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        }
+        arkret_wire::EventKind::ModerationDecision
+        | arkret_wire::EventKind::ModerationDecisionLift => {
+            let body = payload()?;
+            let target = body
+                .get("target_ref")
+                .and_then(Value::as_str)
+                .ok_or_else(|| malformed("moderation assertion has no target"))?
+                .to_owned();
+            #[derive(diesel::QueryableByName)]
+            struct StateRow {
+                #[diesel(sql_type=Jsonb)]
+                value: Value,
+            }
+            let current = diesel::sql_query("SELECT value FROM moderation_state_current_results WHERE realm_id=$1 AND target_ref=$2 FOR UPDATE").bind::<Text, _>(event.realm_id.as_str()).bind::<Text, _>(&target).get_result::<StateRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            let mut assertions = current
+                .map(|row| {
+                    row.value
+                        .get("assertions")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .ok_or_else(|| malformed("moderation assertions are malformed"))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            assertions.push(serde_json::json!({"tag_id": crate::moderation_state_current_results::assertion_tag(&event.event_id), "value":body}));
+            assertions.sort_by(|left, right| {
+                left.get("tag_id")
+                    .and_then(Value::as_str)
+                    .cmp(&right.get("tag_id").and_then(Value::as_str))
+            });
+            upsert_keyed(
+                conn,
+                &event.realm_id,
+                "moderation_state_current_results",
+                Some(("target_ref", &target)),
+                &row,
+                &serde_json::json!({"assertions":assertions}),
+            )
+            .await?;
+        }
         arkret_wire::EventKind::RealmProfile => {
             crate::realm_bootstrap_current_results::commit_realm_profile_current_result_in_connection(
                 conn, event, commit,
@@ -560,6 +864,7 @@ pub(crate) async fn advance_in_connection(
         }
         _ => {}
     }
+    crate::replica_authorization::advance_verified_head(conn, commit).await?;
     Ok(())
 }
 
@@ -776,6 +1081,89 @@ mod tests {
     struct ValueRow {
         #[diesel(sql_type = Jsonb)]
         value: Value,
+    }
+
+    #[tokio::test]
+    async fn call_genesis_snapshot_replica_keeps_exact_source_and_rejects_cross_scope_reuse() {
+        let database = TestDatabase::lease().await;
+        let realm =
+            arkret_wire::RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let call = arkret_wire::CallId::new("ak:call:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+            .unwrap();
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        };
+        let value = serde_json::json!({"from":null,"to":"ringing"});
+        let entries = [arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::CallState {
+                call_id: call.clone(),
+            },
+            source_stream_ref: stream.clone(),
+            revision: arkret_wire::CurrentRevision {
+                commit_id: head.commit_id.clone(),
+                stream_position: 7,
+            },
+            value: value.clone(),
+        }];
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let at = chrono::Utc::now();
+        // The caller verifies the signed bootstrap before this durable sink.
+        // Retained genesis history can be absent at the disclosure floor.
+        for _ in 0..2 {
+            diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+            install_snapshot_in_connection(&mut conn, &realm, &head, &entries, at)
+                .await
+                .unwrap();
+            diesel::sql_query("COMMIT")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        let stored=diesel::sql_query("SELECT jsonb_build_object('source',source_stream_ref,'value',value,'create',create_event_id) AS value FROM call_state_current_results WHERE realm_id=$1 AND call_id=$2")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(call.as_str()).get_result::<ValueRow>(&mut *conn).await.unwrap().value;
+        assert_eq!(stored["source"], serde_json::json!(&stream));
+        assert_eq!(stored["value"], value);
+        assert_eq!(
+            stored["create"],
+            call.as_str().replacen("ak:call:", "ak:event:", 1)
+        );
+        let other = arkret_wire::CommitStreamRef::Circle {
+            realm_id: realm.clone(),
+            circle_id: arkret_wire::CircleId::new(
+                "ak:circle:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7",
+            )
+            .unwrap(),
+        };
+        let commit_id = head.commit_id.to_string();
+        let revision = Revision {
+            commit_id: &commit_id,
+            stream_position: 7,
+            updated_at: at,
+        };
+        assert!(
+            upsert_call_genesis(&mut conn, &realm, &call, &other, &revision, &value)
+                .await
+                .is_err()
+        );
+        assert!(
+            upsert_call_genesis(
+                &mut conn,
+                &realm,
+                &call,
+                &stream,
+                &revision,
+                &serde_json::json!({"from":null,"to":"active"})
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]

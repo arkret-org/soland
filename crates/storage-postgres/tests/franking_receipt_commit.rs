@@ -1,0 +1,358 @@
+//! Accepted encrypted targets, real signatures and durable proof retries on PostgreSQL.
+#[path = "../../test-support/src/device_authorization_history.rs"]
+#[allow(dead_code)]
+mod device_authorization_history;
+#[path = "support/human_profile.rs"]
+mod human_profile;
+#[path = "support/ordinary_realm.rs"]
+mod ordinary_realm;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
+
+use std::sync::Arc;
+
+use arkret_wire::{ActorId, EventKind, ScopeRef};
+use ed25519_dalek::{Signer as _, SigningKey};
+use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
+use soland_storage_postgres::{
+    PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore,
+};
+
+fn fixture(label: &str) -> pcr_genesis::PcrGenesisFixture {
+    pcr_genesis::PcrGenesisFixture::new_with(
+        human_profile::station_did(&ordinary_realm::station()),
+        device_authorization_history::DeviceHistoryFixtureOptions {
+            local_id: label.to_owned(),
+            founding_device_id: arkret_wire::DeviceId::new(format!(
+                "ak:device:01904100-0000-7000-8000-{}",
+                arkret_canonical::sha256_bytes(label.as_bytes())[..6]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ))
+            .unwrap(),
+            ..Default::default()
+        },
+    )
+}
+
+fn prepared(
+    job: &soland_storage::PendingFrankingProof,
+    nonce: u8,
+    method: arkret_wire::DidUrl,
+    key: &SigningKey,
+) -> soland_storage::PreparedFrankingProof {
+    let mut proof = arkret_models_collaboration::events_payloads::moderation::FrankingProof {
+        realm_id: job.realm_id.clone(),
+        event_id: job.target_event_id.clone(),
+        received_by: job.received_by.clone(),
+        verification_method: method.clone(),
+        received_at: job.received_at,
+        replay_nonce: arkret_canonical::base64url_encode([nonce; 24]),
+        signature: String::new(),
+    };
+    proof.signature = arkret_canonical::base64url_encode(
+        key.sign(&proof.canonical_signing_bytes().unwrap())
+            .to_bytes(),
+    );
+    let mut draft = arkret_event_draft::TypedEventDraft::<
+        arkret_wire::event_spec::ModerationFrankingProof,
+    >::new(
+        ScopeRef::Realm {
+            realm_id: job.realm_id.clone(),
+        },
+        ActorId::service(job.received_by.clone()),
+        proof,
+    )
+    .unwrap()
+    .author_with_digest_suite(job.received_at, arkret_canonical::DigestSuite::Sha256)
+    .unwrap();
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        key.clone(),
+        human_profile::station_did(&job.received_by),
+        method,
+    );
+    arkret_signatures::sign_event(
+        &mut draft,
+        &signer,
+        arkret_signatures::SignEventOptions::new().with_created_at(job.received_at),
+    )
+    .unwrap();
+    soland_storage::PreparedFrankingProof {
+        realm_id: job.realm_id.clone(),
+        target_event_id: job.target_event_id.clone(),
+        received_by: job.received_by.clone(),
+        event: draft.event().clone(),
+        verification_key: key.verifying_key().as_bytes().to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exact_retry() {
+    use arkret_models_crypto::{
+        EventContentPreEncryptionHeader, EventContentRoutingContext, MlsGovernanceBindingPayload,
+    };
+    use arkret_wire::EncryptedPayloadScheme;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let label = uuid::Uuid::now_v7().to_string();
+    let account = human_profile::admit(&pool, &ordinary_realm::station(), &label).await;
+    let fixture = fixture(&label);
+    assert_eq!(account, fixture.history.account);
+    let actor = ActorId::account(account.clone());
+    let did = human_profile::station_did(&ordinary_realm::station());
+    let method = arkret_wire::DidUrl::new(format!("{did}#authority")).unwrap();
+    let key = SigningKey::from_bytes(&device_authorization_history::STATION_AUTHORITY_SEED);
+    let app = soland_services::authority_commit::AuthorityCommitApplication::new(
+        soland_services::persistence::PersistenceHandle::new(Arc::new(PgPersistenceStore::new(
+            pool.clone(),
+        ))),
+        0,
+    );
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = ordinary_realm::bootstrap_unit_for_account(&label, &account, &did);
+    let at = unit.transactions[0].commit.committed_at;
+    let mut submission = unit.submission.clone();
+    for submitted in &mut submission.events {
+        submitted.event = device_authorization_history::sign_event(
+            submitted.event.clone(),
+            fixture.history.device_verification_method.clone(),
+            fixture.history.founding_device_signing_seed,
+        );
+    }
+    let body=serde_json::to_vec(&arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(submission.clone())).unwrap();
+    let unit = app
+        .prepare_ordinary_realm_bootstrap_unit(
+            submission,
+            body,
+            &unit.transactions[0].expected_authority,
+            method.clone(),
+            &key,
+            at,
+        )
+        .unwrap();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let mut previous = unit.transactions.last().unwrap().clone();
+    let realm = previous.event.realm_id.clone();
+    let scope = ScopeRef::Realm {
+        realm_id: realm.clone(),
+    };
+    let seal = |event: arkret_wire::Event| {
+        device_authorization_history::sign_event(
+            event,
+            fixture.history.device_verification_method.clone(),
+            fixture.history.founding_device_signing_seed,
+        )
+    };
+    let mut group = arkret_mls::ArkretMlsIdentity::new_test_human_device(
+        actor.clone(),
+        fixture.history.founding_device_id.clone(),
+    )
+    .unwrap()
+    .create_group_with_governance_binding(
+        &scope,
+        &MlsGovernanceBindingPayload::realm(realm.clone(), None, 0, 0, 0).unwrap(),
+    )
+    .unwrap();
+    let (group_info, tree) = group.public_group_state_bytes().unwrap();
+    let tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+        &group_info,
+        &tree,
+        group.group_id().as_str(),
+        0,
+    )
+    .unwrap();
+    let genesis = seal(ordinary_realm::event_for_actor(
+        EventKind::MlsGenesis,
+        scope.clone(),
+        actor.clone(),
+        serde_json::json!({
+            "cipher_suite":group.group_ciphersuite_canonical_id().unwrap(),
+            "group_info_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&group_info)),
+            "ratchet_tree_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&tree)),
+            "governance_binding":MlsGovernanceBindingPayload::realm(realm.clone(),None,0,0,0).unwrap(),
+            "created_at":arkret_canonical::format_timestamp_canonical(at)
+        }),
+        at,
+    ));
+    let mut request = ordinary_realm::request_for_event(&previous, genesis.clone(), at);
+    request.authority_commit = app
+        .prepare_self_mls_transaction(
+            &genesis,
+            soland_storage::MlsStateInstallation {
+                effective_scope: scope.clone(),
+                base: None,
+                epoch: 0,
+                public_state: tracker.export_state().unwrap(),
+                member_principals: group.member_actor_ids().unwrap().into_iter().collect(),
+                genesis_blobs: Vec::new(),
+            },
+            Vec::new(),
+            &ordinary_realm::station(),
+            method.clone(),
+            &key,
+            at,
+        )
+        .await
+        .unwrap();
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(genesis.clone()));
+    uow.commit_event(request.clone()).await.unwrap();
+    previous = request.authority_commit;
+    let strand = seal(ordinary_realm::event_for_actor(
+        EventKind::StrandCreate,
+        scope.clone(),
+        actor.clone(),
+        serde_json::json!({"object":{
+            "schema":"ak.schema.strand.v1","realm_id":realm,"tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Encrypted receipt"},"state":"active","created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)
+        }}),
+        at,
+    ));
+    let mut request = ordinary_realm::request_for_event(&previous, strand.clone(), at);
+    request.authority_commit = app
+        .prepare_self_event_transaction(
+            &strand,
+            &ordinary_realm::station(),
+            method.clone(),
+            &key,
+            at,
+        )
+        .await
+        .unwrap();
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(strand.clone()));
+    uow.commit_event(request.clone()).await.unwrap();
+    previous = request.authority_commit;
+    let header = EventContentPreEncryptionHeader::reconstruct(
+        "1.0",
+        "application/arkret-content+json",
+        EncryptedPayloadScheme::MlsRfc9420,
+        scope.clone(),
+        EventKind::MessageCreate.as_str(),
+        0,
+        genesis.event_id.clone(),
+        group.local_content_sender_domain().unwrap(),
+        EventContentRoutingContext::None,
+    )
+    .unwrap();
+    let encrypted = group
+        .encrypt_payload(
+            header,
+            b"{\"kind\":\"ak.content.text\",\"body\":\"receipt\",\"format\":\"plain\"}",
+        )
+        .unwrap()
+        .to_envelope()
+        .unwrap();
+    let received_at = at + chrono::TimeDelta::seconds(5);
+    let target = seal(ordinary_realm::event_for_actor(
+        EventKind::MessageCreate,
+        scope,
+        actor.clone(),
+        serde_json::json!({
+            "strand_id":arkret_wire::StrandId::from_event_id(&strand.event_id),"track_name":"discussion","encrypted_content":encrypted
+        }),
+        at - chrono::TimeDelta::days(2),
+    ));
+    let mut request = ordinary_realm::request_for_event(&previous, target.clone(), received_at);
+    request.authority_commit = app
+        .prepare_self_event_transaction(
+            &target,
+            &ordinary_realm::station(),
+            method.clone(),
+            &key,
+            received_at,
+        )
+        .await
+        .unwrap();
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(target.clone()));
+    uow.commit_event(request.clone()).await.unwrap();
+    uow.commit_event(request.clone()).await.unwrap();
+    let jobs = store
+        .pending_franking_proofs(&ordinary_realm::station())
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    let job = &jobs[0];
+    assert_eq!(job.received_at, received_at);
+    assert!(target.created_at < job.received_at);
+    let candidate = prepared(job, 1, method.clone(), &key);
+    let mut wrong_controller = prepared(job, 2, method.clone(), &key);
+    let mut wrong: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
+        serde_json::from_value(serde_json::to_value(&wrong_controller.event.payload).unwrap())
+            .unwrap();
+    wrong.verification_method =
+        arkret_wire::DidUrl::new("did:web:other-controller.example#authority".to_owned()).unwrap();
+    wrong.signature = arkret_canonical::base64url_encode(
+        key.sign(&wrong.canonical_signing_bytes().unwrap())
+            .to_bytes(),
+    );
+    wrong_controller.event.payload =
+        serde_json::from_value(serde_json::to_value(&wrong).unwrap()).unwrap();
+    // Both signatures are genuine; the method belongs to another controller.
+    wrong_controller.event = device_authorization_history::sign_event(
+        wrong_controller.event,
+        wrong.verification_method,
+        key.to_bytes(),
+    );
+    assert!(store.fix_franking_proof(&wrong_controller).await.is_err());
+    let fixed = store.fix_franking_proof(&candidate).await.unwrap();
+    let reopened = PgAuthorityCommitStore { pool: pool.clone() };
+    assert_eq!(
+        reopened
+            .pending_franking_proofs(&ordinary_realm::station())
+            .await
+            .unwrap()[0]
+            .prepared_event,
+        Some(fixed.clone())
+    );
+    assert_eq!(
+        reopened
+            .fix_franking_proof(&prepared(job, 3, method.clone(), &key))
+            .await
+            .unwrap(),
+        fixed
+    );
+    let mut proof_request =
+        ordinary_realm::request_for_event(&request.authority_commit, fixed.clone(), received_at);
+    proof_request.authority_commit = app
+        .prepare_self_event_transaction(
+            &fixed,
+            &ordinary_realm::station(),
+            method,
+            &key,
+            received_at,
+        )
+        .await
+        .unwrap();
+    proof_request.realm_fanout_source =
+        Some(arkret_wire::EventAdmissionSubmission::new(fixed.clone()));
+    uow.commit_event(proof_request.clone()).await.unwrap();
+    uow.commit_event(proof_request.clone()).await.unwrap();
+    assert!(
+        reopened
+            .pending_franking_proofs(&ordinary_realm::station())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let accepted = reopened
+        .committed_event(&fixed.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.event, fixed);
+    assert_eq!(accepted.commit, proof_request.authority_commit.commit);
+    arkret_signatures::detached_object::verify_detached_object_signature(
+        &accepted.commit.signature,
+        &arkret_canonical::canonical::unsigned_value(&accepted.commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: key.verifying_key().as_bytes().to_vec(),
+        },
+    )
+    .unwrap();
+}

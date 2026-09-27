@@ -85,6 +85,7 @@ async fn refresh_direct_conversation_peer_claim(
 pub(super) enum AdmittedProducer {
     /// Same-Station producer; the guard is rechecked in the unit.
     Local(SelfProducerCommitGuard),
+    Applet(soland_storage::AppletEventProducerGuard),
     /// Cross-Station human device; the verified evidence is retained with
     /// the Event's first Commit.
     Forwarded(soland_storage::ForwardedProducerDeviceEvidence),
@@ -108,7 +109,13 @@ pub(super) struct SelfEventUnitEffects {
 fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
-        arkret_wire::EventKind::SpaceCreate
+        arkret_wire::EventKind::CircleCreate
+            | arkret_wire::EventKind::CircleMemberState
+            | arkret_wire::EventKind::RealmOrganization
+            | arkret_wire::EventKind::SelfModerationReport
+            | arkret_wire::EventKind::ModerationDecision
+            | arkret_wire::EventKind::ModerationDecisionLift
+            | arkret_wire::EventKind::SpaceCreate
             | arkret_wire::EventKind::RealmProfile
             | arkret_wire::EventKind::StrandUpdate
             | arkret_wire::EventKind::StrandArchive
@@ -125,6 +132,9 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::CapabilityRevoke
             | arkret_wire::EventKind::CapabilityRelinquish
             | arkret_wire::EventKind::MessageRevise
+            | arkret_wire::EventKind::MemberIdentityUpdate
+            | arkret_wire::EventKind::CallCreate
+            | arkret_wire::EventKind::MessageCreate
             | arkret_wire::EventKind::MessageRedact
             | arkret_wire::EventKind::MlsGenesis
             | arkret_wire::EventKind::MlsCommit
@@ -305,13 +315,15 @@ pub(super) async fn commit_event_unit(
         envelope,
         received_at: committed_at,
     };
-    let (self_producer_guard, forwarded_producer_evidence) = match producer {
-        AdmittedProducer::Local(guard) => (Some(guard), None),
-        AdmittedProducer::Forwarded(evidence) => (None, Some(evidence)),
+    let (self_producer_guard, forwarded_producer_evidence, applet_producer_guard) = match producer {
+        AdmittedProducer::Local(guard) => (Some(guard), None, None),
+        AdmittedProducer::Forwarded(evidence) => (None, Some(evidence), None),
+        AdmittedProducer::Applet(guard) => (None, None, Some(guard)),
     };
     let command = soland_services::events::CommitAcceptedEventCommand {
         authority_commit: transaction.clone(),
         self_producer_guard,
+        applet_producer_guard,
         forwarded_producer_evidence,
         event: record,
         parent_membership_admission: None,
@@ -335,23 +347,28 @@ pub(super) async fn commit_event_unit(
         deliveries: Vec::new(),
         realm_fanout_source: Some(submission.clone()),
     };
-    let committed = match franking_replay_nonce {
-        Some(mut nonce) => {
-            nonce.consumed_at = committed_at;
-            state
-                .events()
-                .commit_accepted_event_batch(
-                    soland_services::events::CommitAcceptedEventBatchCommand {
-                        events: vec![command],
-                        franking_replay_nonce: Some(nonce),
-                        applet_record: None,
-                        applet_authoring_preview: None,
-                        agent_membership_cascade: None,
-                    },
-                )
-                .await
-        }
-        None => state.events().commit_accepted_event(command).await,
+    let realm_organization_proof =
+        crate::routing::organizations::prepare_realm_organization_proof(state, event)
+            .await
+            .map_err(|reason| ServiceError::Conflict(reason.to_owned()))?;
+    let franking_replay_nonce = franking_replay_nonce.map(|mut nonce| {
+        nonce.consumed_at = committed_at;
+        nonce
+    });
+    let committed = if franking_replay_nonce.is_some() || realm_organization_proof.is_some() {
+        state
+            .events()
+            .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
+                events: vec![command],
+                franking_replay_nonce,
+                realm_organization_proof,
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+    } else {
+        state.events().commit_accepted_event(command).await
     };
     if let Err(error) = committed {
         // A concurrent exact replay may have won the same Event identity; it
@@ -409,9 +426,8 @@ pub(super) async fn commit_event_unit(
 ///
 /// The Station never authors, re-signs or injects guards into the Event; it
 /// only signs the covering RealmCommit. The report's typed current result and
-/// any consumed franking nonce commit with it. Circle-scope reports need a
-/// Circle-stream authority cut and MIMI facade reports their own ingress, so
-/// both stay closed here.
+/// any consumed franking nonce commit with it. Realm and Circle reports use
+/// their exact signed source stream; MIMI facade reports have their own ingress.
 pub(crate) async fn submit_self_moderation_report(
     state: &AppState,
     session: &SessionIdentityState,
@@ -435,12 +451,6 @@ pub(crate) async fn submit_self_moderation_report(
     {
         return Err(ServiceError::SchemaViolation(
             "self moderation report must be directly authored by its reporter".to_owned(),
-        ));
-    }
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-    {
-        return Err(ServiceError::Internal(
-            "Circle-scope moderation report authority cut is unavailable".to_owned(),
         ));
     }
     let producer_guard =
@@ -473,6 +483,40 @@ pub(crate) async fn submit_self_moderation_report(
             franking_replay_nonce,
             mls: None,
         },
+    )
+    .await
+}
+
+/// Admit an Applet producer using its independently checked current Service key.
+pub(crate) async fn submit_applet_event(
+    state: &AppState,
+    event: Event,
+    service_did_document: arkret_identity::DidDocument,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    let submission = EventAdmissionSubmission {
+        event,
+        approval_signatures: None,
+    };
+    submission
+        .validate()
+        .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
+    if !matches!(
+        submission.event.kind,
+        arkret_wire::EventKind::MessageCreate
+            | arkret_wire::EventKind::MemberState
+            | arkret_wire::EventKind::CapabilityRelinquish
+    ) {
+        return Err(ServiceError::SchemaViolation(
+            "Applet Event kind has no accepting domain unit".into(),
+        ));
+    }
+    commit_event_unit(
+        state,
+        &submission,
+        AdmittedProducer::Applet(soland_storage::AppletEventProducerGuard {
+            service_did_document,
+        }),
+        SelfEventUnitEffects::default(),
     )
     .await
 }

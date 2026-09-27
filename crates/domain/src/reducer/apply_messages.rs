@@ -99,6 +99,35 @@ impl ProjectionState {
             redacted_at: None,
         };
         let effect = ProjectionEffect::MessageCreated(state.clone());
+        if let Some(reply) = operation.payload.get("reply_to_id").and_then(Value::as_str)
+            && let Ok(target) = arkret_wire::MessageId::new(reply)
+        {
+            use arkret_models_collaboration::objects::relation::RelationEndpoint;
+            let relation_id =
+                arkret_wire::RelationId::from_event_id(&operation.context.event_id).to_string();
+            let scope_circle_id = match &operation.context.accepted_scope_ref {
+                arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.to_string()),
+                _ => None,
+            };
+            self.relations.insert(
+                relation_id.clone(),
+                SolandRelationState {
+                    relation_id,
+                    realm_id: operation.realm_id.to_string(),
+                    relation_kind: "replies_to".to_owned(),
+                    scope_circle_id,
+                    from_ref: Some(RelationEndpoint::Object(state.message_id.clone())),
+                    to_ref: Some(RelationEndpoint::Object(target.to_string())),
+                    rank: None,
+                    fields: BTreeMap::new(),
+                    state: "active".to_owned(),
+                    source_event_id: Some(event_id.clone()),
+                    source_event_digest: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+            );
+        }
         if let Some(definition) = definition {
             self.apply_poll_create(operation, definition, now);
         }

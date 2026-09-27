@@ -314,8 +314,7 @@ async fn install_endpoint(
     let registration_epoch_evidence =
         registration_epoch_evidence_from_event(&basis.registration_event)?;
     validate_applet_package(state, commit.applet_package(), &registration_epoch_evidence)?;
-    let producer_verification_method = commit.applet_package().webhook_auth.key_ref.clone();
-    let producer_signing_key = super::install::registration_epoch_producer_signing_key(
+    super::install::registration_epoch_producer_signing_key(
         state,
         commit.applet_package(),
         &registration_epoch_evidence,
@@ -375,8 +374,7 @@ async fn install_endpoint(
         state,
         &session,
         commit,
-        producer_verification_method,
-        producer_signing_key,
+        recomputed_plan,
         idempotency_key,
         body_digest,
         authoring_preview_subject_key,
@@ -763,7 +761,7 @@ async fn revoke_install_endpoint(
             .await?;
             continue;
         }
-        match crate::routing::events::event_log::submit_initial_event_submission(
+        match crate::routing::events::event_log::submit_applet_revoke_event_submission(
             state, &session, submission,
         )
         .await
@@ -1139,6 +1137,7 @@ async fn build_revoke_plan(
             grant_snapshot,
             &scope_realm_id,
             &package.service_id,
+            package.bot_actor_id.route_service_id(),
             &response.capability_grant_refs,
         )?;
         for grant_id in &response.capability_grant_refs {
@@ -1186,13 +1185,17 @@ fn active_applet_grant_revisions(
     snapshot: Vec<soland_storage::CapabilityGrantCurrentResultRecord>,
     realm_id: &arkret_wire::RealmId,
     applet_service_id: &arkret_wire::DidCoreId,
+    target_station_id: &arkret_wire::DidCoreId,
     installed_grant_refs: &[arkret_wire::GrantId],
 ) -> Result<std::collections::BTreeMap<arkret_wire::GrantId, CurrentRevision>, AppError> {
     let installed = installed_grant_refs
         .iter()
         .cloned()
         .collect::<std::collections::BTreeSet<_>>();
-    let expected_subject = arkret_wire::ActorId::service(applet_service_id.clone());
+    let expected_subject = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        applet_service_id.clone(),
+        target_station_id.clone(),
+    ));
     let mut active = std::collections::BTreeMap::new();
     for row in snapshot {
         if !installed.contains(&row.grant_id)
@@ -1908,7 +1911,7 @@ async fn provision_ghost_actor_endpoint(
         return json_ok(outcome);
     }
 
-    let now = chrono::Utc::now();
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     for existing_record in applet_records(state).await? {
         let candidate = ghost_actor_id.signing_principal_id().as_str();
         if existing_record.package.service_id.as_str() == candidate
@@ -1942,29 +1945,6 @@ async fn provision_ghost_actor_endpoint(
             "validated Ghost authorization ref invalid: {error}"
         ))
     })?;
-    let outcome = GhostActorProvisionOutcome {
-        ghost_actor_id: ghost_actor_id.clone(),
-        managed_actor_provision_ref: durable_ghost_event_ref(
-            state,
-            &provision.managed_actor_bundle.managed_actor_provision_event,
-        )
-        .await?,
-        principal_control_realm_id: arkret_wire::RealmId::from_event_id(
-            &provision.managed_actor_bundle.pcr_genesis_event.event_id,
-        ),
-        profile_event_ref: durable_ghost_event_ref(
-            state,
-            &provision.managed_actor_bundle.profile_event,
-        )
-        .await?,
-        accountability_grant_ref: durable_ghost_event_ref(
-            state,
-            &provision.managed_actor_bundle.accountability_grant_event,
-        )
-        .await?,
-        authorization_ref: authorization_ref.clone(),
-        display_name: authoring_basis.display_name.clone(),
-    };
     let ghost = GhostActorRecord {
         ghost_actor_id: ghost_actor_id.clone(),
         external_ref: authoring_basis.external_ref.clone(),
@@ -1989,102 +1969,110 @@ async fn provision_ghost_actor_endpoint(
     let expected_applet_record = encode_applet_record(&record)?;
     let registration_epoch_evidence =
         registration_epoch_evidence_from_event(&record.registration_event)?;
-    let producer_verification_method = arkret_wire::DidUrl::new(
-        super::signature::applet_registration_verification_method(&record, service_id.as_str())?,
-    )
-    .map_err(|error| {
-        AppError::internal(format!(
-            "validated Applet registration verification method is invalid: {error}"
-        ))
-    })?;
-    let producer_signing_key = super::install::registration_epoch_producer_signing_key(
-        state,
-        &record.package,
-        &registration_epoch_evidence,
-    )?;
+    let service_did_document =
+        crate::jws_verify::resolve_did_document(state, &registration_epoch_evidence.did)
+            .map_err(AppError::param_invalid)?;
+    let identity_value = encode_applet_identity(&record.identity)?;
     record.ghosts.push(ghost);
     let applet_record_value = encode_applet_record(&record)?;
-    let commit_result = crate::routing::events::event_log::submit_ghost_provision_batch(
-        state,
-        service_id.as_str(),
-        ghost_actor_id.signing_principal_id().as_str(),
-        realm_id.as_str(),
-        provision
-            .managed_actor_bundle
-            .managed_actor_provision_event
-            .clone(),
-        provision.managed_actor_bundle.pcr_genesis_event.clone(),
-        provision
-            .managed_actor_bundle
-            .accountability_grant_event
-            .clone(),
-        provision.managed_actor_bundle.profile_event.clone(),
-        typed_path_applet_id,
-        record.bot_actor_id.route_service_id().clone(),
-        encode_applet_identity(&record.identity)?,
-        producer_verification_method,
-        producer_signing_key,
-        expected_applet_record,
-        applet_record_value,
-        applet_authoring_preview_subject_key(&provision.authoring_request)?,
-        provision
+    let input = soland_storage::AppletAuthoringUnitWrite {
+        request: arkret_models_integration::AppletManagedActorCommittedRequest::Ghost(Box::new(
+            provision.clone(),
+        )),
+        package: record.package.clone(),
+        recomputed_install_plan: None,
+        service_did_document,
+        controller_did_document: super::install::package_controller_document(
+            state,
+            &record.package,
+        )?,
+        station_verification_method: state
+            .service_verification_method("notary-key")
+            .map_err(AppError::internal)?,
+        station_public_key: *state.notary_verifying_key().as_bytes(),
+        admin_actor_id: arkret_wire::ActorId::service(service_id.clone()),
+        admin_producer_guards: Vec::new(),
+        expected_identity: Some(identity_value.clone()),
+        expected_installation: Some(expected_applet_record.clone()),
+        preview_subject_key: applet_authoring_preview_subject_key(&provision.authoring_request)?,
+        request_digest: provision
             .authoring_request
             .canonical_digest()
-            .map_err(|error| {
-                AppError::param_invalid(format!("authoring request digest failed: {error}"))
-            })?
-            .to_string(),
-        crate::routing::events::event_log::EventCommitIdempotency {
-            authenticated_actor: arkret_wire::ActorId::service(authoring_basis.service_id.clone()),
-            operation_id: "ak.peer.applet_bridge.command.submit".to_owned(),
-            key: idempotency_key.clone(),
-            request_hash: request_digest.clone(),
-        },
-        serde_json::to_value(&outcome)
-            .map_err(|error| AppError::internal(format!("Ghost outcome invalid: {error}")))?,
-    )
-    .await;
-    if let Err(error) = commit_result {
-        // A replica or concurrent request may win after the optimistic lookup
-        // above. Re-read the durable first response so an exact retry still
-        // receives replay semantics; a different body remains a conflict.
-        if matches!(
-            error.code().as_str(),
-            "duplicate" | "duplicate_conflict" | "cas_conflict"
-        ) && let Some(replay) = state
-            .jobs()
-            .scoped_idempotency_record(
-                &arkret_wire::ActorId::service(authoring_basis.service_id.clone()),
-                "ak.peer.applet_bridge.command.submit",
-                &idempotency_key,
-            )
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
+        canonical_request_hash: Hash::new(request_digest.clone())
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
+        operation_id: "ak.peer.applet_bridge.command.submit".to_owned(),
+        idempotency_key: idempotency_key.clone(),
+        prior_managed_refs: Vec::new(),
+        prior_service_signer_evidence: None,
+        accepted_at: now,
+    };
+    let target_station_id = record.bot_actor_id.route_service_id().clone();
+    let outcome_actor = ghost_actor_id.clone();
+    let outcome_service = service_id.clone();
+    let outcome_authorization = authorization_ref.clone();
+    let outcome_display = authoring_basis.display_name.clone();
+    let finalizer: soland_storage::AppletUnitFinalizer = std::sync::Arc::new(move |references| {
+        let bundle = &provision.managed_actor_bundle;
+        let outcome = GhostActorProvisionOutcome {
+            ghost_actor_id: outcome_actor.clone(),
+            managed_actor_provision_ref: crate::routing::events::event_log::applet_committed_ref(
+                references,
+                &bundle.managed_actor_provision_event,
+            )?,
+            principal_control_realm_id: arkret_wire::RealmId::from_event_id(
+                &bundle.pcr_genesis_event.event_id,
+            ),
+            profile_event_ref: crate::routing::events::event_log::applet_committed_ref(
+                references,
+                &bundle.profile_event,
+            )?,
+            accountability_grant_ref: crate::routing::events::event_log::applet_committed_ref(
+                references,
+                &bundle.accountability_grant_event,
+            )?,
+            authorization_ref: outcome_authorization.clone(),
+            display_name: outcome_display.clone(),
+        };
+        let response_body = serde_json::to_value(outcome)
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
+        Ok(soland_storage::AppletUnitFinalization {
+            applet_record: soland_storage::AppletRecordCommit {
+                applet_id: typed_path_applet_id.clone(),
+                identity: soland_storage::AppletIdentityCommit {
+                    target_station_id: target_station_id.clone(),
+                    expected_record: Some(identity_value.clone()),
+                    record: identity_value.clone(),
+                },
+                expected_record: Some(expected_applet_record.clone()),
+                record: applet_record_value.clone(),
+            },
+            idempotency_record: soland_storage::IdempotencyRecord {
+                authenticated_actor: arkret_wire::ActorId::service(outcome_service.clone()),
+                operation_id: "ak.peer.applet_bridge.command.submit".to_owned(),
+                idempotency_key: idempotency_key.clone(),
+                request_hash: request_digest.clone(),
+                response_status: 201,
+                response_body: response_body.clone(),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(1),
+            },
+            response_body,
+        })
+    });
+    let accepted =
+        crate::routing::events::event_log::submit_applet_authoring_unit(state, input, finalizer)
             .await
-            .map_err(|lookup_error| {
-                AppError::internal(format!("idempotency lookup failed: {lookup_error}"))
-            })?
-        {
-            if replay.request_hash != request_digest {
-                return Err(AppError::conflict(
-                    "Idempotency-Key was already used with different Ghost provisioning Events",
+            .map_err(|error| {
+                crate::routing::events::event_log::submit_one_error_to_app_error(
+                    "Ghost admission",
+                    error.status(),
+                    error.code(),
+                    &error.message(),
                 )
-                .with_wire_code("duplicate_conflict"));
-            }
-            let replayed: GhostActorProvisionOutcome = serde_json::from_value(replay.response_body)
-                .map_err(|decode_error| {
-                    AppError::internal(format!(
-                        "stored Ghost provision outcome invalid: {decode_error}"
-                    ))
-                })?;
-            res.status_code(StatusCode::OK);
-            return json_ok(replayed);
-        }
-        return Err(AppError::from_rejection(
-            soland_http::error::ErrorCode::from_wire(&error.code())
-                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-            error.message(),
-        )
-        .with_rejection_code(error.code()));
-    }
+            })?;
+    let outcome: GhostActorProvisionOutcome = serde_json::from_value(accepted.response_body)
+        .map_err(|error| AppError::internal(format!("stored Ghost outcome is invalid: {error}")))?;
 
     crate::routing::append_audit_log(
         state,
@@ -2103,7 +2091,11 @@ async fn provision_ghost_actor_endpoint(
     )
     .await;
 
-    res.status_code(StatusCode::CREATED);
+    res.status_code(if accepted.replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    });
     json_ok(outcome)
 }
 

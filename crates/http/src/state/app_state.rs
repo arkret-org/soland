@@ -1710,24 +1710,15 @@ impl AppState {
             .current_state_digest_for_actor(realm_id, actor_id)
     }
 
-    /// MID-2..6 — persist the accepted `ak.member.identity.update` event (and
-    /// the handle-claim envelopes its payload carries) through the durable
-    /// store, then update the in-memory registry projection. The durable
-    /// write runs first so a crash mid-projection loses at worst the
-    /// in-memory view that hydration rebuilds on startup.
+    /// Install an accepted identity assertion into the disposable registry.
+    /// Event/Commit and current assertions have already committed together;
+    /// hydration reads those accepted facts, not this cache's write-through.
     pub(crate) async fn record_member_identity_update(
         &self,
         record: super::MemberIdentityEventRecord,
         identity_payload: &Value,
     ) {
         let store = self.persistence.member_identity_store();
-        if let Err(error) = store.put_event(&record).await {
-            tracing::error!(
-                %error,
-                event_id = %record.event_id,
-                "failed to persist member identity event"
-            );
-        }
         let claim_records: Vec<super::HandleClaimEvidenceRecord> =
             super::member_identity::handle_claim_envelopes_in_identity_payload(identity_payload)
                 .into_iter()
@@ -2098,12 +2089,65 @@ pub fn getrandom_seed(out: &mut [u8; 32]) {
 }
 
 #[cfg(test)]
+#[path = "../../../storage-postgres/tests/support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod hydration_ordinary_realm;
+
+#[cfg(test)]
 mod committed_event_hydration_tests {
     use soland_storage::{EventProjectionStoreRegistry, PersistenceStore, QueuedEventStatus};
     use soland_storage_postgres::PgPersistenceStore;
     use soland_storage_postgres::test_database::TestDatabase;
 
     use super::*;
+
+    #[tokio::test]
+    async fn committed_realm_policy_is_rebuilt_by_the_restart_hydration_wrapper() {
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
+        let unit = hydration_ordinary_realm::bootstrap_unit("policy-hydration-restart");
+        store
+            .authority_commits()
+            .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+            .await
+            .unwrap();
+        let realm = unit.transactions[0].event.realm_id.clone();
+        let expected_policy = unit
+            .transactions
+            .iter()
+            .find(|transaction| transaction.event.kind == arkret_wire::EventKind::RealmPolicyBundle)
+            .unwrap()
+            .event
+            .payload
+            .clone();
+        // A new projection wrapper has no policy cache. Hydration must read
+        // the accepted Event log, with the same result on a second reopen.
+        for _ in 0..2 {
+            let reopened_store = PgPersistenceStore::new(database.pool());
+            let projection = ProjectionService::new("policy-hydration-restart");
+            assert!(
+                projection
+                    .snapshot()
+                    .realm_policy_bundle_value(realm.as_str())
+                    .is_none()
+            );
+            projection
+                .hydrate_from_persistence(
+                    &reopened_store,
+                    &RuntimeHydrationProjectionAdapter,
+                    [realm.clone()],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                projection
+                    .snapshot()
+                    .realm_policy_bundle_value(realm.as_str())
+                    .cloned(),
+                Some(serde_json::to_value(&expected_policy).unwrap()),
+            );
+        }
+    }
 
     #[tokio::test]
     async fn queued_event_is_not_a_restart_projection_source() {

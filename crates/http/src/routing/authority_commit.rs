@@ -232,6 +232,7 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
             Some(
                 code @ (soland_storage::ConflictCode::DirectConversationFoundingUnitInvalid
                 | soland_storage::ConflictCode::DirectConversationSpaceForbidden
+                | soland_storage::ConflictCode::CallStateTransitionInvalid
                 | soland_storage::ConflictCode::EpochUpdateRequired
                 | soland_storage::ConflictCode::MlsActivationRequired
                 | soland_storage::ConflictCode::MlsActivationIrreversible
@@ -775,6 +776,33 @@ mod tests {
                 None => assert!(body.get("reason_code").is_none(), "{body}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn call_genesis_noninitial_state_renders_registered_precondition_reason() {
+        let mut res = Response::new();
+        render_service_error(
+            &mut res,
+            ServiceError::Conflict(format!(
+                "{}: Call genesis cannot enter active",
+                soland_storage::ConflictCode::CallStateTransitionInvalid
+            )),
+        );
+        assert_eq!(res.status_code, Some(StatusCode::CONFLICT));
+        let problem: arkret_wire::Problem = salvo::test::ResponseExt::take_json(&mut res)
+            .await
+            .expect("typed Call Problem");
+        assert_eq!(problem.status, 409);
+        assert_eq!(problem.code(), arkret_wire::ErrorCode::FAILED_PRECONDITION);
+        let value = serde_json::to_value(&problem).unwrap();
+        assert_eq!(
+            value["reason_code"],
+            arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
+        );
+        assert_eq!(
+            value["type"],
+            "https://arkret.org/problems/failed_precondition"
+        );
     }
 
     #[tokio::test]

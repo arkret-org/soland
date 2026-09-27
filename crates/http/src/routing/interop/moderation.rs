@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{EventId, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::FrankingProof;
 use arkret_wire::{ActorId, EventKind, ScopeRef};
+#[cfg(test)]
 use ed25519_dalek::Signer as _;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -19,7 +20,9 @@ use soland_http::error::ErrorCode;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
 
-use super::{now, realm_has_member, sha256_hex};
+#[cfg(test)]
+use super::now;
+use super::sha256_hex;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};
@@ -28,12 +31,14 @@ pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
 }
 
+#[cfg(test)]
 fn authored_event_wire_value(
     event: &arkret_wire::AuthoredEvent,
 ) -> Result<Value, serde_json::Error> {
     serde_json::to_value(event.event())
 }
 
+#[cfg(test)]
 fn author_franking_proof_event(
     proof: FrankingProof,
     service_actor_id: arkret_wire::DidCoreId,
@@ -48,86 +53,6 @@ fn author_franking_proof_event(
         proof,
     )?
     .author_with_digest_suite(created_at, digest_suite)
-}
-
-/// Build the receiving service's signed proof Event for an accepted encrypted
-/// Event. Ordering and admission belong to the authority-commit boundary.
-pub(crate) async fn prepare_franking_proof_event(
-    state: &AppState,
-    target: &soland_services::events::AcceptedEvent,
-) -> Result<soland_services::events::CommitAcceptedEventCommand, AppError> {
-    let realm_id = target
-        .realm_id
-        .as_deref()
-        .ok_or_else(|| AppError::internal("franking target Event has no Realm"))?;
-    let target_event_id = target.event_id.as_str();
-    let service_did = state.service_resolution_commitment().did.clone();
-    let service_actor_id = arkret_wire::project_did_to_core_id(&service_did)
-        .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
-    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
-        .map_err(|error| AppError::internal(format!("service notary method invalid: {error}")))?;
-    let signing_key = state.notary_signing_key();
-    let mut proof = FrankingProof {
-        realm_id: RealmId::new(realm_id.to_owned())
-            .map_err(|error| AppError::internal(format!("franking Realm id invalid: {error}")))?,
-        event_id: EventId::new(target_event_id.to_owned())
-            .map_err(|error| AppError::internal(format!("franking target id invalid: {error}")))?,
-        received_by: service_actor_id.clone(),
-        verification_method: verification_method.clone(),
-        received_at: target.received_at,
-        replay_nonce: uuid::Uuid::now_v7().simple().to_string(),
-        signature: String::new(),
-    };
-    let proof_bytes = proof.canonical_signing_bytes().map_err(|error| {
-        AppError::internal(format!("franking proof transcript failed: {error}"))
-    })?;
-    proof.signature = arkret_canonical::base64url_encode(signing_key.sign(&proof_bytes).to_bytes());
-    let created_at = now();
-    let digest_suite = state.projections().realm_digest_suite(realm_id);
-    let mut event = author_franking_proof_event(proof, service_actor_id, created_at, digest_suite)
-        .map_err(|error| AppError::internal(format!("franking Event build failed: {error}")))?;
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        signing_key.as_ref().clone(),
-        service_did,
-        verification_method,
-    );
-    arkret_signatures::sign_event(
-        &mut event,
-        &signer,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-    )
-    .map_err(|error| AppError::internal(format!("franking Event signing failed: {error}")))?;
-    let session = soland_services::identity::SessionIdentityState {
-        token_hash: "franking-proof-service".to_owned(),
-        account_pk: None,
-        actor: state.service_id().clone(),
-        endpoint: soland_services::identity::SessionEndpointState::ServiceSynthetic,
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        session_grant: None,
-        expires_at: created_at + chrono::Duration::minutes(5),
-        created_at,
-        revoked_at: None,
-    };
-    let envelope = authored_event_wire_value(&event)
-        .map_err(|error| AppError::internal(format!("franking Event serialize failed: {error}")))?;
-    crate::routing::events::event_log::prepare_service_franking_proof_event_value(
-        state,
-        &session,
-        envelope,
-        realm_id,
-        target_event_id,
-    )
-    .await
-    .map_err(|error| {
-        // A registered top-level rejection keeps its registry status.
-        AppError::from_rejection(
-            soland_http::error::ErrorCode::from_wire(&error.code())
-                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-            format!("franking Event admission failed: {}", error.message()),
-        )
-        .with_rejection_code(error.code())
-    })
 }
 
 #[derive(Clone, Debug)]
@@ -214,16 +139,19 @@ async fn validate_signed_moderation_report_safety(
     evidence_package: &Value,
     franking_proof: &Value,
 ) -> Result<ModerationReportSafety, AppError> {
-    validate_moderation_report_content_safety(
-        state,
-        realm_id,
-        Some(reporter_actor),
-        target_ref,
+    // Target visibility and exact scope are decided by the accepting current writer,
+    // after the governing cut is locked; no reducer projection authorizes a report.
+    let _ = (reporter_actor, target_ref);
+    let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
+    let evidence_package =
+        validate_moderation_evidence_package(evidence_package, &effective_scope)?;
+    let franking_proof =
+        validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
+    Ok(ModerationReportSafety {
         effective_scope,
         evidence_package,
         franking_proof,
-    )
-    .await
+    })
 }
 
 async fn validate_moderation_report_content_safety(
@@ -633,7 +561,7 @@ fn franking_anchor_event(
     Ok(event)
 }
 
-fn validate_franking_covering_commit(
+pub(crate) fn validate_franking_covering_commit(
     record: &soland_storage::CanonicalEventRecord,
     committed: &soland_storage::CommittedEventRecord,
     realm: &RealmId,
@@ -767,11 +695,6 @@ async fn moderation_report(
         .map_err(|error| AppError::internal(format!("moderation replay lookup failed: {error}")))?
         .is_some_and(|record| record.canonical_bytes == canonical_bytes);
     if !exact_replay {
-        if !realm_has_member(state, event.realm_id.as_str(), &reporter_actor.to_string()).await {
-            return Err(AppError::capability_denied(
-                "reporter_id cannot see the target realm",
-            ));
-        }
         let evidence_package = payload
             .evidence_package
             .as_ref()
@@ -857,6 +780,28 @@ pub(crate) async fn moderation_queue_for_session(
         .moderation_queue_for_actor(&actor, realm_filter)
         .await
         .map_err(|error| AppError::internal(format!("moderation queue read failed: {error}")))
+}
+
+/// Deployment-local management aggregation; its policy entries are original
+/// accepted Events, never fabricated report queue items.
+pub(crate) async fn moderation_management_view_for_session(
+    state: &AppState,
+    principal: &str,
+    realm_filter: Option<&RealmId>,
+) -> Result<soland_storage::ModerationManagementView, AppError> {
+    let principal = arkret_wire::DidCoreId::new(principal.to_owned())
+        .map_err(|error| AppError::internal(format!("session principal is invalid: {error}")))?;
+    let actor = ActorId::account(arkret_wire::AccountId::new(
+        principal,
+        state.service_core_id().clone(),
+    ));
+    state
+        .governance()
+        .moderation_management_view_for_actor(&actor, realm_filter)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("moderation management View read failed: {error}"))
+        })
 }
 
 #[cfg(test)]

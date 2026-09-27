@@ -321,7 +321,7 @@ impl RealmAuthorizationCut {
     /// window contains `at`, and whose issuer chain descends intact from the
     /// current authority root. Actions, resources and non-temporal
     /// constraints are not decided here.
-    fn effective_grants(
+    pub(crate) fn effective_grants(
         &self,
         at: chrono::DateTime<chrono::Utc>,
     ) -> impl Iterator<Item = (&GrantId, &CapabilityGrant)> + '_ {
@@ -485,7 +485,9 @@ impl RealmAuthorizationCut {
         let actions = Self::unconditional_actions(kind);
         let owner =
             self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER);
-        let (target, facts) = self.event_operation(event);
+        let (target, mut facts) = self.event_operation(event);
+        self.complete_applet_facts_in_connection(conn, event, &mut facts)
+            .await?;
         match self
             .admit_actions_in_connection(
                 conn,
@@ -536,9 +538,21 @@ impl RealmAuthorizationCut {
                 )))
             };
         }
-        let realm = WireResourceSelector::realm(self.realm_id.clone());
+        let realm = match &event.scope_ref {
+            arkret_wire::ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            } if realm_id == &self.realm_id => {
+                WireResourceSelector::circle(realm_id.clone(), circle_id.clone())
+            }
+            _ => WireResourceSelector::realm(self.realm_id.clone()),
+        };
         let facts = OperationFacts {
             strand_id: Some(target.strand_id.to_string()),
+            circle_id: match &event.scope_ref {
+                arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.to_string()),
+                _ => None,
+            },
             object_kind: Some("message".to_owned()),
             track: Some(DISCUSSION_TRACK.to_owned()),
             target_created_at: Some(target.created_at),
@@ -585,11 +599,66 @@ impl RealmAuthorizationCut {
     }
 
     /// The target and operation facts an Event names in its own payload.
+    async fn complete_applet_facts_in_connection(
+        &self,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
+        facts: &mut OperationFacts,
+    ) -> PersistenceResult<()> {
+        if event.applet_id.is_some() {
+            let registration = crate::managed_message_actor::registration(conn, event).await?;
+            facts.applet_id = Some(registration.applet_id.to_string());
+            facts.executed_by = event.executed_by.clone();
+            facts.registration_epoch = Some(registration.registration_epoch.to_string());
+        }
+        Ok(())
+    }
+
+    /// A managed actor entering itself is not already a joined member. Its
+    /// explicit action grant still owes every ordinary constraint and quota.
+    pub(crate) async fn require_managed_self_membership_action_in_connection(
+        &self,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.require_open_lifecycle(event)?;
+        let actions = Self::unconditional_actions(&event.kind);
+        let (target, mut facts) = self.event_operation(event);
+        self.complete_applet_facts_in_connection(conn, event, &mut facts)
+            .await?;
+        match self
+            .admit_actions_in_connection(
+                conn,
+                &actions,
+                &target,
+                &facts,
+                false,
+                event.event_id.as_str(),
+                at,
+            )
+            .await?
+        {
+            ActionAdmission::Admitted => Ok(()),
+            ActionAdmission::NotHeld { .. } => Err(capability_denied(
+                "managed membership has no explicit authorizing action",
+            )),
+        }
+    }
+
     fn event_operation(
         &self,
         event: &arkret_wire::Event,
     ) -> (WireResourceSelector, OperationFacts) {
-        let realm = WireResourceSelector::realm(self.realm_id.clone());
+        let realm = match &event.scope_ref {
+            arkret_wire::ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            } if realm_id == &self.realm_id => {
+                WireResourceSelector::circle(realm_id.clone(), circle_id.clone())
+            }
+            _ => WireResourceSelector::realm(self.realm_id.clone()),
+        };
         let kind = event.kind.as_str();
         let family = kind
             .strip_prefix("ak.")
@@ -612,7 +681,10 @@ impl RealmAuthorizationCut {
             object_kind: family,
             strand_id: payload_id("strand_id"),
             space_id: payload_id("space_id"),
-            circle_id: payload_id("circle_id"),
+            circle_id: match &event.scope_ref {
+                arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.to_string()),
+                _ => payload_id("circle_id"),
+            },
             ..OperationFacts::default()
         };
         if matches!(

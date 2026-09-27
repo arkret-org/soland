@@ -107,8 +107,8 @@ fn edge_writer(from: &str, to: &str) -> Option<EdgeWriter> {
     }
 }
 
-/// Realm membership moves only on the Realm stream, by an Event its actor
-/// authored directly.
+/// Realm membership moves only on the Realm stream. Managed Applet authors
+/// additionally close their identity and Service authorization at this cut.
 fn require_realm_stream_carrier(
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
@@ -123,7 +123,7 @@ fn require_realm_stream_carrier(
             "Realm membership is admitted only on the Realm stream",
         ));
     }
-    if event.executed_by.is_some() || event.applet_id.is_some() {
+    if event.executed_by.is_some() && event.applet_id.is_none() {
         return Err(unsupported(
             "delegated or Applet-authored membership has no same-cut admission",
         ));
@@ -539,6 +539,18 @@ pub(crate) async fn admit_member_state_in_connection(
     }
     require_realm_stream_carrier(event, commit)?;
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    if event.applet_id.is_some() {
+        crate::managed_message_actor::require_managed_actor_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+        RealmAuthorizationCut::read(conn, &event.realm_id, &event.actor_id)
+            .await?
+            .require_managed_self_membership_action_in_connection(conn, event, commit.committed_at)
+            .await?;
+    }
     admit_member_state(conn, event, commit).await
 }
 

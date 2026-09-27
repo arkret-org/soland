@@ -165,6 +165,7 @@ async fn commit_projected_invite(
         }],
         authority_commit: transaction,
         self_producer_guard: None,
+        applet_producer_guard: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,

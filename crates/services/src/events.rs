@@ -359,6 +359,13 @@ pub use soland_storage::{
 
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
+    async fn admit_applet_authoring_unit(
+        &self,
+        input: soland_storage::AppletAuthoringUnitWrite,
+        author: soland_storage::AppletCommitAuthor,
+        attester: soland_storage::AppletResolutionAttester,
+        finalize: soland_storage::AppletUnitFinalizer,
+    ) -> ServiceResult<soland_storage::AppletAuthoringUnitOutcome>;
     async fn applet_identity(
         &self,
         applet_id: &str,
@@ -405,6 +412,26 @@ pub trait AppletPort: Send + Sync {
         &self,
         subject_key: &str,
     ) -> ServiceResult<Option<AppletAuthoringPreviewState>>;
+    async fn pending_applet_authoring_completions(
+        &self,
+        _limit: u32,
+    ) -> ServiceResult<Vec<soland_storage::AppletAuthoringCompletion>> {
+        Err(soland_storage::PersistenceError::Internal(
+            "durable Applet completion delivery is unavailable".to_owned(),
+        )
+        .into())
+    }
+    async fn acknowledge_applet_authoring_completion(
+        &self,
+        _applet_id: &arkret_wire::AppletId,
+        _request_digest: &arkret_wire::Hash,
+        _at: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        Err(soland_storage::PersistenceError::Internal(
+            "durable Applet completion acknowledgement is unavailable".to_owned(),
+        )
+        .into())
+    }
 }
 
 pub use soland_storage::ProjectionEventAppendOutcome as ProjectedEventAppendResult;
@@ -433,6 +460,7 @@ pub struct CommitAcceptedEventCommand {
     /// so the signed commit travels with the Event it admits.
     pub authority_commit: soland_storage::AuthorityCommitTransaction,
     pub self_producer_guard: Option<soland_storage::SelfProducerCommitGuard>,
+    pub applet_producer_guard: Option<soland_storage::AppletEventProducerGuard>,
     /// Verified `producer_device_evidence` of a cross-Station human-device
     /// producer, retained for audit with the Event's first Commit.
     pub forwarded_producer_evidence: Option<soland_storage::ForwardedProducerDeviceEvidence>,
@@ -467,6 +495,7 @@ pub use soland_storage::{
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
     pub franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
+    pub realm_organization_proof: Option<soland_storage::RealmOrganizationProofCommit>,
     pub applet_record: Option<CommitAppletRecord>,
     pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,
     pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
@@ -790,6 +819,18 @@ impl EventQueryService {
             .applet_identity(applet_id, target_station_id)
             .await
     }
+    pub async fn admit_applet_authoring_unit(
+        &self,
+        input: soland_storage::AppletAuthoringUnitWrite,
+        author: soland_storage::AppletCommitAuthor,
+        attester: soland_storage::AppletResolutionAttester,
+        finalize: soland_storage::AppletUnitFinalizer,
+    ) -> ServiceResult<soland_storage::AppletAuthoringUnitOutcome> {
+        self.applets
+            .admit_applet_authoring_unit(input, author, attester, finalize)
+            .await
+    }
+
     pub async fn applets(&self) -> ServiceResult<Vec<Value>> {
         self.applets.applets().await
     }
@@ -855,6 +896,24 @@ impl EventQueryService {
     ) -> ServiceResult<Option<AppletAuthoringPreviewState>> {
         self.applets
             .current_applet_authoring_preview(subject_key)
+            .await
+    }
+    pub async fn pending_applet_authoring_completions(
+        &self,
+        limit: u32,
+    ) -> ServiceResult<Vec<soland_storage::AppletAuthoringCompletion>> {
+        self.applets
+            .pending_applet_authoring_completions(limit)
+            .await
+    }
+    pub async fn acknowledge_applet_authoring_completion(
+        &self,
+        applet_id: &arkret_wire::AppletId,
+        request_digest: &arkret_wire::Hash,
+        at: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        self.applets
+            .acknowledge_applet_authoring_completion(applet_id, request_digest, at)
             .await
     }
 
@@ -1559,6 +1618,7 @@ mod tests {
             .commit_accepted_event(CommitAcceptedEventCommand {
                 authority_commit,
                 self_producer_guard: None,
+                applet_producer_guard: None,
                 forwarded_producer_evidence: None,
                 parent_membership_admission: None,
                 contact_projection: None,

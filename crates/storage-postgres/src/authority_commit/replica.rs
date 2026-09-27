@@ -212,16 +212,16 @@ pub(crate) async fn materialize_founding_in_connection(
 
 async fn hosts_joined_member(
     conn: &mut AsyncPgConnection,
-    realm_id: &arkret_wire::RealmId,
+    stream: &arkret_wire::CommitStreamRef,
     local_service_id: &arkret_wire::DidCoreId,
 ) -> Result<bool, PgTransactionError> {
-    let rows = sql_query(
-        "SELECT member_id FROM member_state_current_results \
-         WHERE realm_id=$1 AND membership='join' FOR SHARE",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .load::<MemberIdRow>(&mut *conn)
-    .await?;
+    let rows = match stream {
+        arkret_wire::CommitStreamRef::Realm { realm_id } => sql_query("SELECT member_id FROM member_state_current_results WHERE realm_id=$1 AND membership='join' FOR SHARE")
+            .bind::<Text, _>(realm_id.as_str()).load::<MemberIdRow>(&mut *conn).await?,
+        arkret_wire::CommitStreamRef::Circle { realm_id, circle_id } => sql_query("SELECT cm.member_id FROM circle_member_state_current_results cm JOIN member_state_current_results rm ON rm.realm_id=cm.realm_id AND rm.member_id=cm.member_id JOIN circle_current_results circle ON circle.circle_id=cm.circle_id AND circle.realm_id=cm.realm_id WHERE cm.realm_id=$1 AND cm.circle_id=$2 AND cm.membership='join' AND rm.membership='join' AND circle.value->>'state'='active' FOR SHARE")
+            .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).load::<MemberIdRow>(&mut *conn).await?,
+        _ => return Ok(false),
+    };
     for row in rows {
         let member: arkret_wire::ActorId =
             serde_json::from_str(&row.member_id).map_err(|error| {
@@ -402,12 +402,50 @@ async fn require_visible(
             ));
         }
     }
-    if event.kind == arkret_wire::EventKind::SelfModerationReport {
-        // Only a moderator may hold a report, and a member Station keeps no
-        // capability current to prove a hosted moderator.
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::SelfModerationReport
+            | arkret_wire::EventKind::ModerationFrankingProof
+    ) {
+        let scope = if event.kind == arkret_wire::EventKind::ModerationFrankingProof {
+            let proof: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(PersistenceError::database)?;
+            crate::moderation_franking_proof_current_results::franking_target_scope_in_connection(
+                conn,
+                &event.realm_id,
+                &proof.event_id,
+            )
+            .await?
+        } else {
+            event.scope_ref.clone()
+        };
+        let rows = sql_query("SELECT member_id FROM member_state_current_results WHERE realm_id=$1 AND membership='join'").bind::<Text, _>(event.realm_id.as_str()).load::<MemberIdRow>(&mut *conn).await?;
+        for row in rows {
+            let member: arkret_wire::ActorId =
+                serde_json::from_str(&row.member_id).map_err(PersistenceError::database)?;
+            if member.route_service_id() == local_service_id
+                && crate::replica_authorization::scope_moderator(
+                    conn,
+                    &event.realm_id,
+                    &member,
+                    &scope,
+                    &[
+                        arkret_wire::CapabilityActionId::POLICY_MANAGE,
+                        arkret_wire::CapabilityActionId::MODERATION_DECISION,
+                    ],
+                    chrono::Utc::now(),
+                )
+                .await?
+            {
+                return Ok(());
+            }
+        }
         return Err(conflict(
             ConflictCode::CapabilityDenied,
-            "no hosted moderator basis is provable on a member Station",
+            "no hosted exact-scope moderator is proved at the verified replica cut",
         ));
     }
     Ok(())
@@ -473,14 +511,9 @@ async fn insert_commit_row(
 }
 
 fn require_realm_stream(commit: &arkret_wire::RealmCommit) -> Result<(), PgTransactionError> {
-    if commit.stream_ref
-        != (arkret_wire::CommitStreamRef::Realm {
-            realm_id: commit.realm_id.clone(),
-        })
+    if !matches!(&commit.stream_ref, arkret_wire::CommitStreamRef::Realm { realm_id } | arkret_wire::CommitStreamRef::Circle { realm_id, .. } if realm_id == &commit.realm_id)
     {
-        return Err(
-            invalid("Circle and Sidecar replicas need their own scope membership basis").into(),
-        );
+        return Err(invalid("replica stream has no supported scope membership basis").into());
     }
     Ok(())
 }
@@ -555,7 +588,7 @@ async fn install_replica_commit_in_connection(
     let opening = match &replica.role {
         CommittedReplicaRole::OpeningJoin { member_account_id }
             if head.is_none()
-                || !hosts_joined_member(conn, &event.realm_id, &replica.local_service_id)
+                || !hosts_joined_member(conn, &commit.stream_ref, &replica.local_service_id)
                     .await? =>
         {
             Some(member_account_id)
@@ -565,6 +598,21 @@ async fn install_replica_commit_in_connection(
     let Some(member_account_id) = opening else {
         return store_held_successor(conn, replica, &key, head.as_ref(), anchor).await;
     };
+    if matches!(
+        commit.stream_ref,
+        arkret_wire::CommitStreamRef::Circle { .. }
+    ) && !super::accepted_current_member_joined_in_connection(
+        conn,
+        &event.realm_id,
+        &arkret_wire::ActorId::account(member_account_id.clone()),
+    )
+    .await?
+    {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "Circle opening join has no accepted parent Realm membership",
+        ));
+    }
     let member_account_id =
         serde_json::to_value(member_account_id).map_err(PersistenceError::database)?;
     match (&head, anchor) {
@@ -631,18 +679,18 @@ async fn store_held_successor(
     let commit = &replica.commit;
     let anchored = anchored_head(anchor)?;
     require_direct_successor(head, commit)?;
+    if !hosts_joined_member(conn, &commit.stream_ref, &replica.local_service_id).await? {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "no hosted member has the exact replica scope",
+        ));
+    }
+    require_visible(conn, event, &replica.local_service_id).await?;
     if commit.stream_position <= anchored.stream_position {
         // The installed snapshot already carries this Commit's effect.
         store_replica_rows(conn, event, commit, key, replica.received_at).await?;
         return Ok(CommittedReplicaOutcome::Stored);
     }
-    if !hosts_joined_member(conn, &event.realm_id, &replica.local_service_id).await? {
-        return Err(conflict(
-            ConflictCode::CapabilityDenied,
-            "no member this Station hosts may hold the Event",
-        ));
-    }
-    require_visible(conn, event, &replica.local_service_id).await?;
     store_replica_rows(conn, event, commit, key, replica.received_at).await?;
     crate::replica_current::advance_in_connection(conn, event, commit).await?;
     if crate::account_summary::changes_account_summary_inputs(&event.kind) {
@@ -672,6 +720,16 @@ pub(super) async fn install_committed_chain_node_in_connection(
     anchored_head(locked_anchor(conn, &key).await?)?;
     require_direct_successor(head.as_ref(), commit)?;
     insert_commit_row(conn, commit, &key, None).await?;
+    if matches!(
+        commit.stream_ref,
+        arkret_wire::CommitStreamRef::Realm { .. }
+    ) {
+        let source =
+            serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?;
+        sql_query("DELETE FROM replica_authorization_cuts WHERE realm_id=$1 AND source_stream_ref=$2 AND head_stream_position<$3")
+            .bind::<Text, _>(commit.realm_id.as_str()).bind::<Jsonb, _>(source).bind::<BigInt, _>(to_i64(commit.stream_position,"withheld authorization cut")?).execute(&mut *conn).await?;
+    }
+
     Ok(CommittedReplicaOutcome::Stored)
 }
 
@@ -679,8 +737,21 @@ pub(super) async fn replica_stream_anchor_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
 ) -> Result<Option<ReplicaStreamAnchor>, PgTransactionError> {
-    sql_query(format!("{ANCHOR_SELECT} WHERE a.realm_id = $1"))
-        .bind::<Text, _>(realm_id.as_str())
+    replica_anchor_for_stream_in_connection(
+        conn,
+        &arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+    )
+    .await
+}
+
+pub(super) async fn replica_anchor_for_stream_in_connection(
+    conn: &mut AsyncPgConnection,
+    stream: &arkret_wire::CommitStreamRef,
+) -> Result<Option<ReplicaStreamAnchor>, PgTransactionError> {
+    sql_query(format!("{ANCHOR_SELECT} WHERE a.stream_key=$1"))
+        .bind::<Text, _>(stream_key(stream)?)
         .get_result::<AnchorRow>(&mut *conn)
         .await
         .optional()?
@@ -695,9 +766,7 @@ pub(super) async fn install_replica_anchor_in_connection(
     conn: &mut AsyncPgConnection,
     install: &ReplicaAnchorInstall,
 ) -> Result<(), PgTransactionError> {
-    let realm_stream = arkret_wire::CommitStreamRef::Realm {
-        realm_id: install.realm_id.clone(),
-    };
+    let realm_stream = install.snapshot_head.stream_ref.clone();
     let key = stream_key(&realm_stream)?;
     let anchor = locked_anchor(conn, &key)
         .await?
@@ -709,18 +778,14 @@ pub(super) async fn install_replica_anchor_in_connection(
                 "this Station holds no replica of the Realm stream",
             )
         })?;
-    if anchor.anchored_head.is_some() {
-        return Err(conflict(
-            ConflictCode::DuplicateConflict,
-            "the replica stream is already anchored",
-        ));
-    }
     let join = &anchor.join_commit;
     if join.commit_id != install.join_commit_id {
         return Err(invalid("the anchor names another opening join").into());
     }
     let head = locked_head(conn, &key).await?;
-    if head.as_ref().map(|head| &head.commit_id) != Some(&join.commit_id) {
+    if anchor.anchored_head.is_none()
+        && head.as_ref().map(|head| &head.commit_id) != Some(&join.commit_id)
+    {
         return Err(PersistenceError::Internal(
             "a pending replica stream holds a Commit after its join".to_owned(),
         )
@@ -734,11 +799,63 @@ pub(super) async fn install_replica_anchor_in_connection(
     {
         return Err(invalid("the bootstrap snapshot head does not cover the join").into());
     }
+    if let Some(held) = &head {
+        if snapshot_head.stream_position < held.stream_position
+            || (snapshot_head.stream_position == held.stream_position
+                && snapshot_head.commit_id != held.commit_id)
+        {
+            return Err(conflict(
+                ConflictCode::ForkQuarantine,
+                "a refreshed snapshot does not cover the verified held head",
+            ));
+        }
+    }
+    if let Some(previous) = &anchor.anchored_head {
+        if snapshot_head.stream_position < previous.stream_position
+            || (snapshot_head.stream_position == previous.stream_position
+                && snapshot_head.commit_id != previous.commit_id)
+        {
+            return Err(conflict(
+                ConflictCode::ForkQuarantine,
+                "a refreshed snapshot regresses its verified anchor",
+            ));
+        }
+    }
+    let member = arkret_wire::ActorId::account(anchor.member_account_id.clone());
+    let opening_selector = match &realm_stream {
+        arkret_wire::CommitStreamRef::Realm { .. } => arkret_wire::CurrentSelector::MemberState {
+            actor_id: member.clone(),
+        },
+        arkret_wire::CommitStreamRef::Circle { circle_id, .. } => {
+            arkret_wire::CurrentSelector::CircleMemberState {
+                circle_id: circle_id.clone(),
+                member_actor_id: member.clone(),
+            }
+        }
+        _ => return Err(invalid("bootstrap has no supported stream").into()),
+    };
+    let current_opening = install.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentResult::Value { selector, source_stream_ref, revision, value } if selector == &opening_selector && source_stream_ref == &realm_stream && revision.commit_id == join.commit_id && revision.stream_position == join.stream_position && value.get("membership").and_then(Value::as_str) == Some("join")));
+    if !current_opening {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "bootstrap does not prove its exact opening join is still current",
+        ));
+    }
+    if matches!(realm_stream, arkret_wire::CommitStreamRef::Circle { .. }) {
+        let parent_joined = install.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::MemberState { actor_id }, source_stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id }, value, .. } if actor_id == &member && realm_id == &install.realm_id && value.get("membership").and_then(Value::as_str) == Some("join")));
+        if !parent_joined {
+            return Err(conflict(
+                ConflictCode::CapabilityDenied,
+                "Circle bootstrap has no current parent Realm join",
+            ));
+        }
+    }
     let installed_at = chrono::Utc::now();
-    crate::replica_current::install_snapshot_in_connection(
+    crate::replica_current::install_snapshot_at_heads_in_connection(
         conn,
         &install.realm_id,
         snapshot_head,
+        &install.visible_stream_heads,
         &install.current_state_entries,
         installed_at,
     )

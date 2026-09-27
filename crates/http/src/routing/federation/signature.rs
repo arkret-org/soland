@@ -4,7 +4,7 @@ use arkret_signatures::http_signature::{
     HttpMessageVerificationError, HttpSignatureScenario, SignatureError, SignatureInput,
     SignaturePolicyError, SignatureVerificationPolicy,
 };
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::http_signature;
@@ -360,32 +360,45 @@ async fn verifying_key_for_service_id(
         return VerifyingKey::from_bytes(&bytes)
             .map_err(|error| signature_error(format!("local assertion key is invalid: {error}")));
     }
-    if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
-        return Ok(key);
+    // Cached peer keys are historical verification material, not current
+    // transport authority. Resolve the service's current method state on every
+    // request, including an exact retry, before any inner admission is reached.
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|_| signature_error("source verification method is not a DID URL"))?;
+    let current = match state.dids().resolve_current_service_did(&did).await {
+        Ok(current) => current,
+        Err(error) => {
+            state.discard_federation_peer_verification_keys(service_id, verification_method);
+            return Err(signature_error(format!(
+                "current source service key state unavailable: {error}"
+            )));
+        }
+    };
+    match current_peer_key_from_document(&current.document, &did, verification_method) {
+        Ok(key) => Ok(key),
+        Err(error) => {
+            state.discard_federation_peer_verification_keys(service_id, verification_method);
+            Err(signature_error(error))
+        }
     }
-    // Resolve the exact keyid named in the signed transcript. This permits a
-    // service to publish a controller-owned method such as `#service-key`
-    // while preventing a service-level cache entry from silently accepting a
-    // different or rotated-away method.
-    if let Ok(key) =
-        crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method).await
-    {
-        return Ok(key);
-    }
-    if state.config().development_mode && verification_method.ends_with("#federation-fanout-key") {
-        tracing::warn!(
-            service_id,
-            "development_mode accepted deterministic federation service key fallback"
-        );
-        return Ok(development_service_signing_key(service_id).verifying_key());
-    }
-    Err(signature_error(
-        "source service key unavailable; key_rotation_hint=refresh_origin_service_id",
-    ))
 }
 
-fn development_service_signing_key(service_id: &str) -> SigningKey {
-    http_signature::deterministic_development_signing_key(b"soland:notary-ephemeral:", service_id)
+fn current_peer_key_from_document(
+    document: &arkret_identity::DidDocument,
+    did: &arkret_wire::Did,
+    verification_method: &str,
+) -> Result<VerifyingKey, String> {
+    let method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| error.to_string())?;
+    arkret_identity::validate_verification_method_relationship(
+        document,
+        &method,
+        did,
+        arkret_identity::DidVerificationRelationship::AssertionMethod,
+    )
+    .map_err(|error| error.to_string())?;
+    arkret_identity::jws::resolve_ed25519_pubkey_from_document(document, verification_method)
+        .map_err(|error| error.to_string())
 }
 
 pub(in crate::routing) fn signature_target_uri(req: &Request, state: &AppState) -> String {
@@ -528,5 +541,70 @@ mod tests {
         let started_at = Instant::now();
         apply_federation_auth_failure_delay(started_at).await;
         assert!(virtual_start.elapsed() >= FEDERATION_AUTH_FAILURE_TIMING_BUCKET);
+    }
+
+    #[tokio::test]
+    async fn current_peer_key_does_not_restore_revoked_cache_when_resolver_is_unavailable() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                development_mode: true,
+                did_resolver_allow_methods: vec!["web".into()],
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let did = arkret_wire::Did::new("did:web:127.0.0.1%3A9".to_owned()).unwrap();
+        let service_id = arkret_wire::project_did_to_core_id(&did)
+            .unwrap()
+            .to_string();
+        let method = format!("{did}#federation-fanout-key");
+        let historical = ed25519_dalek::SigningKey::from_bytes(&[79; 32]).verifying_key();
+        state.install_federation_peer_verifying_key(None, &service_id, historical);
+        state.install_federation_peer_verification_method_key(None, &method, historical);
+        state.discard_federation_peer_verification_keys(&service_id, &method);
+        // Old historical material may still arrive from another proof rail.
+        // Current transport authentication must never recover it from a cache
+        // or a deterministic development key after a fresh lookup fails.
+        state.install_federation_peer_verifying_key(None, &service_id, historical);
+        state.install_federation_peer_verification_method_key(None, &method, historical);
+        assert!(
+            verifying_key_for_service_id(&state, &service_id, &method)
+                .await
+                .is_err()
+        );
+        assert!(state.federation_peer_verifying_key(&service_id).is_none());
+    }
+
+    #[test]
+    fn current_peer_key_refuses_a_removed_assertion_even_if_key_bytes_remain() {
+        let did = arkret_wire::Did::new("did:web:peer.example").unwrap();
+        let method = format!("{did}#service-key");
+        let key = ed25519_dalek::SigningKey::from_bytes(&[79; 32]).verifying_key();
+        let mut document = arkret_identity::DidDocument {
+            id: did.clone(),
+            verification_methods: std::collections::BTreeMap::from([(
+                method.clone(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.as_bytes()),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: None,
+            raw_properties: std::collections::BTreeMap::from([(
+                "assertionMethod".to_owned(),
+                serde_json::json!([method]),
+            )]),
+        };
+        assert_eq!(
+            current_peer_key_from_document(&document, &did, &method).unwrap(),
+            key
+        );
+        document
+            .raw_properties
+            .insert("assertionMethod".to_owned(), serde_json::json!([]));
+        assert!(current_peer_key_from_document(&document, &did, &method).is_err());
+        document.raw_properties.insert(
+            "assertionMethod".to_owned(),
+            serde_json::json!(["#replacement"]),
+        );
+        assert!(current_peer_key_from_document(&document, &did, &method).is_err());
     }
 }

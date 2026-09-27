@@ -11,10 +11,7 @@ pub(in crate::routing) use envelope::{
     PrivateInviteEnvelope, validate_join_gate_proof_signatures, validate_private_invite_envelope,
 };
 #[cfg(test)]
-pub(super) use envelope::{
-    event_requirements_schema_id, validate_event_critical_features, validate_event_proofs,
-    validate_event_schema_and_payload, validate_event_time_fields, validate_member_identity_proof,
-};
+pub(super) use envelope::{validate_event_proofs, validate_event_schema_and_payload};
 #[cfg(test)]
 pub(crate) use mls_governance::payload_declares_media_plaintext_service;
 #[cfg(test)]

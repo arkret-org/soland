@@ -18,6 +18,10 @@ use soland_storage::{
 };
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
+#[path = "human_profile.rs"]
+#[allow(dead_code)]
+pub mod human_profile;
+
 /// The founder every fixture Realm is created by.
 pub const FOUNDER: &str = "ak:did_core:web:ordinary-founder.example";
 /// The Station that governs every fixture Realm.
@@ -132,6 +136,8 @@ pub fn bootstrap_unit_for_station(
     bootstrap_unit_with_join_rule_for_station(
         seed,
         "invite",
+        "since_join",
+        None,
         governing_station,
         Some(governing_did),
     )
@@ -142,12 +148,65 @@ pub fn bootstrap_unit_with_join_rule(
     seed: &str,
     join_rule: &str,
 ) -> OrdinaryRealmBootstrapCommitUnit {
-    bootstrap_unit_with_join_rule_for_station(seed, join_rule, &station(), None)
+    bootstrap_unit_with_join_rule_for_station(seed, join_rule, "since_join", None, &station(), None)
+}
+
+/// Build a formal bootstrap for a local Station and its chosen history policy.
+pub fn bootstrap_unit_with_history_for_station(
+    seed: &str,
+    join_rule: &str,
+    history_access: &str,
+    governing_station: &arkret_wire::DidCoreId,
+    governing_did: &arkret_wire::Did,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    bootstrap_unit_with_join_rule_for_station(
+        seed,
+        join_rule,
+        history_access,
+        None,
+        governing_station,
+        Some(governing_did),
+    )
+}
+
+/// A formal ordinary Realm whose founder is the exact accepted Account.
+pub fn bootstrap_unit_for_account(
+    seed: &str,
+    account: &arkret_wire::AccountId,
+    governing_did: &arkret_wire::Did,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    bootstrap_unit_with_join_rule_for_station(
+        seed,
+        "public",
+        "since_join",
+        Some(&account.principal_id),
+        &account.station_id,
+        Some(governing_did),
+    )
+}
+
+pub fn bootstrap_unit_with_history_for_account(
+    seed: &str,
+    join_rule: &str,
+    history_access: &str,
+    account: &arkret_wire::AccountId,
+    governing_did: &arkret_wire::Did,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    bootstrap_unit_with_join_rule_for_station(
+        seed,
+        join_rule,
+        history_access,
+        Some(&account.principal_id),
+        &account.station_id,
+        Some(governing_did),
+    )
 }
 
 fn bootstrap_unit_with_join_rule_for_station(
     seed: &str,
     join_rule: &str,
+    history_access: &str,
+    founding_principal: Option<&arkret_wire::DidCoreId>,
     governing_station: &arkret_wire::DidCoreId,
     governing_did: Option<&arkret_wire::Did>,
 ) -> OrdinaryRealmBootstrapCommitUnit {
@@ -159,7 +218,7 @@ fn bootstrap_unit_with_join_rule_for_station(
 
     let at =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
-    let actor = founder();
+    let actor = founding_principal.cloned().unwrap_or_else(founder);
     let station = governing_station.clone();
     let genesis_salt = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(arkret_canonical::sha256_bytes(seed.as_bytes()));
@@ -176,7 +235,7 @@ fn bootstrap_unit_with_join_rule_for_station(
             "security_class":"high_assurance",
             "governance_station_id":station,
             "initial_join_rule":join_rule,
-            "initial_history_access":"since_join",
+            "initial_history_access":history_access,
             "initial_discoverability":"invite_only"
         }}),
         at,
@@ -202,7 +261,7 @@ fn bootstrap_unit_with_join_rule_for_station(
         ),
         (
             arkret_wire::EventKind::RealmHistoryAccess,
-            serde_json::json!({"from":null,"to":"since_join"}),
+            serde_json::json!({"from":null,"to":history_access}),
         ),
         (
             arkret_wire::EventKind::RealmDiscovery,
@@ -406,6 +465,7 @@ pub fn request_for_event(
             recipient_queue_capacity: 0,
         },
         self_producer_guard: None,
+        applet_producer_guard: None,
         forwarded_producer_evidence: None,
         event: record,
         parent_membership_admission: None,
@@ -471,7 +531,10 @@ impl Discussion {
         next_request(
             previous,
             arkret_wire::EventKind::MessageCreate,
-            &founder(),
+            self.unit.transactions[0]
+                .event
+                .actor_id
+                .signing_principal_id(),
             message_payload(&self.strand_id, body),
             at,
         )
@@ -481,7 +544,17 @@ impl Discussion {
 /// Admit an ordinary Realm, create its discussion Strand and make it the
 /// default -- the confirmed cut a local Message or self report needs.
 pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
-    let unit = bootstrap_unit(seed);
+    open_discussion_unit(pool, bootstrap_unit(seed)).await
+}
+
+/// Admit the founder's real PCR and Human Profile before opening discussion.
+pub async fn open_human_discussion(pool: &PgPool, seed: &str) -> Discussion {
+    let account = human_profile::admit(pool, &station(), "ordinary-founder").await;
+    let unit = bootstrap_unit_for_account(seed, &account, &human_profile::station_did(&station()));
+    open_discussion_unit(pool, unit).await
+}
+
+async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitUnit) -> Discussion {
     unit.validate().unwrap();
     PgAuthorityCommitStore { pool: pool.clone() }
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -495,7 +568,7 @@ pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
     let strand = next_request(
         last,
         arkret_wire::EventKind::StrandCreate,
-        &founder(),
+        creator.signing_principal_id(),
         serde_json::json!({"object": {
             "schema":"ak.schema.strand.v1",
             "realm_id":realm_id,
@@ -514,7 +587,7 @@ pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
     let default = next_request(
         &strand.authority_commit,
         arkret_wire::EventKind::RealmSetDefaultStrand,
-        &founder(),
+        creator.signing_principal_id(),
         serde_json::json!({
             "realm_id": realm_id,
             "strand_id": strand_id,

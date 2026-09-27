@@ -5,7 +5,7 @@
 #[path = "support/ordinary_realm.rs"]
 mod ordinary_realm;
 
-use ordinary_realm::{Discussion, event_for_actor, founder, open_discussion, station};
+use ordinary_realm::{Discussion, event_for_actor, founder, open_human_discussion, station};
 use soland_storage::{
     EventCommitUnitOfWork, ReadCursorAdvance, ReadCursorAdvanceOutcome, ReadCursorAdvanceRefusal,
     ReadCursorStore,
@@ -130,7 +130,7 @@ async fn two_messages(
 async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = open_discussion(&pool, "read-cursor-causal").await;
+    let discussion = open_human_discussion(&pool, "read-cursor-causal").await;
     let (first, second) = two_messages(&pool, &discussion).await;
     let store = PgReadCursorStore::new(pool.clone());
     let owner_id = owner(&founder());
@@ -245,7 +245,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
 async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = open_discussion(&pool, "read-cursor-refusals").await;
+    let discussion = open_human_discussion(&pool, "read-cursor-refusals").await;
     let (_, second) = two_messages(&pool, &discussion).await;
     let store = PgReadCursorStore::new(pool.clone());
     let hlc = "019641370000-0000-00000001";

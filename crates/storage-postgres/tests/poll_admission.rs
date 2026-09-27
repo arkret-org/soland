@@ -53,13 +53,20 @@ struct CurrentVote {
 async fn votes_keep_canonical_history_without_message_rows_and_commit_position_wins() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = ordinary_realm::open_discussion(&pool, "poll-current").await;
+    let discussion = ordinary_realm::open_human_discussion(&pool, "poll-current").await;
+    let actor = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let at = discussion.committed_at() + chrono::Duration::seconds(30);
     let poll = ordinary_realm::next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::MessageCreate,
-        &ordinary_realm::founder(),
+        &actor,
         definition(&discussion),
         at,
     );
@@ -67,7 +74,7 @@ async fn votes_keep_canonical_history_without_message_rows_and_commit_position_w
     let first = ordinary_realm::next_request(
         &poll.authority_commit,
         arkret_wire::EventKind::MessageCreate,
-        &ordinary_realm::founder(),
+        &actor,
         response(&discussion, &poll, json!(["a"])),
         at + chrono::Duration::seconds(2),
     );
@@ -78,7 +85,7 @@ async fn votes_keep_canonical_history_without_message_rows_and_commit_position_w
     let mut second_event = ordinary_realm::event(
         arkret_wire::EventKind::MessageCreate,
         poll.authority_commit.event.scope_ref.clone(),
-        &ordinary_realm::founder(),
+        &actor,
         &ordinary_realm::station(),
         payload,
         at - chrono::Duration::seconds(1),
@@ -121,13 +128,20 @@ async fn votes_keep_canonical_history_without_message_rows_and_commit_position_w
 async fn semantic_refusals_and_poll_projection_fault_roll_back_the_whole_commit() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = ordinary_realm::open_discussion(&pool, "poll-atomic").await;
+    let discussion = ordinary_realm::open_human_discussion(&pool, "poll-atomic").await;
+    let actor = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let at = discussion.committed_at() + chrono::Duration::seconds(30);
     let poll = ordinary_realm::next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::MessageCreate,
-        &ordinary_realm::founder(),
+        &actor,
         definition(&discussion),
         at,
     );
@@ -149,7 +163,7 @@ async fn semantic_refusals_and_poll_projection_fault_roll_back_the_whole_commit(
         let request = ordinary_realm::next_request(
             &poll.authority_commit,
             arkret_wire::EventKind::MessageCreate,
-            &ordinary_realm::founder(),
+            &actor,
             payload,
             at + chrono::Duration::seconds(1),
         );
@@ -170,7 +184,7 @@ async fn semantic_refusals_and_poll_projection_fault_roll_back_the_whole_commit(
     let request = ordinary_realm::next_request(
         &poll.authority_commit,
         arkret_wire::EventKind::MessageCreate,
-        &ordinary_realm::founder(),
+        &actor,
         response(&discussion, &poll, json!(["a"])),
         at + chrono::Duration::seconds(2),
     );

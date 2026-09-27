@@ -56,7 +56,7 @@ pub(crate) async fn admit_in_connection(
     conn: &mut AsyncPgConnection,
     event: &Event,
     commit: &RealmCommit,
-    authority_station: &arkret_wire::DidCoreId,
+    _authority_station: &arkret_wire::DidCoreId,
 ) -> PersistenceResult<()> {
     match &event.kind {
         EventKind::CircleCreate => {
@@ -150,12 +150,6 @@ pub(crate) async fn admit_in_connection(
                     "cross-actor Circle membership needs its audit and manager cut",
                 ));
             }
-            if member.route_service_id() != authority_station {
-                return Err(conflict(
-                    ConflictCode::UnsupportedFeature,
-                    "remote Circle membership needs scope-targeted fanout",
-                ));
-            }
             let next = event
                 .payload
                 .get("membership")
@@ -233,23 +227,6 @@ pub(crate) async fn admit_in_connection(
                 return Err(conflict(
                     ConflictCode::FailedPrecondition,
                     "Circle self-membership edge is invalid",
-                ));
-            }
-            let mls = sql_query(
-                "SELECT value FROM mls_group_current_results WHERE realm_id=$1 \
-                 AND value->'effective_scope'->>'kind'='circle' \
-                 AND value->'effective_scope'->>'circle_id'=$2 LIMIT 1",
-            )
-            .bind::<Text, _>(event.realm_id.as_str())
-            .bind::<Text, _>(circle_id.as_str())
-            .get_result::<CircleRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?;
-            if mls.is_some() {
-                return Err(conflict(
-                    ConflictCode::UnsupportedFeature,
-                    "activated Circle needs MLS membership reconciliation",
                 ));
             }
             Ok(())

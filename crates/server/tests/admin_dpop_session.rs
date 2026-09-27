@@ -356,3 +356,95 @@ async fn production_dpop_session_is_scope_checked_and_authenticated_once() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(problem_code(&body), "unauthenticated", "{body}");
 }
+
+/// The canonical self gate binds a real grant proof to method, complete URL,
+/// credential bytes and holder key. Every mismatch carries a fresh signed jti.
+#[tokio::test]
+async fn canonical_viewer_binds_dpop_to_method_url_token_and_holder_key() {
+    let session = grant_session("viewer-dpop-binding", |_| {}).await;
+    let correct = session.headers("GET", VIEWER_PATH);
+    let (status, body) = session.get(VIEWER_PATH, Some(&correct)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let viewer: arkret_models_collaboration::account_operations::AccountView =
+        serde_json::from_value(body).expect("SDK AccountView");
+    assert_eq!(viewer.principal_id, session.principal_id);
+
+    let url = format!(
+        "{}{}",
+        session.state.config().public_base_url.trim_end_matches('/'),
+        VIEWER_PATH
+    );
+    let other_key = SigningKey::from_bytes(&Sha256::digest(b"unbound-viewer-holder").into());
+    for (label, method, target, token, key) in [
+        (
+            "method",
+            "POST",
+            url.clone(),
+            session.grant_jwt.clone(),
+            &session.holder_key,
+        ),
+        (
+            "URL authority",
+            "GET",
+            format!("https://untrusted-origin.example{VIEWER_PATH}"),
+            session.grant_jwt.clone(),
+            &session.holder_key,
+        ),
+        (
+            "token hash",
+            "GET",
+            url.clone(),
+            "another-exact-credential".to_owned(),
+            &session.holder_key,
+        ),
+        (
+            "holder key",
+            "GET",
+            url,
+            session.grant_jwt.clone(),
+            &other_key,
+        ),
+    ] {
+        let proof = arkret_signatures::dpop::build_dpop_proof(
+            &arkret_signatures::dpop::DpopProofRequest::new(method, target).access_token(token),
+            key,
+        )
+        .expect("fresh signed DPoP mismatch");
+        let headers = (format!("DPoP {}", session.grant_jwt), proof.header_value);
+        let (status, body) = session.get(VIEWER_PATH, Some(&headers)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{label}: {body}");
+        let problem: arkret_wire::Problem =
+            serde_json::from_value(body.clone()).expect("SDK Problem");
+        assert_eq!(problem.status, 401, "{label}: {body}");
+        assert_eq!(problem.code(), "unauthenticated", "{label}: {body}");
+        assert!(
+            !problem.extensions.contains_key("principal_id"),
+            "{label}: {body}"
+        );
+        assert!(
+            !problem.extensions.contains_key("account_id"),
+            "{label}: {body}"
+        );
+        assert!(
+            !serde_json::to_string(&body)
+                .unwrap()
+                .contains(session.principal_id.as_str()),
+            "{label}: viewer identity leaked"
+        );
+    }
+
+    // Rejections cannot turn a previously consumed valid proof into a retry.
+    let (status, body) = session.get(VIEWER_PATH, Some(&correct)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "replay: {body}");
+    let problem: arkret_wire::Problem = serde_json::from_value(body).expect("SDK replay Problem");
+    assert_eq!(problem.status, 401);
+    assert_eq!(problem.code(), "unauthenticated");
+
+    // The grant remains usable with a new correctly bound proof.
+    let fresh = session.headers("GET", VIEWER_PATH);
+    let (status, body) = session.get(VIEWER_PATH, Some(&fresh)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let viewer: arkret_models_collaboration::account_operations::AccountView =
+        serde_json::from_value(body).expect("SDK AccountView after mismatches");
+    assert_eq!(viewer.principal_id, session.principal_id);
+}

@@ -23,7 +23,7 @@ pub(crate) fn supported_plaintext_poll(payload: &Value) -> Option<PollContentBlo
     if !object.keys().all(|key| {
         matches!(
             key.as_str(),
-            "strand_id" | "track_name" | "content" | "poll_response_heads"
+            "strand_id" | "track_name" | "content" | "poll_response_heads" | "reply_to_id"
         )
     }) || !object.contains_key("strand_id")
         || object.get("track_name")? != "discussion"

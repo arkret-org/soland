@@ -137,6 +137,7 @@ fn attach_request(
 fn batch(create: EventCommitRequest, attach: EventCommitRequest) -> EventBatchCommitRequest {
     EventBatchCommitRequest {
         events: vec![create, attach],
+        realm_organization_proof: None,
         franking_replay_nonce: None,
         applet_record: None,
         applet_authoring_preview: None,
@@ -256,7 +257,7 @@ async fn sidecar_genesis_reserves_exact_controller_and_current_in_one_commit() {
 async fn sidecar_create_and_context_attach_commit_atomically_or_write_nothing() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = ordinary_realm::open_discussion(&pool, "sidecar-attach-cut").await;
+    let discussion = ordinary_realm::open_human_discussion(&pool, "sidecar-attach-cut").await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let at = discussion.head.authority_commit.commit.committed_at;
     let create = next_request(
@@ -335,7 +336,7 @@ async fn sidecar_create_and_context_attach_commit_atomically_or_write_nothing() 
     let another = TestDatabase::lease().await;
     let other_pool = another.pool();
     let other_discussion =
-        ordinary_realm::open_discussion(&other_pool, "sidecar-attach-rollback").await;
+        ordinary_realm::open_human_discussion(&other_pool, "sidecar-attach-rollback").await;
     let other_uow = PgEventCommitUnitOfWork::new(other_pool.clone());
     let other_at = other_discussion.head.authority_commit.commit.committed_at;
     let other_create = next_request(

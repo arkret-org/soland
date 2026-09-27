@@ -231,7 +231,7 @@ pub(super) fn validate_admin_install_events(
             || !matches!(
                 &grant.subject,
                 CapabilitySubject::Actor(subject)
-                    if subject == &ActorId::service(package.service_id.clone())
+                    if subject == &ActorId::account(arkret_wire::AccountId::new(package.service_id.clone(), basis.target_station_id.clone()))
             )
             || grant.resources.len() != 1
             || grant.resources[0] != expected_resource
@@ -666,8 +666,7 @@ pub(super) async fn register_package_install(
     state: &AppState,
     session: &SessionRecord,
     commit: AppletInstallRequestBody,
-    producer_verification_method: arkret_wire::DidUrl,
-    producer_signing_key: arkret_wire::DidKey,
+    recomputed_install_plan: AppletInstallPlan,
     idempotency_key: String,
     body_digest: String,
     authoring_preview_subject_key: String,
@@ -687,6 +686,20 @@ pub(super) async fn register_package_install(
     })?;
     let registration_event = basis.registration_event.clone();
     let capability_grant_events = basis.capability_grant_events.clone();
+    let committed_request = arkret_models_integration::AppletManagedActorCommittedRequest::Install(
+        Box::new(commit.clone()),
+    );
+    let mut admin_producer_guards = Vec::with_capacity(1 + capability_grant_events.len());
+    for event in std::iter::once(&registration_event).chain(capability_grant_events.iter()) {
+        admin_producer_guards.push(
+            crate::state::verify_self_event_producer(state, session, event)
+                .await
+                .map_err(|error| AppError::capability_denied(error.to_string()))?,
+        );
+    }
+    let epoch = registration_epoch_evidence_from_event(&registration_event)?;
+    let service_did_document = crate::jws_verify::resolve_did_document(state, &epoch.did)
+        .map_err(AppError::param_invalid)?;
     let submitted_plan_digest = commit
         .authoring_request()
         .plan_digest
@@ -700,7 +713,7 @@ pub(super) async fn register_package_install(
     let typed_applet_id = package.applet_id.clone();
     let applet_id = package.applet_id.to_string();
     let target_station_id = basis.target_station_id.clone();
-    let realm_id = effective_scope_realm_id(&effective_scope);
+    let realm_id = effective_scope_realm_id(&effective_scope).to_owned();
     let ghost_actors_allowed =
         ghost_actors_allowed_for_install(&package, &approved_actions, actor_policy.as_ref());
 
@@ -809,7 +822,7 @@ pub(super) async fn register_package_install(
     };
     let identity_value = encode_applet_identity(&identity)?;
 
-    let now = chrono::Utc::now();
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let e2ee_authorization_refs =
         e2ee_authorization_refs_for_install(&package, e2ee_policy.as_ref())?;
     debug_assert!(!approved_actions.is_empty());
@@ -823,130 +836,183 @@ pub(super) async fn register_package_install(
         AppletInstallEffectiveStatus::PartiallyInstalled => "partially_installed",
     };
     let install_id = ids::generate_install_id();
-    // A draft EventId is not a committed reference. The legacy Applet batch
-    // writer accepts a prebuilt response/record, before it has issued signed
-    // RealmCommits. Until it returns exact Commit coordinates from the same
-    // atomic UoW, a fresh install stops here without writing an Event.
-    let registration_event_ref = committed_install_ref(state, &registration_event).await?;
-    let bot_actor_provision_ref =
-        committed_install_ref(state, &identity.bot_actor_provision_event).await?;
-    let response = AppletInstallOutcome {
-        install_id,
-        applet_id: package.applet_id.clone(),
-        registration_event_ref,
-        registration_epoch: package.registration_epoch.clone(),
-        bot_actor_id: identity.bot_actor_id.clone(),
-        bot_actor_provision_ref,
-        bot_principal_control_realm_id: identity.bot_principal_control_realm_id.clone(),
-        capability_grant_refs,
-        e2ee_authorization_refs,
-        widget_policy_ref: None,
-        effective_status,
-        rejections: denied_scope_values(&package, &approved_actions)
-            .into_iter()
-            .map(|scope| AppletScopeRejection {
-                requested_scope: Some(scope.requested_scope),
-                reason_code: scope.reason_code,
-            })
-            .collect(),
+    let prior_managed_refs = if include_identity_events {
+        Vec::new()
+    } else {
+        let mut refs = Vec::with_capacity(4);
+        for event in [
+            &identity.bot_actor_provision_event,
+            &identity.bot_pcr_genesis_event,
+            &identity.bot_accountability_grant_event,
+            &identity.bot_profile_event,
+        ] {
+            refs.push(committed_install_ref(state, event).await?);
+        }
+        refs
     };
-    let mut record = AppletRecord {
-        identity,
-        applet_id: typed_applet_id.clone(),
-        owner_actor_id: registration_event.actor_id.clone(),
-        portal_realm_id: RealmId::new(realm_id).map_err(|error| {
-            AppError::internal(format!("validated portal realm id is invalid: {error}"))
-        })?,
-        effective_scope,
-        capabilities: approved_actions,
+    let station_verification_method = state
+        .service_verification_method("notary-key")
+        .map_err(AppError::internal)?;
+    let input = soland_storage::AppletAuthoringUnitWrite {
+        request: committed_request,
         package: package.clone(),
-        ghost_actors_allowed,
-        status: effective_status_wire.to_owned(),
-        registered_at: now,
-        revoked_at: None,
-        idempotency_key,
-        install_body_digest: Hash::new(body_digest).map_err(|error| {
-            AppError::internal(format!("validated install body digest is invalid: {error}"))
-        })?,
-        install_id: response.install_id.clone(),
-        install_response: response.clone(),
-        registration_event,
-        capability_grant_events,
-        install_execution: Value::Null,
-        revoke_execution: None,
-        ghosts: Vec::new(),
+        recomputed_install_plan: Some(recomputed_install_plan),
+        service_did_document,
+        controller_did_document: package_controller_document(state, &package)?,
+        station_verification_method,
+        station_public_key: *state.notary_verifying_key().as_bytes(),
+        admin_actor_id: owner_actor.clone(),
+        admin_producer_guards,
+        expected_identity: expected_identity.clone(),
+        expected_installation: None,
+        preview_subject_key: authoring_preview_subject_key,
+        request_digest: Hash::new(authoring_request_digest)
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
+        canonical_request_hash: Hash::new(body_digest.clone())
+            .map_err(|error| AppError::param_invalid(error.to_string()))?,
+        operation_id: "ak.self.applet.command.install".to_owned(),
+        idempotency_key: idempotency_key.clone(),
+        prior_managed_refs,
+        prior_service_signer_evidence: None,
+        accepted_at: now,
     };
-    record.install_execution = build_install_execution_record(
-        state.service_id(),
-        owner_actor_id,
-        &record.idempotency_key,
-        record.install_body_digest.as_str(),
-        &submitted_plan_digest,
-        &record,
-        &response,
-        true,
-    )?;
-    let mut formal_events = Vec::with_capacity(6 + record.capability_grant_events.len());
-    formal_events.push(record.registration_event.clone());
-    formal_events.extend(record.capability_grant_events.iter().cloned());
-    if include_identity_events {
-        formal_events.push(record.bot_actor_provision_event.clone());
-        formal_events.push(record.bot_pcr_genesis_event.clone());
-        formal_events.push(record.bot_accountability_grant_event.clone());
-        formal_events.push(record.bot_profile_event.clone());
-    }
-    let record_value = encode_applet_record(&record)?;
-    crate::routing::events::event_log::submit_applet_install_batch(
-        state,
-        formal_events,
-        typed_applet_id,
-        target_station_id,
-        expected_identity,
-        identity_value,
-        producer_verification_method,
-        producer_signing_key,
-        record_value,
-        authoring_preview_subject_key,
-        authoring_request_digest,
-        crate::routing::events::event_log::EventCommitIdempotency {
-            authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-                    AppError::internal(format!("session actor invalid: {error}"))
-                })?,
-                state.service_core_id(),
-            )),
-            operation_id: "ak.self.applet.command.install".to_owned(),
-            key: record.idempotency_key.clone(),
-            request_hash: record.install_body_digest.to_string(),
-        },
-        serde_json::to_value(&response)
-            .map_err(|error| AppError::internal(format!("Applet outcome invalid: {error}")))?,
-    )
-    .await
-    .map_err(|error| {
-        AppError::from_rejection(
-            soland_http::error::ErrorCode::from_wire(&error.code())
-                .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-            error.message(),
+    let audit_package = package.clone();
+    let audit_actor = identity.bot_actor_id.clone();
+    let admin_actor = owner_actor.clone();
+    let station_id = state.service_id().to_owned();
+    let finalizer: soland_storage::AppletUnitFinalizer = std::sync::Arc::new(move |references| {
+        let registration_event_ref = crate::routing::events::event_log::applet_committed_ref(
+            references,
+            &registration_event,
+        )?;
+        let bot_actor_provision_ref = crate::routing::events::event_log::applet_committed_ref(
+            references,
+            &identity.bot_actor_provision_event,
+        )?;
+        let response = AppletInstallOutcome {
+            install_id: install_id.clone(),
+            applet_id: package.applet_id.clone(),
+            registration_event_ref,
+            registration_epoch: package.registration_epoch.clone(),
+            bot_actor_id: identity.bot_actor_id.clone(),
+            bot_actor_provision_ref,
+            bot_principal_control_realm_id: identity.bot_principal_control_realm_id.clone(),
+            capability_grant_refs: capability_grant_refs.clone(),
+            e2ee_authorization_refs: e2ee_authorization_refs.clone(),
+            widget_policy_ref: None,
+            effective_status,
+            rejections: denied_scope_values(&package, &approved_actions)
+                .into_iter()
+                .map(|scope| AppletScopeRejection {
+                    requested_scope: Some(scope.requested_scope),
+                    reason_code: scope.reason_code,
+                })
+                .collect(),
+        };
+        let mut record = AppletRecord {
+            identity: identity.clone(),
+            applet_id: typed_applet_id.clone(),
+            owner_actor_id: registration_event.actor_id.clone(),
+            portal_realm_id: RealmId::new(realm_id.clone()).map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "validated portal realm id is invalid: {error}"
+                ))
+            })?,
+            effective_scope: effective_scope.clone(),
+            capabilities: approved_actions.clone(),
+            package: package.clone(),
+            ghost_actors_allowed,
+            status: effective_status_wire.to_owned(),
+            registered_at: now,
+            revoked_at: None,
+            idempotency_key: idempotency_key.clone(),
+            install_body_digest: Hash::new(body_digest.clone()).map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "validated install body digest is invalid: {error}"
+                ))
+            })?,
+            install_id: response.install_id.clone(),
+            install_response: response.clone(),
+            registration_event: registration_event.clone(),
+            capability_grant_events: capability_grant_events.clone(),
+            install_execution: Value::Null,
+            revoke_execution: None,
+            ghosts: Vec::new(),
+        };
+        record.install_execution = build_install_execution_record(
+            &station_id,
+            &admin_actor.to_string(),
+            &record.idempotency_key,
+            record.install_body_digest.as_str(),
+            &submitted_plan_digest,
+            &record,
+            &response,
+            true,
         )
-        .with_rejection_code(error.code())
-    })?;
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
+        let response_body = serde_json::to_value(&response)
+            .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))?;
+        Ok(soland_storage::AppletUnitFinalization {
+            applet_record: soland_storage::AppletRecordCommit {
+                applet_id: typed_applet_id.clone(),
+                identity: soland_storage::AppletIdentityCommit {
+                    target_station_id: target_station_id.clone(),
+                    expected_record: expected_identity.clone(),
+                    record: identity_value.clone(),
+                },
+                expected_record: None,
+                record: encode_applet_record(&record).map_err(|error| {
+                    soland_storage::PersistenceError::Internal(error.to_string())
+                })?,
+            },
+            idempotency_record: soland_storage::IdempotencyRecord {
+                authenticated_actor: admin_actor.clone(),
+                operation_id: "ak.self.applet.command.install".to_owned(),
+                idempotency_key: idempotency_key.clone(),
+                request_hash: body_digest.clone(),
+                response_status: 201,
+                response_body: response_body.clone(),
+                created_at: now,
+                expires_at: now + chrono::Duration::days(1),
+            },
+            response_body,
+        })
+    });
+    let accepted =
+        crate::routing::events::event_log::submit_applet_authoring_unit(state, input, finalizer)
+            .await
+            .map_err(|error| {
+                crate::routing::events::event_log::submit_one_error_to_app_error(
+                    "Applet admission",
+                    error.status(),
+                    error.code(),
+                    &error.message(),
+                )
+            })?;
+    let response: AppletInstallOutcome =
+        serde_json::from_value(accepted.response_body).map_err(|error| {
+            AppError::internal(format!("stored Applet outcome is invalid: {error}"))
+        })?;
     crate::routing::append_audit_log(
         state,
         Some(owner_actor_id),
         "applet.install",
         json!({
-            "applet_id": record.applet_id.clone(),
-            "namespaces": &record.package.namespaces,
-            "service_id": package.service_id,
-            "bot_actor_id": record.bot_actor_id,
+            "applet_id": audit_package.applet_id,
+            "namespaces": &audit_package.namespaces,
+            "service_id": audit_package.service_id,
+            "bot_actor_id": audit_actor,
             "registration_event_ref": response.registration_event_ref,
-            "registration_epoch": package.registration_epoch,
+            "registration_epoch": audit_package.registration_epoch,
         }),
         "accepted",
     )
     .await;
-    res.status_code(StatusCode::CREATED);
+    res.status_code(if accepted.replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    });
     Ok(response)
 }
 
@@ -1242,6 +1308,26 @@ fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), 
 /// MUST be a DID URL under `controller_principal_id`, and the resolved public key MUST
 /// come from `controller_principal_id`'s DID document. A proof signed by any
 /// other key — even with a correctly recomputed `payload_digest` — fails here.
+pub(super) fn package_controller_document(
+    state: &AppState,
+    package: &AppletPackage,
+) -> Result<DidDocument, AppError> {
+    let proof = package
+        .proof
+        .as_ref()
+        .ok_or_else(|| AppError::param_invalid("applet package proof is required"))?;
+    let controller = proof
+        .verification_method
+        .split_once('#')
+        .map(|(did, _)| did)
+        .ok_or_else(|| {
+            AppError::param_invalid("applet package verification method has no controller")
+        })?;
+    let controller = arkret_wire::Did::new(controller)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    crate::jws_verify::resolve_did_document(state, &controller).map_err(AppError::param_invalid)
+}
+
 fn validate_controller_proof(
     state: &AppState,
     package: &AppletPackage,

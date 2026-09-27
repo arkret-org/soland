@@ -8,8 +8,8 @@ fn root_anchor_event_public_key(
 ) -> Result<arkret_signatures::PublicKeyMaterial, EventValidationError> {
     let multibase = signer_controller.strip_prefix("did:key:").ok_or_else(|| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             "root-anchor update authority must use canonical did:key material",
         )
     })?;
@@ -21,16 +21,16 @@ fn root_anchor_event_public_key(
 fn did_key_from_ed25519_bytes(bytes: &[u8]) -> Result<arkret_wire::DidKey, EventValidationError> {
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             "verified Event producer key is not Ed25519",
         )
     })?;
     let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&bytes);
     arkret_wire::DidKey::new(format!("did:key:{multibase}")).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             format!("verified Event producer key is invalid: {error}"),
         )
     })
@@ -81,8 +81,8 @@ pub(crate) async fn validate_event_proofs(
     )
     .map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             format!("event actor_id is invalid: {error}"),
         )
     })?;
@@ -193,8 +193,8 @@ pub(crate) async fn validate_event_proofs(
     if let Some(proof) = proofs.first() {
         let Some(proof_object) = proof.as_object() else {
             return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
                 "event producer_proof must be a JSON object",
             ));
         };
@@ -208,31 +208,31 @@ pub(crate) async fn validate_event_proofs(
         for field in required_fields {
             if !proof_object.contains_key(*field) {
                 return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
                     "event proof is missing required fields",
                 ));
             }
         }
         if event_string_field(proof_object, &["kind"]).as_deref() != Some("detached_jws") {
             return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
                 "event proof kind must be detached_jws",
             ));
         }
         let proof_event_digest =
             event_string_field(proof_object, &["event_digest"]).ok_or_else(|| {
                 event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
                     "proof event_digest is required",
                 )
             })?;
         if proof_event_digest != expected_payload_digest {
             return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "proof_event_digest_mismatch",
+                StatusCode::UNAUTHORIZED,
+                "signature_invalid",
                 "proof event_digest does not match the event payload",
             ));
         }
@@ -240,8 +240,8 @@ pub(crate) async fn validate_event_proofs(
         let verification_method = event_string_field(proof_object, &["verification_method"])
             .ok_or_else(|| {
                 event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
                     "proof verification_method is required",
                 )
             })?;
@@ -253,8 +253,8 @@ pub(crate) async fn validate_event_proofs(
         let verification_method_url = arkret_wire::DidUrl::new(verification_method.clone())
             .map_err(|error| {
                 event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "invalid_proof",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
                     format!("proof verification_method must be a DID URL: {error}"),
                 )
             })?;
@@ -281,7 +281,7 @@ pub(crate) async fn validate_event_proofs(
                     .ok_or_else(|| {
                         event_validation_error(
                             StatusCode::SERVICE_UNAVAILABLE,
-                            "stale_did_document",
+                            "temporarily_unavailable",
                             "candidate device Event proof requires the accepted PCR resolution",
                         )
                     })?;
@@ -305,16 +305,16 @@ pub(crate) async fn validate_event_proofs(
                 .is_ok_and(|principal| principal.as_str() == actor_id)
             {
                 return Err(event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "invalid_proof",
+                    StatusCode::UNAUTHORIZED,
+                    "signature_invalid",
                     "candidate device proof resolution does not project to actor_id",
                 ));
             }
             let expected_method = format!("{}#{}", resolution.did, candidate.device_id);
             if verification_method_url.as_str() != expected_method {
                 return Err(event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "invalid_proof",
+                    StatusCode::UNAUTHORIZED,
+                    "signature_invalid",
                     "candidate device Event proof must use initial_resolution.did#device_id",
                 ));
             }
@@ -329,8 +329,8 @@ pub(crate) async fn validate_event_proofs(
         } else if let Some(expected_root_method) = root_anchor_method.as_deref() {
             if verification_method_url != expected_root_method {
                 return Err(event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "invalid_proof",
+                    StatusCode::UNAUTHORIZED,
+                    "signature_invalid",
                     "root-anchored Event proof must use the active update authority from the referenced DID entry",
                 ));
             }
@@ -344,8 +344,8 @@ pub(crate) async fn validate_event_proofs(
                 || ordinary_proof_root_id.is_err()
             {
                 return Err(event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "invalid_proof",
+                    StatusCode::UNAUTHORIZED,
+                    "signature_invalid",
                     "proof verification method must be rooted in the proof signer (executed_by when present, else actor_id)",
                 ));
             }
@@ -355,8 +355,8 @@ pub(crate) async fn validate_event_proofs(
             let created_at =
                 event_string_field(proof_object, &["created_at"]).ok_or_else(|| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "schema_violation",
                         "proof created_at is required",
                     )
                 })?;
@@ -422,8 +422,8 @@ pub(crate) async fn validate_event_proofs(
                     .strip_prefix("did:key:")
                     .ok_or_else(|| {
                         event_validation_error(
-                            StatusCode::BAD_REQUEST,
-                            "invalid_proof",
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "schema_violation",
                             "candidate device key must use did:key multibase encoding",
                         )
                     })?;
@@ -440,15 +440,15 @@ pub(crate) async fn validate_event_proofs(
                 .map_err(|error| {
                     tracing::debug!(%error, "candidate device Event proof verification failed");
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
+                        StatusCode::UNAUTHORIZED,
+                        "signature_invalid",
                         "candidate device Event proof verification failed",
                     )
                 })?;
                 return did_key_from_ed25519_bytes(&material.ed25519_bytes().map_err(|error| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "schema_violation",
                         format!("candidate device Event key is invalid: {error}"),
                     )
                 })?);
@@ -474,15 +474,15 @@ pub(crate) async fn validate_event_proofs(
                 .map_err(|error| {
                     tracing::debug!(%error, "root-anchor Event proof verification failed");
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
+                        StatusCode::UNAUTHORIZED,
+                        "signature_invalid",
                         "root-anchor Event proof verification failed",
                     )
                 })?;
                 return did_key_from_ed25519_bytes(&material.ed25519_bytes().map_err(|error| {
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "schema_violation",
                         format!("root-anchor Event key is invalid: {error}"),
                     )
                 })?);
@@ -499,8 +499,8 @@ pub(crate) async fn validate_event_proofs(
                 .map_err(|error| {
                     tracing::debug!(%error, "staged Applet formal Event proof verification failed");
                     event_validation_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
+                        StatusCode::UNAUTHORIZED,
+                        "signature_invalid",
                         "staged Applet formal Event proof is invalid",
                     )
                 })?;
@@ -509,8 +509,8 @@ pub(crate) async fn validate_event_proofs(
         }
     }
     Err(event_validation_error(
-        StatusCode::BAD_REQUEST,
-        "invalid_proof",
+        StatusCode::UNAUTHORIZED,
+        "signature_invalid",
         "Event has no verified producer key",
     ))
 }
@@ -532,8 +532,8 @@ pub(super) fn event_proof_binding_bytes(
     let proof: arkret_wire::ProducerEventProof =
         serde_json::from_value(Value::Object(proof_object.clone())).map_err(|error| {
             event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
                 format!("event proof is not an SDK ProducerEventProof: {error}"),
             )
         })?;
@@ -542,15 +542,15 @@ pub(super) fn event_proof_binding_bytes(
         || arkret_canonical::format_timestamp_canonical(proof.created_at) != created_at
     {
         return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
+            StatusCode::UNAUTHORIZED,
+            "signature_invalid",
             "event proof binding fields are inconsistent",
         ));
     }
     let bytes = proof.canonical_binding_bytes(actor_id).map_err(|error| {
         event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
             format!("proof binding canonicalization failed: {error}"),
         )
     })?;
@@ -596,64 +596,6 @@ mod tests {
         }
     }
 
-    fn signed_service_franking_event(
-        state: &AppState,
-    ) -> (arkret_wire::AuthoredEvent, SessionRecord, String, String) {
-        let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned();
-        let target_event_id = "ak:event:AQsHmGu_9sPOyJ4aG8VlWQBp8wGGhdC-BjfAaXqrIbk-".to_owned();
-        let actor_id = arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap();
-        let service_did = state.service_resolution_commitment().did.clone();
-        let verification_method = state.service_verification_method("notary-key").unwrap();
-        let created_at = chrono::Utc::now();
-        let event = arkret_wire::test_support::raw_event_for_actor_at(
-            arkret_wire::EventKind::ModerationFrankingProof.as_str(),
-            arkret_wire::ScopeRef::Realm {
-                realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
-            },
-            arkret_wire::ActorId::service(actor_id.clone()),
-            json!({
-                "realm_id": realm_id,
-                "event_id": target_event_id,
-                "received_by": actor_id,
-                "verification_method": verification_method,
-                "received_at": "2026-08-28T00:00:00.000Z",
-                "replay_nonce": "0123456789abcdef",
-                "signature": "c2lnbmF0dXJl"
-            }),
-            created_at,
-        )
-        .unwrap();
-        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
-            event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
-        let signer = arkret_signatures::Ed25519PayloadSigner::new(
-            state.notary_signing_key().as_ref().clone(),
-            service_did,
-            verification_method.clone(),
-        );
-        arkret_signatures::sign_event(
-            &mut event,
-            &signer,
-            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-        )
-        .unwrap();
-        let session = SessionRecord {
-            account_pk: None,
-            token_hash: "franking-proof-service-test".to_owned(),
-            actor: state.service_id().clone(),
-            endpoint: soland_services::identity::SessionEndpointState::ServiceSynthetic,
-            audience: state.service_id().clone(),
-            session_public_key: None,
-            session_grant: None,
-            expires_at: created_at + chrono::Duration::minutes(1),
-            created_at,
-            revoked_at: None,
-        };
-        (event, session, realm_id, target_event_id)
-    }
-
     /// These fixtures never reach the signature check, so the envelope bytes
     /// only have to be non-empty.
     const ENVELOPE_BYTES: &[u8] = br#"{"kind":"ak.test.event"}"#;
@@ -696,13 +638,16 @@ mod tests {
         let session = session(&actor, &state);
         let digest = format!("sha256:{}", "1".repeat(64));
 
-        for verification_method in [
+        for (verification_method, expected_status) in [
             // DID without a fragment — the exact form the old `!=` disjunct let through
-            signer.to_owned(),
+            (signer.to_owned(), StatusCode::UNPROCESSABLE_ENTITY),
             // trailing marker but still no fragment
-            format!("{signer}#"),
+            (format!("{signer}#"), StatusCode::UNPROCESSABLE_ENTITY),
             // a different webvh SCID, so it projects to a different core identity
-            "did:webvh:z6mkevil:alice.example#key-1".to_owned(),
+            (
+                "did:webvh:z6mkevil:alice.example#key-1".to_owned(),
+                StatusCode::UNAUTHORIZED,
+            ),
         ] {
             let mut event = event_with_verification_method(&actor, &verification_method);
             event["executed_by"] = event["actor_id"].clone();
@@ -720,8 +665,7 @@ mod tests {
             .await
             .expect_err("proof verification method must be a DID URL rooted in the signer");
             assert_eq!(
-                error.status,
-                StatusCode::FORBIDDEN,
+                error.status, expected_status,
                 "{verification_method}: {}",
                 error.message
             );
@@ -760,47 +704,5 @@ mod tests {
             "a rooted DID URL must not be rejected by the rooting gate: {}",
             error.message
         );
-    }
-
-    /// `event-and-patch.md` sections 2.4 and 3.1 plus
-    /// `content-moderation.md` section 3.4: a receiving service directly
-    /// authors the durable franking-proof Event as its own service principal.
-    /// Its exact producer source must still be available and authenticated;
-    /// an internal business marker cannot substitute the local notary key.
-    #[tokio::test]
-    async fn internal_service_admission_cannot_replace_missing_historical_source() {
-        let state = state();
-        let (event, session, realm_id, target_event_id) = signed_service_franking_event(&state);
-        let envelope_bytes =
-            arkret_canonical::canonical_json_bytes(&event.event().digest_payload().unwrap())
-                .unwrap();
-        let event_digest = event
-            .event()
-            .producer_proof
-            .as_ref()
-            .expect("producer proof")
-            .event_digest
-            .to_string();
-        let object = serde_json::to_value(event.event()).unwrap();
-        let object = object.as_object().unwrap();
-        let admission = InternalEventAdmission::service_franking_proof(
-            &realm_id,
-            event.event().actor_id.clone(),
-            &target_event_id,
-        );
-
-        validate_event_proofs(
-            object,
-            &state,
-            &session,
-            state.service_id().as_str(),
-            &event_digest,
-            arkret_canonical::DigestSuite::Sha256,
-            &envelope_bytes,
-            &[],
-            Some(&admission),
-        )
-        .await
-        .expect_err("an internal service marker cannot replace authenticated source evidence");
     }
 }

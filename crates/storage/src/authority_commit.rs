@@ -7,7 +7,7 @@
 
 use arkret_wire::{
     CommitStreamHead, CommitStreamRef, Event, MlsWelcomeDelivery, RealmAuthorityHandoff,
-    RealmCommit, RealmStateSnapshot,
+    RealmCommit, RealmCommitId, RealmStateSnapshot,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -1114,11 +1114,83 @@ pub struct ReplicaAnchorInstall {
     pub join_commit_id: arkret_wire::RealmCommitId,
     /// The snapshot's head on the Realm stream, at or after the join.
     pub snapshot_head: CommitStreamHead,
+    pub visible_stream_heads: Vec<CommitStreamHead>,
     pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+}
+
+/// Internal read-only eligibility at the Signal's signed and current cuts.
+#[derive(Clone, Debug)]
+pub struct SignalScopeAuthority {
+    pub recipient_actors: Vec<arkret_wire::ActorId>,
+    pub historical_mls_event_ref: arkret_wire::EventId,
+    pub current_mls: arkret_wire::MlsGroupCurrent,
+    pub cipher_suite: String,
 }
 
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    async fn signal_recipient_realms(
+        &self,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<arkret_wire::RealmId>> {
+        let _ = actor;
+        Err(crate::PersistenceError::Internal(
+            "Signal recipient inventory is unavailable".to_owned(),
+        ))
+    }
+
+    async fn signal_scope_authority(
+        &self,
+        scope: &arkret_wire::ScopeRef,
+        authority_commit_id: &RealmCommitId,
+        sender: &arkret_wire::ActorId,
+        signal_class: arkret_wire::SignalClass,
+        sent_at: chrono::DateTime<chrono::Utc>,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<SignalScopeAuthority>> {
+        let _ = (
+            scope,
+            authority_commit_id,
+            sender,
+            signal_class,
+            sent_at,
+            at,
+        );
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: verified Signal scope cuts are unavailable".to_owned(),
+        ))
+    }
+
+    async fn pending_franking_proofs(
+        &self,
+        receiver: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<Vec<crate::PendingFrankingProof>> {
+        let _ = receiver;
+        Ok(Vec::new())
+    }
+
+    async fn fix_franking_proof(
+        &self,
+        prepared: &crate::PreparedFrankingProof,
+    ) -> PersistenceResult<Event> {
+        let _ = prepared;
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: durable franking publication is unavailable".to_owned(),
+        ))
+    }
+
+    async fn complete_franking_proof(
+        &self,
+        realm: &arkret_wire::RealmId,
+        target: &arkret_wire::EventId,
+        proof_event: &arkret_wire::EventId,
+    ) -> PersistenceResult<()> {
+        let _ = (realm, target, proof_event);
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: durable franking publication is unavailable".to_owned(),
+        ))
+    }
+
     async fn install_genesis_authority(
         &self,
         authority: &CurrentRealmAuthority,
@@ -1178,6 +1250,52 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Option<ReplicaStreamAnchor>>;
+
+    async fn replica_anchor_for_stream(
+        &self,
+        stream: &CommitStreamRef,
+    ) -> PersistenceResult<Option<ReplicaStreamAnchor>> {
+        match stream {
+            CommitStreamRef::Realm { realm_id } => self.replica_stream_anchor(realm_id).await,
+            _ => Ok(None),
+        }
+    }
+
+    async fn circle_views_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::circle::CircleView>> {
+        let _ = (realm_id, actor);
+        Ok(Vec::new())
+    }
+
+    async fn circle_view_for_actor(
+        &self,
+        circle_id: &arkret_wire::CircleId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<arkret_models_collaboration::governance::circle::CircleView>>
+    {
+        let _ = (circle_id, actor);
+        Ok(None)
+    }
+
+    async fn replica_authorization_head(
+        &self,
+        stream: &CommitStreamRef,
+    ) -> PersistenceResult<Option<CommitStreamHead>> {
+        let _ = stream;
+        Ok(None)
+    }
+
+    async fn pending_replica_streams(&self) -> PersistenceResult<Vec<CommitStreamRef>> {
+        Ok(self
+            .pending_replica_stream_anchors()
+            .await?
+            .into_iter()
+            .map(|realm_id| CommitStreamRef::Realm { realm_id })
+            .collect())
+    }
 
     /// Every Realm whose replica stream is still pending anchor.
     async fn pending_replica_stream_anchors(&self) -> PersistenceResult<Vec<arkret_wire::RealmId>>;

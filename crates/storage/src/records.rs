@@ -683,6 +683,7 @@ impl std::fmt::Display for FederationOutboxState {
 pub struct RealmFanoutAuthorityWitness {
     pub member_id: arkret_wire::ActorId,
     pub membership_event_ref: String,
+    pub circle_membership_event_ref: Option<arkret_wire::EventId>,
 }
 
 /// Durable metadata that distinguishes a Realm Event fanout obligation from
@@ -721,7 +722,11 @@ impl RealmFanoutBinding {
                 .map_err(|error| format!("invalid Realm fanout member id: {error}"))?;
             EventId::new(witness.membership_event_ref.clone())
                 .map_err(|error| format!("invalid Realm fanout membership Event ref: {error}"))?;
-            if !witnesses.insert((&witness.member_id, witness.membership_event_ref.as_str())) {
+            if !witnesses.insert((
+                &witness.member_id,
+                witness.membership_event_ref.as_str(),
+                &witness.circle_membership_event_ref,
+            )) {
                 return Err("Realm fanout authority witnesses must be unique".to_owned());
             }
         }

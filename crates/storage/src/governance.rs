@@ -46,6 +46,18 @@ pub trait RealmOrganizationStore: Send + Sync {
 /// `(realm_id, organization_id, relationship)`.
 #[async_trait]
 pub trait RealmOrganizationStatementStore: Send + Sync {
+    async fn accepted_relationships(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::realm_governance::RealmOrganizationRelationshipRow>>;
+    /// Refuse a sensitive dependency on the unavailable cross-Realm policy
+    /// authority from accepted relationships at one locked Realm cut.
+    async fn require_moderation_authority(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()>;
     async fn put(&self, record: &RealmOrganizationStatementRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<RealmOrganizationStatementRecord>>;
 }

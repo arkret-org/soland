@@ -632,7 +632,10 @@ impl AppletRecord {
                 || grant.issuer_id != self.owner_actor_id
                 || grant.realm_id.as_ref() != Some(&self.portal_realm_id)
                 || !matches!(&grant.subject, CapabilitySubject::Actor(subject)
-                    if subject == &ActorId::service(self.package.service_id.clone()))
+                if subject == &ActorId::account(arkret_wire::AccountId::new(
+                    self.package.service_id.clone(),
+                    self.bot_actor_id.route_service_id().clone(),
+                )))
                 || grant.resources.as_slice() != [expected_resource.clone()]
                 || applet_authority_constraints.as_slice() != [&expected_constraint]
                 || grant.actions.is_empty()

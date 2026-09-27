@@ -384,6 +384,27 @@ pub struct AuthorityCommitApplication {
 }
 
 impl AuthorityCommitApplication {
+    /// Sign the exact Event at a cut locked by a specialized admission unit.
+    /// The unit must install this Commit with its domain facts atomically.
+    pub fn sign_event_commit_at_authority_cut(
+        &self,
+        event: &Event,
+        authority: &CurrentRealmAuthority,
+        head: Option<&CommitStreamHead>,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+    ) -> ServiceResult<RealmCommit> {
+        build_signed_event_commit(
+            event,
+            authority,
+            head,
+            verification_method,
+            signing_key,
+            committed_at,
+        )
+    }
+
     pub fn new(persistence: PersistenceHandle, recipient_queue_capacity: usize) -> Self {
         Self {
             persistence,
@@ -1229,6 +1250,68 @@ impl AuthorityCommitApplication {
         Ok(self.store().replica_stream_anchor(realm_id).await?)
     }
 
+    pub async fn pending_franking_proofs(
+        &self,
+        receiver: &arkret_wire::DidCoreId,
+    ) -> ServiceResult<Vec<soland_storage::PendingFrankingProof>> {
+        Ok(self.store().pending_franking_proofs(receiver).await?)
+    }
+
+    pub async fn fix_franking_proof(
+        &self,
+        prepared: &soland_storage::PreparedFrankingProof,
+    ) -> ServiceResult<arkret_wire::Event> {
+        Ok(self.store().fix_franking_proof(prepared).await?)
+    }
+
+    pub async fn complete_franking_proof(
+        &self,
+        realm: &arkret_wire::RealmId,
+        target: &arkret_wire::EventId,
+        proof_event: &arkret_wire::EventId,
+    ) -> ServiceResult<()> {
+        Ok(self
+            .store()
+            .complete_franking_proof(realm, target, proof_event)
+            .await?)
+    }
+
+    pub async fn replica_anchor_for_stream(
+        &self,
+        stream: &arkret_wire::CommitStreamRef,
+    ) -> ServiceResult<Option<soland_storage::ReplicaStreamAnchor>> {
+        Ok(self.store().replica_anchor_for_stream(stream).await?)
+    }
+
+    pub async fn circle_views_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> ServiceResult<Vec<arkret_models_collaboration::governance::circle::CircleView>> {
+        Ok(self.store().circle_views_for_actor(realm_id, actor).await?)
+    }
+
+    pub async fn circle_view_for_actor(
+        &self,
+        circle_id: &arkret_wire::CircleId,
+        actor: &arkret_wire::ActorId,
+    ) -> ServiceResult<Option<arkret_models_collaboration::governance::circle::CircleView>> {
+        Ok(self.store().circle_view_for_actor(circle_id, actor).await?)
+    }
+
+    pub async fn replica_authorization_head(
+        &self,
+        stream: &arkret_wire::CommitStreamRef,
+    ) -> ServiceResult<Option<arkret_wire::CommitStreamHead>> {
+        Ok(self.store().replica_authorization_head(stream).await?)
+    }
+
+    pub async fn pending_replica_streams(
+        &self,
+    ) -> ServiceResult<Vec<arkret_wire::CommitStreamRef>> {
+        Ok(self.store().pending_replica_streams().await?)
+    }
+
     pub async fn pending_replica_stream_anchors(&self) -> ServiceResult<Vec<arkret_wire::RealmId>> {
         Ok(self.store().pending_replica_stream_anchors().await?)
     }
@@ -1280,6 +1363,35 @@ impl AuthorityCommitApplication {
         event_id: &arkret_wire::EventId,
     ) -> ServiceResult<Option<soland_storage::CommittedEventRecord>> {
         Ok(self.store().committed_event(event_id).await?)
+    }
+
+    pub async fn signal_recipient_realms(
+        &self,
+        actor: &arkret_wire::ActorId,
+    ) -> ServiceResult<Vec<arkret_wire::RealmId>> {
+        Ok(self.store().signal_recipient_realms(actor).await?)
+    }
+
+    pub async fn signal_scope_authority(
+        &self,
+        scope: &arkret_wire::ScopeRef,
+        authority_commit_id: &RealmCommitId,
+        sender: &arkret_wire::ActorId,
+        signal_class: arkret_wire::SignalClass,
+        sent_at: DateTime<Utc>,
+        at: DateTime<Utc>,
+    ) -> ServiceResult<Option<soland_storage::SignalScopeAuthority>> {
+        Ok(self
+            .store()
+            .signal_scope_authority(
+                scope,
+                authority_commit_id,
+                sender,
+                signal_class,
+                sent_at,
+                at,
+            )
+            .await?)
     }
 
     pub async fn committed_event_by_commit_id(

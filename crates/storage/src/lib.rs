@@ -47,6 +47,7 @@ mod device_revocations;
 mod devices;
 mod events;
 mod federation;
+mod franking;
 mod governance;
 mod grant_evaluation;
 mod idempotency;
@@ -97,6 +98,7 @@ pub use device_revocations::*;
 pub use devices::*;
 pub use events::*;
 pub use federation::*;
+pub use franking::*;
 pub use governance::*;
 pub use grant_evaluation::*;
 pub use idempotency::*;
@@ -221,6 +223,8 @@ pub enum ConflictCode {
     EpochMismatch,
     /// The scope's key-access checkpoint awaits a covering winning MLS Commit.
     EpochUpdateRequired,
+    /// A Call genesis selects a non-initial lifecycle state.
+    CallStateTransitionInvalid,
     /// Two verified Event variants share one full EventId. Internal name for
     /// what the wire calls `witness_disagreement`.
     EventHashCollision,
@@ -351,7 +355,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 70] = [
+    pub const ALL: [Self; 71] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
@@ -366,6 +370,7 @@ impl ConflictCode {
         Self::DuplicateConflict,
         Self::EpochMismatch,
         Self::EpochUpdateRequired,
+        Self::CallStateTransitionInvalid,
         Self::EventHashCollision,
         Self::EventIdDigestMismatch,
         Self::EventNotAccepted,
@@ -443,6 +448,9 @@ impl ConflictCode {
             Self::DuplicateConflict => "duplicate_conflict",
             Self::EpochMismatch => arkret_wire::ErrorCode::EPOCH_MISMATCH,
             Self::EpochUpdateRequired => arkret_wire::ReasonCode::EPOCH_UPDATE_REQUIRED,
+            Self::CallStateTransitionInvalid => {
+                arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
+            }
             Self::EventHashCollision => "event_hash_collision",
             Self::EventIdDigestMismatch => "event_id_digest_mismatch",
             Self::EventNotAccepted => "event_not_accepted",

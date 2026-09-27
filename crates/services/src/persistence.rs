@@ -31,6 +31,24 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn accepted_realm_organization_relationships(&self, realm_id: &arkret_wire::RealmId, at: chrono::DateTime<chrono::Utc>) -> PersistenceResult<Vec<arkret_models_collaboration::governance::realm_governance::RealmOrganizationRelationshipRow>>{
+        self.persistence
+            .realm_organization_statements()
+            .accepted_relationships(realm_id, at)
+            .await
+    }
+
+    pub async fn require_organization_moderation_authority(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.persistence
+            .realm_organization_statements()
+            .require_moderation_authority(realm_id, at)
+            .await
+    }
+
     pub async fn admit_consent(
         &self,
         write: soland_storage::ConsentAdmissionWrite,

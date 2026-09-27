@@ -47,7 +47,6 @@ use std::sync::OnceLock;
 use salvo::prelude::*;
 
 pub(crate) mod handlers;
-pub(crate) mod realm_fixture;
 pub(crate) mod util;
 
 use soland_http::error::AppError;
@@ -73,9 +72,6 @@ pub fn router() -> Router {
         .push(Router::with_path("erase-receipt").post(handlers::erase_receipt))
         .push(Router::with_path("snapshot").post(handlers::snapshot))
         .push(Router::with_path("query").post(handlers::query))
-        .push(Router::with_path("realm-basis").post(handlers::realm_basis))
-        .push(Router::with_path("signal-mls-basis").post(handlers::signal_mls_basis))
-        .push(Router::with_path("realm-fixture/install").post(realm_fixture::install))
         .push(Router::with_path("chaos/operation").get(handlers::chaos_operation))
 }
 

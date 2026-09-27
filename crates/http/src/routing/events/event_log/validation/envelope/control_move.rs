@@ -128,8 +128,8 @@ pub(super) async fn reject_revoked_actor_device_signature(
             .is_some_and(|device| device.revoked_at.is_some());
         if revoked {
             return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "actor_signature_revoked",
+                StatusCode::CONFLICT,
+                "device_revoked",
                 "event proof was signed by a revoked actor device",
             ));
         }

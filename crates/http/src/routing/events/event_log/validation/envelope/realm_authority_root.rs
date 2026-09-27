@@ -30,8 +30,8 @@ pub(in crate::routing) async fn validate_realm_authority_root_authorization(
     }
     if arkret_schema::capability_action(kind).is_some_and(|action| action.root_control_only) {
         return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
-            "realm_authority_root_missing",
+            StatusCode::CONFLICT,
+            "failed_precondition",
             "root-control admission requires the same-cut authority-root current result",
         ));
     }

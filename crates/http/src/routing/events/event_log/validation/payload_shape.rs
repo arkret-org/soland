@@ -208,7 +208,7 @@ pub(super) fn validate_event_audience_fields(
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "domain_mismatch",
+            "capability_denied",
             "event domain must bind to this service DID",
         ));
     }
@@ -217,7 +217,7 @@ pub(super) fn validate_event_audience_fields(
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "device_session_mismatch",
+            "capability_denied",
             "event device_id must match the bearer session device",
         ));
     }

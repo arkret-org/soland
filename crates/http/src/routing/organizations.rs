@@ -1,8 +1,8 @@
-//! Organization registry + moderation policy inheritance.
+//! Organization discovery and historical organization-side consent.
 //!
-//! This is the local P2 governance surface for organization-owned Realms:
-//! org policies are stored once, Realm create links fan out through an index,
-//! and linked Realm projections consume the effective organization policy.
+//! Display declarations never authorize or deny membership or federation.
+//! Sensitive actions read accepted organization relationships at the PostgreSQL
+//! admission cut; cross-Realm moderation policy authority remains fail-closed.
 
 use std::collections::BTreeSet;
 
@@ -251,26 +251,88 @@ pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<Di
     state.governance().cached_realm_organizations(realm_id)
 }
 
-pub(crate) async fn organization_policy_blocks_join(
+/// Resolve organization consent at its signed historical DID state before the
+/// authority transaction. PostgreSQL binds and verifies this internal evidence
+/// again against the exact accepted Event; it is never a caller-side sidecar.
+pub(crate) async fn prepare_realm_organization_proof(
     state: &AppState,
-    realm_id: &str,
-    actor: &ActorId,
-) -> bool {
-    let _ = actor;
-    if let Err(error) = refresh_organization_projection(state).await {
-        tracing::warn!(%error, "failed to refresh organization projection for join policy");
-        return true;
+    event: &arkret_wire::Event,
+) -> Result<Option<soland_storage::RealmOrganizationProofCommit>, &'static str> {
+    if event.kind != arkret_wire::EventKind::RealmOrganization {
+        return Ok(None);
     }
-    unresolved_moderation_policy_authority(state, realm_id)
+    let payload: arkret_models_collaboration::RealmOrganizationPayload = serde_json::from_value(
+        serde_json::to_value(&event.payload)
+            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?,
+    )
+    .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+    arkret_policy::verify_realm_organization_statement(
+        &payload,
+        &event.realm_id,
+        event.created_at,
+        &arkret_policy::NoDelegationResolver,
+    )
+    .map_err(|_| "organization_statement_unverified")?;
+    if payload.authorization.issuer_role
+        != arkret_models_collaboration::RealmOrganizationIssuerRole::Organization
+        || payload.authorization.issuer_id != payload.organization_id
+        || payload.authorization.signed_at > event.created_at
+    {
+        return Err("organization_statement_unverified");
+    }
+    let did = arkret_identity::verification_method_did(
+        payload.authorization.verification_method.as_str(),
+    )
+    .map_err(|_| "organization_statement_unverified")?;
+    if arkret_wire::project_did_to_core_id(&did).map_err(|_| "organization_statement_unverified")?
+        != payload.organization_id
+    {
+        return Err("organization_statement_unverified");
+    }
+    let key = crate::jws_verify::resolve_ed25519_pubkey_at(
+        state,
+        payload.authorization.verification_method.as_str(),
+        payload.authorization.signed_at,
+    )
+    .await
+    .map_err(|_| "organization_statement_unverified")?;
+    use base64::Engine as _;
+    let arkret_models_collaboration::SignatureMaterial::NonEmptyString(encoded) =
+        &payload.authorization.proof
+    else {
+        return Err("organization_statement_unverified");
+    };
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded.as_str())
+        .map_err(|_| "organization_statement_unverified")?;
+    let signature = ed25519_dalek::Signature::from_slice(&bytes)
+        .map_err(|_| "organization_statement_unverified")?;
+    let transcript =
+        arkret_models_collaboration::realm_organization_statement_signing_bytes(&payload)
+            .map_err(|_| "organization_statement_unverified")?;
+    key.verify_strict(&transcript, &signature)
+        .map_err(|_| "organization_statement_unverified")?;
+    Ok(Some(soland_storage::RealmOrganizationProofCommit {
+        event_id: event.event_id.clone(),
+        verification_method: payload.authorization.verification_method,
+        signed_at: payload.authorization.signed_at,
+        public_key: key.to_bytes(),
+    }))
 }
 
-pub(crate) fn organization_policy_blocks_federation(
+pub(crate) async fn organization_policy_blocks_federation(
     state: &AppState,
     realm_id: &str,
-    peer_service_id: &DidCoreId,
+    _peer_service_id: &DidCoreId,
 ) -> bool {
-    let _ = peer_service_id;
-    unresolved_moderation_policy_authority(state, realm_id)
+    let Ok(realm_id) = arkret_wire::RealmId::new(realm_id.to_owned()) else {
+        return true;
+    };
+    state
+        .persistence()
+        .require_organization_moderation_authority(&realm_id, Utc::now())
+        .await
+        .is_err()
 }
 
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
@@ -346,17 +408,6 @@ fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Va
     serde_json::to_value(organization_record_view(state, record)).unwrap_or(Value::Null)
 }
 
-/// The policy governance Realm is unique, but no accepted Event/Commit-backed
-/// current-policy reader is wired yet. A verified moderation relationship
-/// therefore blocks the sensitive action until that reader is available.
-fn unresolved_moderation_policy_authority(state: &AppState, realm_id: &str) -> bool {
-    state
-        .projections()
-        .snapshot()
-        .verified_organization_relationships(realm_id, Utc::now())
-        .into_iter()
-        .any(|relationship| relationship.covers_scope("moderation_policy"))
-}
 fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
     let value = raw.trim();
     if value.is_empty() {

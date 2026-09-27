@@ -89,6 +89,7 @@ fn persistence_event_commit_request(
     soland_storage::EventCommitRequest {
         authority_commit: command.authority_commit,
         self_producer_guard: command.self_producer_guard,
+        applet_producer_guard: command.applet_producer_guard,
         forwarded_producer_evidence: command.forwarded_producer_evidence,
         event: command.event,
         parent_membership_admission: command.parent_membership_admission,
@@ -333,6 +334,41 @@ impl crate::events::MessagePort for PersistenceEventReader {
 
 #[async_trait::async_trait]
 impl crate::events::AppletPort for PersistenceEventReader {
+    async fn pending_applet_authoring_completions(
+        &self,
+        limit: u32,
+    ) -> crate::ServiceResult<Vec<soland_storage::AppletAuthoringCompletion>> {
+        Ok(self
+            .0
+            .applets()
+            .pending_authoring_completions(limit)
+            .await?)
+    }
+    async fn acknowledge_applet_authoring_completion(
+        &self,
+        applet_id: &arkret_wire::AppletId,
+        request_digest: &arkret_wire::Hash,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .0
+            .applets()
+            .acknowledge_authoring_completion(applet_id, request_digest, at)
+            .await?)
+    }
+    async fn admit_applet_authoring_unit(
+        &self,
+        input: soland_storage::AppletAuthoringUnitWrite,
+        author: soland_storage::AppletCommitAuthor,
+        attester: soland_storage::AppletResolutionAttester,
+        finalize: soland_storage::AppletUnitFinalizer,
+    ) -> crate::ServiceResult<soland_storage::AppletAuthoringUnitOutcome> {
+        Ok(self
+            .0
+            .applets()
+            .admit_authoring_unit(input, author, attester, finalize)
+            .await?)
+    }
     async fn applet_identity(
         &self,
         applet_id: &str,
@@ -933,6 +969,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     .into_iter()
                     .map(persistence_event_commit_request)
                     .collect(),
+                realm_organization_proof: command.realm_organization_proof,
                 franking_replay_nonce: command.franking_replay_nonce,
                 applet_record: command.applet_record,
                 applet_authoring_preview: command.applet_authoring_preview,

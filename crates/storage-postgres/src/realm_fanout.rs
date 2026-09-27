@@ -225,6 +225,7 @@ async fn departing_member_target(
         station,
         RealmFanoutAuthorityWitness {
             member_id: member,
+            circle_membership_event_ref: None,
             membership_event_ref: event.event_id.to_string(),
         },
     )))
@@ -246,6 +247,24 @@ async fn remote_targets(
     if event.kind == arkret_wire::EventKind::CircleCreate {
         return Ok(BTreeMap::new());
     }
+    let moderation_private = matches!(
+        event.kind,
+        arkret_wire::EventKind::SelfModerationReport
+            | arkret_wire::EventKind::ModerationFrankingProof
+    );
+    let effective_scope = if event.kind == arkret_wire::EventKind::ModerationFrankingProof {
+        let proof: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
+            serde_json::from_value(serde_json::to_value(&event.payload).map_err(internal)?)
+                .map_err(internal)?;
+        crate::moderation_franking_proof_current_results::franking_target_scope_in_connection(
+            conn,
+            &event.realm_id,
+            &proof.event_id,
+        )
+        .await?
+    } else {
+        event.scope_ref.clone()
+    };
     let rows = sql_query(
         "SELECT m.member_id, e.envelope->>'event_id' AS membership_event_id \
          FROM member_state_current_results m \
@@ -280,10 +299,27 @@ async fn remote_targets(
         {
             continue;
         }
-        if event.kind == arkret_wire::EventKind::SelfModerationReport
-            && !crate::capability_grant_current_results::actor_holds_realm_action_in_connection(
+        let circle_membership_event_ref = if !moderation_private {
+            if let arkret_wire::ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            } = &effective_scope
+            {
+                let Some(basis) = sql_query("SELECT e.envelope->>'event_id' AS event_id FROM circle_member_state_current_results m JOIN circle_current_results circle ON circle.circle_id=m.circle_id AND circle.realm_id=m.realm_id JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref JOIN canonical_events e ON e.pk=c.event_pk WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' AND circle.value->>'state'='active' AND e.state='committed'")
+                .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).bind::<Text, _>(member.to_string())
+                .get_result::<MembershipEventRow>(&mut *conn).await.optional().map_err(PersistenceError::database)? else { continue; };
+                Some(arkret_wire::EventId::new(basis.event_id).map_err(internal)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if moderation_private
+            && !crate::moderation_report_current_results::scope_moderator(
                 conn,
                 &event.realm_id,
+                &effective_scope,
                 &member,
                 &[
                     arkret_wire::CapabilityActionId::POLICY_MANAGE,
@@ -302,6 +338,7 @@ async fn remote_targets(
             .or_default()
             .push(RealmFanoutAuthorityWitness {
                 member_id: member,
+                circle_membership_event_ref,
                 membership_event_ref: row.membership_event_id,
             });
     }
@@ -310,7 +347,65 @@ async fn remote_targets(
     {
         targets.entry(station).or_default().push(witness);
     }
+    if let Some((station, witness)) =
+        departing_circle_member_target(conn, event, authority_station).await?
+    {
+        targets.entry(station).or_default().push(witness);
+    }
     Ok(targets)
+}
+
+async fn departing_circle_member_target(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    authority_station: &arkret_wire::DidCoreId,
+) -> PersistenceResult<Option<(arkret_wire::DidCoreId, RealmFanoutAuthorityWitness)>> {
+    if event.kind != arkret_wire::EventKind::CircleMemberState
+        || !matches!(
+            event.payload.get("membership").and_then(Value::as_str),
+            Some("leave" | "ban")
+        )
+    {
+        return Ok(None);
+    }
+    let arkret_wire::ScopeRef::Circle {
+        realm_id,
+        circle_id,
+    } = &event.scope_ref
+    else {
+        return Ok(None);
+    };
+    let member: arkret_wire::ActorId = serde_json::from_value(
+        event
+            .payload
+            .get("member_id")
+            .cloned()
+            .ok_or_else(|| internal("Circle departure has no member"))?,
+    )
+    .map_err(internal)?;
+    if member.route_service_id() == authority_station {
+        return Ok(None);
+    }
+    let Some(parent) = sql_query("SELECT e.envelope->>'event_id' AS event_id FROM member_state_current_results m JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join' AND e.state='committed' AND c.stream_ref->>'kind'='realm'")
+        .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(member.to_string()).get_result::<MembershipEventRow>(&mut *conn).await.optional().map_err(PersistenceError::database)? else { return Ok(None); };
+    let current = sql_query("SELECT e.envelope->>'event_id' AS event_id FROM circle_member_state_current_results m JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref JOIN canonical_events e ON e.pk=c.event_pk WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership IN ('leave','ban') AND e.state='committed'")
+        .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).bind::<Text, _>(member.to_string()).get_result::<MembershipEventRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if current.as_ref().map(|row| row.event_id.as_str()) != Some(event.event_id.as_str()) {
+        return Ok(None);
+    }
+    let previous = sql_query("SELECT e.kind, e.envelope->'payload'->>'membership' AS membership FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE c.realm_id=$1 AND c.stream_ref=$2 AND e.kind='ak.circle.member.state' AND e.envelope->'payload'->'member_id'=$3 AND c.stream_position < (SELECT current_stream_position FROM circle_member_state_current_results WHERE realm_id=$1 AND circle_id=$4 AND member_id=$5) ORDER BY c.stream_position DESC LIMIT 1")
+        .bind::<Text, _>(realm_id.as_str()).bind::<Jsonb, _>(serde_json::to_value(arkret_wire::CommitStreamRef::Circle { realm_id:realm_id.clone(),circle_id:circle_id.clone() }).map_err(internal)?).bind::<Jsonb, _>(serde_json::to_value(&member).map_err(internal)?).bind::<Text, _>(circle_id.as_str()).bind::<Text, _>(member.to_string()).get_result::<PriorMembershipRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if previous.and_then(|row| row.membership).as_deref() != Some("join") {
+        return Ok(None);
+    }
+    Ok(Some((
+        member.route_service_id().clone(),
+        RealmFanoutAuthorityWitness {
+            member_id: member,
+            membership_event_ref: parent.event_id,
+            circle_membership_event_ref: Some(event.event_id.clone()),
+        },
+    )))
 }
 
 /// Whether a frozen fanout intent to `peer` is still owed at the current
@@ -354,13 +449,29 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         realm_id: event.realm_id.clone(),
     };
     if commit.stream_ref != realm_stream {
-        if source.is_some() {
-            return Err(PersistenceError::Conflict(
-                "Circle and Sidecar fanout target planning is unavailable".to_owned(),
-            )
-            .into());
+        let supported_circle = matches!(&event.scope_ref, arkret_wire::ScopeRef::Circle { .. })
+            && matches!(
+                event.kind,
+                arkret_wire::EventKind::CircleMemberState
+                    | arkret_wire::EventKind::MlsGenesis
+                    | arkret_wire::EventKind::MlsCommit
+                    | arkret_wire::EventKind::StrandCreate
+                    | arkret_wire::EventKind::MessageCreate
+                    | arkret_wire::EventKind::MessageRevise
+                    | arkret_wire::EventKind::MessageRedact
+                    | arkret_wire::EventKind::SelfModerationReport
+                    | arkret_wire::EventKind::ModerationDecision
+                    | arkret_wire::EventKind::ModerationDecisionLift
+            );
+        if !supported_circle {
+            if source.is_some() {
+                return Err(PersistenceError::Conflict(
+                    "Circle and Sidecar fanout target planning is unavailable".to_owned(),
+                )
+                .into());
+            }
+            return Ok(0);
         }
-        return Ok(0);
     }
     let targets = remote_targets(conn, event, authority_station, commit.committed_at).await?;
     let mut replicated_welcomes: BTreeMap<_, Vec<arkret_wire::MlsWelcomeDelivery>> =
@@ -382,6 +493,20 @@ pub(crate) async fn plan_realm_fanout_in_connection(
     if targets.is_empty() {
         return Ok(0);
     }
+    crate::organization_moderation_gate::require_organization_moderation_authority_in_connection(
+        conn,
+        &event.realm_id,
+        if matches!(
+            commit.stream_ref,
+            arkret_wire::CommitStreamRef::Realm { .. }
+        ) {
+            Some(commit.stream_position)
+        } else {
+            None
+        },
+        commit.committed_at,
+    )
+    .await?;
     let source = source.ok_or_else(|| {
         PersistenceError::Conflict(
             "Realm Event with remote joined members has no fanout source submission".to_owned(),

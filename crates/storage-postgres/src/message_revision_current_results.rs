@@ -75,10 +75,26 @@ fn supported_plain_text(payload: &Value) -> bool {
     let Some(object) = payload.as_object() else {
         return false;
     };
-    object.len() == 3
-        && object.contains_key("strand_id")
+    object.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "strand_id" | "track_name" | "content" | "reply_to_id" | "poll_response_heads"
+        )
+    }) && object.contains_key("strand_id")
         && object.get("track_name") == Some(&Value::String("discussion".to_owned()))
-        && plain_text_content(object.get("content"))
+        && object.get("content").is_some_and(|content| {
+            plain_text_content(Some(content))
+                || content.as_object().is_some_and(|content| {
+                    content
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "kind" | "format" | "body" | "mentions"))
+                        && content
+                            .get("kind")
+                            .is_some_and(|kind| kind == "ak.content.text")
+                        && content.get("format").is_none_or(|format| format == "plain")
+                        && content.get("body").is_some_and(Value::is_string)
+                })
+        })
 }
 
 #[cfg(test)]
@@ -101,7 +117,6 @@ mod plain_text_format_tests {
         for content in [
             serde_json::json!({"kind":"ak.content.text","format":"markdown","body":"hello"}),
             serde_json::json!({"kind":"ak.content.text","format":null,"body":"hello"}),
-            serde_json::json!({"kind":"ak.content.text","body":"hello","mentions":[]}),
             serde_json::json!({"kind":"ak.content.text"}),
         ] {
             assert!(!supported_plain_text(&serde_json::json!({
@@ -126,7 +141,7 @@ fn supported_mls_carrier(payload: &Value) -> bool {
     object.keys().all(|key| {
         matches!(
             key.as_str(),
-            "strand_id" | "track_name" | "encrypted_content" | "encrypted_metadata"
+            "strand_id" | "track_name" | "encrypted_content" | "encrypted_metadata" | "reply_to_id"
         )
     }) && object.contains_key("strand_id")
         && object.contains_key("encrypted_content")
@@ -162,14 +177,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     }
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-        || commit.stream_ref
-            != (arkret_wire::CommitStreamRef::Realm {
-                realm_id: event.realm_id.clone(),
-            })
-    {
-        return Err(conflict("Message create requires the Realm source stream"));
-    }
+    require_message_source_stream(event, commit)?;
     let ordinary = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
          WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
@@ -187,6 +195,11 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
     let mls_carrier = supported_mls_carrier(&payload);
     let poll = crate::poll_state::supported_plaintext_poll(&payload);
+    if matches!(&event.scope_ref, arkret_wire::ScopeRef::Circle { .. }) && !mls_carrier {
+        return Err(conflict(
+            "Circle Message content requires its admitted MLS carrier",
+        ));
+    }
     if !mls_carrier && !supported_plain_text(&payload) && poll.is_none() {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
@@ -223,6 +236,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     // A Direct Conversation Message names its profile authority source,
     // which the profile table already decided at this cut.
     if !cut.is_direct_conversation()
+        && event.applet_id.is_none()
         && event.authorization_ref.as_ref().is_some_and(|reference| {
             controller != event.actor_id || reference.as_str() != root.authority_event_ref.as_str()
         })
@@ -246,7 +260,22 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if !member.present {
         return Err(conflict("Message actor is not a confirmed Realm member"));
     }
-    require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id).await?;
+    crate::moderation_report_current_results::ensure_scope_member(
+        conn,
+        &event.realm_id,
+        &event.scope_ref,
+        &event.actor_id,
+    )
+    .await?;
+    require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id, &event.scope_ref)
+        .await?;
+    crate::message_interactions::require_message_actor(conn, event, commit.committed_at).await?;
+    crate::message_interactions::require_poll_content_in_connection(conn, event, commit, &typed)
+        .await?;
+    crate::message_interactions::require_reply_and_mentions_in_connection(
+        conn, event, commit, &typed,
+    )
+    .await?;
     if !mls_carrier {
         require_plaintext_message_service(conn, &event.realm_id, commit).await?;
     }
@@ -300,12 +329,14 @@ pub(crate) async fn require_active_discussion_strand(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
     strand_id: &arkret_wire::StrandId,
+    scope: &arkret_wire::ScopeRef,
 ) -> PersistenceResult<()> {
     // Strand identities preserve the creating Event's token. Resolve that
     // immutable source separately from the current value's covering Commit.
     let creating_event =
         arkret_wire::EventIdentityKey::new(strand_id.digest_suite_code(), strand_id.digest_bytes())
             .event_id();
+    let stream = message_scope_stream(realm_id, scope)?;
     let strand = diesel::sql_query(
         "SELECT s.value,s.current_stream_position,created.envelope->>'event_id' AS created_event_id \
          FROM strand_current_results s \
@@ -315,16 +346,17 @@ pub(crate) async fn require_active_discussion_strand(
          JOIN realm_commits creation ON creation.event_pk=created.pk AND creation.realm_id=s.realm_id \
          WHERE s.realm_id=$1 AND s.strand_id=$2 \
            AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id \
+           AND c.stream_ref=$4 \
            AND e.state='committed' AND e.kind IN ('ak.strand.create','ak.strand.update','ak.strand.archive','ak.strand.restore','ak.strand.stage.set') \
            AND created.kind='ak.strand.create' AND created.state='committed' \
-           AND creation.stream_ref->>'kind'='realm' AND creation.stream_ref->>'realm_id'=s.realm_id \
+           AND creation.stream_ref=c.stream_ref \
            AND creation.stream_position<=c.stream_position \
          FOR SHARE OF s",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(strand_id.as_str())
     .bind::<diesel::sql_types::Binary, _>(creating_event.token_bytes().to_vec())
+    .bind::<Jsonb, _>(serde_json::to_value(&stream).map_err(PersistenceError::database)?)
     .get_result::<StrandRow>(&mut *conn)
     .await
     .optional()
@@ -340,13 +372,10 @@ pub(crate) async fn require_active_discussion_strand(
             "Message target Strand identity has no creating Event",
         ));
     }
-    if strand
-        .value
-        .get("scope_circle_id")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Err(conflict("Message target Strand is outside the Realm scope"));
-    }
+    let expected_circle = match scope {
+        arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id.as_str()),
+        _ => None,
+    };
     match strand.value.get("state").and_then(Value::as_str) {
         Some("active") => {}
         Some("redacted") => {
@@ -362,6 +391,9 @@ pub(crate) async fn require_active_discussion_strand(
             ));
         }
     }
+    if strand.value.get("scope_circle_id").and_then(Value::as_str) != expected_circle {
+        return Err(conflict("Message target Strand is outside the Realm scope"));
+    }
     let discussion = strand
         .value
         .pointer("/tracks/discussion")
@@ -375,15 +407,50 @@ pub(crate) async fn require_active_discussion_strand(
     let changed = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
          WHERE e.realm_id=$1 AND e.state='committed' AND c.stream_position>$2 \
+           AND c.stream_ref=$3 \
            AND ((e.kind LIKE 'ak.strand.%' AND e.kind NOT IN ('ak.strand.create','ak.strand.update','ak.strand.archive','ak.strand.restore','ak.strand.stage.set','ak.strand.watch.set','ak.strand.move','ak.strand.reorder')) OR e.kind='ak.redaction')) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<BigInt, _>(strand.current_stream_position)
+    .bind::<Jsonb, _>(serde_json::to_value(&stream).map_err(PersistenceError::database)?)
     .get_result::<PresentRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
     if changed.present {
         return Err(conflict("Message Strand has an unprojected successor"));
+    }
+    Ok(())
+}
+
+fn message_scope_stream(
+    realm: &arkret_wire::RealmId,
+    scope: &arkret_wire::ScopeRef,
+) -> PersistenceResult<arkret_wire::CommitStreamRef> {
+    match scope {
+        arkret_wire::ScopeRef::Realm { realm_id } if realm_id == realm => {
+            Ok(arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            })
+        }
+        arkret_wire::ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } if realm_id == realm => Ok(arkret_wire::CommitStreamRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: circle_id.clone(),
+        }),
+        _ => Err(conflict("Message has no admitted effective scope")),
+    }
+}
+
+fn require_message_source_stream(
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if message_scope_stream(&event.realm_id, &event.scope_ref)? != commit.stream_ref
+        || event.event_id != commit.event_ref
+    {
+        return Err(conflict("Message differs from its accepting source stream"));
     }
     Ok(())
 }
@@ -469,6 +536,7 @@ pub(crate) struct MessageTarget {
     pub(crate) author: arkret_wire::ActorId,
     pub(crate) created_at: chrono::DateTime<chrono::Utc>,
     pub(crate) strand_id: arkret_wire::StrandId,
+    pub(crate) scope_ref: arkret_wire::ScopeRef,
 }
 
 /// Lock the Message's `message_revision` row and read its creating
@@ -496,7 +564,7 @@ pub(crate) async fn locked_message_target(
     let creation = diesel::sql_query(
         "SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
          WHERE e.id=$1 AND e.realm_id=$2 AND e.kind='ak.message.create' AND e.state='committed' \
-           AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=e.realm_id",
+           AND c.realm_id=e.realm_id",
     )
     .bind::<diesel::sql_types::Binary, _>(token.to_vec())
     .bind::<Text, _>(realm_id.as_str())
@@ -528,6 +596,7 @@ pub(crate) async fn locked_message_target(
         author: created.actor_id,
         created_at: created.created_at,
         strand_id: payload.strand_id,
+        scope_ref: created.scope_ref,
     })
 }
 
@@ -558,17 +627,7 @@ pub(crate) fn require_message_write_carrier(
 ) -> PersistenceResult<()> {
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id)
-        || commit.stream_ref
-            != (arkret_wire::CommitStreamRef::Realm {
-                realm_id: event.realm_id.clone(),
-            })
-        || commit.event_ref != event.event_id
-    {
-        return Err(conflict(
-            "Message revise and redact require the Realm source stream",
-        ));
-    }
+    require_message_source_stream(event, commit)?;
     if event.payload.contains_key("mimi_provenance") {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
@@ -602,7 +661,20 @@ pub(crate) async fn commit_message_revise_current_result_in_connection(
     }
     require_message_write_carrier(event, commit)?;
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
-    if !supported_plain_text_revision(&payload) {
+    let encrypted = payload.get("encrypted_content").is_some()
+        && payload.as_object().is_some_and(|object| {
+            object.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "message_id"
+                        | "track_name"
+                        | "reason"
+                        | "encrypted_content"
+                        | "encrypted_metadata"
+                )
+            })
+        });
+    if !encrypted && !supported_plain_text_revision(&payload) {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
     let typed: arkret_models_collaboration::events_payloads::message::MessageRevisePayload =
@@ -613,6 +685,16 @@ pub(crate) async fn commit_message_revise_current_result_in_connection(
         crate::realm_authorization_cut::RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_governed_member(&event.kind)?;
     let target = locked_message_target(conn, &event.realm_id, &typed.message_id).await?;
+    if target.scope_ref != event.scope_ref {
+        return Err(PersistenceError::NotFound("message not found".to_owned()));
+    }
+    crate::moderation_report_current_results::ensure_scope_member(
+        conn,
+        &event.realm_id,
+        &event.scope_ref,
+        &event.actor_id,
+    )
+    .await?;
     cut.require_authored_target_in_connection(
         conn,
         event,
@@ -624,14 +706,25 @@ pub(crate) async fn commit_message_revise_current_result_in_connection(
         commit.committed_at,
     )
     .await?;
+    crate::message_interactions::require_message_actor(conn, event, commit.committed_at).await?;
     if message_is_redacted(conn, &event.realm_id, &target.message_id).await? {
         return Err(PersistenceError::Conflict(format!(
             "{}: a redacted Message cannot be revised",
             soland_storage::ConflictCode::FailedPrecondition
         )));
     }
-    require_active_discussion_strand(conn, &event.realm_id, &target.strand_id).await?;
-    require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    require_active_discussion_strand(conn, &event.realm_id, &target.strand_id, &event.scope_ref)
+        .await?;
+    if encrypted {
+        crate::mls_group_current_results::require_mls_send_gate_in_connection(conn, event).await?;
+    } else {
+        if matches!(&event.scope_ref, arkret_wire::ScopeRef::Circle { .. }) {
+            return Err(conflict(
+                "Circle Message revision requires its admitted MLS carrier",
+            ));
+        }
+        require_plaintext_message_service(conn, &event.realm_id, commit).await?;
+    }
     let replaced = diesel::sql_query(
         "UPDATE message_revision_current_results SET current_commit_id=$3, \
          current_stream_position=$4, value=$5, updated_at=$6 \

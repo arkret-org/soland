@@ -581,7 +581,7 @@ CREATE TABLE public.applet_managed_identities (
     CONSTRAINT applet_managed_identities_pkey PRIMARY KEY (applet_id, target_station_id),
     CONSTRAINT applet_managed_identities_record_key_check CHECK (
         record->>'applet_id' = applet_id
-        AND record->>'bot_actor_station_id' = target_station_id
+        AND record->'bot_actor_id'->'account_id'->>'station_id' = target_station_id
     )
 );
 
@@ -644,6 +644,24 @@ CREATE TABLE public.applet_transactions (
 
 CREATE INDEX applet_transactions_received_idx ON public.applet_transactions USING btree (received_at);
 
+CREATE TABLE public.applet_authoring_completions (
+    applet_id text NOT NULL,
+    request_digest text NOT NULL,
+    source_id text NOT NULL,
+    destination_id text NOT NULL,
+    endpoint text NOT NULL,
+    idempotency_key text NOT NULL,
+    context jsonb NOT NULL,
+    projection_attestation jsonb NOT NULL,
+    accepted_at timestamp with time zone NOT NULL,
+    delivered_at timestamp with time zone,
+    PRIMARY KEY (applet_id, request_digest)
+);
+
+CREATE INDEX applet_authoring_completions_pending_idx
+    ON public.applet_authoring_completions (accepted_at)
+    WHERE delivered_at IS NULL;
+
 CREATE TABLE public.applet_authoring_previews (
     subject_key text NOT NULL,
     basis_digest text NOT NULL,
@@ -669,6 +687,20 @@ CREATE UNIQUE INDEX applet_authoring_previews_one_current_idx
 CREATE INDEX applet_authoring_previews_expiry_idx
     ON public.applet_authoring_previews (expires_at)
     WHERE status = 'current';
+
+-- Internal exact-request completion of the fixed local Applet authoring unit.
+CREATE TABLE public.applet_authoring_units (
+    actor_key text NOT NULL,
+    operation_id text NOT NULL,
+    idempotency_key text NOT NULL,
+    canonical_request_hash text NOT NULL,
+    request_digest text NOT NULL,
+    committed_event_refs jsonb NOT NULL,
+    response_body jsonb NOT NULL,
+    authoring_context jsonb NOT NULL,
+    accepted_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (actor_key, operation_id, idempotency_key)
+);
 
 CREATE TABLE public.audit_logs (
     id uuid PRIMARY KEY,
@@ -967,9 +999,30 @@ FOR EACH ROW EXECUTE FUNCTION public.record_realm_commit_event_kind();
 -- bootstrap snapshot is verified and its typed current installed, the
 -- stream is pending anchor (`anchor_commit_id` is NULL): local reads are
 -- temporarily unavailable and later replicas are `dependency_missing`.
+-- Internal cache of verified, disclosed SDK authorization current rows.
+CREATE TABLE public.replica_authorization_cuts (
+ realm_id TEXT NOT NULL,
+ source_stream_ref JSONB NOT NULL,
+ head_commit_id TEXT NOT NULL,
+ head_stream_position BIGINT NOT NULL CHECK(head_stream_position BETWEEN 0 AND 9007199254740991),
+ verified_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,source_stream_ref)
+);
+
+CREATE TABLE public.replica_authorization_rows (
+ realm_id TEXT NOT NULL,
+ selector JSONB NOT NULL,
+ source_stream_ref JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,selector)
+);
+
 CREATE TABLE public.replica_stream_anchors (
     stream_key text PRIMARY KEY,
-    realm_id text NOT NULL UNIQUE,
+    realm_id text NOT NULL,
     join_commit_id text NOT NULL UNIQUE REFERENCES public.realm_commits(commit_id),
     member_account_id jsonb NOT NULL,
     anchor_commit_id text,
@@ -3837,20 +3890,28 @@ CREATE TABLE public.one_time_keys (
     PRIMARY KEY (actor_id, device_id, position)
 );
 
--- MID-1..6: accepted `ak.member.identity.update` events, stored verbatim.
--- Startup hydration rebuilds the in-memory effective-set registry from these
--- rows so the R3.2 digests and roster projection survive restart.
-CREATE TABLE public.member_identity_events (
-    event_id text PRIMARY KEY,
+-- Accepted whole-value Applet registration and its covering Commit.
+CREATE TABLE public.applet_registration_current_results (
     realm_id text NOT NULL,
-    actor_id text NOT NULL,
-    segment text NOT NULL,
-    payload_digest text NOT NULL,
-    replaces jsonb NOT NULL DEFAULT '[]'::jsonb,
-    raw_event jsonb NOT NULL
+    applet_id text NOT NULL,
+    current_commit_id text NOT NULL REFERENCES public.realm_commits(commit_id),
+    current_stream_position bigint NOT NULL CHECK (current_stream_position >= 0),
+    value jsonb NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (realm_id, applet_id)
 );
 
-CREATE INDEX member_identity_events_subject_idx ON public.member_identity_events USING btree (realm_id, actor_id, segment);
+-- Registered append-only member identity assertions and their covering Commit.
+CREATE TABLE public.member_identity_updates_current_results (
+    realm_id text NOT NULL,
+    member_id text NOT NULL,
+    segment text NOT NULL CHECK (segment = 'member_identity'),
+    current_commit_id text NOT NULL REFERENCES public.realm_commits(commit_id),
+    current_stream_position bigint NOT NULL CHECK (current_stream_position >= 0),
+    value jsonb NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (realm_id, member_id, segment)
+);
 
 -- Local handle-claim evidence cache behind the member identity registry.
 CREATE TABLE public.member_identity_handle_claims (
@@ -4337,6 +4398,22 @@ CREATE TABLE realm_link_current_results (
 CREATE INDEX realm_link_current_result_gate
  ON realm_link_current_results(realm_id,link_kind,status,target_realm_id);
 
+CREATE TABLE realm_organization_current_results (
+ realm_id TEXT NOT NULL,
+ organization_id TEXT NOT NULL,
+ relationship TEXT NOT NULL CHECK(relationship IN ('owner','governance','sponsor','directory_certifier')),
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ organization_public_key BYTEA NOT NULL CHECK(octet_length(organization_public_key)=32),
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,organization_id,relationship),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'realm_id'=realm_id),
+ CHECK(value->>'organization_id'=organization_id),
+ CHECK(value->>'relationship'=relationship)
+);
+
 CREATE TABLE member_state_current_results (
  realm_id TEXT NOT NULL,
  member_id TEXT NOT NULL,
@@ -4355,6 +4432,21 @@ CREATE INDEX member_state_current_result_membership
 -- Circle create is a Realm-stream Event; membership writes are on that
 -- Circle's own Commit stream. These rows are derived only in the accepting
 -- transaction and carry the exact accepted revision.
+CREATE TABLE call_state_current_results (
+ realm_id TEXT NOT NULL,
+ call_id TEXT NOT NULL,
+ create_event_id TEXT NOT NULL UNIQUE,
+ source_stream_ref JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,call_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(source_stream_ref->>'kind' IN ('realm','circle')),
+ CHECK(source_stream_ref->>'realm_id'=realm_id)
+);
+
 CREATE TABLE circle_current_results (
  realm_id TEXT NOT NULL,
  circle_id TEXT NOT NULL PRIMARY KEY,
@@ -4373,7 +4465,7 @@ CREATE TABLE circle_current_results (
 );
 CREATE TABLE circle_member_state_current_results (
  realm_id TEXT NOT NULL,
- circle_id TEXT NOT NULL REFERENCES circle_current_results(circle_id),
+ circle_id TEXT NOT NULL,
  member_id TEXT NOT NULL,
  membership TEXT NOT NULL CHECK(membership IN ('join','knock','leave','ban')),
  current_commit_id TEXT NOT NULL,
@@ -4388,6 +4480,8 @@ CREATE TABLE circle_member_state_current_results (
 );
 CREATE INDEX circle_member_state_current_result_membership
  ON circle_member_state_current_results(circle_id,membership,member_id);
+CREATE INDEX circle_member_state_current_results_realm
+ ON circle_member_state_current_results(realm_id,member_id,circle_id);
 
 -- Native Sidecar genesis is a Realm-stream Event. This accepted current is
 -- separate from the service-local agent_sidecars projection and permanently
@@ -4650,6 +4744,45 @@ CREATE TABLE object_redaction_current_results (
 -- Event itself, keyed by its own EventId and stored with the exact complete
 -- signed payload at the covering RealmCommit. The report queue item is a
 -- read-side View over this family; it has no second writable state here.
+-- Existing franking typed current, published from the exact durable receipt job.
+CREATE TABLE moderation_franking_proof_current_results (
+ realm_id TEXT NOT NULL,
+ target_event_id TEXT NOT NULL,
+ source_stream_ref JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,target_event_id),
+ CHECK(jsonb_typeof(source_stream_ref)='object'),
+ CHECK(jsonb_typeof(value)='object')
+);
+
+-- Internal restart-safe work; the signed Event bytes and nonce are fixed once.
+CREATE TABLE moderation_franking_jobs (
+ realm_id TEXT NOT NULL,
+ target_event_id TEXT NOT NULL,
+ received_by TEXT NOT NULL,
+ received_at TIMESTAMPTZ NOT NULL,
+ prepared_event JSONB,
+ verification_key BYTEA,
+ PRIMARY KEY(realm_id,target_event_id,received_by),
+ CHECK((prepared_event IS NULL)=(verification_key IS NULL)),
+ CHECK(verification_key IS NULL OR octet_length(verification_key)=32)
+);
+
+CREATE TABLE moderation_franking_proof_nonces (
+ realm_id TEXT NOT NULL,
+ received_by TEXT NOT NULL,
+ replay_nonce TEXT NOT NULL,
+ proof_event_id TEXT NOT NULL,
+ consumed_at TIMESTAMPTZ NOT NULL,
+ expires_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,received_by,replay_nonce),
+ CHECK(expires_at>consumed_at)
+);
+CREATE INDEX moderation_franking_proof_nonces_expiry ON moderation_franking_proof_nonces(realm_id,received_by,expires_at);
+
 CREATE TABLE moderation_report_current_results (
  realm_id TEXT NOT NULL,
  report_event_id TEXT NOT NULL PRIMARY KEY,

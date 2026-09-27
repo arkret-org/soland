@@ -14,6 +14,10 @@ use soland_test_support::AppStateTestExt as _;
 use soland_test_support::pcr_genesis::PcrGenesisFixture;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[path = "../../storage-postgres/tests/support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
+
 const ACCOUNT_DATA_PATH: &str = "/_arkret/self/account_data/ak.push_rules";
 const INTROSPECTION_PATH: &str = "/_coauth/internal/session-grants/introspect";
 
@@ -208,6 +212,8 @@ async fn account_grant_session(fixture: &PcrGenesisFixture) -> GrantSession {
                 arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
                 arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_GET_V1,
                 arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
+                "ak.self.read_cursor.command.advance.v1",
+                "ak.self.read_cursor.read.list.v1",
             ],
             "expires_at": arkret_canonical::format_timestamp_canonical(
                 chrono::Utc::now() + chrono::Duration::minutes(5),
@@ -263,10 +269,21 @@ impl GrantSession {
         operation: &str,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        self.request_path(method, ACCOUNT_DATA_PATH, operation, body)
+            .await
+    }
+
+    async fn request_path(
+        &self,
+        method: &str,
+        path: &str,
+        operation: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let htu = format!(
             "{}{}",
             self.state.config().public_base_url.trim_end_matches('/'),
-            ACCOUNT_DATA_PATH
+            path.split('?').next().unwrap()
         );
         let proof = arkret_signatures::dpop::build_dpop_proof(
             &arkret_signatures::dpop::DpopProofRequest::new(method, htu)
@@ -274,11 +291,12 @@ impl GrantSession {
             &self.holder_key,
         )
         .expect("DPoP proof builds");
-        let url = format!("http://server{ACCOUNT_DATA_PATH}");
+        let url = format!("http://server{path}");
         let request = match method {
             "PUT" => TestClient::put(url),
             "DELETE" => TestClient::delete(url),
             "GET" => TestClient::get(url),
+            "POST" => TestClient::post(url),
             _ => panic!("unexpected method"),
         }
         .add_header("authorization", format!("DPoP {}", self.token), true)
@@ -488,5 +506,120 @@ async fn account_data_write_rejects_another_actors_signed_event() {
             Some(StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST)
         ),
         "holder isolation must reject a different actor's Event"
+    );
+}
+
+#[tokio::test]
+async fn signed_read_cursor_round_trip_replays_without_entering_the_realm_log() {
+    let service_did = soland_test_support::fixture_service_identity(&test_config())
+        .identity()
+        .unwrap()
+        .did
+        .clone();
+    let fixture = PcrGenesisFixture::new(service_did);
+    let session = account_grant_session(&fixture).await;
+    let persistence = session.state.test_persistence();
+    let unit = ordinary_realm::bootstrap_unit_for_account(
+        &format!("read-cursor-{}", uuid::Uuid::now_v7()),
+        &fixture.history.account,
+        &session.state.service_did(),
+    );
+    unit.validate().unwrap();
+    persistence
+        .authority_commits()
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let initial = unit.transactions.last().unwrap();
+    let realm_id = initial.event.realm_id.clone();
+    let event = arkret_wire::test_support::raw_event_at(
+        EventKind::ReadCursorAdvance.as_str(),
+        ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        fixture.history.account.principal_id.clone(),
+        session.state.service_core_id(),
+        json!({
+            "schema":"ak.schema.read_cursor.v1",
+            "actor_id":arkret_wire::ActorId::account(fixture.history.account.clone()),
+            "device_id":fixture.history.founding_device_id, "realm_id":realm_id,
+            "read_scope":{"kind":"realm"},
+            "position":{"event_id":initial.event.event_id,"hlc":"019041000000-0001-1dae0001"},
+        }),
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let event = soland_test_support::signed_event::sign_fixture_event(
+        event,
+        fixture.history.did.as_str(),
+        fixture.history.founding_device_id.as_str(),
+        fixture.history.founding_device_signing_seed,
+    );
+    let advance_id = event.event_id.clone();
+    let created_at = arkret_canonical::format_timestamp_canonical(event.created_at);
+    let body = arkret_models_collaboration::objects::read_receipts::ReadCursorAdvanceRequestBody {
+        advance_event: arkret_wire::EventAdmissionSubmission::new(event),
+    };
+    let body = serde_json::to_value(body).unwrap();
+    let (status, first) = session
+        .request_path(
+            "POST",
+            "/_arkret/self/read-cursors",
+            "ak.self.read_cursor.command.advance.v1",
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(
+        first["position"]["event_id"],
+        initial.event.event_id.as_str()
+    );
+    assert_eq!(first["updated_at"], created_at);
+    let (status, replay) = session
+        .request_path(
+            "POST",
+            "/_arkret/self/read-cursors",
+            "ak.self.read_cursor.command.advance.v1",
+            Some(body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay, first);
+    let (status, list) = session
+        .request_path(
+            "GET",
+            &format!("/_arkret/self/read-cursors?realm_id={realm_id}"),
+            "ak.self.read_cursor.read.list.v1",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["markers"], json!([first]));
+    let stream = arkret_wire::CommitStreamRef::Realm { realm_id };
+    assert_eq!(
+        persistence
+            .authority_commits()
+            .stream_head(&stream)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit_id,
+        initial.commit.commit_id
+    );
+    assert!(
+        persistence
+            .events()
+            .get(advance_id.as_str())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        persistence
+            .authority_commits()
+            .committed_event(&advance_id)
+            .await
+            .unwrap()
+            .is_none()
     );
 }

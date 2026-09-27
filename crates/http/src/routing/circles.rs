@@ -31,9 +31,9 @@
 
 use arkret_identifiers::{CircleId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
-    CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody, CircleMemberRequestBody,
-    CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
-    CircleScopeRotateRequestBody, CircleView,
+    Circle, CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody,
+    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
+    CircleScopeRotateRequestBody, CircleState, CircleView,
 };
 use arkret_wire::{ActorId, Event};
 use salvo::oapi::endpoint;
@@ -42,7 +42,6 @@ use salvo::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use soland_domain::reducer::{CircleLifecycleState, CircleProjection, ProjectionState};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
@@ -72,115 +71,65 @@ where
         .map_err(|e| AppError::internal(format!("stored circle {field}: {e}")))
 }
 
-fn circle_view_from_projection(
-    projection: &ProjectionState,
-    c: &CircleProjection,
-    actor: &str,
-) -> Result<CircleView, AppError> {
-    let include_member_details = c.members.contains(actor);
-    let viewer_membership = projection
-        .circle_membership(&c.circle_id, actor)
-        .map(|membership| parse_sdk_field("viewer_membership", &membership.state))
-        .transpose()?;
-    circle_view_from(c, viewer_membership, include_member_details)
-}
-
-fn circle_view_from(
-    c: &CircleProjection,
-    viewer_membership: Option<CircleMembership>,
-    include_member_details: bool,
-) -> Result<CircleView, AppError> {
-    Ok(CircleView {
-        circle_id: parse_sdk_field("circle_id", &c.circle_id)?,
-        realm_id: parse_sdk_field("realm_id", &c.realm_id)?,
-        profile_ref: c.profile_ref.clone(),
-        title: c.title.clone(),
-        summary: c.summary.clone(),
-        display: parse_sdk_field("display", &c.display)?,
-        directory_visibility: parse_sdk_field("directory_visibility", &c.directory_visibility)?,
-        join_rule: parse_sdk_field("join_rule", &c.join_rule)?,
-        history_access: parse_sdk_field("history_access", &c.history_access)?,
-        mls_group_id: c.mls_group_ref.clone(),
-        state: parse_sdk_field("state", c.state.as_str())?,
-        viewer_membership,
-        member_ids: if include_member_details {
-            c.members
-                .iter()
-                .map(|member| parse_stored_circle_actor(member))
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            Vec::new()
-        },
-        created_by: parse_stored_circle_actor(&c.created_by)?,
-        created_at: c.created_at,
-        updated_by: c
-            .updated_by
-            .as_ref()
-            .map(|actor| parse_stored_circle_actor(actor))
-            .transpose()?,
-        updated_at: c.updated_at,
-    })
-}
-
 fn parse_stored_circle_actor(value: &str) -> Result<ActorId, AppError> {
     serde_json::from_str(value)
         .map_err(|error| AppError::internal(format!("stored circle ActorId: {error}")))
-}
-
-fn circle_directory_visible_to_actor(
-    projection: &ProjectionState,
-    circle: &CircleProjection,
-    actor: &str,
-) -> bool {
-    if serde_json::from_str::<ActorId>(actor).is_err()
-        || (projection
-            .agent_membership_binding(&circle.realm_id, actor)
-            .is_some()
-            && !projection.effective_agent_membership_base(&circle.realm_id, actor))
-    {
-        return false;
-    }
-    circle.members.contains(actor)
-        || (circle.directory_visibility == "realm_members"
-            && projection
-                .member(&circle.realm_id, actor)
-                .is_some_and(|member| member.state == "join"))
-}
-
-fn is_reserved_sidecar_circle(circle: &CircleProjection) -> bool {
-    circle.title == "Agent Sidecar Scope"
-        || circle
-            .display
-            .pointer("/short_name")
-            .and_then(Value::as_str)
-            .is_some_and(|short_name| short_name.starts_with("SC-"))
-}
-
-fn is_ordinary_circle(circle: &CircleProjection) -> bool {
-    circle.profile_ref.is_none() && !is_reserved_sidecar_circle(circle)
 }
 
 fn scope_rotate_failed(reason: &'static str, detail: impl Into<String>) -> AppError {
     crate::app_error!(FailedPrecondition, detail.into()).with_rejection_code(reason)
 }
 
-fn circle_projection_snapshot(
+async fn durable_circle_view(
     state: &AppState,
     circle_id: &str,
-) -> Result<CircleProjection, AppError> {
-    let projection = state.projections().snapshot();
-    projection
-        .circles
-        .get(circle_id)
-        .cloned()
+    actor: &ActorId,
+) -> Result<CircleView, AppError> {
+    let id = CircleId::new(circle_id.to_owned())
+        .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?;
+    state
+        .authority_commits()
+        .circle_view_for_actor(&id, actor)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("circle not found"))
 }
 
+fn accepted_create_view(event: &Event, circle_id: CircleId) -> Result<CircleView, AppError> {
+    let circle: Circle = serde_json::from_value(
+        event
+            .payload
+            .get("object")
+            .cloned()
+            .ok_or_else(|| AppError::internal("accepted Circle create has no object"))?,
+    )
+    .map_err(|e| AppError::internal(format!("accepted Circle object: {e}")))?;
+    Ok(CircleView {
+        circle_id,
+        realm_id: circle.realm_id,
+        profile_ref: circle.profile_ref,
+        title: circle.title,
+        summary: circle.summary,
+        display: circle.display,
+        directory_visibility: circle.directory_visibility,
+        join_rule: circle.join_rule,
+        history_access: circle.history_access,
+        mls_group_id: None,
+        state: circle.state,
+        viewer_membership: None,
+        member_ids: Vec::new(),
+        created_by: circle.created_by,
+        created_at: circle.created_at,
+        updated_by: circle.updated_by,
+        updated_at: circle.updated_at,
+    })
+}
+
 fn validate_scope_rotate_events(
-    circle: &CircleProjection,
+    circle: &CircleView,
     events: &[Event],
 ) -> Result<Option<String>, AppError> {
-    if circle.state != CircleLifecycleState::Active {
+    if circle.state != CircleState::Active {
         return Err(scope_rotate_failed(
             "circle_not_active",
             "circle scope rotation requires an active Circle",
@@ -190,7 +139,7 @@ fn validate_scope_rotate_events(
     // the reducer sets it from the Circle's own accepted `ak.mls.genesis` and
     // never clears it, so `None` is exactly the plaintext scope this rotation
     // cannot act on.
-    if circle.mls_group_ref.is_none() {
+    if circle.mls_group_id.is_none() {
         return Err(scope_rotate_failed(
             "circle_scope_not_mls_backed",
             "circle scope rotation requires an installed RFC 9420 group",
@@ -204,7 +153,7 @@ fn validate_scope_rotate_events(
     }
 
     let mut saw_commit = false;
-    let mut group_ref = circle.mls_group_ref.clone();
+    let mut group_ref = circle.mls_group_id.clone();
     for event in events {
         let kind = &event.kind;
         match kind {
@@ -216,7 +165,7 @@ fn validate_scope_rotate_events(
                 ));
             }
         }
-        if event.realm_id.as_str() != circle.realm_id {
+        if event.realm_id.as_str() != circle.realm_id.as_str() {
             return Err(scope_rotate_failed(
                 "mls_rotate_realm_mismatch",
                 "MLS rotate event realm_id must match the Circle realm_id",
@@ -226,8 +175,8 @@ fn validate_scope_rotate_events(
             arkret_wire::ScopeRef::Circle {
                 realm_id,
                 circle_id,
-            } if realm_id.as_str() == circle.realm_id && circle_id.as_str() == circle.circle_id => {
-            }
+            } if realm_id.as_str() == circle.realm_id.as_str()
+                && circle_id.as_str() == circle.circle_id.as_str() => {}
             _ => {
                 return Err(scope_rotate_failed(
                     "mls_rotate_scope_mismatch",
@@ -298,14 +247,11 @@ async fn list_circles(
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
-    let projection = state.projections().snapshot();
-    let circles = projection
-        .circles_for_realm(realm_id.as_str())
-        .iter()
-        .filter(|c| is_ordinary_circle(c))
-        .filter(|c| circle_directory_visible_to_actor(&projection, c, &actor.to_string()))
-        .map(|c| circle_view_from_projection(&projection, c, &actor.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let circles = state
+        .authority_commits()
+        .circle_views_for_actor(&realm_id, &actor)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
     json_ok(CircleList {
         realm_id,
         circle_views: circles,
@@ -329,20 +275,7 @@ async fn get_circle(
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
-    let projection = state.projections().snapshot();
-    let circle = projection
-        .circle(&circle_id)
-        .ok_or_else(|| AppError::not_found("circle not found"))?;
-    if !is_ordinary_circle(circle)
-        || !circle_directory_visible_to_actor(&projection, circle, &actor.to_string())
-    {
-        return Err(AppError::not_found("circle not found"));
-    }
-    json_ok(circle_view_from_projection(
-        &projection,
-        circle,
-        &actor.to_string(),
-    )?)
+    json_ok(durable_circle_view(state, &circle_id, &actor).await?)
 }
 
 #[endpoint(
@@ -366,16 +299,9 @@ async fn post_circle(
     // caller's Event, never minted here. A service that minted it would be
     // naming an object no receiver can agree with.
     let circle_id = caller_signed_circle_create_id(&actor, &submission.event)?;
+    let accepted = submission.event.clone();
     submit_caller_signed_circle_event(state, &session, submission).await?;
-    let projection = state.projections().snapshot();
-    let circle = projection
-        .circle(circle_id.as_str())
-        .ok_or_else(|| AppError::internal("circle create accepted but not projected"))?;
-    json_ok(circle_view_from_projection(
-        &projection,
-        circle,
-        &actor.to_string(),
-    )?)
+    json_ok(accepted_create_view(&accepted, circle_id)?)
 }
 
 /// Check what the request wrapper alone can decide about a caller-signed
@@ -473,14 +399,7 @@ async fn post_circle_member(
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
     let submission = body.into_inner().member_event;
-    // Neither the strict-subset invariant nor the `ak.circle.member.manage`
-    // decision is re-implemented here any more. Both were mirrored in this handler
-    // only because `accept_local_operations` projects fire-and-forget and drops the
-    // reducer's `Rejected` effect; ordinary Event admission returns it. The
-    // capability itself is decided by the policy layer against projected grants
-    // (`events/operations/policy/realm_circle.rs`), which is also what makes a
-    // request-supplied verdict worthless — and `circle_member_state_payload` is
-    // closed, so the caller could not carry one even if it wanted to.
+    // The Event unit decides membership against the accepted parent and Circle cut.
     let target = caller_signed_circle_member_target(&actor, &circle_id, &submission.event)?;
     submit_caller_signed_circle_event(state, &session, submission).await?;
     json_ok(CircleMembershipOutcome {
@@ -602,13 +521,12 @@ async fn delete_circle_member(
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
     let actor_id = actor_id.into_inner();
-    let circle = circle_projection_snapshot(state, &circle_id)?;
     let submission = body.into_inner().member_event;
     let target = caller_signed_circle_member_delete_target(
         &actor,
         &circle_id,
         &actor_id,
-        &circle.realm_id,
+        submission.event.realm_id.as_str(),
         &submission.event,
     )?;
     submit_caller_signed_circle_event(state, &session, submission).await?;
@@ -636,8 +554,10 @@ async fn post_scope_rotate(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let circle_id = circle_id.into_inner();
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let body = body.into_inner();
-    let circle = circle_projection_snapshot(state, &circle_id)?;
+    let circle = durable_circle_view(state, &circle_id, &actor).await?;
     validate_scope_rotate_events(&circle, &body.events)?;
 
     let mut accepted = Vec::new();
@@ -687,14 +607,9 @@ async fn post_scope_rotate(
         )));
     }
 
-    let mls_group_ref = {
-        let projection = state.projections().snapshot();
-        let circle = projection
-            .circles
-            .get(&circle_id)
-            .ok_or_else(|| AppError::not_found("circle not found"))?;
-        circle.mls_group_ref.clone()
-    };
+    let mls_group_ref = durable_circle_view(state, &circle_id, &actor)
+        .await?
+        .mls_group_id;
 
     json_ok(CircleScopeRotateOutcome {
         circle_id: CircleId::new(circle_id)

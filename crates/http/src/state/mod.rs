@@ -7,6 +7,7 @@ pub mod did_resolver_chain;
 mod account_authority_device_pairing;
 mod actor_private;
 mod app_state;
+mod applet_completion;
 mod authority_accountability_grant;
 mod authority_agent_control;
 mod authority_agent_pcr_genesis;
@@ -15,6 +16,7 @@ pub(crate) mod authority_consent;
 mod authority_contact;
 mod authority_direct_conversation;
 mod authority_forward;
+mod authority_franking;
 mod authority_key_backup_pointer;
 mod authority_mls_unit;
 mod authority_port;
@@ -25,7 +27,6 @@ mod member_identity;
 mod notification;
 mod replica_anchor;
 mod service_route_fetcher;
-
 #[doc(hidden)]
 pub use account_authority_device_pairing::AccountAuthorityDevicePairingPort;
 pub(crate) use account_authority_device_pairing::PrivateAccountAuthorityDevicePairing;
@@ -37,6 +38,9 @@ pub use app_state::{
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
     getrandom_seed, realm_genesis_payload,
 };
+pub use applet_completion::{
+    deliver_pending_applet_completions, spawn_pending_applet_completion_sweeper,
+};
 pub(crate) use authority_contact::{
     ContactProducer, commit_contact_event_unit, verify_contact_producer,
 };
@@ -44,10 +48,11 @@ pub(crate) use authority_contact::{
 pub(crate) use authority_forward::{
     admit_forwarded_event, forward_self_event, fresh_producer_device_evidence,
 };
+pub use authority_franking::spawn_pending_franking_sweeper;
 pub(crate) use authority_producer_validation::{
     verify_account_device_payload_proof, verify_account_device_producer, verify_self_event_producer,
 };
-pub(crate) use authority_self_event_unit::submit_self_moderation_report;
+pub(crate) use authority_self_event_unit::{submit_applet_event, submit_self_moderation_report};
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
     MemberIdentitySubjectKey,

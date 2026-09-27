@@ -16,10 +16,9 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{RealmCommitId, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationLifecyclePhase, RealmOrganizationRelationshipList,
-    RealmOrganizationRelationshipRow,
 };
 use arkret_wire::DidCoreId;
 use salvo::oapi::endpoint;
@@ -104,49 +103,17 @@ async fn list_realm_organizations_impl(
     }
     let now = chrono::Utc::now();
 
-    let mut relationships = Vec::new();
-    // Stable organization ids with a currently-verified statement: these are excluded
-    // from the declared-hint list so a hint never duplicates a verified row.
-    let mut verified_org_ids: BTreeSet<DidCoreId> = BTreeSet::new();
-    {
-        let projection = state.projections().snapshot();
-        for row in projection.realm_organization_statements_for_realm(&realm_id) {
-            let lifecycle_phase = if row.is_effective_active(now) {
-                verified_org_ids.insert(row.organization_id.clone());
-                RealmOrganizationLifecyclePhase::VerifiedActive
-            } else {
-                RealmOrganizationLifecyclePhase::RevokedOrExpired
-            };
-            let control_scopes = row
-                .control_scopes
-                .iter()
-                .map(|s| de_str("control_scope", s))
-                .collect::<Result<Vec<_>, _>>()?;
-            let realm_commit_ref = row
-                .realm_commit_ref
-                .as_deref()
-                .map(|s| de_str::<RealmCommitId>("realm_commit_ref", s))
-                .transpose()?;
-            relationships.push(RealmOrganizationRelationshipRow {
-                statement_id: row.statement_id.clone(),
-                organization_id: row.organization_id.clone(),
-                relationship: de_str("relationship", &row.relationship)?,
-                status: de_str("status", &row.status)?,
-                control_scopes,
-                issued_at: row.issued_at,
-                not_before: row.not_before,
-                expires_at: row.expires_at,
-                supersedes_statement_id: row.supersedes_statement_id.clone(),
-                revokes_statement_id: row.revokes_statement_id.clone(),
-                realm_commit_ref,
-                issuer_role: de_str("issuer_role", &row.issuer_role)?,
-                delegation_ref: row.delegation_ref.clone(),
-                lifecycle_phase,
-                updated_at: Some(row.updated_at),
-            });
-        }
-    }
-
+    let typed_realm = de_str::<RealmId>("realm_id", &realm_id)?;
+    let relationships = state
+        .persistence()
+        .accepted_realm_organization_relationships(&typed_realm, now)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let verified_org_ids: BTreeSet<DidCoreId> = relationships
+        .iter()
+        .filter(|row| row.lifecycle_phase == RealmOrganizationLifecyclePhase::VerifiedActive)
+        .map(|row| row.organization_id.clone())
+        .collect();
     // SOL-ORG-05 declared `owning_organization_ids` hints (display surface only),
     // minus any organization that already has a currently-verified statement so
     // a hint never duplicates a verified row.

@@ -9,6 +9,10 @@ use super::{
     async_trait, ids, pg_conn, sql_query, sql_types,
 };
 
+#[cfg(test)]
+#[path = "projection_pg_tests.rs"]
+mod pg_tests;
+
 /// Space, Strand, Morph and Circle are Event-derived kinds: their protocol id is
 /// the create Event's 33-byte token, stored raw beside the local sequential
 /// `pk` that carries the physical ordering.
@@ -734,8 +738,12 @@ pub(crate) async fn append_projection_batch_in_connection(
 /// a committed Event whose current-result projection is missing.
 pub(crate) async fn append_projection_event_in_transaction(
     conn: &mut diesel_async::AsyncPgConnection,
-    record: ProjectionEventRecord,
+    mut record: ProjectionEventRecord,
 ) -> PersistenceResult<ProjectionEventAppendOutcome> {
+    // The local receipt observation can have finer precision than PostgreSQL.
+    // Freeze it before insertion and replay comparison; created_at retains
+    // the original signed Event's canonical millisecond value unchanged.
+    record.received_at = arkret_canonical::normalize_timestamp_canonical(record.received_at);
     let event_id = ids::parse_event_id(&record.event_id)
         .ok_or_else(|| PersistenceError::SchemaViolation("malformed projection Event id".into()))?;
     let realm_pk = crate::realm_identity::ensure_realm_pk(conn, &record.realm_id).await?;

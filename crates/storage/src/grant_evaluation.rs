@@ -43,6 +43,10 @@ use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc}
 /// names are read from the selector when the fact is absent.
 #[derive(Clone, Debug, Default)]
 pub struct OperationFacts {
+    /// Applet identity and signer epoch independently resolved at the write cut.
+    pub applet_id: Option<String>,
+    pub executed_by: Option<ActorId>,
+    pub registration_epoch: Option<String>,
     pub strand_id: Option<String>,
     pub space_id: Option<String>,
     pub circle_id: Option<String>,
@@ -362,6 +366,28 @@ fn admits(
         // Ordinary re-grant control governs issuing child grants
         // (`constraint-schema.md` §7.4); exercising the grant's own actions
         // is not restricted by it.
+        GrantConstraintKind::AuthorityControl
+            if constraint.constraint_subkind == Some(GrantConstraintSubkind::AppletAuthority) =>
+        {
+            match (
+                &operation.facts.applet_id,
+                &operation.facts.executed_by,
+                &operation.facts.registration_epoch,
+            ) {
+                (Some(applet), Some(executor), Some(epoch)) => Tri::from_bool(
+                    constraint
+                        .applet_id
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == applet)
+                        && constraint.executed_by.as_ref() == Some(executor)
+                        && constraint
+                            .registration_epoch
+                            .as_ref()
+                            .is_some_and(|id| id.as_str() == epoch),
+                ),
+                _ => Tri::Unknown,
+            }
+        }
         GrantConstraintKind::AuthorityControl => Tri::Yes,
         GrantConstraintKind::Quota
         | GrantConstraintKind::ClaimBased
@@ -393,6 +419,7 @@ fn constraint_is_evaluable(constraint: &GrantConstraint) -> bool {
         (GrantConstraintKind::FieldAccess, None)
         | (GrantConstraintKind::KindRestriction, None)
         | (GrantConstraintKind::AuthorityControl, None)
+        | (GrantConstraintKind::AuthorityControl, Some(GrantConstraintSubkind::AppletAuthority))
         | (GrantConstraintKind::Quota, Some(GrantConstraintSubkind::Rate)) => true,
         (GrantConstraintKind::ScopeLimitation, None) => {
             // The Kanban container-move fields belong to

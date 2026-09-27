@@ -209,15 +209,19 @@ fn assert_owed(
             && !row.payload_json.contains("authority_witnesses"),
         "the frozen basis stays in sender metadata"
     );
-    let frozen: Vec<RealmFanoutAuthorityWitness> =
+    let mut frozen: Vec<RealmFanoutAuthorityWitness> =
         serde_json::from_value(row.realm_fanout["authority_witnesses"].clone()).unwrap();
-    let expected: Vec<_> = witnesses
+    let mut expected: Vec<_> = witnesses
         .iter()
         .map(|(member, event_id)| RealmFanoutAuthorityWitness {
             member_id: (*member).clone(),
+            circle_membership_event_ref: None,
             membership_event_ref: event_id.to_string(),
         })
         .collect();
+    // Compare the exact authority basis independently of database text collation.
+    frozen.sort_by_key(|witness| witness.member_id.to_string());
+    expected.sort_by_key(|witness| witness.member_id.to_string());
     assert_eq!(frozen, expected);
 }
 
@@ -941,6 +945,11 @@ async fn anchor_at_join(
                 stream_position: commit.stream_position,
                 commit_id: commit.commit_id.clone(),
             },
+            visible_stream_heads: vec![arkret_wire::CommitStreamHead {
+                stream_ref: commit.stream_ref.clone(),
+                stream_position: commit.stream_position,
+                commit_id: commit.commit_id.clone(),
+            }],
             current_state_entries: entries,
         })
         .await
@@ -986,7 +995,7 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         last,
         arkret_wire::EventKind::RealmProfile,
         &founder(),
-        serde_json::json!({"name":"Renamed"}),
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Renamed"}),
         last.commit.committed_at,
     ));
     let error = store
@@ -1027,7 +1036,7 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         &join.authority_commit,
         arkret_wire::EventKind::RealmProfile,
         &founder(),
-        serde_json::json!({"name":"Replicated"}),
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Replicated"}),
         last.commit.committed_at,
     ));
     // The join left the stream pending its bootstrap anchor: nothing after it
@@ -1061,7 +1070,7 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         &next.authority_commit,
         arkret_wire::EventKind::RealmProfile,
         &founder(),
-        serde_json::json!({"name":"Too early"}),
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Too early"}),
         last.commit.committed_at,
     ));
     let error = store
@@ -1103,7 +1112,7 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         &leave.authority_commit,
         arkret_wire::EventKind::RealmProfile,
         &founder(),
-        serde_json::json!({"name":"Unowed"}),
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Unowed"}),
         last.commit.committed_at,
     ));
     let error = store
@@ -1134,7 +1143,7 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
         &rejoin.authority_commit,
         arkret_wire::EventKind::RealmProfile,
         &founder(),
-        serde_json::json!({"name":"After the rejoin"}),
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"After the rejoin"}),
         last.commit.committed_at,
     ));
     assert_code(
@@ -1304,6 +1313,7 @@ async fn fanout_basis_revalidation_cancels_after_member_leave() {
     let event = &join.authority_commit.event;
     let basis = vec![RealmFanoutAuthorityWitness {
         member_id: alice.clone(),
+        circle_membership_event_ref: None,
         membership_event_ref: event.event_id.to_string(),
     }];
     let now = chrono::Utc::now();
@@ -1324,6 +1334,7 @@ async fn fanout_basis_revalidation_cancels_after_member_leave() {
     );
     let stale = vec![RealmFanoutAuthorityWitness {
         member_id: alice.clone(),
+        circle_membership_event_ref: None,
         membership_event_ref: unit.transactions.last().unwrap().event.event_id.to_string(),
     }];
     assert!(
@@ -1347,6 +1358,7 @@ async fn fanout_basis_revalidation_cancels_after_member_leave() {
     let leave_event = &leave.authority_commit.event;
     let leave_basis = vec![RealmFanoutAuthorityWitness {
         member_id: alice.clone(),
+        circle_membership_event_ref: None,
         membership_event_ref: leave_event.event_id.to_string(),
     }];
     assert!(
@@ -1384,7 +1396,7 @@ async fn committed_replication_rejects_broken_predecessor_and_no_local_member() 
             previous,
             arkret_wire::EventKind::RealmProfile,
             &founder(),
-            serde_json::json!({ "name": name }),
+            serde_json::json!({ "schema":"ak.schema.realm_profile.v1", "title": name }),
             at,
         ))
     };
@@ -1630,6 +1642,7 @@ async fn circle_create_withheld_gap_allows_next_realm_replica() {
             realm_id: realm_id.clone(),
             join_commit_id: join.authority_commit.commit.commit_id.clone(),
             snapshot_head: material.visible_stream_heads[0].clone(),
+            visible_stream_heads: material.visible_stream_heads.clone(),
             current_state_entries: material.current_state_entries,
         })
         .await
@@ -1661,7 +1674,7 @@ async fn circle_create_withheld_gap_allows_next_realm_replica() {
         &create.authority_commit,
         arkret_wire::EventKind::RealmProfile,
         &founder(),
-        serde_json::json!({"name":"After Circle gap"}),
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"After Circle gap"}),
         at,
     ));
     uow.commit_event(next.clone()).await.unwrap();
@@ -3094,6 +3107,7 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
             realm_id: realm_id.clone(),
             join_commit_id: join.authority_commit.commit.commit_id.clone(),
             snapshot_head: head.clone(),
+            visible_stream_heads: material.visible_stream_heads.clone(),
             current_state_entries: material.current_state_entries.clone(),
         })
         .await
@@ -3605,4 +3619,298 @@ async fn replicated_welcomes_queue_with_their_commit_replica_or_on_replay() {
     ];
     expected.sort();
     assert_eq!(queued_welcomes(&pool).await, expected);
+}
+
+/// Structural producer proofs isolate accepted-state replication and disclosure.
+/// Real franking signatures are exercised separately in franking_receipt_commit.
+#[tokio::test]
+async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expires() {
+    let governor_db = TestDatabase::lease().await;
+    let replica_db = TestDatabase::lease().await;
+    let pool = governor_db.pool();
+    let governor = PgAuthorityCommitStore { pool: pool.clone() };
+    let member = PgAuthorityCommitStore {
+        pool: replica_db.pool(),
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let did = device_authorization_history::did_web_station(&ordinary_realm::station());
+    let creator = accepted_human_profile::accepted_human_profile(&pool, did.clone()).await;
+    let unit = ordinary_realm::bootstrap_unit_for_account(
+        &uuid::Uuid::now_v7().to_string(),
+        creator.as_account_id().unwrap(),
+        &did,
+    );
+    let at = unit.transactions.last().unwrap().commit.committed_at;
+    governor
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm = unit.transactions[0].event.realm_id.clone();
+    let remote = remote_member("circle-replica-reader");
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        remote.clone(),
+        &remote,
+        "join",
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &join, true))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let material = governor
+        .member_station_bootstrap_material(
+            &realm,
+            remote.as_account_id().unwrap(),
+            &join.authority_commit.commit.commit_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let realm_head = material
+        .visible_stream_heads
+        .iter()
+        .find(|h| matches!(h.stream_ref, arkret_wire::CommitStreamRef::Realm { .. }))
+        .unwrap()
+        .clone();
+    member
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: realm.clone(),
+            join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            snapshot_head: realm_head,
+            visible_stream_heads: material.visible_stream_heads,
+            current_state_entries: material.current_state_entries,
+        })
+        .await
+        .unwrap();
+    let create = sourced(next_request_for_actor(
+        &join.authority_commit,
+        arkret_wire::EventKind::CircleCreate,
+        creator.clone(),
+        serde_json::json!({"object":{
+            "schema":"ak.schema.circle.v1","realm_id":realm,"title":"Remote private","display":{"short_name":"Remote","color_token":"blue","symbol":{"glyph":"lock"}},
+            "directory_visibility":"members","join_rule":"public","history_access":"since_join","state":"active","created_by":creator,"created_at":at
+        }}),
+        at,
+    ));
+    uow.commit_event(create.clone()).await.unwrap();
+    assert!(
+        fanout_rows(&pool, &create).await.is_empty(),
+        "parent Realm membership does not disclose a Circle object"
+    );
+    let circle = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
+    let scope = arkret_wire::ScopeRef::Circle {
+        realm_id: realm.clone(),
+        circle_id: circle.clone(),
+    };
+    // Public entry still requires its explicit capability; Realm membership
+    // alone is only the enclosing scope floor (circle.md section 9).
+    let root_event_ref = realm_root_event_ref(&pool, &realm).await;
+    let grant = sourced(next_request_for_actor(
+        &create.authority_commit,
+        arkret_wire::EventKind::CapabilityGrant,
+        creator.clone(),
+        serde_json::json!({"grant":{
+            "schema":"ak.schema.capability.v1","realm_id":realm,
+            "issuer_id":creator,"subject":remote,"actions":["ak.circle.member.add"],
+            "resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
+            "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,
+                "authority_event_ref":root_event_ref,"authority_generation":0}],
+            "issued_at":arkret_canonical::format_timestamp_canonical(at)
+        }}),
+        at,
+    ));
+    uow.commit_event(grant).await.unwrap();
+    let stream = arkret_wire::CommitStreamRef::Circle {
+        realm_id: realm.clone(),
+        circle_id: circle.clone(),
+    };
+    let circle_transition = |previous: &AuthorityCommitTransaction,
+                             state: &str,
+                             expected: Option<&str>| {
+        let event = ordinary_realm::event_for_actor(
+            arkret_wire::EventKind::CircleMemberState,
+            scope.clone(),
+            remote.clone(),
+            serde_json::json!({"circle_id":circle,"member_id":remote,"membership":state,"expected_membership":expected}),
+            at,
+        );
+        let mut request = ordinary_realm::request_for_event(previous, event, at);
+        if previous.commit.stream_ref != stream {
+            request.authority_commit.commit.stream_position = 0;
+            request.authority_commit.commit.previous_commit_ref = None;
+        }
+        request.authority_commit.commit.stream_ref = stream.clone();
+        sourced(request)
+    };
+    let circle_join = circle_transition(&create.authority_commit, "join", None);
+    uow.commit_event(circle_join.clone()).await.unwrap();
+    let rows = fanout_rows(&pool, &circle_join).await;
+    assert_eq!(rows.len(), 1);
+    let witnesses: Vec<RealmFanoutAuthorityWitness> =
+        serde_json::from_value(rows[0].realm_fanout["authority_witnesses"].clone()).unwrap();
+    assert_eq!(
+        witnesses[0].membership_event_ref,
+        join.authority_commit.event.event_id.to_string()
+    );
+    assert_eq!(
+        witnesses[0].circle_membership_event_ref,
+        Some(circle_join.authority_commit.event.event_id.clone())
+    );
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &circle_join, true))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let mut connection = member.pool.get().await.unwrap();
+    let metadata = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM circle_current_results WHERE circle_id=$1",
+    )
+    .bind::<Text, _>(circle.as_str())
+    .get_result::<CountRow>(&mut *connection)
+    .await
+    .unwrap();
+    assert_eq!(
+        metadata.count, 0,
+        "the private Circle Create must not be fabricated before bootstrap"
+    );
+    drop(connection);
+    let pending_scan = arkret_wire::StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: stream.clone(),
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 16,
+    };
+    assert!(matches!(
+        member
+            .scan_stream_for_account(
+                &pending_scan,
+                remote.as_account_id().unwrap(),
+                &member_station()
+            )
+            .await
+            .unwrap(),
+        soland_storage::AccountStreamScan::Unproved(
+            "the Circle stream is pending its bootstrap anchor"
+        )
+    ));
+    let material = governor
+        .member_station_bootstrap_material(
+            &realm,
+            remote.as_account_id().unwrap(),
+            &circle_join.authority_commit.commit.commit_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let circle_head = material
+        .visible_stream_heads
+        .iter()
+        .find(|h| h.stream_ref == stream)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        circle_head.commit_id,
+        circle_join.authority_commit.commit.commit_id
+    );
+    member
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: realm.clone(),
+            join_commit_id: circle_join.authority_commit.commit.commit_id.clone(),
+            snapshot_head: circle_head,
+            visible_stream_heads: material.visible_stream_heads.clone(),
+            current_state_entries: material.current_state_entries.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        member
+            .replica_anchor_for_stream(&arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm.clone()
+            })
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        member
+            .replica_anchor_for_stream(&stream)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let scan = arkret_wire::StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: stream.clone(),
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 16,
+    };
+    assert_eq!(
+        rows_of_circle_scan(
+            member
+                .scan_stream_for_account(&scan, remote.as_account_id().unwrap(), &member_station())
+                .await
+                .unwrap()
+        ),
+        vec![true]
+    );
+    let leave = circle_transition(&circle_join.authority_commit, "leave", Some("join"));
+    uow.commit_event(leave.clone()).await.unwrap();
+    assert!(
+        !governor
+            .realm_fanout_still_owed(
+                &circle_join.authority_commit.event,
+                &ordinary_realm::station(),
+                &member_station(),
+                &witnesses,
+                at
+            )
+            .await
+            .unwrap()
+    );
+    let leave_rows = fanout_rows(&pool, &leave).await;
+    assert_eq!(
+        leave_rows.len(),
+        1,
+        "departing hosted member is owed its terminating state"
+    );
+    member
+        .install_committed_replica(&replica(&unit, &leave, false))
+        .await
+        .unwrap();
+    assert!(matches!(
+        member
+            .scan_stream_for_account(&scan, remote.as_account_id().unwrap(), &member_station())
+            .await
+            .unwrap(),
+        soland_storage::AccountStreamScan::Unproved("the caller has no held Circle join")
+    ));
+    assert!(
+        governor
+            .member_station_bootstrap_material(
+                &realm,
+                remote.as_account_id().unwrap(),
+                &circle_join.authority_commit.commit.commit_id
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "an old opening join cannot refresh current authorization after leave"
+    );
+}
+
+fn rows_of_circle_scan(scan: soland_storage::AccountStreamScan) -> Vec<bool> {
+    match scan {
+        soland_storage::AccountStreamScan::Page(page) => page
+            .committed_events
+            .iter()
+            .map(|event| matches!(event, arkret_wire::CommittedEventView::Full(_)))
+            .collect(),
+        other => panic!("Circle page expected: {other:?}"),
+    }
 }
