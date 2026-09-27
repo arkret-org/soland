@@ -1229,9 +1229,7 @@ async fn execute_rotation_erase(
                 "authorizing device or confirmed backup pointer is not current",
             )
         })?;
-    if existing_progress.is_none()
-        && confirmed.authority_commit_id != request.authority_commit_id
-    {
+    if existing_progress.is_none() && confirmed.authority_commit_id != request.authority_commit_id {
         return Err(crate::app_error!(
             FailedPrecondition,
             "backup-series erase authority Commit does not match the current pointer",
@@ -2035,47 +2033,19 @@ async fn prepare_recovery_plan(
             "session-frozen replacement device public key is invalid: {error}"
         ))
     })?;
-    let key_multibase = recovery_session
-        .requesting_device_public_key_did
-        .strip_prefix("did:key:")
-        .ok_or_else(|| AppError::internal("replacement device key is not did:key"))?;
-    let verification_method = format!(
-        "{}#{}",
-        recovery_session.requesting_device_public_key_did, key_multibase,
-    );
+    let principal_resolution = state
+        .persistence()
+        .principal_resolution_by_account_id(&request.account_id)
+        .await
+        .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
+        .ok_or_else(|| AppError::conflict("accepted recovery principal resolution missing"))?;
+    let verification_method = recovery_device_verification_method(
+        &principal_resolution.projection.did,
+        &request.account_id,
+        &intent.replacement_device_id,
+    )?;
     for event in [reanchor_event, authorize_event] {
-        event
-            .verify_event_id_matches_content_with_digest_suite(digest_suite)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        let proof = event
-            .producer_proof
-            .as_ref()
-            .ok_or_else(|| AppError::param_invalid("recovery Event has no producer proof"))?;
-        proof
-            .validate_production()
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        if proof.verification_method.as_str() != verification_method {
-            return Err(AppError::conflict(
-                "recovery Event signer differs from the session-frozen replacement key",
-            ));
-        }
-        let envelope = arkret_signatures::EventProofBuilder::new()
-            .envelope_bytes(event)
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-            proof,
-            &envelope,
-            &event.actor_id,
-            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                bytes: key.to_bytes().to_vec(),
-            },
-            digest_suite,
-        )
-        .map_err(|error| {
-            AppError::conflict(format!(
-                "replacement device Event proof is invalid: {error}"
-            ))
-        })?;
+        verify_recovery_event_proof(event, &request.account_id, &verification_method, &key)?;
     }
     let recovery_session_snapshot_digest = Hash::new(
         arkret_canonical::canonical_sha256(
@@ -2099,6 +2069,71 @@ async fn prepare_recovery_plan(
         result_model_generation_ref: intent.result_model_generation_ref,
         reanchor_unit: intent.reanchor_unit.clone(),
         reanchor_commit_intent: commit_intent.clone(),
+    })
+}
+
+/// The accepted Account DID identifies the candidate method; the session's
+/// frozen replacement key supplies its unit-local verification material.
+fn recovery_device_verification_method(
+    accepted_did: &arkret_wire::Did,
+    account: &AccountId,
+    device_id: &DeviceId,
+) -> Result<DidUrl, AppError> {
+    if arkret_wire::project_did_to_core_id(accepted_did)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != account.principal_id
+    {
+        return Err(AppError::conflict(
+            "accepted recovery DID differs from the Account principal",
+        ));
+    }
+    DidUrl::new(format!("{accepted_did}#{device_id}"))
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+fn verify_recovery_event_proof(
+    event: &arkret_wire::Event,
+    account: &AccountId,
+    verification_method: &DidUrl,
+    frozen_key: &ed25519_dalek::VerifyingKey,
+) -> Result<(), AppError> {
+    if event.actor_id != ActorId::account(account.clone()) || event.executed_by.is_some() {
+        return Err(AppError::conflict(
+            "recovery Event is not authored by the exact Account",
+        ));
+    }
+    let digest_suite = arkret_canonical::DigestSuite::Sha256;
+    event
+        .verify_event_id_matches_content_with_digest_suite(digest_suite)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let proof = event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| AppError::param_invalid("recovery Event has no producer proof"))?;
+    proof
+        .validate_production()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if &proof.verification_method != verification_method {
+        return Err(AppError::conflict(
+            "recovery Event signer differs from the accepted Account device method",
+        ));
+    }
+    let envelope = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &envelope,
+        &event.actor_id,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: frozen_key.to_bytes().to_vec(),
+        },
+        digest_suite,
+    )
+    .map_err(|error| {
+        AppError::conflict(format!(
+            "replacement device Event proof is invalid: {error}"
+        ))
     })
 }
 
@@ -2156,6 +2191,60 @@ mod tests {
 
     fn core(name: &str) -> DidCoreId {
         DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()
+    }
+
+    #[test]
+    fn recovery_event_method_is_bound_to_the_accepted_account_and_frozen_key() {
+        let account = AccountId::new(core("alice"), core("station-a"));
+        let accepted_did = arkret_wire::Did::new("did:web:alice.example").unwrap();
+        let device = DeviceId::new("ak:device:01964137-0000-7000-8000-000000000001").unwrap();
+        let expected =
+            recovery_device_verification_method(&accepted_did, &account, &device).unwrap();
+        let seed = [73; 32];
+        let key = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x52; 32],
+        ));
+        let signed = |method: DidUrl, author: &AccountId, signing_seed| {
+            soland_test_support::device_authorization_history::sign_event(
+                arkret_wire::test_support::raw_event(
+                    arkret_wire::EventKind::MessageCreate.as_str(),
+                    arkret_wire::ScopeRef::Realm {
+                        realm_id: realm.clone(),
+                    },
+                    author.principal_id.clone(),
+                    author.station_id.clone(),
+                    json!({}),
+                )
+                .unwrap(),
+                method,
+                signing_seed,
+            )
+        };
+        let event = signed(expected.clone(), &account, seed);
+        verify_recovery_event_proof(&event, &account, &expected, &key).unwrap();
+        let another_key = ed25519_dalek::SigningKey::from_bytes(&[74; 32]).verifying_key();
+        assert!(verify_recovery_event_proof(&event, &account, &expected, &another_key).is_err());
+        for method in [
+            "did:web:alice.example#ak:device:01964137-0000-7000-8000-000000000003",
+            "did:web:bob.example#ak:device:01964137-0000-7000-8000-000000000001",
+            "did:key:z6MkrJVnaZkeFzdQyMZuW7Lh1UmCXySXy3yw8DabJVmVZdtv#z6MkrJVnaZkeFzdQyMZuW7Lh1UmCXySXy3yw8DabJVmVZdtv",
+        ] {
+            let event = signed(DidUrl::new(method).unwrap(), &account, seed);
+            assert!(verify_recovery_event_proof(&event, &account, &expected, &key).is_err());
+        }
+        let other_station = AccountId::new(account.principal_id.clone(), core("station-b"));
+        let event = signed(expected.clone(), &other_station, seed);
+        assert!(verify_recovery_event_proof(&event, &account, &expected, &key).is_err());
+        assert!(
+            recovery_device_verification_method(
+                &arkret_wire::Did::new("did:web:bob.example").unwrap(),
+                &account,
+                &device,
+            )
+            .is_err()
+        );
     }
 
     #[test]
