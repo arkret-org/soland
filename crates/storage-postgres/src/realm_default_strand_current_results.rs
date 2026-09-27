@@ -164,17 +164,15 @@ pub(crate) async fn commit_realm_default_strand_current_result_in_connection(
     if target.value.get("state") != Some(&Value::String("active".to_owned())) {
         return Err(conflict("default Strand target is not active"));
     }
-    // Until every Strand lifecycle kind has a same-cut current writer, a
-    // later lifecycle or redaction in this Realm makes the target's active
-    // state unavailable. This deliberately rejects unrelated successors too:
-    // the current row cannot prove which Strand they changed.
+    // Unsupported structural or terminal writes cannot be inferred from
+    // this current row. Materialized lifecycle and progress writes can.
     let changed = diesel::sql_query(
         "SELECT EXISTS ( \
            SELECT 1 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
            WHERE e.realm_id=$1 AND e.state='committed' \
              AND c.stream_position>$2 \
              AND (e.kind LIKE 'ak.strand.%' OR e.kind='ak.redaction') \
-             AND e.kind<>'ak.strand.create' \
+             AND e.kind NOT IN ('ak.strand.create','ak.strand.update','ak.strand.archive','ak.strand.restore','ak.strand.stage.set','ak.strand.watch.set','ak.strand.move','ak.strand.reorder') \
          ) AS present",
     )
     .bind::<Text, _>(event.realm_id.as_str())

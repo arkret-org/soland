@@ -297,19 +297,30 @@ pub(crate) async fn require_active_discussion_strand(
     realm_id: &arkret_wire::RealmId,
     strand_id: &arkret_wire::StrandId,
 ) -> PersistenceResult<()> {
+    // Strand identities preserve the creating Event's token. Resolve that
+    // immutable source separately from the current value's covering Commit.
+    let creating_event =
+        arkret_wire::EventIdentityKey::new(strand_id.digest_suite_code(), strand_id.digest_bytes())
+            .event_id();
     let strand = diesel::sql_query(
-        "SELECT s.value,s.current_stream_position,e.envelope->>'event_id' AS created_event_id \
+        "SELECT s.value,s.current_stream_position,created.envelope->>'event_id' AS created_event_id \
          FROM strand_current_results s \
          JOIN realm_commits c ON c.commit_id=s.current_commit_id \
          JOIN canonical_events e ON e.pk=c.event_pk \
+         JOIN canonical_events created ON created.id=$3 AND created.realm_id=s.realm_id \
+         JOIN realm_commits creation ON creation.event_pk=created.pk AND creation.realm_id=s.realm_id \
          WHERE s.realm_id=$1 AND s.strand_id=$2 \
            AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position \
            AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id \
-           AND e.kind='ak.strand.create' AND e.state='committed' \
+           AND e.state='committed' AND e.kind IN ('ak.strand.create','ak.strand.update','ak.strand.archive','ak.strand.restore','ak.strand.stage.set') \
+           AND created.kind='ak.strand.create' AND created.state='committed' \
+           AND creation.stream_ref->>'kind'='realm' AND creation.stream_ref->>'realm_id'=s.realm_id \
+           AND creation.stream_position<=c.stream_position \
          FOR SHARE OF s",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(strand_id.as_str())
+    .bind::<diesel::sql_types::Binary, _>(creating_event.token_bytes().to_vec())
     .get_result::<StrandRow>(&mut *conn)
     .await
     .optional()
@@ -343,12 +354,12 @@ pub(crate) async fn require_active_discussion_strand(
     if discussion.get("enabled") == Some(&Value::Bool(false)) {
         return Err(conflict("Message discussion track is disabled"));
     }
-    // No same-cut lifecycle writer exists yet for later Strand updates. Any
-    // later lifecycle in this Realm makes the create row insufficient proof.
+    // Unsupported structural or terminal writes still invalidate the proof.
+    // Already materialized kinds, including watches on other Strands, do not.
     let changed = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
          WHERE e.realm_id=$1 AND e.state='committed' AND c.stream_position>$2 \
-           AND ((e.kind LIKE 'ak.strand.%' AND e.kind<>'ak.strand.create') OR e.kind='ak.redaction')) AS present",
+           AND ((e.kind LIKE 'ak.strand.%' AND e.kind NOT IN ('ak.strand.create','ak.strand.update','ak.strand.archive','ak.strand.restore','ak.strand.stage.set','ak.strand.watch.set','ak.strand.move','ak.strand.reorder')) OR e.kind='ak.redaction')) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<BigInt, _>(strand.current_stream_position)

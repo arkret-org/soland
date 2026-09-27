@@ -15,7 +15,7 @@
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_wire::EventKind;
+use arkret_wire::{EventEffectOwnership, EventKind, EventWireScope};
 use serde_json::Value;
 
 use super::{
@@ -52,9 +52,9 @@ pub(crate) fn upsert_realm_link(vec: &mut Vec<RealmLinkState>, row: &RealmLinkSt
 // canonical event_kind maps to a single `ApplyFn` adapter that calls
 // the corresponding `apply_*` helper with the per-kind extra args
 // baked in. `apply()` becomes a typed HashMap lookup + indirect call.
-// Every implemented reducer-input kind is present. Registry-owned durable
-// facts and authority-commit effects use explicit adapters; an unimplemented
-// reducer input remains absent and therefore fails closed before mutation.
+// The explicit effect manifest owns every active kind, including deliberate
+// refusals. Cache adapters do not replace the accepting transaction's owner.
+// Canonical metadata is checked before deriving either runtime dispatch path.
 
 fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
     op.payload
@@ -67,6 +67,95 @@ fn projection_received_at(op: &Operation) -> chrono::DateTime<chrono::Utc> {
 
 /// Adapter signature for entries in [`default_apply_registry`].
 pub type ApplyFn = fn(&mut ProjectionState, &Operation, &ServerHlc) -> ProjectionEffect;
+
+#[derive(Clone, Copy)]
+enum CacheSlot {
+    Shared(ApplyFn),
+    Service(ApplyFn),
+    FailClosed,
+}
+
+#[derive(Clone, Copy)]
+struct EffectRegistration {
+    kind: &'static str,
+    owner: EventEffectOwnership,
+    scope: EventWireScope,
+    reducer_input: bool,
+    slot: CacheSlot,
+}
+
+include!("effect_manifest.rs");
+
+fn validate_effect_manifest(entries: &[EffectRegistration]) -> Result<(), String> {
+    let mut registered = std::collections::HashSet::new();
+    for entry in entries {
+        let kind = EventKind::from(entry.kind);
+        if !registered.insert(kind.clone()) {
+            return Err(format!("duplicate effect slot: {}", entry.kind));
+        }
+        let Some(descriptor) = kind.effect_descriptor() else {
+            return Err(format!("unregistered effect kind: {}", entry.kind));
+        };
+        if descriptor.ownership != entry.owner {
+            return Err(format!("effect owner mismatch: {}", entry.kind));
+        }
+        if kind.wire_scope() != entry.scope || kind.is_reducer_input() != entry.reducer_input {
+            return Err(format!("effect scope mismatch: {}", entry.kind));
+        }
+        match entry.slot {
+            CacheSlot::Shared(_)
+                if !entry.reducer_input || entry.scope != EventWireScope::DurableEvent =>
+            {
+                return Err(format!(
+                    "private/service effect on shared reducer: {}",
+                    entry.kind
+                ));
+            }
+            CacheSlot::Service(_) if entry.reducer_input => {
+                return Err(format!(
+                    "shared reducer effect on service path: {}",
+                    entry.kind
+                ));
+            }
+            _ => {}
+        }
+    }
+    let expected = EventKind::ALL
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    if registered != expected {
+        return Err(
+            "active Event effect slots do not exactly cover the canonical registry".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Mandatory in release builds too. An SDK registry addition without an
+/// explicitly reviewed cache handler or refusal prevents service startup.
+pub fn assert_effect_dispatch_contract() {
+    std::sync::LazyLock::force(&APPLY_REGISTRY);
+}
+
+pub(crate) fn apply_service_effect(
+    state: &mut ProjectionState,
+    kind: &EventKind,
+    operation: &Operation,
+    hlc: &ServerHlc,
+) -> ProjectionEffect {
+    assert_effect_dispatch_contract();
+    match EFFECT_MANIFEST
+        .iter()
+        .find(|entry| entry.kind == kind.as_str())
+        .map(|entry| entry.slot)
+    {
+        Some(CacheSlot::Service(handler)) => handler(state, operation, hlc),
+        _ => ProjectionEffect::Rejected {
+            reason: "unregistered_private_event_effect".to_owned(),
+        },
+    }
+}
 
 fn apply_durable_fact_dispatch(
     _state: &mut ProjectionState,
@@ -780,411 +869,18 @@ fn apply_moderation_decision_lift_dispatch(
     s.apply_moderation_decision_lift(op, op.created_at)
 }
 
-/// Build the canonical `event_kind → ApplyFn` registry consumed by
-/// [`super::ProjectionState::apply`]. Public so out-of-crate tests can assert
-/// exact coverage of the active reducer-input set.
+/// Derive implemented shared cache handlers from the validated manifest.
+/// Deliberately unsupported slots remain refusals; their existence does not
+/// claim a durable accepting writer or an implemented private service.
 pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn> {
-    let mut m: std::collections::HashMap<EventKind, ApplyFn> =
-        std::collections::HashMap::with_capacity(EventKind::ALL.len());
-    m.insert(
-        arkret_wire::EventKind::MessageCreate,
-        apply_message_dispatch as ApplyFn,
-    );
-    m.insert(
-        arkret_wire::EventKind::MessageRevise,
-        apply_message_revise_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MessageRedact,
-        apply_redaction_dispatch,
-    );
-    m.insert(arkret_wire::EventKind::Redaction, apply_redaction_dispatch);
-    m.insert(
-        arkret_wire::EventKind::ReactionAdd,
-        apply_reaction_add_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ReactionRemove,
-        apply_reaction_remove_dispatch,
-    );
-    m.insert(arkret_wire::EventKind::RsvpSet, apply_rsvp_set_dispatch);
-    m.insert(arkret_wire::EventKind::PinAdd, apply_pin_dispatch);
-    m.insert(arkret_wire::EventKind::PinRemove, apply_pin_dispatch);
-    m.insert(arkret_wire::EventKind::PinReorder, apply_pin_dispatch);
-    m.insert(
-        arkret_wire::EventKind::RelationCreate,
-        apply_relation_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RelationUpdate,
-        apply_relation_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RelationTombstone,
-        apply_relation_delete_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MemberState,
-        apply_membership_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::InviteThirdParty,
-        apply_invite_third_party_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::InviteClaim,
-        apply_invite_claim_dispatch,
-    );
-    // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
-    // `ak.member.identity.update`. Cell family
-    // `ak.component.member.identity.v1`, state model `ordered_log`, bottom
-    // `expose`. The ordered-log projection (effective-set filter,
-    // member_display_state_digest materialization) lives on
-    // `AppState::member_identity`
-    // (see `routing::events::projection::project_member_identity_update`)
-    // because it spans cells; the in-process reducer just records that
-    // the event was accepted so subscribers observe the lifecycle effect.
-    m.insert(
-        arkret_wire::EventKind::MemberIdentityUpdate,
-        apply_member_identity_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmCreate,
-        apply_realm_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmHistoryAccess,
-        apply_realm_history_access_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::IdentityResolutionUpdate,
-        apply_identity_resolution_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmProfile,
-        apply_realm_profile_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmArchive,
-        apply_realm_archive_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmRestore,
-        apply_realm_restore_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmFreeze,
-        apply_realm_freeze_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmUnfreeze,
-        apply_realm_unfreeze_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmTombstone,
-        apply_realm_tombstone_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmDestroy,
-        apply_realm_destroy_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmOwnerTransfer,
-        apply_realm_owner_transfer_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmGovernanceStationChange,
-        apply_realm_governance_station_change_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmAuthorityReset,
-        apply_realm_authority_reset_dispatch,
-    );
-    // COT-06-004 — Realm default-Strand pointer.
-    m.insert(
-        arkret_wire::EventKind::RealmSetDefaultStrand,
-        apply_realm_set_default_strand_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SpaceCreate,
-        apply_space_container_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SpaceUpdate,
-        apply_space_container_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SpaceParent,
-        apply_space_container_parent_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SpaceArchive,
-        apply_space_container_archive_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SpaceRestore,
-        apply_space_container_restore_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SpaceTombstone,
-        apply_space_container_tombstone_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandCreate,
-        apply_strand_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandUpdate,
-        apply_strand_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandArchive,
-        apply_strand_archive_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandRestore,
-        apply_strand_restore_dispatch,
-    );
-    // `common-fields.md` §5.3 — the business-progression axis. Its own event
-    // kind exists for capability slicing and audit filtering, so it needs its
-    // own reducer arm: `ak.strand.update` patches on `stage` /
-    // `stage_changed_at` are forbidden wire.
-    m.insert(
-        arkret_wire::EventKind::StrandStageSet,
-        apply_strand_stage_set_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandMove,
-        apply_strand_position_touch_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandReorder,
-        apply_strand_position_touch_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::StrandWatchSet,
-        apply_strand_watch_set_dispatch,
-    );
-    // Unified tracks patch. Payload-shape validation (presence of `tracks`
-    // patch map) lives in the wire validator. TODO: apply patch ops
-    // against soland-side Strand.tracks projection once the server-side
-    // projection carries the tracks map.
-    m.insert(
-        arkret_wire::EventKind::StrandTracksUpdate,
-        apply_strand_track_touch_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MorphCreate,
-        apply_morph_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MorphUpdate,
-        apply_morph_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MorphArchive,
-        apply_morph_archive_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MorphRestore,
-        apply_morph_restore_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MorphStageSet,
-        apply_morph_stage_set_dispatch,
-    );
-    // Circle lifecycle and membership security commands.
-    m.insert(
-        arkret_wire::EventKind::CircleCreate,
-        apply_circle_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CircleUpdate,
-        apply_circle_update_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CircleArchive,
-        apply_circle_archive_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CircleRestore,
-        apply_circle_restore_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CircleTombstone,
-        apply_circle_tombstone_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CircleMemberState,
-        apply_circle_member_state_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::CircleHistoryAccess,
-        apply_circle_history_access_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SidecarCreate,
-        apply_sidecar_create_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SidecarContextAttach,
-        apply_sidecar_context_attach_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AgentSidecarExchangeControl,
-        apply_sidecar_exchange_control_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AppletRegistration,
-        apply_applet_registration_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AppletDiscovery,
-        apply_applet_discovery_dispatch,
-    );
-    // REDU-1 (R3 spec-sync) — agent lifecycle transition dispatch. bottom=reject,
-    // deactivate is terminal.
-    m.insert(
-        arkret_wire::EventKind::SelfAgentPause,
-        apply_agent_pause_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SelfAgentResume,
-        apply_agent_resume_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::SelfAgentDeactivate,
-        apply_agent_deactivate_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmPolicyBundle,
-        apply_realm_policy_bundle_dispatch,
-    );
-    // The Realm-bootstrap facet kinds. `bootstrap_event_kinds` in the Event
-    // kind registry lists them and
-    // `services::projection::apply_realm_bootstrap_to_state` turns an
-    // `Ignored` effect into a hard `RealmBootstrapProjectionError`, so an
-    // unregistered kind here fails Realm bootstrap outright.
-    m.insert(
-        arkret_wire::EventKind::RealmAlias,
-        apply_realm_bootstrap_facet_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmJoinRule,
-        apply_realm_bootstrap_facet_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmDiscovery,
-        apply_realm_bootstrap_facet_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmPlaintextVisibleServices,
-        apply_realm_bootstrap_facet_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmSearchPolicy,
-        apply_realm_search_policy_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::RealmReadReceiptPolicy,
-        apply_realm_read_receipt_policy_dispatch,
-    );
-    // media_service is Realm-scoped with cell_family
-    // `ak.component.realm.media_service.v1`; consumed by the AKP-0010
-    // media token exchange in `routing::interop::webrtc`.
-    m.insert(
-        arkret_wire::EventKind::RealmMediaService,
-        apply_realm_media_service_dispatch,
-    );
-    // `ak.call.create` establishes the Event-derived CallId before any
-    // signaling or state event may refer to it.
-    m.insert(
-        arkret_wire::EventKind::CallCreate,
-        apply_call_create_dispatch,
-    );
-    // `ak.call.state` — durable call lifecycle + recording/transcribe/
-    // moderation projection. Cell family `ak.component.call.state.v1`,
-    // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
-    m.insert(arkret_wire::EventKind::CallState, apply_call_state_dispatch);
-    m.insert(
-        arkret_wire::EventKind::CallRecordingStart,
-        apply_call_recording_start_dispatch,
-    );
-    // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
-    // cell + a structured side-band cache; see the per-kind apply
-    // helpers for cell-family naming.
-    m.insert(arkret_wire::EventKind::RealmLink, apply_realm_link_dispatch);
-    // SOL-ORG-02 — organization-authorized Realm relationship statement.
-    m.insert(
-        arkret_wire::EventKind::RealmOrganization,
-        apply_realm_organization_dispatch,
-    );
-    // Policy documents and approval configurations are two registered typed
-    // current-result families. Policy-action keeps its policy-ref and
-    // Realm-local selector namespaces disjoint in the reducer.
-    m.insert(arkret_wire::EventKind::PolicySet, apply_policy_set_dispatch);
-    m.insert(
-        arkret_wire::EventKind::PolicyAction,
-        apply_policy_action_dispatch,
-    );
-    // Agent runtime key authorization + revocation. Authorize records the
-    // key; revoke removes it. Neither operation changes Realm grants.
-    m.insert(
-        arkret_wire::EventKind::AgentKeyAuthorize,
-        apply_agent_key_authorize_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::AgentKeyRevoke,
-        apply_agent_key_revoke_dispatch,
-    );
-    // The approve leg is the only durable reducer input of the Agent draft
-    // workflow; request/reject are actor-private and never reach here.
-    m.insert(
-        arkret_wire::EventKind::AgentActionApprove,
-        apply_agent_action_approve_dispatch,
-    );
-    // P2 — moderation control-plane projection. Decision + lift share the
-    // `ak.component.moderation_state.v1` or_set cell; acceptance fail-closed
-    // rules live in `apply_moderation.rs`.
-    m.insert(
-        arkret_wire::EventKind::ModerationDecision,
-        apply_moderation_decision_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ModerationDecisionLift,
-        apply_moderation_decision_lift_dispatch,
-    );
-    // `ak.self.moderation.report` writes the `moderation_report` typed current
-    // result, keyed by the report Event itself, inside the guarded authority
-    // unit of work at the covering RealmCommit. The report is visible only to
-    // the target scope's moderators, so the shared product projection keeps no
-    // mirror of it and only acknowledges the durable fact.
-    m.insert(
-        arkret_wire::EventKind::SelfModerationReport,
-        apply_durable_fact_dispatch,
-    );
-    // `ak.mls.genesis` and `ak.mls.commit` write the `mls_group` typed current
-    // result, with the public RFC 9420 state and every Welcome, inside the
-    // guarded authority unit of work at the covering RealmCommit. The shared
-    // product projection keeps no mirror of the group and only acknowledges
-    // the durable fact.
-    m.insert(
-        arkret_wire::EventKind::MlsGenesis,
-        apply_durable_fact_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::MlsCommit,
-        apply_durable_fact_dispatch,
-    );
-    for kind in [
-        EventKind::AppletBridgeError,
-        EventKind::AppletManagedActorProvision,
-        EventKind::AuditAccessed,
-    ] {
-        m.insert(kind, apply_durable_fact_dispatch);
-    }
-    debug_assert!(m.keys().all(EventKind::is_reducer_input));
-    m
+    validate_effect_manifest(EFFECT_MANIFEST).expect("invalid Event effect dispatch ownership");
+    EFFECT_MANIFEST
+        .iter()
+        .filter_map(|entry| match entry.slot {
+            CacheSlot::Shared(handler) => Some((EventKind::from(entry.kind), handler)),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) static APPLY_REGISTRY: std::sync::LazyLock<
@@ -1198,6 +894,143 @@ mod tests {
     use arkret_wire::EventKind;
 
     use super::default_apply_registry;
+
+    #[test]
+    fn effect_manifest_exactly_covers_canonical_owners_and_cache_handlers() {
+        super::validate_effect_manifest(super::EFFECT_MANIFEST).unwrap();
+        let registry = default_apply_registry();
+        assert_eq!(
+            registry.len(),
+            super::EFFECT_MANIFEST
+                .iter()
+                .filter(|entry| matches!(entry.slot, super::CacheSlot::Shared(_)))
+                .count()
+        );
+        for kind in [
+            EventKind::SelfModerationReport,
+            EventKind::MlsGenesis,
+            EventKind::MlsCommit,
+        ] {
+            let entry = super::EFFECT_MANIFEST
+                .iter()
+                .find(|entry| entry.kind == kind.as_str())
+                .unwrap();
+            assert_eq!(
+                entry.owner,
+                arkret_wire::EventEffectOwnership::TypedResultWriter
+            );
+            assert!(matches!(entry.slot, super::CacheSlot::Shared(_)));
+            assert!(!kind.effect_descriptor().unwrap().result_families.is_empty());
+        }
+    }
+
+    #[test]
+    fn effect_manifest_rejects_missing_extra_and_duplicate_slots() {
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        entries.pop();
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("exactly cover")
+        );
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        entries.push(entries[0]);
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("duplicate")
+        );
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        entries[0].kind = "ak.unregistered.effect";
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("unregistered")
+        );
+    }
+
+    #[test]
+    fn effect_manifest_rejects_owner_scope_and_execution_path_mutations() {
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        let index = entries
+            .iter()
+            .position(|entry| entry.kind == EventKind::MessageCreate.as_str())
+            .unwrap();
+        entries[index].owner = arkret_wire::EventEffectOwnership::DurableFactNoCurrentProjection;
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("owner mismatch")
+        );
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        entries[index].scope = arkret_wire::EventWireScope::ActorPrivateEvent;
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("scope mismatch")
+        );
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        entries[index].slot = super::CacheSlot::Service(super::apply_message_dispatch);
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("shared reducer effect")
+        );
+        let mut entries = super::EFFECT_MANIFEST.to_vec();
+        let private = entries
+            .iter()
+            .position(|entry| entry.kind == EventKind::AccountDataSet.as_str())
+            .unwrap();
+        entries[private].slot = super::CacheSlot::Shared(super::apply_message_dispatch);
+        assert!(
+            super::validate_effect_manifest(&entries)
+                .unwrap_err()
+                .contains("private/service effect")
+        );
+    }
+
+    #[test]
+    fn effect_manifest_refusal_paths_do_not_mutate_product_state() {
+        let mut state = super::ProjectionState::new();
+        state
+            .realm_join_rules
+            .insert("existing-realm".to_owned(), "closed".to_owned());
+        let baseline = format!("{state:?}");
+        let hlc = super::ServerHlc::new("effect-refusal");
+        for kind in [
+            EventKind::AccountDataSet,
+            EventKind::InviteCreate,
+            EventKind::Unknown("ak.unregistered.effect".to_owned()),
+        ] {
+            assert!(matches!(
+                state.apply(&operation(&kind), &hlc),
+                super::ProjectionEffect::Rejected { .. }
+            ));
+            assert_eq!(format!("{state:?}"), baseline);
+        }
+        // A private Event forced onto the shared cache path still cannot
+        // dispatch its owning private service or mutate Realm state.
+        assert!(matches!(
+            state.apply_projected(&operation(&EventKind::AccountDataSet), &hlc),
+            super::ProjectionEffect::Rejected { .. }
+        ));
+        assert_eq!(format!("{state:?}"), baseline);
+    }
+
+    #[test]
+    fn effect_manifest_service_ack_uses_its_registered_durable_owner() {
+        let kind = EventKind::AuditErasureReceipt;
+        assert_eq!(
+            kind.effect_ownership(),
+            Some(arkret_wire::EventEffectOwnership::DurableFactNoCurrentProjection)
+        );
+        let mut state = super::ProjectionState::new();
+        let baseline = format!("{state:?}");
+        assert!(
+            matches!(state.apply(&operation(&kind), &super::ServerHlc::new("service-owner")), super::ProjectionEffect::DurableFactRetained { kind: effect_kind, .. } if effect_kind == kind)
+        );
+        assert_eq!(format!("{state:?}"), baseline);
+    }
 
     fn operation(kind: &EventKind) -> arkret_event_draft::ProjectedEventOperation {
         arkret_event_draft::test_support::raw_projected_operation(

@@ -460,6 +460,14 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::StrandArchive
+        | arkret_wire::EventKind::StrandRestore
+        | arkret_wire::EventKind::StrandStageSet => {
+            crate::strand_current_results::commit_strand_transition_in_connection(
+                conn, event, commit, false,
+            )
+            .await?;
+        }
         arkret_wire::EventKind::StrandMove | arkret_wire::EventKind::StrandReorder => {
             crate::strand_position_current_results::project_verified_event_in_connection(
                 conn, event, commit,

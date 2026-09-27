@@ -615,6 +615,23 @@ impl RealmAuthorizationCut {
             circle_id: payload_id("circle_id"),
             ..OperationFacts::default()
         };
+        if matches!(
+            event.kind,
+            EventKind::StrandArchive | EventKind::StrandRestore | EventKind::StrandStageSet
+        ) {
+            let field = if event.kind == EventKind::StrandStageSet {
+                "strand_id"
+            } else {
+                "target_ref"
+            };
+            if let Some(strand) = payload_id(field).and_then(|id| StrandId::new(id).ok()) {
+                facts.strand_id = Some(strand.to_string());
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), strand),
+                    facts,
+                );
+            }
+        }
         if event.kind == EventKind::StrandUpdate {
             // The patch target and touched fields are producer-bound payload
             // facts. Missing or malformed facts fail closed for constrained

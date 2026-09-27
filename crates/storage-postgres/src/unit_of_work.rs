@@ -2478,6 +2478,10 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::strand_current_results::commit_strand_transition_in_connection(
+            conn, event, commit, true,
+        )
+        .await?;
         crate::space_current_results::commit_space_create_current_results_in_connection(
             conn, event, commit,
         )

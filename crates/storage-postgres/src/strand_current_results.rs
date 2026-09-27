@@ -103,6 +103,143 @@ pub(crate) async fn commit_strand_create_current_result_in_connection(
     Ok(())
 }
 
+/// Commit the lifecycle and progress axes from their registered payloads.
+/// Authority admission and verified replica folding share this value writer.
+pub(crate) async fn commit_strand_transition_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    authorize: bool,
+) -> PersistenceResult<()> {
+    use arkret_wire::EventKind;
+    if !matches!(
+        event.kind,
+        EventKind::StrandArchive | EventKind::StrandRestore | EventKind::StrandStageSet
+    ) {
+        return Ok(());
+    }
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let realm_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: event.realm_id.clone(),
+    };
+    let realm_stream = arkret_wire::CommitStreamRef::Realm {
+        realm_id: event.realm_id.clone(),
+    };
+    if event.scope_ref != realm_scope || commit.stream_ref != realm_stream {
+        return Err(reject(
+            "Strand transition requires a Realm-scope authority cut",
+        ));
+    }
+    let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    let (target, stage) = if event.kind == EventKind::StrandStageSet {
+        let body: arkret_models_collaboration::events_payloads::strand::StrandStageSetPayload =
+            serde_json::from_value(payload).map_err(PersistenceError::database)?;
+        (body.strand_id.clone(), Some(body))
+    } else {
+        let body: arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload =
+            serde_json::from_value(payload).map_err(PersistenceError::database)?;
+        let target = arkret_wire::StrandId::new(body.target_ref.as_str())
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        (target, None)
+    };
+    if authorize {
+        crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
+    let row = diesel::sql_query(
+        "SELECT s.realm_id,s.current_commit_id,s.current_stream_position,s.value \
+         FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id \
+         WHERE s.realm_id=$1 AND s.strand_id=$2 AND c.realm_id=s.realm_id \
+           AND c.stream_position=s.current_stream_position AND c.stream_ref->>'kind'='realm' \
+           AND c.stream_ref->>'realm_id'=s.realm_id FOR UPDATE OF s",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(target.as_str())
+    .get_result::<StrandCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| reject("Strand transition target has no confirmed current value"))?;
+    let position = i64::try_from(commit.stream_position).map_err(PersistenceError::database)?;
+    if row.current_stream_position >= position || row.current_commit_id == commit.commit_id.as_str()
+    {
+        return Err(reject(
+            "Strand current revision does not precede transition",
+        ));
+    }
+    let current: arkret_models_collaboration::objects::strand::Strand =
+        serde_json::from_value(row.value.clone()).map_err(PersistenceError::database)?;
+    if current.id.as_ref() != Some(&target)
+        || current.realm_id != event.realm_id
+        || current.scope_circle_id.is_some()
+    {
+        return Err(reject("Strand transition target identity or scope differs"));
+    }
+    if current.state == Some(arkret_wire::ObjectState::Redacted) {
+        return Err(reject("strand_already_terminal"));
+    }
+    let mut post = row.value.clone();
+    let time = Value::String(arkret_canonical::format_timestamp_canonical(
+        event.created_at,
+    ));
+    let lifecycle_time = Value::String(arkret_canonical::format_timestamp_canonical(
+        event.created_at.max(commit.committed_at),
+    ));
+    if let Some(body) = stage {
+        if current.state != Some(arkret_wire::ObjectState::Active) {
+            return Err(reject("strand_not_active"));
+        }
+        if row.value.get("stage").and_then(Value::as_str) != body.expected_stage.as_deref() {
+            return Err(reject("Strand expected_stage differs from current stage"));
+        }
+        if row.value.get("stage").and_then(Value::as_str) != Some(body.stage.as_str()) {
+            post["stage"] = Value::String(body.stage);
+            post["stage_changed_at"] = time.clone();
+            post["updated_by"] =
+                serde_json::to_value(&event.actor_id).map_err(PersistenceError::database)?;
+            post["updated_at"] = lifecycle_time.clone();
+        }
+    } else {
+        let (expected, next, reason) = if event.kind == EventKind::StrandArchive {
+            (
+                arkret_wire::ObjectState::Active,
+                "archived",
+                "strand_not_active",
+            )
+        } else {
+            (
+                arkret_wire::ObjectState::Archived,
+                "active",
+                "strand_not_archived",
+            )
+        };
+        if current.state != Some(expected) {
+            return Err(reject(reason));
+        }
+        post["state"] = Value::String(next.to_owned());
+        post["state_changed_at"] = lifecycle_time.clone();
+        post["updated_by"] =
+            serde_json::to_value(&event.actor_id).map_err(PersistenceError::database)?;
+        post["updated_at"] = lifecycle_time;
+    }
+    let _: arkret_models_collaboration::objects::strand::Strand =
+        serde_json::from_value(post.clone()).map_err(PersistenceError::database)?;
+    let changed = diesel::sql_query("UPDATE strand_current_results SET current_commit_id=$3,current_stream_position=$4,value=$5,updated_at=$6 WHERE realm_id=$1 AND strand_id=$2 AND current_commit_id=$7")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(target.as_str())
+        .bind::<Text,_>(commit.commit_id.as_str()).bind::<BigInt,_>(position).bind::<Jsonb,_>(&post)
+        .bind::<Timestamptz,_>(commit.committed_at).bind::<Text,_>(&row.current_commit_id)
+        .execute(conn).await.map_err(PersistenceError::database)?;
+    if changed != 1 {
+        return Err(reject("Strand current changed before transition"));
+    }
+    Ok(())
+}
+
 /// Admit a Strand patch with the authorization facts and target value frozen
 /// in the accepting transaction. Replica folds call the value writer below
 /// after verification and never re-adjudicate the authority's permissions.

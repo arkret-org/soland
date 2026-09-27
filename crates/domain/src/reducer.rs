@@ -51,7 +51,7 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 pub(crate) use capability_helpers::*;
 pub use commit_stream::{CommitStreamEffect, CommitStreamProjection};
 pub(crate) use dispatch::{APPLY_REGISTRY, upsert_realm_link};
-pub use dispatch::{ApplyFn, default_apply_registry};
+pub use dispatch::{ApplyFn, assert_effect_dispatch_contract, default_apply_registry};
 pub use effects::{MlsEffect, ProjectionEffect};
 pub(crate) use effects::{ObjectLifecycleTransition, SpaceContainerLifecycleTransition};
 pub use facets::{FacetRef, SettledFacet, facet};

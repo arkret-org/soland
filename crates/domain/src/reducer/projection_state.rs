@@ -203,6 +203,7 @@ pub struct ProjectionState {
 
 impl ProjectionState {
     pub fn new() -> Self {
+        super::assert_effect_dispatch_contract();
         Self::default()
     }
 
@@ -416,12 +417,9 @@ impl ProjectionState {
 
     /// Apply a single operation and return the effect.
     ///
-    /// Per-kind dispatch strands through [`APPLY_REGISTRY`] — a static
-    /// `HashMap<canonical_kind, ApplyFn>` built by
-    /// [`default_apply_registry`]. This replaced a 30-arm `match` that
-    /// directly delegated to `ProjectionState::apply_*` helpers; the
-    /// dispatch table is now data, the helpers are the same, and adding
-    /// a new event_kind only touches the registry builder + one adapter.
+    /// Per-kind cache dispatch uses [`APPLY_REGISTRY`], derived from the
+    /// explicit canonical-ownership manifest. Every active kind needs an
+    /// implemented cache adapter or a reviewed refusal before startup.
     ///
     /// A registry miss always fails closed. Non-reducer events have a separate,
     /// explicit service-effect dispatch below and may not enter this shared
@@ -452,27 +450,16 @@ impl ProjectionState {
         effect
     }
 
-    /// Apply accepted Events that intentionally sit outside the shared Realm
-    /// reducer registry. These projections are local/private read models and
-    /// therefore must not make a `reducer_input=false` kind advance the Realm
-    /// frontier merely to keep the local cache alive.
+    /// Apply the manifest's non-reducer service cache adapter. A private
+    /// service remains responsible for its own durable acceptance; this
+    /// function cannot make its Event advance a shared Realm frontier.
     fn apply_non_reducer_event(
         &mut self,
         kind: arkret_wire::EventKind,
         operation: &Operation,
+        hlc: &ServerHlc,
     ) -> ProjectionEffect {
-        match kind {
-            // Actor-private kinds never reach a shared reducer: they are
-            // admitted only into their owner's private store
-            // (actor-private-effects.md §2.1).
-            arkret_wire::EventKind::AuditErasureReceipt => ProjectionEffect::DurableFactRetained {
-                kind: operation.event_kind.clone(),
-                event_id: operation.context.event_id.to_string(),
-            },
-            _ => ProjectionEffect::Rejected {
-                reason: "unregistered_private_event_effect".to_owned(),
-            },
-        }
+        super::dispatch::apply_service_effect(self, &kind, operation, hlc)
     }
 
     /// Reduce one Operation whose Event contract declares no cell write.
@@ -487,7 +474,7 @@ impl ProjectionState {
             };
         };
         if !kind.is_reducer_input() {
-            return self.apply_non_reducer_event(kind, operation);
+            return self.apply_non_reducer_event(kind, operation, hlc);
         }
         self.apply_projected(operation, hlc)
     }
