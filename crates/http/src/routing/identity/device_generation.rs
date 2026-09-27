@@ -113,21 +113,6 @@ pub async fn active_device_revocation_gate_selector(
     let generation = current_device_generation(state, principal_id.as_str())
         .await?
         .ok_or_else(|| generation_fenced("device generation is not active"))?;
-    let device = state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: principal_id.to_string(),
-            device_id: device_id.to_string(),
-        })
-        .await?
-        .ok_or_else(|| ServiceError::NotFound("device authorization is unavailable".to_owned()))?;
-    let Some((target_device_authorize_event_id, authorized_generation_ref)) =
-        verified_device_authorization_binding(&device)?
-    else {
-        return Err(ServiceError::NotFound(
-            "device authorization is not active".to_owned(),
-        ));
-    };
     let history = load_confirmed_device_history(state, &account)
         .await
         .map_err(|error| {
@@ -136,21 +121,13 @@ pub async fn active_device_revocation_gate_selector(
     let history = history.ok_or_else(|| {
         ServiceError::Conflict("device authorization has no confirmed PCR history".into())
     })?;
-    let authorization = history
-        .authorization(&target_device_authorize_event_id)
-        .filter(|authorization| history.is_currently_active(authorization))
-        .ok_or_else(|| {
-            ServiceError::Conflict(
-                "device mirror does not name an active confirmed authorization instance".into(),
-            )
-        })?;
-    if authorization.device_id() != &device_id
-        || authorization.authorized_generation_ref() != authorized_generation_ref
-    {
-        return Err(ServiceError::Conflict(
-            "device mirror differs from the confirmed authorization instance".into(),
-        ));
-    }
+    let authorization = history.current_authorization(&device_id).ok_or_else(|| {
+        ServiceError::NotFound(
+            "device authorization is not active at the accepted PCR head".to_owned(),
+        )
+    })?;
+    let target_device_authorize_event_id = authorization.event_id().clone();
+    let authorized_generation_ref = authorization.authorized_generation_ref();
     // The confirmed history names the authorization instance; whether that
     // device is still usable (not pending, revoked or fenced) is
     // the same-cut PCR device status, and nothing else.

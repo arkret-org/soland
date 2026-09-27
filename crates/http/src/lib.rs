@@ -191,6 +191,22 @@ pub(crate) mod test_event {
     }
 }
 
+/// Exercise the production current-device selector after a committed PCR unit.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub async fn test_active_device_revocation_gate_selector(
+    state: &crate::state::AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> soland_services::ServiceResult<soland_storage::DeviceRevocationGateSelector> {
+    crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+        state,
+        principal_id,
+        device_id,
+    )
+    .await
+}
+
 /// Sign and retain the fresh `producer_device_evidence` that one forwarding
 /// attempt of `event` carries (device-lifecycle §8.2.2).
 #[cfg(feature = "test-support")]
