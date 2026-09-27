@@ -59,9 +59,11 @@ fn plain_text_content(content: Option<&Value>) -> bool {
     let Some(content) = content.and_then(Value::as_object) else {
         return false;
     };
-    content.len() == 3
+    content
+        .keys()
+        .all(|key| matches!(key.as_str(), "kind" | "format" | "body"))
         && content.get("kind") == Some(&Value::String("ak.content.text".to_owned()))
-        && content.get("format") == Some(&Value::String("plain".to_owned()))
+        && content.get("format").is_none_or(|format| format == "plain")
         && content.get("body").is_some_and(Value::is_string)
 }
 
@@ -73,6 +75,39 @@ fn supported_plain_text(payload: &Value) -> bool {
         && object.contains_key("strand_id")
         && object.get("track_name") == Some(&Value::String("discussion".to_owned()))
         && plain_text_content(object.get("content"))
+}
+
+#[cfg(test)]
+mod plain_text_format_tests {
+    use super::{supported_plain_text, supported_plain_text_revision};
+
+    #[test]
+    fn optional_plain_format_is_accepted_without_admitting_rich_carriers() {
+        for content in [
+            serde_json::json!({"kind":"ak.content.text","body":"hello"}),
+            serde_json::json!({"kind":"ak.content.text","format":"plain","body":"hello"}),
+        ] {
+            assert!(supported_plain_text(&serde_json::json!({
+                "strand_id":"fixture","track_name":"discussion","content":content.clone()
+            })));
+            assert!(supported_plain_text_revision(&serde_json::json!({
+                "message_id":"fixture","content":content
+            })));
+        }
+        for content in [
+            serde_json::json!({"kind":"ak.content.text","format":"markdown","body":"hello"}),
+            serde_json::json!({"kind":"ak.content.text","format":null,"body":"hello"}),
+            serde_json::json!({"kind":"ak.content.text","body":"hello","mentions":[]}),
+            serde_json::json!({"kind":"ak.content.text"}),
+        ] {
+            assert!(!supported_plain_text(&serde_json::json!({
+                "strand_id":"fixture","track_name":"discussion","content":content.clone()
+            })));
+            assert!(!supported_plain_text_revision(&serde_json::json!({
+                "message_id":"fixture","content":content
+            })));
+        }
+    }
 }
 
 /// The Realm-scope MLS carrier: the Strand, the discussion track and the
