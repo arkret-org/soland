@@ -464,25 +464,6 @@ impl ProjectionState {
             writes.push((moderation, Value::Array(entries)));
         }
 
-        if let Some(mute_override) = &payload.mute_override {
-            let Ok(value) = serde_json::to_value(mute_override) else {
-                return ProjectionEffect::Rejected {
-                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-                };
-            };
-            writes.push((
-                FacetRef::composite(
-                    facet::CALL_MUTE_OVERRIDE,
-                    &[
-                        call_id.as_str(),
-                        &mute_override.actor_id.to_string(),
-                        mute_override.device_id.as_str(),
-                    ],
-                ),
-                value,
-            ));
-        }
-
         for (target, value) in writes {
             self.set_facet(&realm_id, target, value);
         }
