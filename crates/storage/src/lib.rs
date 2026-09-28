@@ -191,7 +191,7 @@ impl PersistenceError {
 pub enum ConflictCode {
     /// A Agent act-on-behalf approval nonce was already consumed.
     ApprovalNonceReused,
-    /// A List WIP review is required but no accepted approval was supplied.
+    /// A List WIP review is required but no verified approval reached this unit.
     ApprovalRequired,
     /// The applet was revoked between admission and commit.
     AppletRevoked,
