@@ -337,11 +337,13 @@ mod tests {
         let database = crate::test_database::TestDatabase::lease().await;
         let pool = database.pool();
         let mut conn = pg_conn(&pool).await.unwrap();
-        conn.batch_execute("UPDATE account_summary_clock SET revision=5;
+        conn.batch_execute(
+            "UPDATE account_summary_clock SET revision=5;
             UPDATE account_global_clock SET revision=5;
-            UPDATE account_sync_retention SET summary_floor=5,global_floor=5")
-            .await
-            .unwrap();
+            UPDATE account_sync_retention SET summary_floor=5,global_floor=5",
+        )
+        .await
+        .unwrap();
         let now = Utc::now().timestamp_millis();
         let cursor = SyncCursorRecord {
             handle: "detail-before-global".into(),
