@@ -142,6 +142,7 @@ async fn verify_genesis(
 ) -> ServiceResult<MlsStateInstallation> {
     let payload: MlsGenesisPayload = payload(event)?;
     payload.validate().map_err(schema)?;
+    let authority = &payload.creator_leaf_authority;
     if payload.effective_scope() != &event.scope_ref {
         return Err(binding_mismatch(
             "the Genesis binding names another effective scope",
@@ -199,9 +200,12 @@ async fn verify_genesis(
     let leaves = tracker
         .leaves()
         .map_err(|error| schema(error.to_string()))?;
-    if leaves.len() != 1 || leaves[0].actor_id != event.actor_id {
+    if leaves.len() != 1
+        || leaves[0].actor_id != event.actor_id
+        || leaves[0].signature_key != authority.leaf_signature_key_b64u
+    {
         return Err(failed_precondition(
-            "an MLS Genesis roster is exactly the creator's own leaf",
+            "the MLS Genesis public tree does not match the creator leaf authority",
         ));
     }
     let member_principals = leaves.iter().map(|leaf| leaf.actor_id.clone()).collect();
