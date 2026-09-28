@@ -1116,11 +1116,10 @@ async fn postgres_paused_agent_sender_writes_nothing() {
     ));
 }
 
-/// The ordinary Event commit cut never accepts Agent Message authoring. Its
-/// MLS checks belong to the dedicated Agent admission cut. The common producer
-/// guard still rejects a revoked key before the ordinary cut is reached.
+/// The Agent's current key and the MLS group are read at the same accepting
+/// cut. Revocation wins over a stale ciphertext epoch and both refuse writes.
 #[tokio::test]
-async fn postgres_agent_message_requires_dedicated_admission_cut() {
+async fn postgres_agent_message_send_gate_checks_epoch_and_current_key() {
     use soland_storage::{
         AuthorityCommitStore as _, EventCommitUnitOfWork as _, MlsGroupCurrentStore as _,
     };
@@ -1135,6 +1134,23 @@ async fn postgres_agent_message_requires_dedicated_admission_cut() {
     };
     let at = discussion.committed_at();
     let uow = soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone());
+    // Seed only the prerequisite member current for this send-gate test.
+    // Agent controller-binding admission is a separate production cut.
+    let mut conn = pool.get().await.unwrap();
+    sql_query(
+        "INSERT INTO member_state_current_results \
+         (realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES($1,$2,'join',$3,$4,$5,NOW())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(arkret_wire::ActorId::account(agent.agent_account.clone()).to_string())
+    .bind::<Text, _>(discussion.head.authority_commit.commit.commit_id.as_str())
+    .bind::<BigInt, _>(discussion.head.authority_commit.commit.stream_position as i64)
+    .bind::<Jsonb, _>(serde_json::json!({"membership":"join"}))
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
     let mut genesis = ordinary_realm::next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::MlsGenesis,
@@ -1163,7 +1179,53 @@ async fn postgres_agent_message_requires_dedicated_admission_cut() {
         member_principals: Default::default(),
         genesis_blobs: Vec::new(),
     });
+    genesis.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        genesis.authority_commit.event.clone(),
+    ));
     uow.commit_event(genesis.clone()).await.unwrap();
+    // Seed the independently governed capability prerequisite so this case
+    // exercises Message admission and its MLS cut rather than grant issuance.
+    let grant_id = "ak:grant:AcFfzgdHkT6eFkto1gjLaKniVuMXx9sD0GKQwk8BXykz";
+    let root = serde_json::json!({
+        "kind": "realm_root",
+        "realm_id": realm_id,
+        "authority_event_ref": discussion.unit.transactions[0].event.event_id,
+        "authority_generation": 0,
+    });
+    let grant = serde_json::json!({
+        "id": grant_id,
+        "schema": "ak.schema.capability.v1",
+        "realm_id": realm_id,
+        "issuer_id": discussion.unit.transactions[0].event.actor_id,
+        "subject": arkret_wire::ActorId::account(agent.agent_account.clone()),
+        "actions": ["ak.message.create"],
+        "resources": [{"kind":"realm", "realm_id":realm_id}],
+        "issuer_authority_refs": [root.clone()],
+        "authority_depth": 1,
+        "authority_root_refs": [root],
+        "issued_at": arkret_canonical::format_timestamp_canonical(at),
+        "status": "active",
+    });
+    let mut conn = pool.get().await.unwrap();
+    sql_query(
+        "INSERT INTO capability_grant_current_results \
+         (realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value,updated_at) \
+         VALUES($1,$2,'active',$3,$4,$5,$6,$7,NOW())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(grant_id)
+    .bind::<Text, _>(
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x44; 32])
+            .to_string(),
+    )
+    .bind::<Text, _>(genesis.authority_commit.commit.commit_id.as_str())
+    .bind::<Jsonb, _>(serde_json::json!({"kind":"realm", "realm_id": realm_id}))
+    .bind::<BigInt, _>(genesis.authority_commit.commit.stream_position as i64)
+    .bind::<Jsonb, _>(grant)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
     let groups = soland_storage_postgres::PgMlsGroupCurrentStore { pool: pool.clone() };
     let before = groups.current(&scope).await.unwrap().unwrap();
 
@@ -1204,9 +1266,50 @@ async fn postgres_agent_message_requires_dedicated_admission_cut() {
     let current = uow.commit_event(request.clone()).await.unwrap_err();
     assert_eq!(
         current.conflict_code(),
-        Some(soland_storage::ConflictCode::FailedPrecondition),
+        Some(soland_storage::ConflictCode::EpochMismatch),
         "{current}"
     );
+
+    let mut accepted = ordinary_realm::next_request_for_actor(
+        &genesis.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        arkret_wire::ActorId::account(agent.agent_account.clone()),
+        serde_json::json!({
+            "strand_id": discussion.strand_id,
+            "track_name": "discussion",
+            "encrypted_content": arkret_models_crypto::EncryptedEnvelope {
+                version: "1.0".to_owned(),
+                content_type: "application/vnd.arkret.message+json".to_owned(),
+                encryption_context:
+                    arkret_models_crypto::EncryptedEnvelopeEncryptionContext::standard(
+                        0,
+                        genesis.authority_commit.event.event_id.clone(),
+                    ),
+                ciphertext: "Y2lwaGVydGV4dA".to_owned(),
+            },
+        }),
+        at,
+    );
+    let accepted_event = &mut accepted.authority_commit.event;
+    accepted_event
+        .producer_proof
+        .as_mut()
+        .unwrap()
+        .verification_method = agent.verification_method.clone();
+    accepted.event.envelope = serde_json::to_value(&*accepted_event).unwrap();
+    accepted.self_producer_guard = request.self_producer_guard.clone();
+    accepted.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        accepted.authority_commit.event.clone(),
+    ));
+    uow.commit_event(accepted.clone()).await.unwrap();
+    assert!(
+        soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() }
+            .committed_event(&accepted.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
     agent.revoke_key().await;
     let revoked = uow.commit_event(request.clone()).await.unwrap_err();
     assert_eq!(
