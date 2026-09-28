@@ -674,6 +674,10 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM member_state_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'direct_conversation_binding'::text AS selector_kind, to_jsonb(pair_key) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM direct_conversation_binding_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'applet_registration'::text AS selector_kind, to_jsonb(applet_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM applet_registration_current_results WHERE realm_id = $1 \
@@ -864,6 +868,13 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                     actor_id: serde_json::from_value(actor_id).map_err(|error| {
                         PersistenceError::Internal(format!(
                             "stored snapshot member actor id is invalid: {error}"
+                        ))
+                    })?,
+                },
+                ("direct_conversation_binding", Some(pair_key)) => arkret_wire::CurrentSelector::DirectConversationBinding {
+                    pair_key: serde_json::from_value(pair_key).map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "stored Direct Conversation pair key is invalid: {error}"
                         ))
                     })?,
                 },

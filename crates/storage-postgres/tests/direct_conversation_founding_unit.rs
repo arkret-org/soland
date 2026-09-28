@@ -2176,6 +2176,48 @@ async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zer
     uow.commit_event(founder_endorsement.clone()).await.unwrap();
     let head = founder_endorsement.authority_commit.clone();
     assert_eq!(dc_footprint(&pool, &realm_id).await[6], 2);
+    for participant in [&pair.founder, &pair.peer] {
+        let snapshot =
+            soland_storage_postgres::account_snapshot_material(&pool, &realm_id, participant)
+                .await
+                .unwrap()
+                .expect("accepted Direct Conversation participant has a complete Snapshot cut");
+        let binding = snapshot
+            .current_state_entries
+            .iter()
+            .find_map(|entry| match entry {
+                arkret_wire::TypedCurrentResult::Value {
+                    selector: arkret_wire::CurrentSelector::DirectConversationBinding { pair_key },
+                    source_stream_ref,
+                    value,
+                    ..
+                } if pair_key == &facts.pair_key => Some((source_stream_ref, value)),
+                _ => None,
+            })
+            .expect("participant Snapshot retains the exact binding current");
+        assert_eq!(
+            binding.0,
+            &arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone()
+            }
+        );
+        let value: arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingCurrentValue =
+            serde_json::from_value(binding.1.clone()).unwrap();
+        assert_eq!(value.endorsements.len(), 2);
+        assert!(value.endorsed_by(&binding_ref));
+        assert!(value.endorsed_by(&founder_endorsement.authority_commit.event.event_id));
+    }
+    let stranger = AccountId::new(
+        DidCoreId::new("ak:did_core:web:outsider.example".to_owned()).unwrap(),
+        pair.station.clone(),
+    );
+    assert!(
+        matches!(
+            soland_storage_postgres::account_snapshot_material(&pool, &realm_id, &stranger).await,
+            Err(soland_storage::PersistenceError::SchemaViolation(_))
+        ),
+        "a nonparticipant must fail closed on Direct Conversation Snapshot disclosure"
+    );
     let durable = PgEventStore { pool: pool.clone() }
         .direct_conversation_durable_state(TRUST_DOMAIN, facts.pair_key.as_str())
         .await

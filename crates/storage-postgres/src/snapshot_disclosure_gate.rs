@@ -38,6 +38,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmPlaintextVisibleServices,
     EventKind::MemberState,
     EventKind::MemberIdentityUpdate,
+    EventKind::DirectConversationBound,
     EventKind::AppletRegistration,
     EventKind::InviteCreate,
     EventKind::InviteRevoke,
@@ -126,8 +127,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "agent_provisioning_current_results",
     "agent_pcr_genesis_declaration_current_results",
     "agent_selector_claim_current_results",
-    // Direct Conversation binding endorsements: `ak.direct_conversation.bound`
-    // has no disclosure rule yet, so any row refuses the cut below.
+    // Direct Conversation binding is visible only to its exact participants.
     "direct_conversation_binding_current_results",
     // Holder-private PCR Consent is outside ordinary Realm disclosure.
     "consent_current_results",
@@ -432,7 +432,6 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM agent_selector_claim_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_revocation_proposals WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM direct_conversation_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM consent_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM retention_tombstones WHERE realm_id=$1)) AS present",
     )
@@ -993,6 +992,28 @@ pub(crate) fn disclose_to_account(
                     .ok_or_else(|| rejected("Call current has no accepted creation"))?;
                 if current.from.is_some() || current.to != creation.initial_state {
                     return Err(rejected("Call current differs from its accepted creation"));
+                }
+            }
+            CurrentSelector::DirectConversationBinding { pair_key } => {
+                let binding: arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(|_| {
+                        rejected("Direct Conversation binding current value is not closed")
+                    })?;
+                binding
+                    .binding_digest()
+                    .map_err(|_| rejected("Direct Conversation binding endorsements disagree"))?;
+                if binding.endorsements.iter().any(|endorsement| {
+                    endorsement.value.validate_shape().is_err()
+                        || endorsement.value.pair_key != *pair_key
+                        || endorsement.value.realm_id != material.realm_id
+                        || !endorsement
+                            .value
+                            .unordered_participant_ids
+                            .contains(&caller)
+                }) {
+                    return Err(rejected(
+                        "Direct Conversation binding is not disclosed to this exact participant",
+                    ));
                 }
             }
             CurrentSelector::AppletRegistration { applet_id } => {
@@ -1975,6 +1996,67 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn direct_conversation_binding_requires_exact_participant_and_selector() {
+        use arkret_models_collaboration::events_payloads::direct_conversation::{
+            DirectConversationBindingCurrentValue, DirectConversationBindingEndorsementEntry,
+            DirectConversationBoundPayload,
+        };
+        use arkret_models_collaboration::exact_current_results::CanonicalEventDot;
+
+        let (alice, mut material, facts) = fixture();
+        let pair_key = arkret_wire::Hash::new(format!("sha256:{}", "71".repeat(32))).unwrap();
+        let bob = account("bob");
+        let payload = DirectConversationBoundPayload {
+            pair_key: pair_key.clone(),
+            unordered_participant_ids: vec![
+                ActorId::account(alice.clone()),
+                ActorId::account(bob.clone()),
+            ],
+            realm_id: realm_id(),
+            main_strand_id: StrandId::from_event_id(&event_id(0x72)),
+            founding_unit_digest: arkret_wire::Hash::new(format!("sha256:{}", "73".repeat(32))).unwrap(),
+            authorization_basis: arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis::accepted_contact(
+                vec![event_id(0x74), event_id(0x75)],
+            ),
+            initial_exact_pair_group_state_ref: event_id(0x76),
+            created_at: chrono::Utc::now(),
+        };
+        let value = serde_json::to_value(DirectConversationBindingCurrentValue {
+            endorsements: vec![DirectConversationBindingEndorsementEntry {
+                tag_id: CanonicalEventDot::new(event_id(0x77), 0).unwrap(),
+                value: payload,
+            }],
+        })
+        .unwrap();
+        material.current_state_entries.push(row(
+            CurrentSelector::DirectConversationBinding {
+                pair_key: pair_key.clone(),
+            },
+            9,
+            value,
+        ));
+        assert!(disclose_to_account(material.clone(), &alice, &facts).is_ok());
+        let carol = account("carol");
+        let mut joined_outsider = material.clone();
+        joined_outsider.current_state_entries.push(row(
+            CurrentSelector::MemberState {
+                actor_id: ActorId::account(carol.clone()),
+            },
+            9,
+            json!({"membership":"join"}),
+        ));
+        let error = disclose_to_account(joined_outsider, &carol, &facts).unwrap_err();
+        assert!(error.to_string().contains("exact participant"));
+        let binding = material.current_state_entries.last_mut().unwrap();
+        if let TypedCurrentResult::Value { selector, .. } = binding {
+            *selector = CurrentSelector::DirectConversationBinding {
+                pair_key: arkret_wire::Hash::new(format!("sha256:{}", "78".repeat(32))).unwrap(),
+            };
+        }
+        assert!(disclose_to_account(material, &alice, &facts).is_err());
     }
 
     #[test]
