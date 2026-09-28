@@ -443,14 +443,13 @@ async fn put_account_data(
 
     let body = body.into_inner();
     let account_actor = super::session_actor::session_actor_from_credential(state, &session)?;
-    validate_account_data_holder(&body.set_event.event, &account_actor)?;
+    validate_account_data_holder(&body.set_event, &account_actor)?;
     let account_key = account_actor.to_string();
     let content = body
         .set_event
-        .event
         .payload
         .get("body")
-        .or_else(|| body.set_event.event.payload.get("encrypted_payload"))
+        .or_else(|| body.set_event.payload.get("encrypted_payload"))
         .cloned()
         .ok_or_else(|| {
             crate::app_error!(
@@ -484,7 +483,6 @@ async fn put_account_data(
     // with the value it wrote even after a later revision replaced it.
     let updated_at = body
         .set_event
-        .event
         .payload
         .get("updated_at")
         .cloned()
@@ -493,12 +491,12 @@ async fn put_account_data(
         .map_err(|error| {
             AppError::schema_violation(format!("set_event payload.updated_at: {error}"))
         })?
-        .unwrap_or(body.set_event.event.created_at);
+        .unwrap_or(body.set_event.created_at);
     let revision = admit_caller_signed_account_data_set(
         state,
         &session,
         &account_data_key,
-        body.set_event.event,
+        body.set_event,
         false,
     )
     .await?;
@@ -653,7 +651,7 @@ async fn delete_account_data(
         state,
         &session,
         &account_data_key,
-        body.into_inner().set_event.event,
+        body.into_inner().set_event,
         true,
     )
     .await?;
