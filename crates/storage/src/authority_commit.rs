@@ -824,6 +824,16 @@ pub struct VerifiedMlsRecipientRosterWitness {
     pub signed_attest_add_request_canonical_json: Vec<u8>,
 }
 
+/// Peer-authenticated Add authority proof after the serving layer has verified
+/// both historical Station signatures (claim receipt and attestation).
+/// Persistence still compares every selector with the accepted Commit,
+/// producer-signed Welcome and consumed Add Proposal in one transaction.
+#[derive(Clone, Debug)]
+pub struct VerifiedMlsAddAuthorityAttestation {
+    pub source_station_id: arkret_wire::DidCoreId,
+    pub request: arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
+}
+
 /// The durable claim ledger row `keypackage_claim_ref` resolved to, with the
 /// exact request digest the verification read; the accepting transaction
 /// requires the row to still hold that request and a live claim.
@@ -1217,6 +1227,22 @@ pub enum MlsMemberGroupStateMaterialRead {
 
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    /// Install a historical recipient proof only after the caller verified
+    /// its authenticated source and historical Station signatures. The store
+    /// binds it to frozen accepted facts and returns `Duplicate` only for an
+    /// exact replay; any mismatch is a zero-write refusal.
+    async fn install_mls_add_authority_attestation(
+        &self,
+        verified: &VerifiedMlsAddAuthorityAttestation,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<arkret_models_collaboration::mls_roster_authority::MlsAttestAddOutcome>
+    {
+        let _ = (verified, issuer);
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: MLS Add authority ingress is unavailable".to_owned(),
+        ))
+    }
+
     /// Evaluate current and target-cut membership, history and policy in one
     /// repeatable-read transaction. `source_peer` additionally requires the
     /// peer's replication right at that cut. Caller-bearing requests must

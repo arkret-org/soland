@@ -4784,6 +4784,29 @@ CREATE TABLE mls_remote_welcome_provenance (
 CREATE INDEX mls_remote_welcome_provenance_commit
  ON mls_remote_welcome_provenance(scope_key,commit_event_ref);
 
+-- Governance installs the recipient Station's original signed proof only
+-- after matching one frozen Add Proposal and producer-signed Welcome at the
+-- accepted Commit cut. It outlives the short-lived claim ledger/outbox.
+CREATE TABLE mls_add_authority_attestations (
+ attestor_station_id TEXT NOT NULL,
+ realm_id TEXT NOT NULL,
+ scope_key TEXT COLLATE "C" NOT NULL,
+ mls_group_id TEXT NOT NULL,
+ genesis_event_ref TEXT NOT NULL,
+ commit_event_ref TEXT NOT NULL,
+ commit_stream_position BIGINT NOT NULL CHECK(commit_stream_position BETWEEN 1 AND 9007199254740991),
+ epoch BIGINT NOT NULL CHECK(epoch BETWEEN 1 AND 9007199254740991),
+ welcome_id TEXT NOT NULL PRIMARY KEY,
+ claim_id TEXT NOT NULL UNIQUE,
+ consumed_proposal_ordinal BIGINT NOT NULL CHECK(consumed_proposal_ordinal BETWEEN 0 AND 9007199254740991),
+ attestation_digest TEXT NOT NULL,
+ request_json JSONB NOT NULL CHECK(jsonb_typeof(request_json)='object'),
+ installed_at TIMESTAMPTZ NOT NULL,
+ UNIQUE(scope_key,commit_event_ref,consumed_proposal_ordinal)
+);
+CREATE INDEX mls_add_authority_attestations_history
+ ON mls_add_authority_attestations(scope_key,commit_stream_position,consumed_proposal_ordinal);
+
 -- Recipient-Station proof frozen with the replicated Commit and Welcome.
 -- This outbox is independent of the short-lived claim ledger and its
 -- ON DELETE CASCADE Welcome binding. The full original claim outcome stays

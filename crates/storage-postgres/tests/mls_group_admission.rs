@@ -1599,6 +1599,147 @@ async fn frozen_remote_welcomes(
     .collect()
 }
 
+fn signed_remote_add_attestation(
+    commit: &EventCommitRequest,
+    genesis_ref: &arkret_wire::EventId,
+    welcome: &VerifiedMlsWelcome,
+    keypackage: &arkret_models_crypto::MlsKeyPackageRecord,
+    station: &arkret_wire::DidCoreId,
+    leaf_key: arkret_wire::Base64UrlString,
+) -> arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody {
+    use arkret_models_collaboration::mls_roster_authority::{
+        MlsAddAuthorityAttestation, MlsAttestAddRequestBody,
+    };
+    use arkret_models_crypto::{
+        KeyOperationSignature, KeyPackageClaimRecord, PeerKeyPackageClaimReceipt,
+        PeerKeyPackagesClaimOutcome, PeerKeyPackagesClaimUnsignedRequest,
+        peer_keypackage_claim_receipt_signing_bytes,
+    };
+
+    let delivery = &welcome.delivery;
+    let at = commit.authority_commit.commit.committed_at;
+    let method = format!("did:web:mls-member-station.example#station-key-1");
+    let placeholder = || KeyOperationSignature {
+        kid: arkret_wire::NonEmptyString::new(method.clone()).unwrap(),
+        signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+        sig: arkret_wire::Base64UrlString::new("AA").unwrap(),
+    };
+    let device_id = match &delivery.recipient_endpoint {
+        arkret_wire::MlsWelcomeRecipientEndpoint::Device { device_id } => device_id.clone(),
+        _ => panic!("fixture uses a device"),
+    };
+    let authorization_event_ref =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [71_u8; 32]);
+    let record = KeyPackageClaimRecord {
+        claim_id: delivery.keypackage_claim_ref.to_string(),
+        keypackage_ref: keypackage.keypackage_ref.to_string(),
+        actor_id: delivery.recipient_actor_id.clone(),
+        principal_id: delivery
+            .recipient_actor_id
+            .as_account_id()
+            .unwrap()
+            .principal_id
+            .clone(),
+        device_id: Some(device_id),
+        agent_id: None,
+        agent_verification_method: None,
+        pairwise_verification_method: None,
+        keypackage: keypackage.keypackage.clone(),
+        capabilities: vec!["mls".to_owned()],
+        device_authorize_event_id: Some(authorization_event_ref.clone()),
+        agent_key_authorize_event_id: None,
+        expires_at: at + chrono::Duration::hours(1),
+        revocation_status: None,
+        last_resort: None,
+    };
+    record.validate_shape().unwrap();
+    let claim_request: PeerKeyPackagesClaimUnsignedRequest = serde_json::from_value(
+        serde_json::json!({
+            "claim_request_id": uuid::Uuid::now_v7().simple().to_string(),
+            "intended_realm_id": delivery.realm_id,
+            "mls_group_id": delivery.effective_scope.canonical_mls_group_id().unwrap(),
+            "claim_purpose": "realm_membership",
+            "required_capabilities": ["mls"],
+            "expires_at": arkret_canonical::format_timestamp_canonical(at + chrono::Duration::hours(1)),
+        }),
+    )
+    .unwrap();
+    let mut receipt = PeerKeyPackageClaimReceipt {
+        claim_request_id: claim_request.claim_request_id.clone(),
+        request_digest: arkret_wire::Hash::new(format!("sha256:{}", "6".repeat(64))).unwrap(),
+        claims_digest: arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&[&record]).unwrap(),
+        )
+        .unwrap(),
+        source_id: station.clone(),
+        destination_id: delivery.recipient_actor_id.route_service_id().clone(),
+        request: claim_request,
+        claimed_at: at,
+        expires_at: at + chrono::Duration::hours(1),
+        signature: placeholder(),
+    };
+    receipt.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &[19; 32],
+        &method,
+        &peer_keypackage_claim_receipt_signing_bytes(&receipt).unwrap(),
+    )
+    .unwrap();
+    let outcome = PeerKeyPackagesClaimOutcome {
+        claim_request_id: receipt.claim_request_id.clone(),
+        claims: vec![record],
+        claim_receipt: receipt.clone(),
+    };
+    let mut attestation = MlsAddAuthorityAttestation {
+        attestor_station_id: delivery.recipient_actor_id.route_service_id().clone(),
+        realm_id: delivery.realm_id.clone(),
+        effective_scope: delivery.effective_scope.clone(),
+        mls_group_id: delivery.effective_scope.canonical_mls_group_id().unwrap(),
+        genesis_event_ref: genesis_ref.clone(),
+        commit_event_ref: delivery.commit_event_ref.clone(),
+        commit_stream_position: commit.authority_commit.commit.stream_position,
+        epoch: 1,
+        welcome_id: delivery.welcome_id.clone(),
+        claim_id: delivery.keypackage_claim_ref.clone(),
+        actor_id: delivery.recipient_actor_id.clone(),
+        endpoint: delivery.recipient_endpoint.clone(),
+        authorization_event_ref,
+        leaf_signature_key_b64u: leaf_key,
+        claim_record_digest: arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&outcome.claims[0]).unwrap(),
+        )
+        .unwrap(),
+        claim_receipt: receipt,
+        attested_at: at,
+        signature: placeholder(),
+    };
+    attestation.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &[19; 32],
+        &method,
+        &attestation.signing_bytes().unwrap(),
+    )
+    .unwrap();
+    let request = MlsAttestAddRequestBody {
+        attestation,
+        claim_outcome: outcome,
+    };
+    request.validate_claim_binding().unwrap();
+    request
+}
+
+async fn installed_add_attestation_count(pool: &PgPool) -> i64 {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM mls_add_authority_attestations")
+        .get_result::<Row>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
 /// encryption-and-audit.md §2.2 "跨站 recipient": the governance Station
 /// verifies everything but the claim of a Welcome whose recipient another
 /// Station hosts and writes it, in submission order, into the Commit's
@@ -1689,6 +1830,101 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         remote_welcome(&commit, &second),
     ];
     welcomes.sort_by(|left, right| left.delivery.welcome_id.cmp(&right.delivery.welcome_id));
+    // Feed storage the exact Add and GCE consumed by a real RFC 9420 Commit.
+    // The ingress below reparses the frozen Add; arbitrary fixture bytes must
+    // never be enough to install a historical recipient authority proof.
+    let founder_device =
+        arkret_wire::DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let member_device = welcomes
+        .iter()
+        .find(|welcome| welcome.delivery.recipient_actor_id == first)
+        .and_then(|welcome| match &welcome.delivery.recipient_endpoint {
+            arkret_wire::MlsWelcomeRecipientEndpoint::Device { device_id } => {
+                Some(device_id.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let founder_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        founder.clone(),
+        station.clone(),
+    ));
+    let mut group =
+        arkret_mls::ArkretMlsIdentity::new_test_human_device(founder_actor, founder_device)
+            .unwrap()
+            .create_group_with_governance_binding(
+                &realm_scope(&realm_id),
+                &MlsGovernanceBindingPayload::realm(realm_id.clone(), None, 0, 0, 0).unwrap(),
+            )
+            .unwrap();
+    let (group_info, tree) = group.public_group_state_bytes().unwrap();
+    let mut tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+        &group_info,
+        &tree,
+        group.group_id().as_str(),
+        0,
+    )
+    .unwrap();
+    let member_identity =
+        arkret_mls::ArkretMlsIdentity::new_test_human_device(first.clone(), member_device).unwrap();
+    let mut member_keypackage = member_identity.key_package_record().unwrap();
+    member_keypackage.state = arkret_models_crypto::MlsKeyPackageState::Claimed;
+    member_keypackage.claim_id = Some(
+        welcomes
+            .iter()
+            .find(|welcome| welcome.delivery.recipient_actor_id == first)
+            .unwrap()
+            .delivery
+            .keypackage_claim_ref
+            .to_string(),
+    );
+    let add_result = group
+        .add_member_with_governance_binding(
+            &member_keypackage,
+            &MlsGovernanceBindingPayload::realm(
+                realm_id.clone(),
+                Some(genesis_ref.clone()),
+                0,
+                1,
+                0,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let transition = tracker
+        .process_public_handshake(
+            &arkret_canonical::base64url::base64url_decode(add_result.commit.commit.as_bytes())
+                .unwrap(),
+        )
+        .unwrap();
+    let arkret_mls::MlsPublicHandshakeTransition::Commit {
+        consumed_proposals, ..
+    } = transition
+    else {
+        panic!("the real Add transition must be a Commit")
+    };
+    let leaf = |leaf: arkret_mls::MlsPublicEndpointLeaf| MlsProposalLeafProvenance {
+        leaf_index: leaf.leaf_index,
+        actor_id: leaf.actor_id,
+        signature_key: leaf.signature_key,
+    };
+    commit
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .consumed_proposals = consumed_proposals
+        .into_iter()
+        .map(|proposal| MlsConsumedProposalInstallation {
+            ordinal: proposal.ordinal,
+            proposal_ref: proposal.proposal_ref,
+            proposal_type: proposal.proposal_type,
+            proposal_wire: proposal.proposal_wire,
+            sender_leaf: leaf(proposal.sender_leaf),
+            target_before: proposal.target_before.map(leaf),
+            target_after: proposal.target_after.map(leaf),
+        })
+        .collect();
     commit.authority_commit.welcomes = welcomes.clone();
     commit.authority_commit.recipient_queue_capacity = 4;
     uow.commit_event(commit.clone()).await.unwrap();
@@ -1714,6 +1950,144 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         expected_frozen,
         "the original producer-signed remote delivery is retained independently"
     );
+    let first_welcome = welcomes
+        .iter()
+        .find(|welcome| welcome.delivery.recipient_actor_id == first)
+        .unwrap();
+    let add_proposal = commit
+        .authority_commit
+        .mls_state
+        .as_ref()
+        .unwrap()
+        .consumed_proposals
+        .iter()
+        .find(|proposal| proposal.proposal_type == 1)
+        .unwrap();
+    let add_leaf = arkret_mls::verify_add_proposal_leaf(&add_proposal.proposal_wire).unwrap();
+    assert_eq!(add_leaf.actor_id, first);
+    let proof = signed_remote_add_attestation(
+        &commit,
+        &genesis_ref,
+        first_welcome,
+        &member_keypackage,
+        &station,
+        add_leaf.leaf_signature_key,
+    );
+    let governance = PgAuthorityCommitStore { pool: pool.clone() };
+    let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
+        source_station_id: arkret_wire::DidCoreId::new(remote_station).unwrap(),
+        request: proof.clone(),
+    };
+    let mut wrong_source = verified.clone();
+    wrong_source.source_station_id = station.clone();
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_source, &station)
+            .await
+            .is_err()
+    );
+    let mut wrong_leaf = verified.clone();
+    wrong_leaf.request.attestation.leaf_signature_key_b64u =
+        arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode([8_u8; 32])).unwrap();
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_leaf, &station)
+            .await
+            .is_err()
+    );
+    let mut wrong_genesis = verified.clone();
+    wrong_genesis.request.attestation.genesis_event_ref =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [72_u8; 32]);
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_genesis, &station)
+            .await
+            .is_err()
+    );
+    let fresh_keypackage = arkret_mls::ArkretMlsIdentity::new_test_human_device(
+        first.clone(),
+        match &first_welcome.delivery.recipient_endpoint {
+            arkret_wire::MlsWelcomeRecipientEndpoint::Device { device_id } => device_id.clone(),
+            _ => unreachable!(),
+        },
+    )
+    .unwrap()
+    .key_package_record()
+    .unwrap();
+    let wrong_keypackage = soland_storage::VerifiedMlsAddAuthorityAttestation {
+        source_station_id: verified.source_station_id.clone(),
+        request: signed_remote_add_attestation(
+            &commit,
+            &genesis_ref,
+            first_welcome,
+            &fresh_keypackage,
+            &station,
+            verified.request.attestation.leaf_signature_key_b64u.clone(),
+        ),
+    };
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_keypackage, &station)
+            .await
+            .is_err(),
+        "a newly signed claim for another KeyPackage cannot match the frozen Add"
+    );
+    let unknown_welcome = remote_welcome(&commit, &first);
+    let wrong_welcome = soland_storage::VerifiedMlsAddAuthorityAttestation {
+        source_station_id: verified.source_station_id.clone(),
+        request: signed_remote_add_attestation(
+            &commit,
+            &genesis_ref,
+            &unknown_welcome,
+            &member_keypackage,
+            &station,
+            verified.request.attestation.leaf_signature_key_b64u.clone(),
+        ),
+    };
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_welcome, &station)
+            .await
+            .is_err(),
+        "an unaccepted Welcome cannot install an Add proof"
+    );
+    assert_eq!(installed_add_attestation_count(&pool).await, 0);
+    let installed = governance
+        .install_mls_add_authority_attestation(&verified, &station)
+        .await
+        .unwrap();
+    assert_eq!(
+        installed.status,
+        arkret_models_collaboration::mls_roster_authority::MlsAttestAddStatus::Installed
+    );
+    assert_eq!(
+        governance
+            .install_mls_add_authority_attestation(&verified, &station)
+            .await
+            .unwrap()
+            .status,
+        arkret_models_collaboration::mls_roster_authority::MlsAttestAddStatus::Duplicate
+    );
+    assert_eq!(installed_add_attestation_count(&pool).await, 1);
+    let conflicting_replay = soland_storage::VerifiedMlsAddAuthorityAttestation {
+        source_station_id: verified.source_station_id.clone(),
+        request: signed_remote_add_attestation(
+            &commit,
+            &genesis_ref,
+            first_welcome,
+            &member_keypackage,
+            &station,
+            verified.request.attestation.leaf_signature_key_b64u.clone(),
+        ),
+    };
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&conflicting_replay, &station)
+            .await
+            .is_err(),
+        "same Welcome with a different signed historical claim must not replace the winner"
+    );
+    assert_eq!(installed_add_attestation_count(&pool).await, 1);
     assert_eq!(
         payloads
             .iter()

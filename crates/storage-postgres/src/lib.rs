@@ -87,6 +87,7 @@ mod message_revision_current_results;
 mod mls;
 mod mls_group_current_results;
 mod mls_group_state_material_read;
+mod mls_roster_attest_add;
 mod moderation;
 mod moderation_franking_proof_current_results;
 mod moderation_report_current_results;

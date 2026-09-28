@@ -1640,6 +1640,19 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Install a peer-authenticated recipient Add proof against the exact
+    /// accepted MLS Commit, Welcome and consumed Proposal at one PG cut.
+    pub async fn install_mls_add_authority_attestation(
+        &self,
+        verified: &soland_storage::VerifiedMlsAddAuthorityAttestation,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<arkret_models_collaboration::mls_roster_authority::MlsAttestAddOutcome> {
+        Ok(self
+            .store()
+            .install_mls_add_authority_attestation(verified, issuer)
+            .await?)
+    }
+
     /// `ak.self.committed_event.resource.get.v1` on an ordinary Realm's Realm
     /// stream. See
     /// [`soland_storage::AuthorityCommitStore::committed_event_for_member`].

@@ -218,6 +218,7 @@ DROP TABLE IF EXISTS rsvp_current_results CASCADE;
 DROP TABLE IF EXISTS mls_group_current_results CASCADE;
 DROP TABLE IF EXISTS mls_consumed_proposal_provenance CASCADE;
 DROP TABLE IF EXISTS mls_remote_welcome_provenance CASCADE;
+DROP TABLE IF EXISTS mls_add_authority_attestations CASCADE;
 DROP TABLE IF EXISTS mls_replica_genesis_provenance CASCADE;
 DROP TABLE IF EXISTS mls_add_authority_attestation_outbox CASCADE;
 DROP TABLE IF EXISTS message_revision_current_results CASCADE;
