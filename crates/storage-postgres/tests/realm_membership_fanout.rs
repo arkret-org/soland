@@ -2717,6 +2717,18 @@ async fn account_window_starts_joined_member_at_its_join_commit() {
         .await
         .unwrap()
         .unwrap();
+    let bootstrapped = store
+        .freeze_account_realm_window(&request(1), &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bootstrapped.committed_events.is_empty());
+    assert_eq!(bootstrapped.window.preview_only, None);
+    assert_eq!(bootstrapped.window.next_position, head_position + 1);
+    let bootstrap_basis = bootstrapped.window.window_start_basis.unwrap();
+    assert_eq!(bootstrap_basis.anchor_position, head_position);
+    assert_eq!(bootstrap_basis.snapshot_ref, at_head.snapshot_id);
+
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let founder_reply = sourced(next_request(
         &realm.bob_message.authority_commit,
