@@ -4,6 +4,7 @@ use arkret_signatures::http_signature::{
     HttpMessageVerificationError, HttpSignatureScenario, SignatureError, SignatureInput,
     SignaturePolicyError, SignatureVerificationPolicy,
 };
+use arkret_wire::{ErrorCode, ServiceOperationId};
 use ed25519_dalek::VerifyingKey;
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -103,6 +104,7 @@ async fn verify_inbound_peer_http_signature_inner(
     req: &Request,
     body_bytes: Option<&[u8]>,
 ) -> Result<(), AppError> {
+    let closed_peer_submit = is_closed_peer_submit(req.method().as_str(), req.uri().path());
     if body_bytes.is_some() {
         validate_federation_request_binding(state.config().trust_domain.as_str(), req)?;
     }
@@ -129,7 +131,7 @@ async fn verify_inbound_peer_http_signature_inner(
     let authority = signature_authority(req, state);
     let endpoint_digest = validate_destination_authority(state, req, &authority, &destination_id)?;
     let signature_input = http_signature::parse_signature_input_header(req)
-        .map_err(|error| federation_verification_error(error, "outer"))?;
+        .map_err(|error| federation_verification_error(error, "outer", closed_peer_submit))?;
     validate_signature_input(&signature_input, &source_id, "outer")?;
     let idempotency_key = req
         .headers()
@@ -137,8 +139,13 @@ async fn verify_inbound_peer_http_signature_inner(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let source_verifying_key =
-        verifying_key_for_service_id(state, &source_id, &signature_input.key_id).await?;
+    let source_verifying_key = verifying_key_for_service_id(
+        state,
+        &source_id,
+        &signature_input.key_id,
+        closed_peer_submit,
+    )
+    .await?;
     let source_did = arkret_identity::verification_method_did(&signature_input.key_id)
         .map_err(|_| signature_error("source verification method is not a DID URL"))?;
     let source_verification_method = arkret_wire::DidUrl::new(signature_input.key_id.clone())
@@ -154,7 +161,7 @@ async fn verify_inbound_peer_http_signature_inner(
         state.discard_federation_peer_verification_keys(&source_id, &signature_input.key_id);
         state.dids().discard_cached_document(&source_did);
         state.invalidate_did_bindings(&source_did);
-        return Err(signature_error(error));
+        return Err(current_peer_key_error(error, closed_peer_submit));
     }
     let scenario = if endpoint_digest.is_some() {
         HttpSignatureScenario::SignalRelayV1
@@ -173,7 +180,11 @@ async fn verify_inbound_peer_http_signature_inner(
     }
     let policy = SignatureVerificationPolicy::for_scenario(scenario, &applicable_conditionals)
         .map_err(|error| {
-            federation_verification_error(HttpMessageVerificationError::Policy(error), "outer")
+            federation_verification_error(
+                HttpMessageVerificationError::Policy(error),
+                "outer",
+                closed_peer_submit,
+            )
         })?;
     let verification = match body_bytes {
         Some(body) => http_signature::verify_signed_canonical_json_request(
@@ -193,7 +204,8 @@ async fn verify_inbound_peer_http_signature_inner(
             &policy,
         ),
     };
-    verification.map_err(|error| federation_verification_error(error, "outer"))?;
+    verification
+        .map_err(|error| federation_verification_error(error, "outer", closed_peer_submit))?;
     state.install_federation_peer_verifying_key(None, &source_id, source_verifying_key);
     state.install_federation_peer_verification_method_key(
         None,
@@ -296,7 +308,16 @@ pub(super) fn validate_signature_input(
     Ok(())
 }
 
-fn federation_verification_error(error: HttpMessageVerificationError, label: &str) -> AppError {
+fn is_closed_peer_submit(method: &str, path: &str) -> bool {
+    ServiceOperationId::from_http_request(method, path)
+        == Some(ServiceOperationId::PeerEventsCommandSubmitV1)
+}
+
+fn federation_verification_error(
+    error: HttpMessageVerificationError,
+    label: &str,
+    closed_peer_submit: bool,
+) -> AppError {
     match error {
         HttpMessageVerificationError::ContentEncodingNotAllowed
         | HttpMessageVerificationError::NonCanonicalJson(_) => crate::app_error!(
@@ -306,6 +327,11 @@ fn federation_verification_error(error: HttpMessageVerificationError, label: &st
         HttpMessageVerificationError::Signature(SignatureError::ContentDigestMismatch) => {
             crate::metrics::record_digest_mismatch("peer_request_content_digest");
             signature_error("Content-Digest does not match peer canonical request body")
+        }
+        HttpMessageVerificationError::Signature(SignatureError::SignatureInvalid)
+            if closed_peer_submit =>
+        {
+            current_peer_key_error(format!("{label} signature verification failed"), true)
         }
         HttpMessageVerificationError::Signature(
             SignatureError::MissingSignatureInputParameter("created" | "expires"),
@@ -326,6 +352,7 @@ async fn verifying_key_for_service_id(
     state: &AppState,
     service_id: &str,
     verification_method: &str,
+    closed_peer_submit: bool,
 ) -> Result<VerifyingKey, AppError> {
     if service_id == state.service_id() {
         let expected_method = crate::routing::federation::federation_service_signature_key_id(
@@ -338,7 +365,10 @@ async fn verifying_key_for_service_id(
         // delegated by its verified, durable DID history. A request-supplied
         // key or the equality of Source-Service-ID alone is never authority.
         let stored = state.stored_service_identity().await.map_err(|error| {
-            signature_error(format!("local service identity unavailable: {error}"))
+            current_peer_key_error(
+                format!("local service identity unavailable: {error}"),
+                closed_peer_submit,
+            )
         })?;
         let document = &stored.did_document;
         let method = document
@@ -350,35 +380,50 @@ async fn verifying_key_for_service_id(
                     && document.assertion_method.contains(&method.id)
             })
             .ok_or_else(|| {
-                signature_error("local service signature method is not an active assertion key")
+                current_peer_key_error(
+                    "local service signature method is not an active assertion key",
+                    closed_peer_submit,
+                )
             })?;
         let bytes =
             arkret_canonical::multibase::decode_ed25519_multibase(&method.public_key_multibase)
                 .map_err(|error| {
-                    signature_error(format!("local assertion key is invalid: {error}"))
+                    current_peer_key_error(
+                        format!("local assertion key is invalid: {error}"),
+                        closed_peer_submit,
+                    )
                 })?;
-        return VerifyingKey::from_bytes(&bytes)
-            .map_err(|error| signature_error(format!("local assertion key is invalid: {error}")));
+        return VerifyingKey::from_bytes(&bytes).map_err(|error| {
+            current_peer_key_error(
+                format!("local assertion key is invalid: {error}"),
+                closed_peer_submit,
+            )
+        });
     }
     // Cached peer keys are historical verification material, not current
     // transport authority. Resolve the service's current method state on every
     // request, including an exact retry, before any inner admission is reached.
-    let did = arkret_identity::verification_method_did(verification_method)
-        .map_err(|_| signature_error("source verification method is not a DID URL"))?;
+    let did = arkret_identity::verification_method_did(verification_method).map_err(|_| {
+        current_peer_key_error(
+            "source verification method is not a DID URL",
+            closed_peer_submit,
+        )
+    })?;
     let current = match state.dids().resolve_current_service_did(&did).await {
         Ok(current) => current,
         Err(error) => {
             state.discard_federation_peer_verification_keys(service_id, verification_method);
-            return Err(signature_error(format!(
-                "current source service key state unavailable: {error}"
-            )));
+            return Err(current_peer_key_error(
+                format!("current source service key state unavailable: {error}"),
+                closed_peer_submit,
+            ));
         }
     };
     match current_peer_key_from_document(&current.document, &did, verification_method) {
         Ok(key) => Ok(key),
         Err(error) => {
             state.discard_federation_peer_verification_keys(service_id, verification_method);
-            Err(signature_error(error))
+            Err(current_peer_key_error(error, closed_peer_submit))
         }
     }
 }
@@ -470,12 +515,25 @@ fn public_base_url_authority(state: &AppState) -> Option<String> {
 }
 
 fn signature_error(message: impl Into<String>) -> AppError {
+    signature_error_with_code(message, ErrorCode::Unauthenticated)
+}
+
+fn current_peer_key_error(message: impl Into<String>, closed_peer_submit: bool) -> AppError {
+    let code = if closed_peer_submit {
+        ErrorCode::SignatureInvalid
+    } else {
+        ErrorCode::Unauthenticated
+    };
+    signature_error_with_code(message, code)
+}
+
+fn signature_error_with_code(message: impl Into<String>, code: ErrorCode) -> AppError {
     let detail = message.into();
     tracing::warn!(
         federation_auth_detail = %detail,
         "federation request authentication failed"
     );
-    AppError::unauthenticated(FEDERATION_AUTH_FAILURE_MESSAGE)
+    AppError::new(code, FEDERATION_AUTH_FAILURE_MESSAGE)
 }
 
 #[cfg(test)]
@@ -525,6 +583,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_closed_peer_submit_classifies_current_key_failure_as_signature_invalid() {
+        assert!(is_closed_peer_submit("POST", "/_arkret/peer/events"));
+        assert!(!is_closed_peer_submit("GET", "/_arkret/peer/events"));
+        assert!(!is_closed_peer_submit("POST", "/_arkret/peer/events/scan"));
+        for closed in [false, true] {
+            let expected = if closed {
+                ErrorCode::SignatureInvalid
+            } else {
+                ErrorCode::Unauthenticated
+            };
+            let current_key = current_peer_key_error("private key-state reason", closed);
+            let invalid_signature = federation_verification_error(
+                HttpMessageVerificationError::Signature(SignatureError::SignatureInvalid),
+                "outer",
+                closed,
+            );
+            for error in [current_key, invalid_signature] {
+                assert_eq!(error.code, expected);
+                assert_eq!(error.http_status(), salvo::http::StatusCode::UNAUTHORIZED);
+                assert_eq!(error.message.as_ref(), FEDERATION_AUTH_FAILURE_MESSAGE);
+            }
+        }
+        let expired = federation_verification_error(
+            HttpMessageVerificationError::Policy(SignaturePolicyError::Expired),
+            "outer",
+            true,
+        );
+        assert_eq!(expired.code, ErrorCode::Unauthenticated);
+        assert_eq!(expired.message.as_ref(), FEDERATION_AUTH_FAILURE_MESSAGE);
+    }
+
     /// The failure-timing pad is now applied via `tokio::time::sleep().await`
     /// (non-blocking) rather than `std::thread::sleep`, so a fast auth failure
     /// is still padded up to the constant bucket but without pinning a worker.
@@ -567,11 +657,11 @@ mod tests {
         // or a deterministic development key after a fresh lookup fails.
         state.install_federation_peer_verifying_key(None, &service_id, historical);
         state.install_federation_peer_verification_method_key(None, &method, historical);
-        assert!(
-            verifying_key_for_service_id(&state, &service_id, &method)
-                .await
-                .is_err()
-        );
+        let error = verifying_key_for_service_id(&state, &service_id, &method, true)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::SignatureInvalid);
+        assert_eq!(error.message.as_ref(), FEDERATION_AUTH_FAILURE_MESSAGE);
         assert!(state.federation_peer_verifying_key(&service_id).is_none());
     }
 
