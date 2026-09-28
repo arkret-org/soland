@@ -646,6 +646,7 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
     fn circle_projections(&self) -> &dyn CircleProjectionStore;
     fn strand_projections(&self) -> &dyn StrandProjectionStore;
+    fn object_current_snapshot(&self) -> &dyn ObjectCurrentSnapshotStore;
     fn strand_watch_projections(&self) -> &dyn StrandWatchProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
     fn relation_current_results(&self) -> &dyn RelationCurrentResultStore;

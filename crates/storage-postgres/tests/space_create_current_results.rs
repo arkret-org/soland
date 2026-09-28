@@ -10,7 +10,7 @@ use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use ordinary_realm::{bootstrap_unit, founder, next_request};
 use serde_json::{Value, json};
-use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
+use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork, EventProjectionStoreRegistry};
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
@@ -176,6 +176,24 @@ async fn space_create_root_and_child_have_three_sibling_results_and_exact_replay
     assert_eq!(child_space.value["id"], json!(child_id));
     assert_eq!(child_parent.value, json!({"parent_space_id": root_id}));
     assert_eq!(child_policy.value, Value::Null);
+    let current_snapshot = soland_storage_postgres::PgPersistenceStore::new(pool.clone())
+        .object_current_snapshot()
+        .snapshot()
+        .await
+        .unwrap();
+    assert_eq!(current_snapshot.spaces.len(), 2);
+    let root_current = current_snapshot
+        .spaces
+        .iter()
+        .find(|space| space.id.as_ref() == Some(&root_id))
+        .unwrap();
+    let child_current = current_snapshot
+        .spaces
+        .iter()
+        .find(|space| space.id.as_ref() == Some(&child_id))
+        .unwrap();
+    assert_eq!(root_current.title, "Board");
+    assert_eq!(child_current.parent_space_id.as_ref(), Some(&root_id));
     assert_eq!(
         cut_counts(&pool, &realm_id).await,
         [baseline[0] + 2, baseline[1] + 2, 2, 2, 2]

@@ -467,25 +467,6 @@ impl crate::events::AppletPort for PersistenceEventReader {
 
 #[async_trait::async_trait]
 impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
-    async fn store_space_container_projection(
-        &self,
-        record: &crate::events::SpaceContainerProjectionRecord,
-    ) -> crate::ServiceResult<()> {
-        self.persistence
-            .space_container_projections()
-            .put(record)
-            .await?;
-        Ok(())
-    }
-
-    async fn store_strand_projection(
-        &self,
-        record: &crate::events::StrandProjectionRecord,
-    ) -> crate::ServiceResult<()> {
-        self.persistence.strand_projections().put(record).await?;
-        Ok(())
-    }
-
     async fn store_circle_projection(
         &self,
         record: &crate::events::CircleProjectionRecord,

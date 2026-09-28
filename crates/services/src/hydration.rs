@@ -879,12 +879,9 @@ pub async fn hydrate_canonical_realm_memberships(
     Ok(())
 }
 
-/// Read event-backed and mirror-table projections from durable persistence
-/// into the supplied `ProjectionState`. Called at
-/// `AppState::new` so restart picks up the lifecycle state the
-/// write-through path stamped down on the way in. Unknown state
-/// strings or invalid rows are silently skipped (logged at warn) —
-/// the in-memory state stays authoritative.
+/// Rebuild the process-local reducer cache from durable state at startup.
+/// Registered Space and Strand values come from RealmCommit-backed typed
+/// current rows; their old mirror tables cannot resurrect stale state.
 pub async fn hydrate_projections_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
@@ -926,14 +923,6 @@ pub async fn hydrate_projections_from_persistence(
         )?;
     }
 
-    fn parse_space_container_state(value: &str) -> Option<SpaceContainerLifecycleState> {
-        match value {
-            "active" => Some(SpaceContainerLifecycleState::Active),
-            "archived" => Some(SpaceContainerLifecycleState::Archived),
-            "tombstoned" => Some(SpaceContainerLifecycleState::Tombstoned),
-            _ => None,
-        }
-    }
     fn parse_circle_state(value: &str) -> Option<CircleLifecycleState> {
         match value {
             "active" => Some(CircleLifecycleState::Active),
@@ -990,101 +979,96 @@ pub async fn hydrate_projections_from_persistence(
         }
     }
 
-    if let Ok(rows) = persistence
-        .space_container_projections()
-        .snapshot_all()
-        .await
-    {
-        for record in rows {
-            let Some(state) = parse_space_container_state(&record.state) else {
-                tracing::warn!(
-                    container_space_id = %record.container_space_id,
-                    state = %record.state,
-                    "skipping space-container projection row with unknown state during hydrate"
-                );
-                continue;
-            };
-            let child_scope_policy = match parse_child_scope_policy(
-                record.child_scope_policy.as_deref(),
-                record.child_scope_policy_scope_circle_id.as_deref(),
-            ) {
-                Ok(policy) => policy,
-                Err(reason) => {
-                    tracing::warn!(
-                        container_space_id = %record.container_space_id,
-                        reason,
-                        "skipping space-container projection row with invalid child scope policy during hydrate"
-                    );
-                    continue;
-                }
-            };
-            proj.space_containers.insert(
-                record.container_space_id.clone(),
-                SpaceContainerProjection {
-                    container_space_id: record.container_space_id,
-                    realm_id: record.realm_id,
-                    kind: record.kind,
-                    title: record.title,
-                    fields: record.fields,
-                    scope_circle_id: record.scope_circle_id,
-                    child_scope_policy,
-                    parent_ref: record.parent_ref,
-                    rank: record.rank,
-                    state,
-                    state_changed_at: record.state_changed_at,
-                    created_by: record.created_by,
-                    created_at: record.created_at,
-                    updated_by: record.updated_by,
-                    updated_at: record.updated_at,
-                    // Stream-F (Wave 1B): orphaned flag is reducer-only
-                    // bookkeeping; not persisted to the durable mirror
-                    // table yet. Replayed durable events will rebuild
-                    // it via apply_realm_lifecycle cascade.
-                    orphaned: false,
-                    // Stream-F (Wave 2C): same story — cross-Realm
-                },
-            );
-        }
+    // Rebuild the process-local Space/Strand compatibility cache from the same
+    // RealmCommit-backed typed current rows used by canonical list reads.
+    // The retired projection_spaces/projection_strands mirrors must never
+    // resurrect stale state after a restart.
+    let current_objects = persistence.object_current_snapshot().snapshot().await?;
+    for space in current_objects.spaces {
+        let id = space.id.ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "registered Space current has no id".to_owned(),
+            )
+        })?;
+        let state = match space.state.ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "registered Space current has no lifecycle state".to_owned(),
+            )
+        })? {
+            arkret_wire::SpaceState::Active => SpaceContainerLifecycleState::Active,
+            arkret_wire::SpaceState::Archived => SpaceContainerLifecycleState::Archived,
+            arkret_wire::SpaceState::Tombstoned => SpaceContainerLifecycleState::Tombstoned,
+        };
+        proj.space_containers.insert(
+            id.to_string(),
+            SpaceContainerProjection {
+                container_space_id: id.to_string(),
+                realm_id: space.realm_id.to_string(),
+                kind: space.kind,
+                title: space.title,
+                fields: space.fields,
+                scope_circle_id: space.scope_circle_id.map(|id| id.to_string()),
+                child_scope_policy: space.child_scope_policy,
+                parent_ref: space.parent_space_id.map(|id| id.to_string()),
+                rank: space.rank,
+                state,
+                state_changed_at: space.state_changed_at,
+                created_by: space.created_by.to_string(),
+                created_at: space.created_at,
+                updated_by: space.updated_by.map(|id| id.to_string()),
+                updated_at: space.updated_at,
+                orphaned: false,
+            },
+        );
     }
-    if let Ok(rows) = persistence.strand_projections().snapshot_all().await {
-        for record in rows {
-            let Some(state) = parse_object_state(&record.state) else {
-                tracing::warn!(
-                    strand_id = %record.strand_id,
-                    state = %record.state,
-                    "skipping strand projection row with unknown state during hydrate"
-                );
-                continue;
-            };
-            proj.strands.insert(
-                record.strand_id.clone(),
-                StrandProjection {
-                    strand_id: record.strand_id,
-                    realm_id: record.realm_id,
-                    tracks: record.tracks,
-                    title: record.title,
-                    summary: record.summary,
-                    content: record.content,
-                    encrypted_content: record.encrypted_content,
-                    fields: record.fields,
-                    state,
-                    state_changed_at: record.state_changed_at,
-                    stage: record
-                        .stage
-                        .as_deref()
-                        .and_then(object_stage_from_wire_value),
-                    stage_changed_at: record.stage_changed_at,
-                    created_by: record.created_by,
-                    created_at: record.created_at,
-                    updated_by: record.updated_by,
-                    updated_at: record.updated_at,
-                    schema_refs: record.schema_refs,
-                    scope_circle_id: record.scope_circle_id,
-                },
-            );
-        }
-    }
-    // Circle membership is the set the wire validator enforces
+    for strand in current_objects.strands {
+        let id = strand.id.ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "registered Strand current has no id".to_owned(),
+            )
+        })?;
+        let state = match strand.state.ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "registered Strand current has no lifecycle state".to_owned(),
+            )
+        })? {
+            arkret_wire::ObjectState::Active => ObjectLifecycleState::Active,
+            arkret_wire::ObjectState::Archived => ObjectLifecycleState::Archived,
+            arkret_wire::ObjectState::Redacted => ObjectLifecycleState::Redacted,
+        };
+        let metadata = strand.metadata.unwrap_or_default();
+        proj.strands.insert(
+            id.to_string(),
+            StrandProjection {
+                strand_id: id.to_string(),
+                realm_id: strand.realm_id.to_string(),
+                tracks: strand.tracks,
+                title: metadata.title.unwrap_or_default(),
+                summary: metadata.summary,
+                content: strand
+                    .content
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(soland_storage::PersistenceError::database)?,
+                encrypted_content: strand
+                    .encrypted_content
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(soland_storage::PersistenceError::database)?,
+                fields: metadata.fields,
+                state,
+                state_changed_at: strand.state_changed_at,
+                stage: strand.stage,
+                stage_changed_at: strand.stage_changed_at,
+                created_by: strand.created_by.to_string(),
+                created_at: strand.created_at,
+                updated_by: strand.updated_by.map(|id| id.to_string()),
+                updated_at: strand.updated_at,
+                schema_refs: strand.schema_refs.unwrap_or_default(),
+                scope_circle_id: strand.scope_circle_id.map(|id| id.to_string()),
+            },
+        );
+    } // Circle membership is the set the wire validator enforces
     // `Circle.members` is a subset of `Realm.members` against, so it is
     // hydrated before the Circle rows that carry the active-member view.
     let mut circle_memberships: BTreeMap<

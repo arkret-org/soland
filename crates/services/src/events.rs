@@ -23,7 +23,6 @@ pub struct RealmDirectoryQuery {
 
 pub use soland_storage::{
     CircleMemberProjectionRecord, CircleProjectionRecord, RealmOrganizationStatementRecord,
-    SpaceContainerProjectionRecord, StrandProjectionRecord,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -569,11 +568,6 @@ pub trait EventReadPort: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait ProjectionWritePort: Send + Sync {
-    async fn store_space_container_projection(
-        &self,
-        record: &SpaceContainerProjectionRecord,
-    ) -> ServiceResult<()>;
-    async fn store_strand_projection(&self, record: &StrandProjectionRecord) -> ServiceResult<()>;
     /// Persist one Circle row together with its complete membership set.
     async fn store_circle_projection(
         &self,
@@ -915,22 +909,6 @@ impl EventQueryService {
         self.applets
             .acknowledge_applet_authoring_completion(applet_id, request_digest, at)
             .await
-    }
-
-    pub async fn store_space_container_projection(
-        &self,
-        record: &SpaceContainerProjectionRecord,
-    ) -> ServiceResult<()> {
-        self.projections
-            .store_space_container_projection(record)
-            .await
-    }
-
-    pub async fn store_strand_projection(
-        &self,
-        record: &StrandProjectionRecord,
-    ) -> ServiceResult<()> {
-        self.projections.store_strand_projection(record).await
     }
 
     pub async fn store_morph_projection(

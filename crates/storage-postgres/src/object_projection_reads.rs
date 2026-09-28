@@ -16,7 +16,9 @@ use arkret_wire::{
 use diesel::sql_types::{Jsonb, Text};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::Value;
-use soland_storage::{PersistenceError, PersistenceResult};
+use soland_storage::{
+    ObjectCurrentSnapshot, ObjectCurrentSnapshotStore, PersistenceError, PersistenceResult,
+};
 
 use crate::{PgPool, PgTransactionError};
 
@@ -40,6 +42,107 @@ struct PositionRow {
     strand_id: String,
     #[diesel(sql_type = Jsonb)]
     value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct CurrentObjectRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    proved: bool,
+}
+
+pub struct PgObjectCurrentSnapshotStore {
+    pub pool: PgPool,
+}
+
+#[async_trait::async_trait]
+impl ObjectCurrentSnapshotStore for PgObjectCurrentSnapshotStore {
+    async fn snapshot(&self) -> PersistenceResult<ObjectCurrentSnapshot> {
+        let mut conn = self.pool.get().await.map_err(PersistenceError::database)?;
+        let (space_rows, strand_rows) = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn).await?;
+            let orphan_sibling: crate::ExistsRow = diesel::sql_query(
+                "SELECT EXISTS(SELECT 1 FROM space_parent_current_results p \
+                 LEFT JOIN space_current_results s ON s.realm_id=p.realm_id AND s.space_id=p.space_id \
+                 WHERE s.space_id IS NULL UNION ALL SELECT 1 FROM space_child_scope_policy_current_results c \
+                 LEFT JOIN space_current_results s ON s.realm_id=c.realm_id AND s.space_id=c.space_id \
+                 WHERE s.space_id IS NULL) AS present",
+            ).get_result(&mut *conn).await?;
+            if orphan_sibling.present {
+                return Err(corrupt("Space current has orphan sibling family").into());
+            }
+            let spaces = diesel::sql_query(
+                "SELECT s.space_id AS id,s.realm_id, \
+                 s.value || jsonb_build_object('parent_space_id',p.value->'parent_space_id', \
+                 'child_scope_policy',c.value) AS value, \
+                 (sc.commit_id IS NOT NULL AND pc.commit_id IS NOT NULL AND cc.commit_id IS NOT NULL \
+                   AND NOT (s.value ? 'parent_space_id') AND NOT (s.value ? 'child_scope_policy') \
+                   AND jsonb_typeof(p.value)='object' AND p.value ? 'parent_space_id' \
+                   AND p.value - 'parent_space_id'='{}'::jsonb) AS proved \
+                 FROM space_current_results s \
+                 LEFT JOIN space_parent_current_results p ON p.realm_id=s.realm_id AND p.space_id=s.space_id \
+                 LEFT JOIN space_child_scope_policy_current_results c ON c.realm_id=s.realm_id AND c.space_id=s.space_id \
+                 LEFT JOIN realm_commits sc ON sc.commit_id=s.current_commit_id AND sc.realm_id=s.realm_id \
+                   AND sc.stream_position=s.current_stream_position \
+                   AND sc.stream_ref=jsonb_build_object('kind','realm','realm_id',s.realm_id) \
+                 LEFT JOIN realm_commits pc ON pc.commit_id=p.current_commit_id AND pc.realm_id=p.realm_id \
+                   AND pc.stream_position=p.current_stream_position \
+                   AND pc.stream_ref=jsonb_build_object('kind','realm','realm_id',p.realm_id) \
+                 LEFT JOIN realm_commits cc ON cc.commit_id=c.current_commit_id AND cc.realm_id=c.realm_id \
+                   AND cc.stream_position=c.current_stream_position \
+                   AND cc.stream_ref=jsonb_build_object('kind','realm','realm_id',c.realm_id) \
+                 ORDER BY s.realm_id,s.space_id",
+            ).load::<CurrentObjectRow>(&mut *conn).await?;
+            let strands = diesel::sql_query(
+                "SELECT s.strand_id AS id,s.realm_id,s.value, \
+                 (rc.commit_id IS NOT NULL) AS proved FROM strand_current_results s \
+                 LEFT JOIN realm_commits rc ON rc.commit_id=s.current_commit_id AND rc.realm_id=s.realm_id \
+                   AND rc.stream_position=s.current_stream_position \
+                   AND rc.stream_ref=jsonb_build_object('kind','realm','realm_id',s.realm_id) \
+                 ORDER BY s.realm_id,s.strand_id",
+            ).load::<CurrentObjectRow>(&mut *conn).await?;
+            Ok((spaces,strands))
+        }).await.map_err(PgTransactionError::into_persistence)?;
+        let spaces = space_rows
+            .into_iter()
+            .map(|row| {
+                if !row.proved {
+                    return Err(corrupt("Space current sibling has no covering RealmCommit"));
+                }
+                let space: Space =
+                    serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+                if space.id.as_ref().is_none_or(|id| id.as_str() != row.id)
+                    || space.realm_id.as_str() != row.realm_id
+                {
+                    return Err(corrupt("Space current identity mismatch"));
+                }
+                Ok(space)
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        let strands = strand_rows
+            .into_iter()
+            .map(|row| {
+                if !row.proved {
+                    return Err(corrupt("Strand current has no covering RealmCommit"));
+                }
+                let strand: Strand =
+                    serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+                if strand.id.as_ref().is_none_or(|id| id.as_str() != row.id)
+                    || strand.realm_id.as_str() != row.realm_id
+                {
+                    return Err(corrupt("Strand current identity mismatch"));
+                }
+                Ok(strand)
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        Ok(ObjectCurrentSnapshot { spaces, strands })
+    }
 }
 
 fn corrupt(detail: impl Into<String>) -> PersistenceError {

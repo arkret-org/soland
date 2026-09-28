@@ -11,13 +11,10 @@ pub trait RealmMetaStore: Send + Sync {
     async fn delete(&self, realm_id: &str) -> PersistenceResult<()>;
 }
 // ── Projection persistence traits ─────────────────────────────────────────
-// Mirror the in-memory
-// `reducer::ProjectionState::{space_containers,strands,morphs}`
-// maps onto durable storage. The reducer continues to own the in-memory
-// authoritative state; routing layers write through to these stores
-// after each accepted state-changing event, and `AppState::new` hydrates
-// from them on startup so restart doesn't lose Space-container/Strand/Morph
-// lifecycle state.
+// The Space/Strand mirror stores below remain available for legacy data and
+// storage compatibility. Their rows are not a source for registered canonical
+// reads, admission, or restart hydration; ObjectCurrentSnapshotStore owns the
+// latter. Other reducer mirrors retain their existing callers.
 
 /// Durable Space-container projection store (mirror of
 /// `projection_space_containers` table).
@@ -46,6 +43,20 @@ pub trait StrandProjectionStore: Send + Sync {
     ) -> PersistenceResult<Vec<StrandProjectionRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandProjectionRecord>>;
     async fn delete(&self, strand_id: &str) -> PersistenceResult<()>;
+}
+
+/// One consistent restart snapshot of registered Space and Strand typed
+/// current results. These values come from RealmCommit-backed current rows,
+/// never the older reducer mirror tables.
+#[derive(Clone, Debug)]
+pub struct ObjectCurrentSnapshot {
+    pub spaces: Vec<arkret_models_collaboration::objects::space::Space>,
+    pub strands: Vec<arkret_models_collaboration::objects::strand::Strand>,
+}
+
+#[async_trait]
+pub trait ObjectCurrentSnapshotStore: Send + Sync {
+    async fn snapshot(&self) -> PersistenceResult<ObjectCurrentSnapshot>;
 }
 /// Durable Circle projection store (mirror of `projection_circles` +
 /// `projection_circle_members`).

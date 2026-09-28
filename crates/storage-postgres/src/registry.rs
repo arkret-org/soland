@@ -67,6 +67,7 @@ pub struct PgPersistenceStore {
     security_transactions: PgSecurityTransactionStore,
     space_container_projections: PgSpaceContainerProjectionStore,
     strand_projections: PgStrandProjectionStore,
+    object_current_snapshot: crate::object_projection_reads::PgObjectCurrentSnapshotStore,
     morph_projections: PgMorphProjectionStore,
     relation_current_results: PgRelationCurrentResultStore,
     capability_grant_current_results: PgCapabilityGrantCurrentResultStore,
@@ -153,6 +154,9 @@ impl PgPersistenceStore {
             security_transactions: PgSecurityTransactionStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             strand_projections: PgStrandProjectionStore { pool: pool.clone() },
+            object_current_snapshot: crate::object_projection_reads::PgObjectCurrentSnapshotStore {
+                pool: pool.clone(),
+            },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
             relation_current_results: PgRelationCurrentResultStore { pool: pool.clone() },
             capability_grant_current_results: PgCapabilityGrantCurrentResultStore {
@@ -421,6 +425,10 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 
     fn strand_projections(&self) -> &dyn StrandProjectionStore {
         &self.strand_projections
+    }
+
+    fn object_current_snapshot(&self) -> &dyn ObjectCurrentSnapshotStore {
+        &self.object_current_snapshot
     }
 
     fn morph_projections(&self) -> &dyn MorphProjectionStore {

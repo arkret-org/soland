@@ -136,8 +136,6 @@ pub struct RealmBootstrapProjectionError {
 
 #[derive(Clone, Debug)]
 pub enum ProjectionWriteThroughRecord {
-    SpaceContainer(crate::events::SpaceContainerProjectionRecord),
-    Strand(crate::events::StrandProjectionRecord),
     Morph(crate::events::MorphProjectionRecord),
     /// The Circle row plus its complete membership set. Membership is written
     /// as a whole set because it is what the wire validator enforces
@@ -473,26 +471,6 @@ impl ProjectionService {
         operation: &Operation,
     ) -> Option<ProjectionWriteThroughRecord> {
         let kind = crate::operation_semantics::canonical_kind_for_operation(operation)?;
-        let is_space_container_kind = matches!(
-            &kind,
-            arkret_wire::EventKind::SpaceCreate
-                | arkret_wire::EventKind::SpaceUpdate
-                | arkret_wire::EventKind::SpaceParent
-                | arkret_wire::EventKind::SpaceArchive
-                | arkret_wire::EventKind::SpaceRestore
-                | arkret_wire::EventKind::SpaceTombstone
-        );
-        let is_strand_kind = matches!(
-            &kind,
-            arkret_wire::EventKind::StrandCreate
-                | arkret_wire::EventKind::StrandUpdate
-                | arkret_wire::EventKind::StrandArchive
-                | arkret_wire::EventKind::StrandRestore
-                | arkret_wire::EventKind::StrandMove
-                | arkret_wire::EventKind::StrandReorder
-                | arkret_wire::EventKind::StrandStageSet
-                | arkret_wire::EventKind::StrandTracksUpdate
-        );
         let is_morph_kind = matches!(
             &kind,
             arkret_wire::EventKind::MorphCreate
@@ -511,12 +489,7 @@ impl ProjectionService {
                 | arkret_wire::EventKind::CircleMemberState
         );
         let is_redaction = kind == arkret_wire::EventKind::Redaction;
-        if !(is_space_container_kind
-            || is_strand_kind
-            || is_morph_kind
-            || is_circle_kind
-            || is_redaction)
-        {
+        if !(is_morph_kind || is_circle_kind || is_redaction) {
             return None;
         }
 
@@ -581,92 +554,6 @@ impl ProjectionService {
                 )
             });
         }
-        if is_space_container_kind {
-            let id = string_field("space_id").or_else(object_id)?;
-            return state.space_containers.get(&id).map(|row| {
-                let (child_scope_policy, child_scope_policy_scope_circle_id) =
-                    match row.child_scope_policy.as_ref() {
-                        None => (None, None),
-                        Some(
-                            arkret_models_collaboration::objects::space::ChildScopePolicy::AllowAny {},
-                        ) => {
-                            (Some("allow_any".to_owned()), None)
-                        }
-                        Some(
-                            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireE2ee {},
-                        ) => {
-                            (Some("require_e2ee".to_owned()), None)
-                        }
-                        Some(
-                            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireSameScope {},
-                        ) => {
-                            (Some("require_same_scope".to_owned()), None)
-                        }
-                        Some(arkret_models_collaboration::objects::space::ChildScopePolicy::RequireScopeCircleId {
-                            scope_circle_id,
-                        }) => (
-                            Some("require_scope_circle_id".to_owned()),
-                            Some(scope_circle_id.as_str().to_owned()),
-                        ),
-                    };
-                ProjectionWriteThroughRecord::SpaceContainer(
-                    crate::events::SpaceContainerProjectionRecord {
-                        container_space_id: row.container_space_id.clone(),
-                        realm_id: row.realm_id.clone(),
-                        kind: row.kind.clone(),
-                        title: row.title.clone(),
-                        fields: row.fields.clone(),
-                        scope_circle_id: row.scope_circle_id.clone(),
-                        child_scope_policy,
-                        child_scope_policy_scope_circle_id,
-                        parent_ref: row.parent_ref.clone(),
-                        rank: row.rank.clone(),
-                        state: row.state.as_str().to_owned(),
-                        state_changed_at: row.state_changed_at,
-                        created_by: row.created_by.clone(),
-                        created_at: row.created_at,
-                        updated_by: row.updated_by.clone(),
-                        updated_at: row.updated_at,
-                    },
-                )
-            });
-        }
-        if is_strand_kind {
-            let id = if kind == arkret_wire::EventKind::StrandCreate {
-                object_id()
-            } else if matches!(
-                &kind,
-                arkret_wire::EventKind::StrandUpdate
-                    | arkret_wire::EventKind::StrandArchive
-                    | arkret_wire::EventKind::StrandRestore
-            ) {
-                string_field("target_ref")
-            } else {
-                string_field("strand_id")
-            }?;
-            return state.strands.get(&id).map(|row| {
-                ProjectionWriteThroughRecord::Strand(crate::events::StrandProjectionRecord {
-                    strand_id: row.strand_id.clone(),
-                    realm_id: row.realm_id.clone(),
-                    tracks: row.tracks.clone(),
-                    title: row.title.clone(),
-                    summary: row.summary.clone(),
-                    content: row.content.clone(),
-                    encrypted_content: row.encrypted_content.clone(),
-                    fields: row.fields.clone(),
-                    schema_refs: row.schema_refs.clone(),
-                    state: row.state.as_str().to_owned(),
-                    state_changed_at: row.state_changed_at,
-                    stage: row.stage.as_ref().map(object_stage_wire_value),
-                    stage_changed_at: row.stage_changed_at,
-                    created_by: row.created_by.clone(),
-                    created_at: row.created_at,
-                    updated_by: row.updated_by.clone(),
-                    updated_at: row.updated_at,
-                    scope_circle_id: row.scope_circle_id.clone(),
-                })
-            });
-        }
         if is_morph_kind {
             let id = if kind == arkret_wire::EventKind::MorphCreate {
                 object_id()
@@ -683,32 +570,7 @@ impl ProjectionService {
             .payload
             .get("target_ref")
             .and_then(Value::as_str)?;
-        state
-            .strands
-            .get(object_ref)
-            .map(|row| {
-                ProjectionWriteThroughRecord::Strand(crate::events::StrandProjectionRecord {
-                    strand_id: row.strand_id.clone(),
-                    realm_id: row.realm_id.clone(),
-                    tracks: row.tracks.clone(),
-                    title: row.title.clone(),
-                    summary: row.summary.clone(),
-                    content: row.content.clone(),
-                    encrypted_content: row.encrypted_content.clone(),
-                    fields: row.fields.clone(),
-                    schema_refs: row.schema_refs.clone(),
-                    state: row.state.as_str().to_owned(),
-                    state_changed_at: row.state_changed_at,
-                    stage: row.stage.as_ref().map(object_stage_wire_value),
-                    stage_changed_at: row.stage_changed_at,
-                    created_by: row.created_by.clone(),
-                    created_at: row.created_at,
-                    updated_by: row.updated_by.clone(),
-                    updated_at: row.updated_at,
-                    scope_circle_id: row.scope_circle_id.clone(),
-                })
-            })
-            .or_else(|| state.morphs.get(object_ref).map(morph_write_through_record))
+        state.morphs.get(object_ref).map(morph_write_through_record)
     }
 
     pub fn install_snapshot(&self, state: ProjectionState) {
