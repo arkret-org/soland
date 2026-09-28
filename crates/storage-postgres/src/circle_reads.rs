@@ -1,8 +1,6 @@
 //! Circle convenience reads from accepted current cells in one snapshot.
 
-use arkret_models_collaboration::governance::circle::{
-    Circle, CircleDirectoryVisibility, CircleMembership, CircleView,
-};
+use arkret_models_collaboration::governance::circle::{Circle, CircleMembership, CircleView};
 use arkret_wire::{ActorId, CircleId, RealmId};
 use diesel::sql_types::{Jsonb, Text};
 use diesel_async::{AsyncConnection as _, AsyncPgConnection, RunQueryDsl};
@@ -148,7 +146,11 @@ async fn views(
                         && current.effective_at <= at
                 });
         }
-        if !joined && circle.directory_visibility != CircleDirectoryVisibility::RealmMembers {
+        // `CircleView` includes title, summary, creator and the member list.
+        // A Realm member outside this Circle may receive only the separate
+        // directory-preview whitelist, even for `realm_members` visibility.
+        // This full-view read must therefore remain member-only.
+        if !joined {
             continue;
         }
         for member in members {

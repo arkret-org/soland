@@ -90,22 +90,14 @@ async fn check_circle_convenience(visibility: &str) {
     let id = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
     let before = store.circle_view_for_actor(&id, &actor).await.unwrap();
     let listed = store.circle_views_for_actor(&realm, &actor).await.unwrap();
-    if visibility == "realm_members" {
-        let before = before.unwrap();
-        assert!(before.viewer_membership.is_none());
-        assert!(
-            before.member_ids.is_empty(),
-            "Realm root has no implicit Circle body membership"
-        );
-        assert!(before.mls_group_id.is_none());
-        assert_eq!(listed.len(), 1);
-    } else {
-        assert!(
-            before.is_none(),
-            "Circle creator has no implicit private Circle access"
-        );
-        assert!(listed.is_empty());
-    }
+    assert!(
+        before.is_none(),
+        "Realm membership and Circle creation confer no full CircleView access ({visibility})"
+    );
+    assert!(
+        listed.is_empty(),
+        "the full-view list must not leak title or creator to non-members ({visibility})"
+    );
     let join = membership(&create.authority_commit, &id, &actor, "join", None);
     uow.commit_event(join.clone()).await.unwrap();
     let joined = store
@@ -115,21 +107,24 @@ async fn check_circle_convenience(visibility: &str) {
         .unwrap();
     assert_eq!(joined.viewer_membership, Some(CircleMembership::Join));
     assert_eq!(joined.member_ids, vec![actor.clone()]);
+    assert_eq!(
+        store
+            .circle_views_for_actor(&realm, &actor)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "a joined member can list the full CircleView ({visibility})"
+    );
     let leave = membership(&join.authority_commit, &id, &actor, "leave", Some("join"));
     uow.commit_event(leave).await.unwrap();
     let ended = store.circle_view_for_actor(&id, &actor).await.unwrap();
-    if visibility == "realm_members" {
-        let ended = ended.unwrap();
-        assert_eq!(ended.viewer_membership, Some(CircleMembership::Leave));
-        assert!(ended.member_ids.is_empty());
-    } else {
-        assert!(ended.is_none());
-        assert!(
-            store
-                .circle_views_for_actor(&realm, &actor)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
+    assert!(ended.is_none(), "leaving closes the full-view read ({visibility})");
+    assert!(
+        store
+            .circle_views_for_actor(&realm, &actor)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
