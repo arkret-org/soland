@@ -204,7 +204,10 @@ pub struct AccountRealmWindowRequest {
     /// still an accepted ancestor of the head within `window_limit`, the
     /// window is the live delta after it instead of the last `window_limit`
     /// Commits.
-    pub delivered_head: Option<arkret_wire::CommitStreamHead>,
+    pub delivered_heads: Vec<arkret_wire::CommitStreamHead>,
+    /// `None` uses the bounded default visible set. An explicit selection
+    /// carries the caller's exact per-stream filter for this Realm.
+    pub selected_stream_refs: Option<Vec<arkret_wire::CommitStreamRef>>,
 }
 
 /// One frozen, fully delivered stream window and its committed rows.
@@ -216,10 +219,18 @@ pub struct AccountRealmWindowRequest {
 #[derive(Clone, Debug)]
 pub struct AccountRealmWindow {
     pub governance_generation: u64,
+    /// The first selected stream's window. Kept separate from siblings so
+    /// existing single-stream consumers can inspect its exact basis.
     pub window: arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow,
+    pub additional_windows:
+        Vec<arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow>,
+    pub streams_limited: bool,
     pub committed_events: Vec<arkret_wire::CommittedEventView>,
+    /// Every stream visible to this Account at the same cut as the window.
+    /// The window itself still carries only one stream's committed tail.
+    pub current_stream_heads: Vec<arkret_wire::CommitStreamHead>,
     /// Typed current results of the same proved cut, i.e. at the window
-    /// head; the Account current carrier of the window's Realm detail.
+    /// cut; the Account current carrier of the window's Realm detail.
     pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
 }
 

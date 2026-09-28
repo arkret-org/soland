@@ -2044,7 +2044,8 @@ async fn account_window_basis_reserves_exact_issued_snapshot_or_is_preview_only(
         expires_at_ms: now_ms + window_ttl,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
-        delivered_head: None,
+        delivered_heads: Vec::new(),
+        selected_stream_refs: None,
     };
     let positions = |window: &soland_storage::AccountRealmWindow| {
         window
@@ -2582,7 +2583,8 @@ async fn account_window_carries_same_cut_current_and_reservation_deadline() {
         expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
-        delivered_head: None,
+        delivered_heads: Vec::new(),
+        selected_stream_refs: None,
     };
     let backed = store
         .freeze_account_realm_window(&request, &sign)
@@ -2748,7 +2750,8 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
         expires_at_ms: now_ms + soland_storage::MAX_ACCOUNT_WINDOW_RESERVATION_MS,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
-        delivered_head: None,
+        delivered_heads: Vec::new(),
+        selected_stream_refs: None,
     };
     let backed = store
         .freeze_account_realm_window(&request, &sign)
@@ -2816,7 +2819,7 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
     let delta = store
         .freeze_account_realm_window(
             &AccountRealmWindowRequest {
-                delivered_head: Some(delivered.clone()),
+                delivered_heads: vec![delivered.clone()],
                 window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
                 ..request.clone()
             },
@@ -2847,10 +2850,10 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
     let forged = store
         .freeze_account_realm_window(
             &AccountRealmWindowRequest {
-                delivered_head: Some(arkret_wire::CommitStreamHead {
+                delivered_heads: vec![arkret_wire::CommitStreamHead {
                     commit_id: arkret_wire::RealmCommitId::from_digest([0x7f; 32]),
                     ..delivered
-                }),
+                }],
                 window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
                 ..request.clone()
             },
@@ -2967,7 +2970,8 @@ async fn issued_snapshots_and_window_reservations_stay_within_their_caps() {
             expires_at_ms: now_ms + window_ttl,
             now_ms,
             byte_budget: 7 * 1024 * 1024,
-            delivered_head,
+            delivered_heads: delivered_head.into_iter().collect(),
+            selected_stream_refs: None,
         }
     };
     for _ in 0..4 {
@@ -3238,7 +3242,8 @@ async fn account_scan_withholds_expired_and_redacted_messages_on_their_commits()
                     expires_at_ms: now_ms + 300_000,
                     now_ms,
                     byte_budget: 7 * 1024 * 1024,
-                    delivered_head: None,
+                    delivered_heads: Vec::new(),
+                    selected_stream_refs: None,
                 },
                 &sign,
             )
@@ -5360,6 +5365,93 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         after_join,
         soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(_))
     ));
+    // The Account detail freezes Realm and joined Circle windows at one cut.
+    // The typed current and signed head keep both independent stream heads.
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            method.clone(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let request = soland_storage::AccountRealmWindowRequest {
+        realm_id: realm_id.clone(),
+        account: creator.clone(),
+        issuer: station.clone(),
+        window_limit: 20,
+        window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+        expires_at_ms: now_ms + 300_000,
+        now_ms,
+        byte_budget: 7 * 1024 * 1024,
+        delivered_heads: Vec::new(),
+        selected_stream_refs: None,
+    };
+    let frozen = store
+        .freeze_account_realm_window(&request, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!frozen.streams_limited);
+    assert_eq!(frozen.current_stream_heads.len(), 2);
+    let windows = std::iter::once(&frozen.window)
+        .chain(frozen.additional_windows.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(windows.len(), 2);
+    assert!(windows.iter().all(|window| window.complete));
+    assert!(windows.iter().any(|window| matches!(
+        window.stream_ref,
+        arkret_wire::CommitStreamRef::Realm { .. }
+    )));
+    assert!(windows.iter().any(|window| matches!(
+        window.stream_ref,
+        arkret_wire::CommitStreamRef::Circle { .. }
+    )));
+    assert!(frozen.current_state_entries.iter().any(|row| matches!(
+        row,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::CircleMemberState { .. },
+            ..
+        }
+    )));
+    let signed = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &station, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(signed.visible_stream_heads, frozen.current_stream_heads);
+    assert_eq!(
+        store
+            .issued_realm_state_snapshot(&realm_id, &creator, &signed.snapshot_id, &station)
+            .await
+            .unwrap(),
+        Some(signed)
+    );
+    let selected = store
+        .freeze_account_realm_window(
+            &soland_storage::AccountRealmWindowRequest {
+                selected_stream_refs: Some(vec![arkret_wire::CommitStreamRef::Circle {
+                    realm_id: realm_id.clone(),
+                    circle_id: circle_id.clone(),
+                }]),
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                ..request
+            },
+            &sign,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        selected.window.stream_ref,
+        arkret_wire::CommitStreamRef::Circle { .. }
+    ));
+    assert!(selected.additional_windows.is_empty());
+    assert_eq!(selected.current_stream_heads.len(), 2);
     let scan_request = arkret_wire::StreamScanRequest {
         realm_id: realm_id.clone(),
         stream_ref: arkret_wire::CommitStreamRef::Realm {

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 /// reservation, and the Account cursor that carries this progress never
 /// outlives it. `retained_revision` is the Account-summary revision frozen
 /// with the window; the 0441 cursor floor keeps it readable for as long as the
-/// cursor lives. `stream_heads` are the heads the window was frozen at.
+/// cursor lives. `stream_heads` are the heads the window was frozen at;
+/// `streams_limited` records when the default visible set exceeded the cap.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountDetailProgress {
@@ -21,6 +22,8 @@ pub struct AccountDetailProgress {
     pub retained_revision: i64,
     pub governance_generation: u64,
     pub stream_heads: Vec<CommitStreamHead>,
+    #[serde(default)]
+    pub streams_limited: bool,
 }
 
 /// One consistent durable cut used to decide whether a detail window changed.

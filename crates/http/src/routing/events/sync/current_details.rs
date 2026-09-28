@@ -1,4 +1,4 @@
-//! Realm detail delivery: one frozen, caller-proved stream window per frame.
+//! Realm detail delivery: caller-proved stream windows at one frozen cut.
 //!
 //! A window is frozen by `freeze_account_realm_window` at a single durable cut
 //! that proves the Account's complete disclosure, delivers the live delta
@@ -10,10 +10,8 @@
 //! the basis reservation and the Account cursor that carries the window's
 //! progress share one `expires_at_ms`.
 //!
-//! Only the Realm stream of a Realm whose proved cut is exactly that one
-//! stream can be frozen. Any other shape, and any Circle or Sidecar selection,
-//! is an explicit `unavailable` Realm detail, never a silently narrowed or
-//! synthetic window.
+//! Each selected visible stream has its own window and basis. The current
+//! result retains every stream head disclosed at the same signed cut.
 
 use arkret_models_collaboration::sync_frames::account_subscribe::{
     AccountFilter, AccountSubscribeFrame, AccountSubscribeFrameKind, AccountSubscribeRealms,
@@ -46,49 +44,92 @@ fn control(kind: &str) -> AccountSubscribeFrame {
 /// The part of the stream selection this Station can serve for one Realm.
 #[derive(Debug, PartialEq, Eq)]
 enum RealmSelection {
-    /// The Realm stream is the window (explicitly, or as the default first
-    /// screen when no `stream_refs` are given).
-    RealmStream,
+    /// Default bounded visible set.
+    Default,
+    /// Exact caller-selected streams for this Realm.
+    Explicit(Vec<arkret_wire::CommitStreamRef>),
     /// `stream_refs` selects none of this Realm's streams: nothing is owed.
     NotSelected,
-    /// A Circle or Sidecar stream is selected. Its visibility and window
-    /// basis cannot be proved here, so the whole Realm detail is refused
-    /// rather than silently dropping the selected stream.
-    Unsupported,
 }
 
 fn realm_selection(filter: &AccountFilter, realm: &RealmId) -> RealmSelection {
     let Some(stream_refs) = &filter.stream_refs else {
-        return RealmSelection::RealmStream;
+        return RealmSelection::Default;
     };
-    let mut selection = RealmSelection::NotSelected;
-    for stream_ref in stream_refs
+    let selected = stream_refs
         .iter()
         .filter(|stream_ref| stream_ref.realm_id() == realm)
-    {
-        match stream_ref {
-            arkret_wire::CommitStreamRef::Realm { .. } => selection = RealmSelection::RealmStream,
-            _ => return RealmSelection::Unsupported,
-        }
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        RealmSelection::NotSelected
+    } else {
+        RealmSelection::Explicit(selected)
     }
-    selection
 }
 
 /// Whether a delivered window must be replaced by a newly frozen one.
+fn selected_visible_heads(
+    visible: &[arkret_wire::CommitStreamHead],
+    realm: &RealmId,
+    selection: &RealmSelection,
+) -> (Vec<arkret_wire::CommitStreamHead>, bool) {
+    let mut heads = match selection {
+        RealmSelection::Default => visible.to_vec(),
+        RealmSelection::Explicit(refs) => refs
+            .iter()
+            .filter_map(|stream| {
+                visible
+                    .iter()
+                    .find(|head| &head.stream_ref == stream)
+                    .cloned()
+            })
+            .collect(),
+        RealmSelection::NotSelected => Vec::new(),
+    };
+    heads.sort_by_key(|head| {
+        arkret_canonical::canonical_json_bytes(&head.stream_ref).unwrap_or_default()
+    });
+    let limited = matches!(selection, RealmSelection::Default) && heads.len() > 64;
+    if limited {
+        let realm_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let realm_head = heads
+            .iter()
+            .find(|head| head.stream_ref == realm_ref)
+            .cloned();
+        heads.retain(|head| head.stream_ref != realm_ref);
+        heads.truncate(63);
+        if let Some(realm_head) = realm_head {
+            heads.push(realm_head);
+        }
+        heads.sort_by_key(|head| {
+            arkret_canonical::canonical_json_bytes(&head.stream_ref).unwrap_or_default()
+        });
+    }
+    (heads, limited)
+}
+
 fn needs_new_window(
     progress: Option<&AccountDetailProgress>,
-    frontier: &soland_storage::RealmStreamFrontier,
-    realm: &RealmId,
+    generation: u64,
+    selected_heads: &[arkret_wire::CommitStreamHead],
+    streams_limited: bool,
     now_ms: i64,
 ) -> bool {
-    let realm_head = frontier.stream_heads.iter().find(|head| {
-        matches!(&head.stream_ref, arkret_wire::CommitStreamRef::Realm { realm_id } if realm_id == realm)
-    });
     progress.is_none_or(|progress| {
         progress.expires_at_ms - now_ms < WINDOW_RENEW_BEFORE_MS
-            || progress.governance_generation != frontier.governance_generation
-            || realm_head
-                .is_none_or(|head| progress.stream_heads.as_slice() != std::slice::from_ref(head))
+            || progress.governance_generation != generation
+            || progress.streams_limited != streams_limited
+            || progress.stream_heads.len() != selected_heads.len()
+            || selected_heads.iter().any(|selected| {
+                progress
+                    .stream_heads
+                    .iter()
+                    .find(|head| head.stream_ref == selected.stream_ref)
+                    != Some(selected)
+            })
     })
 }
 
@@ -106,16 +147,21 @@ fn unavailable(error_code: RealmDetailErrorCode) -> RealmSyncEntry {
 fn window_entry(
     realm: &RealmId,
     window: soland_storage::AccountRealmWindow,
-    head: arkret_wire::CommitStreamHead,
     cursor: &str,
 ) -> RealmSyncEntry {
+    let mut windows = vec![window.window];
+    windows.extend(window.additional_windows);
+    windows.sort_by_key(|entry| {
+        arkret_canonical::canonical_json_bytes(&entry.stream_ref).unwrap_or_default()
+    });
     RealmSyncEntry {
-        streams: Some(vec![window.window]),
+        streams: Some(windows),
+        streams_limited: window.streams_limited.then_some(true),
         window_snapshot_cursor: Some(cursor.to_owned()),
         current: Some(AccountCurrentResult {
             realm_id: realm.clone(),
             governance_generation: window.governance_generation,
-            stream_heads: vec![head],
+            stream_heads: window.current_stream_heads,
             entries: window.current_state_entries,
         }),
         committed_events: Some(window.committed_events),
@@ -146,7 +192,8 @@ async fn freeze(
     account: &arkret_wire::AccountId,
     realm: &RealmId,
     window_limit: u32,
-    delivered_head: Option<arkret_wire::CommitStreamHead>,
+    delivered_heads: Vec<arkret_wire::CommitStreamHead>,
+    selected_stream_refs: Option<Vec<arkret_wire::CommitStreamRef>>,
 ) -> Result<Freeze, String> {
     // Reserve the Account-summary cut first (0441): the reservation keeps
     // it readable until the cursor that carries `retained_revision` is saved.
@@ -169,7 +216,8 @@ async fn freeze(
         expires_at_ms,
         now_ms,
         byte_budget: ACCOUNT_SYNC_MAX_FRAME_BYTES - DETAIL_ENVELOPE_RESERVATION,
-        delivered_head,
+        delivered_heads,
+        selected_stream_refs,
     };
     let verification_method = state
         .service_verification_method("notary-key")
@@ -186,20 +234,24 @@ async fn freeze(
         .await
     {
         Ok(Some(window)) => {
-            let head = arkret_wire::CommitStreamHead {
-                stream_ref: window.window.stream_ref.clone(),
-                stream_position: window.window.next_position - 1,
-                commit_id: window.window.head_commit_ref.clone(),
-            };
+            let heads = std::iter::once(&window.window)
+                .chain(window.additional_windows.iter())
+                .map(|entry| arkret_wire::CommitStreamHead {
+                    stream_ref: entry.stream_ref.clone(),
+                    stream_position: entry.next_position - 1,
+                    commit_id: entry.head_commit_ref.clone(),
+                })
+                .collect();
             let progress = AccountDetailProgress {
                 window_cursor: window_cursor.clone(),
                 expires_at_ms,
                 retained_revision,
                 governance_generation: window.governance_generation,
-                stream_heads: vec![head.clone()],
+                stream_heads: heads,
+                streams_limited: window.streams_limited,
             };
             Ok(Freeze::Window(
-                window_entry(realm, window, head, window_cursor.as_str()),
+                window_entry(realm, window, window_cursor.as_str()),
                 progress,
             ))
         }
@@ -262,9 +314,10 @@ pub(super) async fn frame(
     for realm in round_robin(realms, after.detail_next_realm.as_deref()) {
         let code = match (realm_selection(filter, &realm), account.as_ref()) {
             (RealmSelection::NotSelected, _) => continue,
-            (RealmSelection::Unsupported, _) => Some(RealmDetailErrorCode::TemporarilyUnavailable),
-            (RealmSelection::RealmStream, None) => Some(RealmDetailErrorCode::NotFound),
-            (RealmSelection::RealmStream, Some(account))
+            (RealmSelection::Default | RealmSelection::Explicit(_), None) => {
+                Some(RealmDetailErrorCode::NotFound)
+            }
+            (RealmSelection::Default | RealmSelection::Explicit(_), Some(account))
                 if is_realm_deleted(state, realm.as_str()).await
                     || !matches!(
                         crate::routing::realm_state_snapshot::account_is_joined_member(
@@ -278,9 +331,17 @@ pub(super) async fn frame(
             {
                 Some(RealmDetailErrorCode::NotFound)
             }
-            (RealmSelection::RealmStream, Some(account)) => {
-                let frontier = match state.authority_commits().realm_stream_heads(&realm).await {
-                    Ok(Some(frontier)) => frontier,
+            (selection, Some(account)) => {
+                // Decide wakeups from this Account's proved visible set. A
+                // newly joined Circle can establish position 0 without moving
+                // the Realm head; unfiltered frontier activity may disclose
+                // private stream existence through timing.
+                let material = match state
+                    .authority_commits()
+                    .realm_state_snapshot_material_for_account(&realm, account)
+                    .await
+                {
+                    Ok(Some(material)) => material,
                     Ok(None) => {
                         positions.remove(realm.as_str());
                         if report_unavailable {
@@ -293,29 +354,38 @@ pub(super) async fn frame(
                         continue;
                     }
                     Err(error) => {
-                        tracing::warn!(%error, realm_id = %realm, "Realm stream heads unavailable");
+                        tracing::warn!(%error, realm_id = %realm, "Account visible stream heads unavailable");
                         return Some(control("resync_required"));
                     }
                 };
+                let (selected_heads, streams_limited) =
+                    selected_visible_heads(&material.visible_stream_heads, &realm, &selection);
                 let delivered = positions.get(realm.as_str());
-                if !needs_new_window(delivered, &frontier, &realm, now_ms) {
+                if !needs_new_window(
+                    delivered,
+                    material.governance_generation,
+                    &selected_heads,
+                    streams_limited,
+                    now_ms,
+                ) {
                     continue;
                 }
-                // The Realm stream head this cursor already delivered, if
-                // any: the next window continues after it.
-                let delivered_head = delivered.and_then(|progress| {
-                    progress
-                        .stream_heads
-                        .iter()
-                        .find(|head| {
-                            head.stream_ref
-                                == arkret_wire::CommitStreamRef::Realm {
-                                    realm_id: realm.clone(),
-                                }
-                        })
-                        .cloned()
-                });
-                match freeze(state, account, &realm, window_limit, delivered_head).await {
+                let delivered_heads =
+                    delivered.map_or_else(Vec::new, |progress| progress.stream_heads.clone());
+                let selected_stream_refs = match selection {
+                    RealmSelection::Explicit(refs) => Some(refs),
+                    _ => None,
+                };
+                match freeze(
+                    state,
+                    account,
+                    &realm,
+                    window_limit,
+                    delivered_heads,
+                    selected_stream_refs,
+                )
+                .await
+                {
                     Ok(Freeze::Window(entry, progress)) => {
                         positions.insert(realm.to_string(), progress);
                         entries.insert(realm.to_string(), entry);
@@ -427,19 +497,24 @@ mod tests {
     }
 
     #[test]
-    fn stream_selection_serves_only_the_realm_stream_and_refuses_hidden_scopes() {
+    fn stream_selection_keeps_explicit_scopes() {
         let (a, b) = (realm(1), realm(2));
         let circle = arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [9; 32],
         ));
         let default = filter(json!({"realm_ids": [a, b]}));
-        assert_eq!(realm_selection(&default, &a), RealmSelection::RealmStream);
+        assert_eq!(realm_selection(&default, &a), RealmSelection::Default);
         let only_a = filter(json!({
             "realm_ids": [a, b],
             "stream_refs": [{"kind": "realm", "realm_id": a}],
         }));
-        assert_eq!(realm_selection(&only_a, &a), RealmSelection::RealmStream);
+        assert_eq!(
+            realm_selection(&only_a, &a),
+            RealmSelection::Explicit(vec![arkret_wire::CommitStreamRef::Realm {
+                realm_id: a.clone()
+            }])
+        );
         assert_eq!(realm_selection(&only_a, &b), RealmSelection::NotSelected);
         let with_circle = filter(json!({
             "realm_ids": [a],
@@ -450,7 +525,15 @@ mod tests {
         }));
         assert_eq!(
             realm_selection(&with_circle, &a),
-            RealmSelection::Unsupported
+            RealmSelection::Explicit(vec![
+                arkret_wire::CommitStreamRef::Realm {
+                    realm_id: a.clone()
+                },
+                arkret_wire::CommitStreamRef::Circle {
+                    realm_id: a.clone(),
+                    circle_id: circle
+                },
+            ])
         );
     }
 
@@ -459,62 +542,78 @@ mod tests {
         let a = realm(1);
         let now = 1_000_000_000;
         let heads = vec![head(&a, 8, 3)];
-        let frontier = soland_storage::RealmStreamFrontier {
-            governance_generation: 0,
-            stream_heads: heads.clone(),
-        };
         let progress = AccountDetailProgress {
             window_cursor: arkret_wire::Cursor::new("ak:cursor:window".to_owned()).unwrap(),
             expires_at_ms: now + WINDOW_TTL_MS,
             retained_revision: 4,
             governance_generation: 0,
             stream_heads: heads.clone(),
+            streams_limited: false,
         };
-        assert!(needs_new_window(None, &frontier, &a, now));
-        assert!(!needs_new_window(Some(&progress), &frontier, &a, now));
+        assert!(needs_new_window(None, 0, &heads, false, now));
+        assert!(!needs_new_window(Some(&progress), 0, &heads, false, now));
+        assert!(needs_new_window(Some(&progress), 1, &heads, false, now));
         assert!(needs_new_window(
             Some(&progress),
-            &soland_storage::RealmStreamFrontier {
-                governance_generation: 1,
-                stream_heads: heads.clone(),
-            },
-            &a,
-            now,
-        ));
-        assert!(needs_new_window(
-            Some(&progress),
-            &soland_storage::RealmStreamFrontier {
-                governance_generation: 0,
-                stream_heads: vec![head(&a, 9, 4)],
-            },
-            &a,
-            now,
+            0,
+            &[head(&a, 9, 4)],
+            false,
+            now
         ));
         let circle = arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [9; 32],
         ));
-        let mut hidden_scope_frontier = frontier.clone();
-        hidden_scope_frontier
-            .stream_heads
-            .push(arkret_wire::CommitStreamHead {
-                stream_ref: arkret_wire::CommitStreamRef::Circle {
-                    realm_id: a.clone(),
-                    circle_id: circle,
-                },
-                stream_position: 2,
-                commit_id: arkret_wire::RealmCommitId::from_digest([10; 32]),
-            });
-        assert!(!needs_new_window(
-            Some(&progress),
-            &hidden_scope_frontier,
+        let circle_head = arkret_wire::CommitStreamHead {
+            stream_ref: arkret_wire::CommitStreamRef::Circle {
+                realm_id: a.clone(),
+                circle_id: circle,
+            },
+            stream_position: 0,
+            commit_id: arkret_wire::RealmCommitId::from_digest([10; 32]),
+        };
+        // A Circle self-join establishes a new visible stream without moving
+        // the already delivered Realm head. The account-visible cut wakes it.
+        let (selected, limited) = selected_visible_heads(
+            &[heads[0].clone(), circle_head.clone()],
             &a,
-            now
-        ));
+            &RealmSelection::Default,
+        );
         assert!(needs_new_window(
             Some(&progress),
-            &frontier,
+            0,
+            &selected,
+            limited,
+            now
+        ));
+        // An undisclosed Circle is absent from the account-visible material.
+        let (selected, limited) = selected_visible_heads(&heads, &a, &RealmSelection::Default);
+        assert!(!needs_new_window(
+            Some(&progress),
+            0,
+            &selected,
+            limited,
+            now
+        ));
+        let (selected, limited) = selected_visible_heads(
+            &[heads[0].clone(), circle_head.clone()],
             &a,
+            &RealmSelection::Explicit(vec![circle_head.stream_ref.clone()]),
+        );
+        assert_eq!(selected, vec![circle_head]);
+        assert!(needs_new_window(
+            Some(&progress),
+            0,
+            &selected,
+            limited,
+            now
+        ));
+        assert!(needs_new_window(Some(&progress), 0, &heads, true, now));
+        assert!(needs_new_window(
+            Some(&progress),
+            0,
+            &heads,
+            false,
             now + WINDOW_TTL_MS - WINDOW_RENEW_BEFORE_MS + 1,
         ));
     }
@@ -528,6 +627,7 @@ mod tests {
             retained_revision: 4,
             governance_generation: 0,
             stream_heads: vec![head(&a, 8, 3)],
+            streams_limited: false,
         };
         let value = serde_json::to_value(&progress).unwrap();
         assert_eq!(value["retained_revision"], 4);

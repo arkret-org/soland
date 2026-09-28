@@ -2816,7 +2816,8 @@ async fn account_window_starts_joined_member_at_its_join_commit() {
         expires_at_ms: now_ms + 300_000,
         now_ms,
         byte_budget: 7 * 1024 * 1024,
-        delivered_head: None,
+        delivered_heads: Vec::new(),
+        selected_stream_refs: None,
     };
     let positions = |window: &soland_storage::AccountRealmWindow| {
         window

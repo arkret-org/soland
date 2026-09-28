@@ -361,6 +361,7 @@ mod tests {
                 stream_position: 8,
                 commit_id: arkret_wire::RealmCommitId::from_digest([0x62; 32]),
             }],
+            streams_limited: false,
         };
         let record = |handle: &str, detail: Value| SyncCursorRecord {
             handle: handle.into(),

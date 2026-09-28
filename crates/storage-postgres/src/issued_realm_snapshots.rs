@@ -370,17 +370,42 @@ async fn recheck_disclosure_in_connection(
     let realm_stream = CommitStreamRef::Realm {
         realm_id: snapshot.realm_id.clone(),
     };
-    if snapshot
-        .visible_stream_heads
-        .iter()
-        .any(|head| head.stream_ref != realm_stream)
-        || snapshot
+    // Recompute the Account's complete disclosure at this read cut. A signed
+    // historical object is still readable only while every one of its streams
+    // and rows remains disclosed to this Account. New visible streams may have
+    // appeared since issuance; they do not invalidate the older exact slice.
+    let current_material =
+        crate::snapshot_disclosure_gate::account_snapshot_material_in_connection(
+            conn,
+            &snapshot.realm_id,
+            account,
+        )
+        .await?
+        .ok_or_else(|| undisclosable("the Account has no current disclosed cut"))?;
+    for head in &snapshot.visible_stream_heads {
+        if !current_material.visible_stream_heads.iter().any(|current| {
+            current.stream_ref == head.stream_ref
+                && (current.stream_position > head.stream_position
+                    || (current.stream_position == head.stream_position
+                        && current.commit_id == head.commit_id))
+        }) {
+            return Err(undisclosable("a signed stream is no longer disclosed"));
+        }
+        let old_floor = snapshot
             .retention_and_history_floor
             .stream_floors
             .iter()
-            .any(|floor| floor.stream_ref != realm_stream)
-    {
-        return Err(undisclosable("a head or floor is outside the Realm stream"));
+            .find(|floor| floor.stream_ref == head.stream_ref)
+            .ok_or_else(|| undisclosable("a signed stream has no floor"))?;
+        let current_floor = current_material
+            .retention_and_history_floor
+            .stream_floors
+            .iter()
+            .find(|floor| floor.stream_ref == head.stream_ref)
+            .ok_or_else(|| undisclosable("a signed stream has no current floor"))?;
+        if old_floor.oldest_position < current_floor.oldest_position {
+            return Err(undisclosable("a signed stream's readable floor advanced"));
+        }
     }
     let actor = arkret_wire::ActorId::account(account.clone());
     let current_floor = crate::account_stream_scan::caller_realm_floor_in_connection(
@@ -390,11 +415,12 @@ async fn recheck_disclosure_in_connection(
     )
     .await?
     .ok_or_else(|| undisclosable("the Account's readable floor is not provable"))?;
-    if snapshot.retention_and_history_floor.stream_floors
-        != [arkret_wire::StreamHistoryFloor {
-            stream_ref: realm_stream.clone(),
-            oldest_position: current_floor.oldest_position,
-        }]
+    if snapshot
+        .retention_and_history_floor
+        .stream_floors
+        .iter()
+        .find(|floor| floor.stream_ref == realm_stream)
+        .is_none_or(|floor| floor.oldest_position != current_floor.oldest_position)
     {
         return Err(undisclosable(
             "the object's floor is not the Account's current readable floor",
@@ -414,8 +440,20 @@ async fn recheck_disclosure_in_connection(
                 "a row family is outside the re-provable subset",
             ));
         };
+        if !current_material.current_state_entries.contains(row) {
+            return Err(undisclosable("a signed row is no longer disclosed"));
+        }
         if source_stream_ref != &realm_stream {
-            return Err(undisclosable("a row source is outside the Realm stream"));
+            // The current disclosure gate proved this exact row and stream;
+            // the historical snapshot's own signature binds its old cut.
+            if !current_material
+                .visible_stream_heads
+                .iter()
+                .any(|head| &head.stream_ref == source_stream_ref)
+            {
+                return Err(undisclosable("a row source is no longer visible"));
+            }
+            continue;
         }
         match selector {
             CurrentSelector::RealmGenesis
@@ -427,6 +465,7 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmDiscovery
             | CurrentSelector::RealmAlias
             | CurrentSelector::RealmPlaintextVisibleServices
+            | CurrentSelector::Circle { .. }
             | CurrentSelector::Strand { .. }
             | CurrentSelector::RealmSetDefaultStrand
             | CurrentSelector::InviteLifecycle { .. }
@@ -554,11 +593,70 @@ fn window_rejected(reason: &str) -> PersistenceError {
     PersistenceError::SchemaViolation(format!("Account window cannot be frozen: {reason}"))
 }
 
+fn select_window_heads(
+    realm_id: &arkret_wire::RealmId,
+    visible_heads: &[arkret_wire::CommitStreamHead],
+    selected_refs: Option<&[arkret_wire::CommitStreamRef]>,
+) -> PersistenceResult<(Vec<arkret_wire::CommitStreamHead>, bool)> {
+    let realm_stream = arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let mut selected = match selected_refs {
+        Some(refs) => {
+            if refs.len() > 64 {
+                return Err(window_rejected(
+                    "explicit stream selection exceeds 64 entries",
+                ));
+            }
+            let mut heads = Vec::with_capacity(refs.len());
+            for stream in refs {
+                if heads
+                    .iter()
+                    .any(|head: &arkret_wire::CommitStreamHead| &head.stream_ref == stream)
+                {
+                    return Err(window_rejected(
+                        "explicit stream selection repeats a stream",
+                    ));
+                }
+                let head = visible_heads
+                    .iter()
+                    .find(|head| &head.stream_ref == stream)
+                    .ok_or_else(|| window_rejected("selected stream is not disclosed"))?;
+                heads.push(head.clone());
+            }
+            heads
+        }
+        None => visible_heads.to_vec(),
+    };
+    if selected.is_empty() {
+        return Err(window_rejected(
+            "the selected cut has no established stream",
+        ));
+    }
+    selected.sort_by_key(|head| {
+        arkret_canonical::canonical_json_bytes(&head.stream_ref).unwrap_or_default()
+    });
+    let streams_limited = selected.len() > 64;
+    if streams_limited {
+        let realm_head = selected
+            .iter()
+            .find(|head| head.stream_ref == realm_stream)
+            .cloned()
+            .ok_or_else(|| window_rejected("default cut has no Realm stream"))?;
+        selected.retain(|head| head.stream_ref != realm_stream);
+        selected.truncate(63);
+        selected.push(realm_head);
+        selected.sort_by_key(|head| {
+            arkret_canonical::canonical_json_bytes(&head.stream_ref).unwrap_or_default()
+        });
+    }
+    Ok((selected, streams_limited))
+}
+
 /// The basis an exact issued snapshot gives a window whose first row is the
 /// Commit after `anchor`: the state after this stream's committed prefix
-/// through `anchor`. The snapshot must carry exactly this one stream with
-/// its head at the anchor and the caller's readable floor `floor`, at or
-/// below the anchor.
+/// through `anchor`. The signed snapshot can cover other visible streams,
+/// but this stream's head and readable floor must match the exact anchor.
 fn basis_from_snapshot(
     snapshot: &arkret_wire::RealmStateSnapshot,
     stream_ref: &arkret_wire::CommitStreamRef,
@@ -566,15 +664,17 @@ fn basis_from_snapshot(
     floor: u64,
 ) -> Option<arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis> {
     use arkret_models_collaboration::sync_frames::account_sync::StreamWindowStartBasis;
-    let exact_head = snapshot.visible_stream_heads.as_slice() == std::slice::from_ref(anchor);
+    let exact_head = snapshot
+        .visible_stream_heads
+        .iter()
+        .find(|head| &head.stream_ref == stream_ref)
+        == Some(anchor);
     let exact_floor = snapshot
         .retention_and_history_floor
         .stream_floors
-        .as_slice()
-        == [arkret_wire::StreamHistoryFloor {
-            stream_ref: stream_ref.clone(),
-            oldest_position: floor,
-        }];
+        .iter()
+        .find(|entry| &entry.stream_ref == stream_ref)
+        .is_some_and(|entry| entry.oldest_position == floor);
     (exact_head
         && exact_floor
         && floor <= anchor.stream_position
@@ -635,8 +735,8 @@ pub(crate) async fn freeze_account_realm_window(
 ) -> PersistenceResult<Option<soland_storage::AccountRealmWindow>> {
     use arkret_models_collaboration::sync_frames::account_sync::RealmStreamWindow;
 
-    if request.window_limit > 100 {
-        return Err(window_rejected("window_limit exceeds 100"));
+    if !(1..=100).contains(&request.window_limit) {
+        return Err(window_rejected("window_limit must be in 1..=100"));
     }
     if request.expires_at_ms <= request.now_ms
         || request.expires_at_ms - request.now_ms
@@ -649,10 +749,6 @@ pub(crate) async fn freeze_account_realm_window(
     arkret_wire::Cursor::new(request.window_cursor.clone())
         .map_err(|_| window_rejected("the window identity is not a cursor value"))?;
     let account_key = account_key(&request.account)?;
-    let stream_ref = arkret_wire::CommitStreamRef::Realm {
-        realm_id: request.realm_id.clone(),
-    };
-    let stream_key = crate::authority_commit::stream_key(&stream_ref)?;
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -691,227 +787,263 @@ pub(crate) async fn freeze_account_realm_window(
                 window_rejected("material generation differs from the locked tenure").into(),
             );
         }
-        let [head] = material.visible_stream_heads.as_slice() else {
-            return Err(window_rejected("the proved cut is not one Realm stream").into());
-        };
-        let [floor] = material
-            .retention_and_history_floor
-            .stream_floors
-            .as_slice()
-        else {
-            return Err(window_rejected("the proved cut has no single Realm floor").into());
-        };
-        let floor = floor.oldest_position;
-        let live_reservations = sql_query(
-            "SELECT count(*) AS present FROM realm_state_snapshot_window_reservations \
+        let (selected_heads, streams_limited) = select_window_heads(
+            &request.realm_id,
+            &material.visible_stream_heads,
+            request.selected_stream_refs.as_deref(),
+        )?;
+        let per_stream_limit = request
+            .window_limit
+            .min((100 / selected_heads.len()) as u32)
+            .max(1);
+        let mut windows = Vec::with_capacity(selected_heads.len());
+        let mut committed_events = Vec::new();
+        for head in &selected_heads {
+            let stream_ref = head.stream_ref.clone();
+            let stream_key = crate::authority_commit::stream_key(&stream_ref)?;
+            let floor = material
+                .retention_and_history_floor
+                .stream_floors
+                .iter()
+                .find(|floor| floor.stream_ref == stream_ref)
+                .ok_or_else(|| window_rejected("the proved cut has no Realm stream floor"))?;
+            let floor = floor.oldest_position;
+            let delivered_head = request
+                .delivered_heads
+                .iter()
+                .find(|delivered| delivered.stream_ref == stream_ref);
+            let live_reservations = sql_query(
+                "SELECT count(*) AS present FROM realm_state_snapshot_window_reservations \
              WHERE account_id=$1 AND stream_key=$2 AND expires_at_ms > $3",
-        )
-        .bind::<Text, _>(&account_key)
-        .bind::<Text, _>(&stream_key)
-        .bind::<super::BigInt, _>(request.now_ms)
-        .get_result::<CountRow>(&mut *conn)
-        .await?
-        .present;
-        // A member whose readable floor is above genesis can bootstrap at an
-        // already-issued current head without waiting for another Event. The
-        // empty tail is still a bounded stream window, with the signed head
-        // reserved as its exact start basis below.
-        let mut head_basis_available = false;
-        if floor > 0
-            && request.delivered_head.is_none()
-            && live_reservations < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
-        {
-            let candidates = sql_query(
-                "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
+            )
+            .bind::<Text, _>(&account_key)
+            .bind::<Text, _>(&stream_key)
+            .bind::<super::BigInt, _>(request.now_ms)
+            .get_result::<CountRow>(&mut *conn)
+            .await?
+            .present;
+            // A member whose readable floor is above genesis can bootstrap at an
+            // already-issued current head without waiting for another Event. The
+            // empty tail is still a bounded stream window, with the signed head
+            // reserved as its exact start basis below.
+            let mut head_basis_available = false;
+            if floor > 0
+                && delivered_head.is_none()
+                && live_reservations
+                    < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
+            {
+                let candidates = sql_query(
+                    "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
                  JOIN realm_state_snapshot_issuances issued \
                    ON issued.snapshot_id = snapshot.snapshot_id \
                  WHERE snapshot.realm_id=$1 AND snapshot.governance_generation=$2 \
                    AND issued.account_id=$3 \
-                   AND snapshot.snapshot_json->'visible_stream_heads' = $4 \
+                   AND snapshot.snapshot_json->'visible_stream_heads' @> $4 \
                  ORDER BY issued.issued_at DESC, snapshot.snapshot_id \
                  LIMIT $5 FOR KEY SHARE OF issued",
-            )
-            .bind::<Text, _>(request.realm_id.as_str())
-            .bind::<super::BigInt, _>(tenure.generation)
-            .bind::<Text, _>(&account_key)
-            .bind::<Jsonb, _>(
-                serde_json::to_value(std::slice::from_ref(head))
-                    .map_err(PersistenceError::database)?,
-            )
-            .bind::<super::BigInt, _>(
-                soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM,
-            )
-            .load::<SnapshotJsonRow>(&mut *conn)
-            .await?;
-            for candidate in candidates {
-                let snapshot: arkret_wire::RealmStateSnapshot =
-                    serde_json::from_value(candidate.snapshot_json)
-                        .map_err(PersistenceError::database)?;
-                if basis_from_snapshot(&snapshot, &stream_ref, head, floor).is_some()
-                    && derived_snapshot_id(&snapshot)? == snapshot.snapshot_id
-                    && still_disclosable(conn, &request.account, &request.issuer, &snapshot).await?
-                {
-                    head_basis_available = true;
-                    break;
-                }
-            }
-        }
-        let tail_start = (head.stream_position + 1)
-            .saturating_sub(u64::from(request.window_limit))
-            .max(floor);
-        let position = |value: u64| {
-            i64::try_from(value).map_err(|_| window_rejected("stream position exceeds storage"))
-        };
-        let delivered_is_ancestor = match &request.delivered_head {
-            Some(delivered)
-                if delivered.stream_ref == stream_ref
-                    && delivered.stream_position < head.stream_position
-                    && delivered.stream_position + 1 >= tail_start =>
-            {
-                sql_query(
-                    "SELECT commit_id AS present FROM realm_commits \
-                     WHERE realm_id=$1 AND stream_key=$2 AND stream_position=$3",
                 )
                 .bind::<Text, _>(request.realm_id.as_str())
-                .bind::<Text, _>(&stream_key)
-                .bind::<super::BigInt, _>(position(delivered.stream_position)?)
-                .get_result::<CommitIdRow>(&mut *conn)
-                .await
-                .optional()?
-                .is_some_and(|row| row.present == delivered.commit_id.as_str())
+                .bind::<super::BigInt, _>(tenure.generation)
+                .bind::<Text, _>(&account_key)
+                .bind::<Jsonb, _>(
+                    serde_json::to_value(std::slice::from_ref(head))
+                        .map_err(PersistenceError::database)?,
+                )
+                .bind::<super::BigInt, _>(
+                    soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM,
+                )
+                .load::<SnapshotJsonRow>(&mut *conn)
+                .await?;
+                for candidate in candidates {
+                    let snapshot: arkret_wire::RealmStateSnapshot =
+                        serde_json::from_value(candidate.snapshot_json)
+                            .map_err(PersistenceError::database)?;
+                    if basis_from_snapshot(&snapshot, &stream_ref, head, floor).is_some()
+                        && derived_snapshot_id(&snapshot)? == snapshot.snapshot_id
+                        && still_disclosable(conn, &request.account, &request.issuer, &snapshot)
+                            .await?
+                    {
+                        head_basis_available = true;
+                        break;
+                    }
+                }
             }
-            _ => false,
-        };
-        let start = if head_basis_available && !delivered_is_ancestor {
-            head.stream_position + 1
-        } else {
-            match &request.delivered_head {
-                Some(delivered) if delivered_is_ancestor => delivered.stream_position + 1,
-                _ => tail_start,
-            }
-        };
-        // Load only the delivered rows and, for a start above genesis, the
-        // anchor Commit just below them: never the whole stream history.
-        let lowest = start.saturating_sub(1);
-        let rows = sql_query(
-            "SELECT commit_row.commit_json, event_row.envelope \
+            let tail_start = (head.stream_position + 1)
+                .saturating_sub(u64::from(per_stream_limit))
+                .max(floor);
+            let position = |value: u64| {
+                i64::try_from(value).map_err(|_| window_rejected("stream position exceeds storage"))
+            };
+            let delivered_is_ancestor = match delivered_head {
+                Some(delivered)
+                    if delivered.stream_ref == stream_ref
+                        && delivered.stream_position < head.stream_position
+                        && delivered.stream_position + 1 >= tail_start =>
+                {
+                    sql_query(
+                        "SELECT commit_id AS present FROM realm_commits \
+                     WHERE realm_id=$1 AND stream_key=$2 AND stream_position=$3",
+                    )
+                    .bind::<Text, _>(request.realm_id.as_str())
+                    .bind::<Text, _>(&stream_key)
+                    .bind::<super::BigInt, _>(position(delivered.stream_position)?)
+                    .get_result::<CommitIdRow>(&mut *conn)
+                    .await
+                    .optional()?
+                    .is_some_and(|row| row.present == delivered.commit_id.as_str())
+                }
+                _ => false,
+            };
+            let start = if head_basis_available && !delivered_is_ancestor {
+                head.stream_position + 1
+            } else {
+                match delivered_head {
+                    Some(delivered) if delivered_is_ancestor => delivered.stream_position + 1,
+                    _ => tail_start,
+                }
+            };
+            // Load only the delivered rows and, for a start above genesis, the
+            // anchor Commit just below them: never the whole stream history.
+            let lowest = start.saturating_sub(1);
+            let rows = sql_query(
+                "SELECT commit_row.commit_json, event_row.envelope \
              FROM realm_commits commit_row \
              JOIN canonical_events event_row ON event_row.pk=commit_row.event_pk \
              WHERE commit_row.realm_id=$1 AND commit_row.stream_key=$2 \
                AND commit_row.stream_position >= $3 \
              ORDER BY commit_row.stream_position",
-        )
-        .bind::<Text, _>(request.realm_id.as_str())
-        .bind::<Text, _>(&stream_key)
-        .bind::<super::BigInt, _>(position(lowest)?)
-        .load::<WindowCommitRow>(&mut *conn)
-        .await?;
-        let mut chain = Vec::with_capacity(rows.len());
-        for row in rows {
-            let commit: arkret_wire::RealmCommit =
-                serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
-            let event: arkret_wire::Event =
-                serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
-            chain.push(arkret_wire::CommittedEventFullView { commit, event });
-        }
-        let contiguous = chain.iter().enumerate().all(|(offset, view)| {
-            view.commit.stream_position == lowest + offset as u64
-                && (offset == 0
-                    || view.commit.previous_commit_ref.as_ref()
-                        == Some(&chain[offset - 1].commit.commit_id))
-        });
-        let tip = chain
-            .last()
-            .ok_or_else(|| window_rejected("the proved stream has no Commit"))?;
-        if !contiguous
-            || tip.commit.stream_position != head.stream_position
-            || tip.commit.commit_id != head.commit_id
-        {
-            return Err(window_rejected("the delivered chain differs from the proved head").into());
-        }
-        let start_index =
-            usize::try_from(start - lowest).map_err(|_| window_rejected("window start"))?;
-        let delivered = crate::committed_disclosure::disclose_to_member_in_connection(
-            conn,
-            chain[start_index..].to_vec(),
-            &arkret_wire::ActorId::account(request.account.clone()),
-        )
-        .await?;
-        let encoded = arkret_canonical::canonical_json_bytes(&delivered)
-            .map_err(PersistenceError::database)?;
-        if encoded.len() > request.byte_budget {
-            return Err(window_rejected("the atomic window exceeds its byte budget").into());
-        }
-        // Readable history lies below the window only above the proved floor.
-        let limited = start > floor;
-        let mut basis = None;
-        // At the cap no further reservation is taken, so a limited window
-        // names no basis and is preview only (0441).
-        if start > floor
-            && live_reservations < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
-        {
-            let anchor_view = &chain[0];
-            let anchor = arkret_wire::CommitStreamHead {
-                stream_ref: stream_ref.clone(),
-                stream_position: anchor_view.commit.stream_position,
-                commit_id: anchor_view.commit.commit_id.clone(),
-            };
-            let candidates = sql_query(
-                "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
+            )
+            .bind::<Text, _>(request.realm_id.as_str())
+            .bind::<Text, _>(&stream_key)
+            .bind::<super::BigInt, _>(position(lowest)?)
+            .load::<WindowCommitRow>(&mut *conn)
+            .await?;
+            let mut chain = Vec::with_capacity(rows.len());
+            for row in rows {
+                let commit: arkret_wire::RealmCommit =
+                    serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
+                let event: arkret_wire::Event =
+                    serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
+                chain.push(arkret_wire::CommittedEventFullView { commit, event });
+            }
+            let contiguous = chain.iter().enumerate().all(|(offset, view)| {
+                view.commit.stream_position == lowest + offset as u64
+                    && (offset == 0
+                        || view.commit.previous_commit_ref.as_ref()
+                            == Some(&chain[offset - 1].commit.commit_id))
+            });
+            let tip = chain
+                .last()
+                .ok_or_else(|| window_rejected("the proved stream has no Commit"))?;
+            if !contiguous
+                || tip.commit.stream_position != head.stream_position
+                || tip.commit.commit_id != head.commit_id
+            {
+                return Err(
+                    window_rejected("the delivered chain differs from the proved head").into(),
+                );
+            }
+            let start_index =
+                usize::try_from(start - lowest).map_err(|_| window_rejected("window start"))?;
+            let delivered = crate::committed_disclosure::disclose_to_member_in_connection(
+                conn,
+                chain[start_index..].to_vec(),
+                &arkret_wire::ActorId::account(request.account.clone()),
+            )
+            .await?;
+            let encoded = arkret_canonical::canonical_json_bytes(&delivered)
+                .map_err(PersistenceError::database)?;
+            let used_bytes = arkret_canonical::canonical_json_bytes(&committed_events)
+                .map_err(PersistenceError::database)?
+                .len();
+            if used_bytes + encoded.len() > request.byte_budget {
+                return Err(window_rejected("the atomic window exceeds its byte budget").into());
+            }
+            committed_events.extend(delivered);
+            // Readable history lies below the window only above the proved floor.
+            let limited = start > floor;
+            let mut basis = None;
+            // At the cap no further reservation is taken, so a limited window
+            // names no basis and is preview only (0441).
+            if start > floor
+                && live_reservations
+                    < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
+            {
+                let anchor_view = &chain[0];
+                let anchor = arkret_wire::CommitStreamHead {
+                    stream_ref: stream_ref.clone(),
+                    stream_position: anchor_view.commit.stream_position,
+                    commit_id: anchor_view.commit.commit_id.clone(),
+                };
+                let candidates = sql_query(
+                    "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
                  JOIN realm_state_snapshot_issuances issued \
                    ON issued.snapshot_id = snapshot.snapshot_id \
                  WHERE snapshot.realm_id=$1 AND snapshot.governance_generation=$2 \
                    AND issued.account_id=$3 \
-                   AND snapshot.snapshot_json->'visible_stream_heads' = $4 \
+                   AND snapshot.snapshot_json->'visible_stream_heads' @> $4 \
                  ORDER BY issued.issued_at DESC, snapshot.snapshot_id \
                  LIMIT $5 FOR KEY SHARE OF issued",
-            )
-            .bind::<Text, _>(request.realm_id.as_str())
-            .bind::<super::BigInt, _>(tenure.generation)
-            .bind::<Text, _>(&account_key)
-            .bind::<Jsonb, _>(
-                serde_json::to_value(std::slice::from_ref(&anchor))
-                    .map_err(PersistenceError::database)?,
-            )
-            .bind::<super::BigInt, _>(
-                soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM,
-            )
-            .load::<SnapshotJsonRow>(&mut *conn)
-            .await?;
-            for candidate in candidates {
-                let snapshot: arkret_wire::RealmStateSnapshot =
-                    serde_json::from_value(candidate.snapshot_json)
-                        .map_err(PersistenceError::database)?;
-                let Some(candidate_basis) =
-                    basis_from_snapshot(&snapshot, &stream_ref, &anchor, floor)
-                else {
-                    continue;
-                };
-                if derived_snapshot_id(&snapshot)? != snapshot.snapshot_id
-                    || !still_disclosable(conn, &request.account, &request.issuer, &snapshot)
-                        .await?
-                {
-                    continue;
-                }
-                sql_query(
-                    "INSERT INTO realm_state_snapshot_window_reservations \
+                )
+                .bind::<Text, _>(request.realm_id.as_str())
+                .bind::<super::BigInt, _>(tenure.generation)
+                .bind::<Text, _>(&account_key)
+                .bind::<Jsonb, _>(
+                    serde_json::to_value(std::slice::from_ref(&anchor))
+                        .map_err(PersistenceError::database)?,
+                )
+                .bind::<super::BigInt, _>(
+                    soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM,
+                )
+                .load::<SnapshotJsonRow>(&mut *conn)
+                .await?;
+                for candidate in candidates {
+                    let snapshot: arkret_wire::RealmStateSnapshot =
+                        serde_json::from_value(candidate.snapshot_json)
+                            .map_err(PersistenceError::database)?;
+                    let Some(candidate_basis) =
+                        basis_from_snapshot(&snapshot, &stream_ref, &anchor, floor)
+                    else {
+                        continue;
+                    };
+                    if derived_snapshot_id(&snapshot)? != snapshot.snapshot_id
+                        || !still_disclosable(conn, &request.account, &request.issuer, &snapshot)
+                            .await?
+                    {
+                        continue;
+                    }
+                    sql_query(
+                        "INSERT INTO realm_state_snapshot_window_reservations \
                      (window_cursor, account_id, stream_key, snapshot_id, expires_at_ms) \
                      VALUES ($1,$2,$3,$4,$5)",
-                )
-                .bind::<Text, _>(&request.window_cursor)
-                .bind::<Text, _>(&account_key)
-                .bind::<Text, _>(&stream_key)
-                .bind::<Text, _>(snapshot.snapshot_id.as_str())
-                .bind::<super::BigInt, _>(request.expires_at_ms)
-                .execute(&mut *conn)
-                .await?;
-                basis = Some(candidate_basis);
-                break;
+                    )
+                    .bind::<Text, _>(&request.window_cursor)
+                    .bind::<Text, _>(&account_key)
+                    .bind::<Text, _>(&stream_key)
+                    .bind::<Text, _>(snapshot.snapshot_id.as_str())
+                    .bind::<super::BigInt, _>(request.expires_at_ms)
+                    .execute(&mut *conn)
+                    .await?;
+                    basis = Some(candidate_basis);
+                    break;
+                }
             }
+            let window = RealmStreamWindow {
+                stream_ref: stream_ref.clone(),
+                head_commit_ref: head.commit_id.clone(),
+                next_position: head.stream_position + 1,
+                limited,
+                window_limit: per_stream_limit,
+                complete: true,
+                preview_only: (start > 0 && basis.is_none()).then_some(true),
+                window_start_basis: basis,
+                e2ee_epoch: None,
+            };
+            window.validate().map_err(PersistenceError::database)?;
+            windows.push(window);
         }
-        // Issue the frozen head so the next live delta after it has an exact
-        // basis. A head beyond the inline snapshot limit issues nothing and
-        // that delta is preview only.
+        // Issue the complete signed cut once, after all per-stream basis
+        // reservations have been proved in this same transaction.
         let head_snapshot = sign(&material)?;
         if !soland_storage::signed_snapshot_matches_material(&head_snapshot, &material) {
             return Err(PersistenceError::Internal(
@@ -922,22 +1054,17 @@ pub(crate) async fn freeze_account_realm_window(
         if soland_storage::enforce_inline_realm_state_snapshot_capacity(&head_snapshot).is_ok() {
             issue_head_in_connection(conn, &request.account, &material, head_snapshot).await?;
         }
-        let window = RealmStreamWindow {
-            stream_ref: stream_ref.clone(),
-            head_commit_ref: head.commit_id.clone(),
-            next_position: head.stream_position + 1,
-            limited,
-            window_limit: request.window_limit,
-            complete: true,
-            preview_only: (start > 0 && basis.is_none()).then_some(true),
-            window_start_basis: basis,
-            e2ee_epoch: None,
-        };
-        window.validate().map_err(PersistenceError::database)?;
+        let mut windows = windows.into_iter();
+        let window = windows
+            .next()
+            .ok_or_else(|| window_rejected("no selected window"))?;
         Ok(Some(soland_storage::AccountRealmWindow {
             governance_generation: generation,
             window,
-            committed_events: delivered,
+            additional_windows: windows.collect(),
+            streams_limited,
+            committed_events,
+            current_stream_heads: material.visible_stream_heads.clone(),
             current_state_entries: material.current_state_entries.clone(),
         }))
     })
@@ -986,13 +1113,18 @@ pub(crate) async fn account_window_basis(
         }
         let snapshot: arkret_wire::RealmStateSnapshot =
             serde_json::from_value(row.snapshot_json).map_err(PersistenceError::database)?;
-        let [anchor] = snapshot.visible_stream_heads.as_slice() else {
+        let Some(anchor) = snapshot
+            .visible_stream_heads
+            .iter()
+            .find(|head| &head.stream_ref == stream_ref)
+        else {
             return Ok(None);
         };
-        let [floor] = snapshot
+        let Some(floor) = snapshot
             .retention_and_history_floor
             .stream_floors
-            .as_slice()
+            .iter()
+            .find(|floor| &floor.stream_ref == stream_ref)
         else {
             return Ok(None);
         };
@@ -1116,6 +1248,65 @@ mod tests {
             chrono::Utc::now(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn account_window_stream_cap_keeps_realm_and_explicit_batches_are_exact() {
+        let realm_id = RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x51; 32],
+        ));
+        let realm_ref = CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let mut heads = vec![CommitStreamHead {
+            stream_ref: realm_ref.clone(),
+            stream_position: 0,
+            commit_id: RealmCommitId::from_digest([0x52; 32]),
+        }];
+        for i in 0..65u8 {
+            heads.push(CommitStreamHead {
+                stream_ref: CommitStreamRef::Circle {
+                    realm_id: realm_id.clone(),
+                    circle_id: arkret_wire::CircleId::from_event_id(&EventId::from_digest(
+                        arkret_canonical::DigestSuite::Sha256,
+                        [i; 32],
+                    )),
+                },
+                stream_position: 0,
+                commit_id: RealmCommitId::from_digest([i; 32]),
+            });
+        }
+        let (at_limit, limited) = select_window_heads(&realm_id, &heads[..64], None).unwrap();
+        assert_eq!(at_limit.len(), 64);
+        assert!(!limited);
+        let (default, limited) = select_window_heads(&realm_id, &heads, None).unwrap();
+        assert_eq!(default.len(), 64);
+        assert!(limited);
+        assert!(default.iter().any(|head| head.stream_ref == realm_ref));
+        let mut expected_circles = heads[1..].to_vec();
+        expected_circles
+            .sort_by_key(|head| arkret_canonical::canonical_json_bytes(&head.stream_ref).unwrap());
+        assert_eq!(
+            default
+                .iter()
+                .filter(|head| head.stream_ref != realm_ref)
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected_circles[..63],
+        );
+        let omitted = expected_circles[63].stream_ref.clone();
+        let (explicit, limited) =
+            select_window_heads(&realm_id, &heads, Some(&[omitted.clone()])).unwrap();
+        assert_eq!(explicit.len(), 1);
+        assert_eq!(explicit[0].stream_ref, omitted);
+        assert!(!limited);
+        assert!(select_window_heads(&realm_id, &heads, Some(&[omitted.clone(), omitted])).is_err());
+        let too_many = heads[1..66]
+            .iter()
+            .map(|head| head.stream_ref.clone())
+            .collect::<Vec<_>>();
+        assert!(select_window_heads(&realm_id, &heads, Some(&too_many)).is_err());
     }
 
     #[test]
