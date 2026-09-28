@@ -4740,7 +4740,7 @@ CREATE TABLE mls_consumed_proposal_provenance (
  commit_stream_position BIGINT NOT NULL CHECK(commit_stream_position BETWEEN 1 AND 9007199254740991),
  epoch BIGINT NOT NULL CHECK(epoch BETWEEN 1 AND 9007199254740991),
  consumed_proposal_ordinal BIGINT NOT NULL CHECK(consumed_proposal_ordinal BETWEEN 0 AND 9007199254740991),
- proposal_type INTEGER NOT NULL CHECK(proposal_type IN (1,2,3,4)),
+ proposal_type INTEGER NOT NULL CHECK(proposal_type IN (1,2,3,4,7)),
  proposal_wire BYTEA NOT NULL CHECK(octet_length(proposal_wire)>0),
  proposal_ref BYTEA NOT NULL CHECK(octet_length(proposal_ref)>0),
  sender_actor_id JSONB NOT NULL CHECK(jsonb_typeof(sender_actor_id)='object'),
@@ -4763,7 +4763,7 @@ CREATE TABLE mls_consumed_proposal_provenance (
  CHECK((proposal_type=1 AND target_before_actor_id IS NULL AND target_after_actor_id IS NOT NULL)
     OR (proposal_type=2 AND target_before_actor_id IS NOT NULL AND target_after_actor_id IS NOT NULL)
     OR (proposal_type=3 AND target_before_actor_id IS NOT NULL AND target_after_actor_id IS NULL)
-    OR (proposal_type=4 AND target_before_actor_id IS NULL AND target_after_actor_id IS NULL))
+    OR (proposal_type IN (4,7) AND target_before_actor_id IS NULL AND target_after_actor_id IS NULL))
 );
 CREATE INDEX mls_consumed_proposal_provenance_cut
  ON mls_consumed_proposal_provenance(scope_key,commit_stream_position,consumed_proposal_ordinal);

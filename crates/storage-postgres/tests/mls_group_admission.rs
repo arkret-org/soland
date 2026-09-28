@@ -468,10 +468,14 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
         commit_event_ref: String,
         #[diesel(sql_type = BigInt)]
         consumed_proposal_ordinal: i64,
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        proposal_type: i32,
         #[diesel(sql_type = Binary)]
         proposal_wire: Vec<u8>,
         #[diesel(sql_type = Jsonb)]
         sender_actor_id: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+        target_before_actor_id: Option<serde_json::Value>,
         #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
         target_after_actor_id: Option<serde_json::Value>,
     }
@@ -528,7 +532,10 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
         .mls_state
         .as_mut()
         .unwrap()
-        .consumed_proposals = vec![proposal(0, 1, 11, None, Some(leaf.clone()))];
+        .consumed_proposals = vec![
+        proposal(0, 1, 11, None, Some(leaf.clone())),
+        proposal(1, 7, 12, None, None),
+    ];
     uow.commit_event(first.clone()).await.unwrap();
     let first_ref = first.authority_commit.event.event_id.clone();
 
@@ -557,7 +564,8 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
 
     let mut conn = pool.get().await.unwrap();
     let rows = diesel::sql_query(
-        "SELECT commit_event_ref,consumed_proposal_ordinal,proposal_wire,sender_actor_id,target_after_actor_id \
+        "SELECT commit_event_ref,consumed_proposal_ordinal,proposal_type,proposal_wire,sender_actor_id, \
+         target_before_actor_id,target_after_actor_id \
          FROM mls_consumed_proposal_provenance WHERE realm_id=$1 \
          ORDER BY commit_stream_position,consumed_proposal_ordinal",
     )
@@ -565,28 +573,58 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
     .load::<ProvenanceRow>(&mut *conn)
     .await
     .unwrap();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].commit_event_ref, first_ref.as_str());
-    assert_eq!(rows[1].commit_event_ref, replacement_ref.as_str());
+    assert_eq!(rows[1].commit_event_ref, first_ref.as_str());
     assert_eq!(rows[2].commit_event_ref, replacement_ref.as_str());
+    assert_eq!(rows[3].commit_event_ref, replacement_ref.as_str());
     assert_eq!(
         rows.iter()
             .map(|row| row.consumed_proposal_ordinal)
             .collect::<Vec<_>>(),
-        vec![0, 0, 1]
+        vec![0, 1, 0, 1]
     );
     assert_eq!(
         rows.iter()
             .map(|row| row.proposal_wire[0])
             .collect::<Vec<_>>(),
-        vec![11, 21, 22]
+        vec![11, 12, 21, 22]
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.proposal_type).collect::<Vec<_>>(),
+        vec![1, 7, 3, 1]
     );
     assert!(
         rows.iter()
             .all(|row| row.sender_actor_id == serde_json::to_value(&leaf.actor_id).unwrap())
     );
+    assert!(rows[1].target_before_actor_id.is_none());
     assert!(rows[1].target_after_actor_id.is_none());
-    assert_eq!(rows[0].target_after_actor_id, rows[2].target_after_actor_id);
+    assert!(rows[2].target_after_actor_id.is_none());
+    assert_eq!(rows[0].target_after_actor_id, rows[3].target_after_actor_id);
+    let invalid_group_context = diesel::sql_query(
+        "INSERT INTO mls_consumed_proposal_provenance \
+         (realm_id,scope_key,commit_event_ref,commit_stream_position,epoch,consumed_proposal_ordinal, \
+          proposal_type,proposal_wire,proposal_ref,sender_actor_id,sender_leaf_index,sender_signature_key, \
+          target_before_actor_id,target_before_leaf_index,target_before_signature_key, \
+          target_after_actor_id,target_after_leaf_index,target_after_signature_key,created_at) \
+         SELECT realm_id,scope_key,commit_event_ref,commit_stream_position,epoch,99, \
+          7,proposal_wire,proposal_ref,sender_actor_id,sender_leaf_index,sender_signature_key, \
+          target_before_actor_id,target_before_leaf_index,target_before_signature_key, \
+          target_after_actor_id,target_after_leaf_index,target_after_signature_key,created_at \
+         FROM mls_consumed_proposal_provenance \
+         WHERE realm_id=$1 AND commit_event_ref=$2 AND consumed_proposal_ordinal=0",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(first_ref.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap_err();
+    assert!(
+        invalid_group_context
+            .to_string()
+            .contains("mls_consumed_proposal_provenance_check2")
+    );
     drop(conn);
 
     let mut stale = with_installation(
@@ -607,7 +645,7 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
         .unwrap()
         .consumed_proposals = vec![proposal(0, 1, 31, None, Some(leaf.clone()))];
     assert_zero_write_refusal(&pool, &stale, ConflictCode::GovernanceBindingMismatch).await;
-    assert_eq!(provenance_count(&pool).await, 3);
+    assert_eq!(provenance_count(&pool).await, 4);
 }
 
 /// A member's public Genesis material read is decided at one accepted Realm
