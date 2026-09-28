@@ -2640,6 +2640,15 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         crate::circle_reads::circle_views_for_actor(&self.pool, realm_id, actor).await
     }
 
+    async fn circle_reads_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::circle::CircleReadView>>
+    {
+        crate::circle_reads::circle_reads_for_actor(&self.pool, realm_id, actor).await
+    }
+
     async fn circle_view_for_actor(
         &self,
         circle_id: &arkret_wire::CircleId,
@@ -2647,6 +2656,15 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<Option<arkret_models_collaboration::governance::circle::CircleView>>
     {
         crate::circle_reads::circle_view_for_actor(&self.pool, circle_id, actor).await
+    }
+
+    async fn circle_read_for_actor(
+        &self,
+        circle_id: &arkret_wire::CircleId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<arkret_models_collaboration::governance::circle::CircleReadView>>
+    {
+        crate::circle_reads::circle_read_for_actor(&self.pool, circle_id, actor).await
     }
 
     async fn replica_authorization_head(

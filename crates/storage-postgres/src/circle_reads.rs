@@ -1,9 +1,13 @@
 //! Circle convenience reads from accepted current cells in one snapshot.
 
-use arkret_models_collaboration::governance::circle::{Circle, CircleMembership, CircleView};
+use arkret_models_collaboration::governance::circle::{
+    Circle, CircleDirectoryVisibility, CircleMemberCountBucket, CircleMembership, CirclePreview,
+    CirclePreviewDisplay, CirclePreviewVisibility, CircleReadView, CircleState, CircleView,
+};
 use arkret_wire::{ActorId, CircleId, RealmId};
 use diesel::sql_types::{Jsonb, Text};
 use diesel_async::{AsyncConnection as _, AsyncPgConnection, RunQueryDsl};
+use sha2::{Digest, Sha256};
 use soland_storage::{PersistenceError, PersistenceResult};
 
 use crate::{PgPool, PgTransactionError, pg_conn};
@@ -46,6 +50,19 @@ fn corrupt(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Internal(format!("invalid accepted Circle current: {detail}"))
 }
 
+fn preview_commitment(realm: &RealmId, circle: &CircleId) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"ak.circle.preview.v1\0");
+    digest.update(realm.as_str().as_bytes());
+    digest.update([0]);
+    digest.update(circle.as_str().as_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn covering_event(
     envelope: serde_json::Value,
     commit: serde_json::Value,
@@ -63,7 +80,7 @@ async fn views(
     realm: Option<&RealmId>,
     circle_id: Option<&CircleId>,
     actor: &ActorId,
-) -> PersistenceResult<Vec<CircleView>> {
+) -> PersistenceResult<Vec<CircleReadView>> {
     use diesel::sql_types::Nullable;
     let circles = diesel::sql_query(
         "SELECT r.value,e.envelope,c.commit_json,r.circle_id FROM circle_current_results r \
@@ -146,13 +163,6 @@ async fn views(
                         && current.effective_at <= at
                 });
         }
-        // `CircleView` includes title, summary, creator and the member list.
-        // A Realm member outside this Circle may receive only the separate
-        // directory-preview whitelist, even for `realm_members` visibility.
-        // This full-view read must therefore remain member-only.
-        if !joined {
-            continue;
-        }
         for member in members {
             let who: ActorId = serde_json::from_str(&member.member_id).map_err(corrupt)?;
             let current: arkret_wire::CircleMemberStateCurrent =
@@ -185,8 +195,7 @@ async fn views(
             if who == *actor {
                 viewer_membership = Some(membership);
             }
-            if joined
-                && membership == CircleMembership::Join
+            if membership == CircleMembership::Join
                 && current.effective_at <= at
                 && crate::account_stream_scan::caller_circle_floor_in_connection(
                     conn,
@@ -199,6 +208,25 @@ async fn views(
             {
                 member_ids.push(who);
             }
+        }
+        if !joined {
+            if circle.directory_visibility == CircleDirectoryVisibility::RealmMembers
+                && circle.state == CircleState::Active
+            {
+                result.push(CircleReadView::Preview(CirclePreview {
+                    circle_id: id.clone(),
+                    realm_id: circle.realm_id.clone(),
+                    visibility: CirclePreviewVisibility::RealmMembers,
+                    display: CirclePreviewDisplay {
+                        color_token: circle.display.color_token,
+                        symbol: circle.display.symbol,
+                    },
+                    member_count_bucket: CircleMemberCountBucket::from_count(member_ids.len()),
+                    join_rule: circle.join_rule,
+                    opaque_commitment: preview_commitment(&circle.realm_id, &id),
+                }));
+            }
+            continue;
         }
         let scope = arkret_wire::ScopeRef::Circle {
             realm_id: circle.realm_id.clone(),
@@ -233,7 +261,7 @@ async fn views(
         } else {
             None
         };
-        result.push(CircleView {
+        result.push(CircleReadView::Full(CircleView {
             circle_id: id,
             realm_id: circle.realm_id,
             profile_ref: circle.profile_ref,
@@ -251,16 +279,16 @@ async fn views(
             created_at: circle.created_at,
             updated_by: circle.updated_by,
             updated_at: circle.updated_at,
-        });
+        }));
     }
     Ok(result)
 }
 
-pub(crate) async fn circle_views_for_actor(
+pub(crate) async fn circle_reads_for_actor(
     pool: &PgPool,
     realm: &RealmId,
     actor: &ActorId,
-) -> PersistenceResult<Vec<CircleView>> {
+) -> PersistenceResult<Vec<CircleReadView>> {
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -275,11 +303,11 @@ pub(crate) async fn circle_views_for_actor(
     .map_err(PgTransactionError::into_persistence)
 }
 
-pub(crate) async fn circle_view_for_actor(
+pub(crate) async fn circle_read_for_actor(
     pool: &PgPool,
     circle: &CircleId,
     actor: &ActorId,
-) -> PersistenceResult<Option<CircleView>> {
+) -> PersistenceResult<Option<CircleReadView>> {
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
@@ -290,4 +318,30 @@ pub(crate) async fn circle_view_for_actor(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+pub(crate) async fn circle_views_for_actor(
+    pool: &PgPool,
+    realm: &RealmId,
+    actor: &ActorId,
+) -> PersistenceResult<Vec<CircleView>> {
+    Ok(circle_reads_for_actor(pool, realm, actor)
+        .await?
+        .into_iter()
+        .filter_map(|read| match read {
+            CircleReadView::Full(view) => Some(view),
+            _ => None,
+        })
+        .collect())
+}
+
+pub(crate) async fn circle_view_for_actor(
+    pool: &PgPool,
+    circle: &CircleId,
+    actor: &ActorId,
+) -> PersistenceResult<Option<CircleView>> {
+    Ok(match circle_read_for_actor(pool, circle, actor).await? {
+        Some(CircleReadView::Full(view)) => Some(view),
+        _ => None,
+    })
 }

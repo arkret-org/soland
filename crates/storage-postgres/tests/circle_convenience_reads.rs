@@ -56,7 +56,7 @@ async fn durable_circle_directory_and_member_details_follow_accepted_current() {
 }
 
 async fn check_circle_convenience(visibility: &str) {
-    use arkret_models_collaboration::governance::circle::CircleMembership;
+    use arkret_models_collaboration::governance::circle::{CircleMembership, CircleReadView};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let did = device_authorization_history::did_web_station(&ordinary_realm::station());
@@ -98,6 +98,44 @@ async fn check_circle_convenience(visibility: &str) {
         listed.is_empty(),
         "the full-view list must not leak title or creator to non-members ({visibility})"
     );
+    let before_read = store.circle_read_for_actor(&id, &actor).await.unwrap();
+    let before_list = store.circle_reads_for_actor(&realm, &actor).await.unwrap();
+    if visibility == "realm_members" {
+        let CircleReadView::Preview(preview) = before_read.unwrap() else {
+            panic!("Realm member must see closed preview before joining");
+        };
+        assert_eq!(before_list.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&preview)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            7
+        );
+        assert_eq!(
+            serde_json::to_value(&preview.display)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            serde_json::to_value(preview.member_count_bucket).unwrap(),
+            "0"
+        );
+        assert_eq!(preview.opaque_commitment.len(), 64);
+        assert!(
+            preview
+                .opaque_commitment
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+    } else {
+        assert!(before_read.is_none());
+        assert!(before_list.is_empty());
+    }
     let join = membership(&create.authority_commit, &id, &actor, "join", None);
     uow.commit_event(join.clone()).await.unwrap();
     let joined = store
@@ -107,6 +145,10 @@ async fn check_circle_convenience(visibility: &str) {
         .unwrap();
     assert_eq!(joined.viewer_membership, Some(CircleMembership::Join));
     assert_eq!(joined.member_ids, vec![actor.clone()]);
+    assert!(matches!(
+        store.circle_read_for_actor(&id, &actor).await.unwrap(),
+        Some(CircleReadView::Full(_))
+    ));
     assert_eq!(
         store
             .circle_views_for_actor(&realm, &actor)
@@ -119,7 +161,18 @@ async fn check_circle_convenience(visibility: &str) {
     let leave = membership(&join.authority_commit, &id, &actor, "leave", Some("join"));
     uow.commit_event(leave).await.unwrap();
     let ended = store.circle_view_for_actor(&id, &actor).await.unwrap();
-    assert!(ended.is_none(), "leaving closes the full-view read ({visibility})");
+    assert!(
+        ended.is_none(),
+        "leaving closes the full-view read ({visibility})"
+    );
+    assert_eq!(
+        store
+            .circle_read_for_actor(&id, &actor)
+            .await
+            .unwrap()
+            .is_some(),
+        visibility == "realm_members"
+    );
     assert!(
         store
             .circle_views_for_actor(&realm, &actor)

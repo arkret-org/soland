@@ -1270,11 +1270,31 @@ pub trait AuthorityCommitStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    async fn circle_reads_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::circle::CircleReadView>>
+    {
+        let _ = (realm_id, actor);
+        Ok(Vec::new())
+    }
+
     async fn circle_view_for_actor(
         &self,
         circle_id: &arkret_wire::CircleId,
         actor: &arkret_wire::ActorId,
     ) -> PersistenceResult<Option<arkret_models_collaboration::governance::circle::CircleView>>
+    {
+        let _ = (circle_id, actor);
+        Ok(None)
+    }
+
+    async fn circle_read_for_actor(
+        &self,
+        circle_id: &arkret_wire::CircleId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<arkret_models_collaboration::governance::circle::CircleReadView>>
     {
         let _ = (circle_id, actor);
         Ok(None)

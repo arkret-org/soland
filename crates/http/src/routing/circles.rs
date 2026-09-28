@@ -32,8 +32,8 @@
 use arkret_identifiers::{CircleId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
     Circle, CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody,
-    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
-    CircleScopeRotateRequestBody, CircleState, CircleView,
+    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleReadView,
+    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleState, CircleView,
 };
 use arkret_wire::{ActorId, Event};
 use salvo::oapi::endpoint;
@@ -249,13 +249,10 @@ async fn list_circles(
         .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     let circles = state
         .authority_commits()
-        .circle_views_for_actor(&realm_id, &actor)
+        .circle_reads_for_actor(&realm_id, &actor)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
-    json_ok(CircleList {
-        realm_id,
-        circle_views: circles,
-    })
+    json_ok(CircleList { realm_id, circles })
 }
 
 #[endpoint(
@@ -269,13 +266,21 @@ async fn get_circle(
     circle_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<CircleView> {
+) -> JsonResult<CircleReadView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
-    json_ok(durable_circle_view(state, &circle_id, &actor).await?)
+    let id =
+        CircleId::new(circle_id).map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?;
+    let read = state
+        .authority_commits()
+        .circle_read_for_actor(&id, &actor)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("circle not found"))?;
+    json_ok(read)
 }
 
 #[endpoint(
