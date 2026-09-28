@@ -265,10 +265,31 @@ pub(crate) async fn commit_authority_position_in_connection(
             if counts.count + additional > limit && !wip_override {
                 match fields.get("wip_limit_enforcement").and_then(Value::as_str) {
                     Some("warn") => {
-                        tracing::warn!(realm=%event.realm_id, list=%destination, "accepted Strand move exceeds List WIP limit")
+                        tracing::warn!(
+                            diagnostic_key = "list_wip_limit_exceeded",
+                            realm_id = %event.realm_id,
+                            event_id = %event.event_id,
+                            board_space_id = %board,
+                            list_space_id = %destination,
+                            strand_id = %strand,
+                            wip_limit = limit,
+                            count_after = counts.count + additional,
+                            list_policy_commit_id = %list.space_commit_id,
+                            list_policy_stream_position = list.space_position,
+                            "Strand move attempts to exceed List WIP limit"
+                        )
                     }
-                    Some("reject" | "require_review") => {
+                    Some("reject") => {
                         return Err(refused("target List WIP limit exceeded"));
+                    }
+                    Some("require_review") => {
+                        // This UOW has no verified approval evidence input yet.
+                        // Do not infer acceptance from an Event payload field or
+                        // an unrelated grant/governance vote.
+                        return Err(PersistenceError::Conflict(format!(
+                            "{}: target List WIP review has no verified approval",
+                            soland_storage::ConflictCode::ApprovalRequired.as_str()
+                        )));
                     }
                     _ => return Err(refused("target List WIP policy is unresolved")),
                 }

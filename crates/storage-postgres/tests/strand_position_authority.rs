@@ -375,7 +375,7 @@ async fn wip_warn_accepts_but_require_review_without_proof_refuses_without_write
             .await
             .unwrap_err()
             .conflict_code(),
-        Some(ConflictCode::FailedPrecondition)
+        Some(ConflictCode::ApprovalRequired)
     );
     assert_eq!(
         before,

@@ -191,6 +191,8 @@ impl PersistenceError {
 pub enum ConflictCode {
     /// A Agent act-on-behalf approval nonce was already consumed.
     ApprovalNonceReused,
+    /// A List WIP review is required but no accepted approval was supplied.
+    ApprovalRequired,
     /// The applet was revoked between admission and commit.
     AppletRevoked,
     /// An Actor Profile `accountable_principal_ids` entry has no committed
@@ -355,8 +357,9 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 72] = [
         Self::ApprovalNonceReused,
+        Self::ApprovalRequired,
         Self::AppletRevoked,
         Self::AccountabilityGrantMissing,
         Self::BackupRevisionStale,
@@ -433,6 +436,7 @@ impl ConflictCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ApprovalNonceReused => arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
+            Self::ApprovalRequired => arkret_wire::ReasonCode::APPROVAL_REQUIRED,
             Self::AppletRevoked => "applet_revoked",
             Self::AccountabilityGrantMissing => {
                 arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING

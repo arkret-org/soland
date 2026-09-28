@@ -121,6 +121,16 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
             return crate::error::render_error_code(code, res, detail);
         }
         match error.conflict_code() {
+            Some(soland_storage::ConflictCode::ApprovalRequired) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    crate::error::error_http_status(arkret_wire::ErrorCode::ClaimRequired),
+                    arkret_wire::ErrorCode::CLAIM_REQUIRED,
+                    detail,
+                    arkret_wire::ReasonCode::APPROVAL_REQUIRED,
+                    None,
+                );
+            }
             Some(soland_storage::ConflictCode::DuplicateConflict) => {
                 return crate::error::render_error_code(
                     arkret_wire::ErrorCode::DuplicateConflict,
@@ -648,6 +658,28 @@ mod tests {
             "https://arkret.org/problems/failed_precondition"
         );
         assert_eq!(body["reason_code"], "snapshot_capacity_exceeded");
+    }
+
+    #[tokio::test]
+    async fn list_wip_review_without_verified_vote_renders_registered_claim_reason() {
+        let mut res = Response::new();
+        render_service_error(
+            &mut res,
+            ServiceError::Conflict(
+                "approval_required: target List WIP review has no verified approval".to_owned(),
+            ),
+        );
+        assert_eq!(
+            res.status_code,
+            Some(crate::error::error_http_status(
+                arkret_wire::ErrorCode::ClaimRequired
+            ))
+        );
+        let body: serde_json::Value = salvo::test::ResponseExt::take_json(&mut res)
+            .await
+            .expect("problem body");
+        assert_eq!(body["type"], "https://arkret.org/problems/claim_required");
+        assert_eq!(body["reason_code"], "approval_required");
     }
 
     /// `schema_violation` is registered at 422 (`error-code-registry.json`);
