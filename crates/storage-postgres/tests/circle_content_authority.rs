@@ -4,7 +4,10 @@
 #[allow(dead_code)]
 mod ordinary_realm;
 
-use arkret_wire::{CircleId, CommitStreamRef, EventKind, MessageId, ScopeRef, StrandId};
+use arkret_wire::{
+    CircleId, CommitStreamRef, CurrentSelector, EventKind, MessageId, ScopeRef, StrandId,
+    TypedCurrentResult,
+};
 use diesel::sql_types::BigInt;
 use diesel_async::RunQueryDsl;
 use serde_json::{Value, json};
@@ -157,6 +160,34 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
     );
     uow.commit_event(strand.clone()).await.unwrap();
     let strand_id = StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let account = actor.as_account_id().unwrap();
+    let circle_stream = CommitStreamRef::Circle {
+        realm_id: realm.clone(),
+        circle_id: circle.clone(),
+    };
+    let joined_snapshot = store
+        .realm_state_snapshot_material_for_account(&realm, account)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        joined_snapshot
+            .visible_stream_heads
+            .iter()
+            .any(|head| head.stream_ref == circle_stream)
+    );
+    assert!(
+        joined_snapshot
+            .current_state_entries
+            .iter()
+            .any(|row| matches!(row,
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::Strand { strand_id: subject },
+                    source_stream_ref,
+                    ..
+                } if subject == &strand_id && source_stream_ref == &circle_stream
+            ))
+    );
     let poll = circle_request(
         &strand.authority_commit,
         &circle,
@@ -218,7 +249,10 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
             "poll_ref":MessageId::from_event_id(&poll.authority_commit.event.event_id),"selections":["a"]}}}),
     );
     let baseline = counts(&pool).await;
-    let error = uow.commit_event(cross_circle_vote.clone()).await.unwrap_err();
+    let error = uow
+        .commit_event(cross_circle_vote.clone())
+        .await
+        .unwrap_err();
     assert!(
         error
             .to_string()
@@ -241,6 +275,28 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
         json!({"circle_id":circle,"member_id":actor,"membership":"leave","expected_membership":"join"}),
     );
     uow.commit_event(leave.clone()).await.unwrap();
+    let left_snapshot = store
+        .realm_state_snapshot_material_for_account(&realm, account)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !left_snapshot
+            .visible_stream_heads
+            .iter()
+            .any(|head| head.stream_ref == circle_stream)
+    );
+    assert!(
+        !left_snapshot
+            .current_state_entries
+            .iter()
+            .any(|row| matches!(row,
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::Strand { strand_id: subject },
+                    ..
+                } if subject == &strand_id
+            ))
+    );
     let after_leave = circle_request(
         &leave.authority_commit,
         &circle,
