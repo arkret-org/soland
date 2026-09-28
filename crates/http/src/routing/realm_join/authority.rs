@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use arkret_identity::{
@@ -12,6 +12,7 @@ use arkret_signatures::PublicKeyMaterial;
 use arkret_wire::{
     AuthorityBundleRequest, Base64UrlString, Did, DidUrl, RealmAuthorityBundle, RealmId, RequestId,
 };
+use chrono::{DateTime, Utc};
 
 use super::{
     AppError, AppState, invalid_request, local_authority_bundle, nonce_for_request, unavailable,
@@ -32,6 +33,59 @@ async fn method_key(state: &AppState, method: &DidUrl) -> Result<PublicKeyMateri
     })
 }
 
+async fn historical_method_key(
+    state: &AppState,
+    method: &DidUrl,
+    signed_at: DateTime<Utc>,
+) -> Result<PublicKeyMaterial, AppError> {
+    let did_text = method.as_str().split('#').next().unwrap_or_default();
+    let did = Did::new(did_text.to_owned()).map_err(unavailable)?;
+    if did.method() == "key" {
+        return method_key(state, method).await;
+    }
+    if did.method() != "webvh" {
+        return Err(unavailable(
+            "mutable DID method has no authenticated historical authority key",
+        ));
+    }
+    // Fetch and verify the complete method-native history, including witness
+    // thresholds, before selecting the entry effective at the signature time.
+    let resolver = crate::state::did_resolver_chain::build_soland_did_resolver(state.config());
+    let history = resolver
+        .fetch_verified_webvh_history(&did)
+        .await
+        .map_err(unavailable)?;
+    let point =
+        arkret_signatures::webvh::validate_webvh_history_at(&did, &history.raw_entries, signed_at)
+            .map_err(unavailable)?;
+    let document: arkret_identity::DidDocument =
+        serde_json::from_value(point.document).map_err(unavailable)?;
+    if document.id != did {
+        return Err(unavailable("historical authority DID document id mismatch"));
+    }
+    let multibase = document
+        .verification_methods
+        .get(method.as_str())
+        .ok_or_else(|| unavailable("historical authority signature method is absent"))?;
+    Ok(PublicKeyMaterial::Ed25519Multibase {
+        value: multibase.clone(),
+    })
+}
+
+pub(crate) async fn insert_historical_method_key(
+    state: &AppState,
+    keys: &mut RealmAuthorityKeyMap,
+    method: &DidUrl,
+    signed_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    keys.insert_at(
+        method,
+        signed_at,
+        historical_method_key(state, method, signed_at).await?,
+    );
+    Ok(())
+}
+
 /// Resolve the key of one more authority signature method, such as the method
 /// of a `RealmCommit` verified against an already verified chain.
 pub(crate) async fn insert_method_key(
@@ -47,34 +101,24 @@ async fn verified_keys(
     state: &AppState,
     bundle: &RealmAuthorityBundle,
 ) -> Result<RealmAuthorityKeyMap, AppError> {
-    let mut methods = BTreeSet::new();
-    methods.insert(bundle.genesis_commit.signature.verification_method.clone());
+    let mut methods: BTreeMap<DidUrl, BTreeSet<DateTime<Utc>>> = BTreeMap::new();
+    let mut add_signature = |signature: &arkret_wire::DetachedObjectSignature| {
+        methods
+            .entry(signature.verification_method.clone())
+            .or_default()
+            .insert(signature.created_at);
+    };
+    add_signature(&bundle.genesis_commit.signature);
     for transition in &bundle.authority_transitions {
-        methods.insert(
-            transition
-                .change_commit
-                .signature
-                .verification_method
-                .clone(),
-        );
-        methods.insert(
-            transition
-                .handoff
-                .old_authority_signature
-                .verification_method
-                .clone(),
-        );
-        methods.insert(
-            transition
-                .handoff
-                .new_authority_acceptance_signature
-                .verification_method
-                .clone(),
-        );
+        add_signature(&transition.change_commit.signature);
+        add_signature(&transition.handoff.old_authority_signature);
+        add_signature(&transition.handoff.new_authority_acceptance_signature);
     }
     let mut keys = RealmAuthorityKeyMap::new();
-    for method in methods {
-        insert_method_key(state, &mut keys, &method).await?;
+    for (method, times) in methods {
+        for signed_at in times {
+            insert_historical_method_key(state, &mut keys, &method, signed_at).await?;
+        }
     }
     Ok(keys)
 }

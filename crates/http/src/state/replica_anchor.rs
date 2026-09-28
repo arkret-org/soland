@@ -173,6 +173,30 @@ async fn ensure_method_key(
     Ok(())
 }
 
+async fn ensure_historical_method_key(
+    state: &AppState,
+    located: &mut LocatedRealmAuthority,
+    signature: &arkret_wire::DetachedObjectSignature,
+) -> Result<(), String> {
+    if arkret_identity::RealmAuthorityKeyDirectory::public_key_at(
+        &located.keys,
+        &signature.verification_method,
+        signature.created_at,
+    )
+    .is_none()
+    {
+        crate::routing::realm_join::insert_historical_method_key(
+            state,
+            &mut located.keys,
+            &signature.verification_method,
+            signature.created_at,
+        )
+        .await
+        .map_err(|error| error.message)?;
+    }
+    Ok(())
+}
+
 /// Verify the snapshot identity and signature under the verified authority
 /// chain: the signer is the governing Station of the snapshot's generation,
 /// and that generation is the current one.
@@ -358,7 +382,7 @@ async fn store_scanned(
     item: &CommittedEventView,
 ) -> Result<(), String> {
     let commit = item.commit();
-    ensure_method_key(state, located, &commit.signature.verification_method).await?;
+    ensure_historical_method_key(state, located, &commit.signature).await?;
     let commits = state.authority_commits();
     match item {
         CommittedEventView::Full(view) => {
