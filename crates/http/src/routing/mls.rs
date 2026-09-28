@@ -73,6 +73,9 @@ use crate::wire::now;
 #[path = "mls_payload_fields.rs"]
 pub(crate) mod payload_fields;
 
+#[path = "mls_roster_signature.rs"]
+mod mls_roster_signature;
+
 const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
 async fn ensure_keypackage_owner_account_active(
@@ -284,6 +287,114 @@ pub(crate) fn peer_router() -> Router {
             Router::with_path("mls/group-state-material")
                 .post(resolve_peer_mls_group_state_material),
         )
+        .push(Router::with_path("mls/add-authority-attestations").post(peer_mls_attest_add))
+}
+
+/// HTTP-local schema carrier: the protocol's closed nested DTOs remain owned
+/// by arkret-models-collaboration. The normative OpenAPI schema is generated
+/// from arkret-spec; these value_type annotations avoid adding Salvo derives
+/// to SDK protocol types just for this service router.
+#[derive(serde::Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct MlsAttestAddHttpRequest {
+    #[salvo(schema(value_type = serde_json::Value))]
+    attestation: arkret_models_collaboration::mls_roster_authority::MlsAddAuthorityAttestation,
+    #[salvo(schema(value_type = serde_json::Value))]
+    claim_outcome: arkret_models_crypto::PeerKeyPackagesClaimOutcome,
+}
+
+#[derive(serde::Serialize, salvo::oapi::ToSchema)]
+struct MlsAttestAddHttpOutcome {
+    #[salvo(schema(value_type = String))]
+    status: arkret_models_collaboration::mls_roster_authority::MlsAttestAddStatus,
+    #[salvo(schema(value_type = String))]
+    attestation_digest: arkret_wire::Hash,
+}
+
+fn mls_attest_add_service_error(error: soland_services::ServiceError) -> AppError {
+    use soland_services::ServiceError;
+    match error {
+        ServiceError::NotFound(_) => AppError::not_found("MLS Add authority source unavailable"),
+        ServiceError::Conflict(detail) => {
+            let code = soland_storage::ConflictCode::from_detail(&detail);
+            let wire_code = match code {
+                Some(soland_storage::ConflictCode::DuplicateConflict) => {
+                    arkret_wire::ErrorCode::DuplicateConflict
+                }
+                Some(soland_storage::ConflictCode::FailedPrecondition) => {
+                    arkret_wire::ErrorCode::FailedPrecondition
+                }
+                _ => arkret_wire::ErrorCode::Conflict,
+            };
+            AppError::new(
+                wire_code,
+                "MLS Add authority conflicts with accepted evidence",
+            )
+        }
+        ServiceError::SchemaViolation(_) => AppError::new(
+            arkret_wire::ErrorCode::SchemaViolation,
+            "invalid MLS Add authority request",
+        ),
+        ServiceError::Database(_)
+        | ServiceError::Internal(_)
+        | ServiceError::UnsupportedEventKind(_) => {
+            AppError::internal("MLS Add authority installation unavailable")
+        }
+    }
+}
+
+// RFC 9421 authenticates the exact peer body before it is parsed. Independent
+// historical signatures bind the recipient claim receipt and Add attestation;
+// governance storage then checks the accepted Commit, Welcome, Proposal and
+// current authority tenure in one transaction before any installation.
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.mls.command.attest_add",
+    request_body = MlsAttestAddHttpRequest,
+    tags("governance")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.mls.command.attest_add.v1"))]
+async fn peer_mls_attest_add(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<MlsAttestAddHttpOutcome> {
+    use arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody;
+
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let peer = super::events::peer::authenticated_peer_context(state, req, true).await?;
+    let body = req
+        .parse_json::<MlsAttestAddHttpRequest>()
+        .await
+        .map_err(|error| {
+            super::events::peer::schema_violation(format!(
+                "invalid MLS Add attestation body: {error}"
+            ))
+        })?;
+    let request = MlsAttestAddRequestBody {
+        attestation: body.attestation,
+        claim_outcome: body.claim_outcome,
+    };
+    request.validate_claim_binding().map_err(|error| {
+        super::events::peer::schema_violation(format!("invalid MLS Add attestation: {error}"))
+    })?;
+    mls_roster_signature::verify_peer_attest_add_signatures(
+        state,
+        &peer.source_service_id,
+        &request,
+    )
+    .await?;
+    let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
+        source_station_id: peer.source_service_id,
+        request,
+    };
+    let outcome = state
+        .authority_commits()
+        .install_mls_add_authority_attestation(&verified, &state.service_core_id())
+        .await
+        .map_err(mls_attest_add_service_error)?;
+    json_ok(MlsAttestAddHttpOutcome {
+        status: outcome.status,
+        attestation_digest: outcome.attestation_digest,
+    })
 }
 
 fn mls_group_state_material_not_found() -> AppError {
