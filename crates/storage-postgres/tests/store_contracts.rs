@@ -22,7 +22,7 @@ use soland_storage::{
     AgentPrincipalRecord, AgentStore, AppletAuthoringPreviewRecord, AppletStore,
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, MlsKeyPackageStore,
     NotificationStore, PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
-    RelationCurrentResultStore,
+    RelationCurrentResultStore, SyncCursorStore,
 };
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
@@ -30,7 +30,7 @@ use soland_storage_postgres::{
     PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
     PgInviteNewSourceLedgerStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
     PgMlsKeyPackageStore, PgNotificationStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore, PgRelationCurrentResultStore,
+    PgProjectionEventStore, PgRelationCurrentResultStore, PgSyncCursorStore,
 };
 
 #[tokio::test]
@@ -2289,6 +2289,12 @@ async fn postgres_agent_approval_trigger_emits_a_readable_account_notification()
         pk: i64,
     }
 
+    #[derive(QueryableByName)]
+    struct ActorKeyRow {
+        #[diesel(sql_type = sql_types::Text)]
+        actor_key: String,
+    }
+
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -2331,18 +2337,122 @@ async fn postgres_agent_approval_trigger_emits_a_readable_account_notification()
     .unwrap();
     drop(conn);
 
-    let rows = PgNotificationStore { pool }
+    let account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(controller_id.clone()).unwrap(),
+        arkret_wire::DidCoreId::new(station_id.clone()).unwrap(),
+    ));
+    let expected_actor_key = account_actor.to_string();
+    let mut conn = pool.get().await.unwrap();
+    let notification_key =
+        sql_query("SELECT recipient_actor_id AS actor_key FROM notifications WHERE id = $1")
+            .bind::<sql_types::Uuid, _>(approval_notification_id)
+            .get_result::<ActorKeyRow>(&mut *conn)
+            .await
+            .unwrap();
+    assert_eq!(notification_key.actor_key, expected_actor_key);
+    let current_key = sql_query(
+        "SELECT actor_key FROM account_global_versions \
+         WHERE actor_key = $1 AND channel = 'notifications' AND item_key = $2",
+    )
+    .bind::<sql_types::Text, _>(&expected_actor_key)
+    .bind::<sql_types::Text, _>(approval_notification_id.to_string())
+    .get_result::<ActorKeyRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(current_key.actor_key, expected_actor_key);
+    let sync = PgSyncCursorStore { pool: pool.clone() };
+    let watermark = sync.account_global_watermark().await.unwrap();
+    let current_payload = sync
+        .account_global_page(
+            &expected_actor_key,
+            "notifications",
+            watermark,
+            "",
+            None,
+            10,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.item_key == approval_notification_id.to_string())
+        .unwrap();
+    let upsert: arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta =
+        serde_json::from_value(current_payload.payload).unwrap();
+    assert!(upsert.agent_runtime_approval().is_some());
+    drop(conn);
+
+    // Authorization can clear the pending timestamp before clearing the
+    // request id. That intermediate row must not replace the readable upsert
+    // with an Agent approval payload containing a null requested_at.
+    let mut conn = pool.get().await.unwrap();
+    sql_query("UPDATE agent_principals SET approval_requested_at = NULL, updated_at = NOW() WHERE id = $1")
+        .bind::<sql_types::Text, _>(&agent_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let watermark = sync.account_global_watermark().await.unwrap();
+    let pending_payload = sync
+        .account_global_page(
+            &expected_actor_key,
+            "notifications",
+            watermark,
+            "",
+            None,
+            10,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.item_key == approval_notification_id.to_string())
+        .unwrap();
+    let pending: arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta =
+        serde_json::from_value(pending_payload.payload).unwrap();
+    assert!(pending.agent_runtime_approval().is_some());
+
+    let authorize_event_ref = arkret_identifiers::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(suffix.as_bytes()),
+    )
+    .to_string();
+    let mut conn = pool.get().await.unwrap();
+    sql_query(
+        "INSERT INTO agent_pairing_receipts(
+            authorize_event_ref, agent_id, controller_principal_id, pairing_request_id,
+            request_digest, raw_key_digest, expires_at, activation_state
+        ) VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '15 minutes', 'active')",
+    )
+    .bind::<sql_types::Text, _>(&authorize_event_ref)
+    .bind::<sql_types::Text, _>(&agent_id)
+    .bind::<sql_types::Text, _>(&controller_id)
+    .bind::<sql_types::Text, _>(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
+    .bind::<sql_types::Text, _>(format!("sha256:{}", "a".repeat(64)))
+    .bind::<sql_types::Text, _>(format!("sha256:{}", "b".repeat(64)))
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let receipt = PgAgentStore { pool: pool.clone() }
+        .pairing_receipt(&authorize_event_ref)
+        .await
+        .unwrap()
+        .expect("durable Agent pairing receipt");
+    assert_eq!(receipt.authorize_event_ref, authorize_event_ref);
+    assert_eq!(
+        receipt.outcome.authorize_event_ref.as_str(),
+        authorize_event_ref
+    );
+    assert_eq!(
+        receipt.outcome.activation_state,
+        arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active
+    );
+
+    let rows = PgNotificationStore { pool: pool.clone() }
         .list_for_account(&soland_storage::AccountPk(account.pk), &station_id, None)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].record.recipient_actor_id,
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(controller_id).unwrap(),
-            arkret_wire::DidCoreId::new(station_id).unwrap(),
-        ))
-    );
+    assert_eq!(rows[0].record.recipient_actor_id, account_actor);
     let data = rows[0]
         .record
         .delta
@@ -2350,6 +2460,46 @@ async fn postgres_agent_approval_trigger_emits_a_readable_account_notification()
         .expect("typed Agent approval notification");
     assert_eq!(data.approval_request_id.as_str(), approval_request_id);
     assert_eq!(data.agent_id.as_str(), agent_id);
+
+    let mut conn = pool.get().await.unwrap();
+    sql_query(
+        "UPDATE agent_principals SET approval_request_id = NULL, updated_at = NOW() WHERE id = $1",
+    )
+    .bind::<sql_types::Text, _>(&agent_id)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let removed = PgNotificationStore { pool: pool.clone() }
+        .list_for_account(&soland_storage::AccountPk(account.pk), &station_id, None)
+        .await
+        .unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(
+        removed[0].record.delta.agent_runtime_approval_removal_reason(),
+        Some(arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Superseded)
+    );
+    let watermark = sync.account_global_watermark().await.unwrap();
+    let removed_payload = sync
+        .account_global_page(
+            &expected_actor_key,
+            "notifications",
+            watermark,
+            "",
+            None,
+            10,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.item_key == approval_notification_id.to_string())
+        .unwrap();
+    let removal: arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta =
+        serde_json::from_value(removed_payload.payload).unwrap();
+    assert_eq!(
+        removal.agent_runtime_approval_removal_reason(),
+        Some(arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Superseded)
+    );
 }
 
 #[tokio::test]

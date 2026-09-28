@@ -2,6 +2,7 @@
 //! RealmCommit. Current key eligibility is checked against the PCR snapshot.
 
 use arkret_models_collaboration::agent_operations::KeyStateCurrentSignerEvidence;
+use arkret_models_collaboration::governance::agent_artifacts::PublicKey;
 use arkret_models_identity::agent_signer_evidence::AgentAuthorizedSigningKey;
 use arkret_models_identity::authenticated_signer_resolution_evidence::build_agent_signer_evidence;
 use arkret_models_identity::{
@@ -192,7 +193,7 @@ pub(crate) async fn current_authenticated_agent_signer_evidence_for_record(
     {
         return Err(AgentEvidenceAcquisitionFailure::AgentAuthorizationInactive);
     }
-    let public_key_jwk: NonEmptyJsonObject = serde_json::from_value(
+    let public_key: PublicKey = serde_json::from_value(
         committed
             .event
             .payload
@@ -201,6 +202,7 @@ pub(crate) async fn current_authenticated_agent_signer_evidence_for_record(
             .ok_or_else(missing)?,
     )
     .map_err(|_| missing())?;
+    let public_key_jwk = agent_runtime_public_key_jwk(&public_key, verification_method)?;
     let evidence = build_agent_signer_evidence(
         agent_id.clone(),
         verification_method.clone(),
@@ -210,6 +212,20 @@ pub(crate) async fn current_authenticated_agent_signer_evidence_for_record(
     )
     .map_err(|_| missing())?;
     Ok((evidence, Vec::new()))
+}
+
+fn agent_runtime_public_key_jwk(
+    public_key: &PublicKey,
+    verification_method: &DidUrl,
+) -> Result<NonEmptyJsonObject, AgentEvidenceAcquisitionFailure> {
+    if public_key.kty.as_str() != "OKP"
+        || public_key.algorithm.as_str() != "Ed25519"
+        || public_key.kid.as_str() != verification_method.as_str()
+    {
+        return Err(missing());
+    }
+    let jwk = arkret_signatures::jwk::JsonWebKey::ed25519(public_key.key.clone());
+    serde_json::from_value(serde_json::to_value(jwk).map_err(|_| missing())?).map_err(|_| missing())
 }
 
 /// Return the frozen evidence and its canonical content ref for the durable
@@ -240,4 +256,29 @@ pub(crate) fn current_agent_evidence_delivery(
         .validate_against(&reference)
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok((reference, root.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_key_evidence_uses_public_jwk_shape() {
+        let method = DidUrl::new("did:web:agent.example#runtime").unwrap();
+        let public_key: PublicKey = serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "kid": method.as_str(),
+            "algorithm": "Ed25519",
+            "key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+        }))
+        .unwrap();
+
+        let jwk = agent_runtime_public_key_jwk(&public_key, &method).unwrap();
+        let value = serde_json::to_value(jwk).unwrap();
+        assert_eq!(value["kty"], "OKP");
+        assert_eq!(value["crv"], "Ed25519");
+        assert_eq!(value["x"], public_key.key.as_str());
+        assert!(value.get("algorithm").is_none());
+        assert!(value.get("key").is_none());
+    }
 }

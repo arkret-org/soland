@@ -2965,6 +2965,8 @@ DECLARE
 BEGIN
     IF NEW.approval_request_id IS NOT NULL
        AND NEW.approval_notification_id IS NOT NULL
+       AND NEW.approval_requested_at IS NOT NULL
+       AND NEW.pairing_expires_at IS NOT NULL
        AND NEW.controller_account_pk IS NOT NULL
        AND NEW.recipient_id IS NOT NULL THEN
         delta_action := 'upsert';
@@ -3014,13 +3016,11 @@ BEGIN
         projection_data, created_at, updated_at
     ) VALUES (
         notification_id,
-        jsonb_build_object(
-            'kind', 'account',
-            'account_id', jsonb_build_object(
-                'principal_id', controller_principal_id,
-                'station_id', service_id
-            )
-        )::text,
+        format(
+            '{"account_id":{"principal_id":%s,"station_id":%s},"kind":"account"}',
+            to_json(controller_principal_id)::text,
+            to_json(service_id)::text
+        ),
         account_pk, service_id,
         'agent_runtime_approval', artifact_id,
         'normal', 'unread', delta_action,

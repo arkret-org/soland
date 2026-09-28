@@ -302,19 +302,43 @@ impl AgentStore for PgAgentStore {
     ) -> PersistenceResult<Option<soland_storage::AgentPairingReceipt>> {
         #[derive(QueryableByName)]
         struct Receipt {
-            #[diesel(sql_type = Jsonb)]
-            receipt: Value,
+            #[diesel(sql_type = Text)]
+            agent_id: String,
+            #[diesel(sql_type = Text)]
+            controller_principal_id: String,
+            #[diesel(sql_type = Text)]
+            request_digest: String,
+            #[diesel(sql_type = Text)]
+            authorize_event_ref: String,
+            #[diesel(sql_type = Text)]
+            activation_state: String,
         }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query("UPDATE agent_pairing_receipts SET activation_state = 'cancelled' WHERE authorize_event_ref = $1 AND activation_state = 'awaiting_accepted_frontier' AND expires_at <= NOW()")
             .bind::<Text,_>(event_id).execute(&mut *conn).await.map_err(PersistenceError::database)?;
-        let row = sql_query("SELECT jsonb_build_object('agent_id',agent_id,'controller_principal_id',controller_principal_id,'request_digest',request_digest,'authorize_event_ref',authorize_event_ref,'activation_state',activation_state) AS receipt FROM agent_pairing_receipts WHERE authorize_event_ref = $1")
+        let row = sql_query("SELECT agent_id, controller_principal_id, request_digest, authorize_event_ref, activation_state FROM agent_pairing_receipts WHERE authorize_event_ref = $1")
             .bind::<Text,_>(event_id).get_result::<Receipt>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
         row.map(|row| {
-            serde_json::from_value(row.receipt)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))
+            let activation_state = match row.activation_state.as_str() {
+                "awaiting_accepted_frontier" => arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::AwaitingSourceCommit,
+                "active" => arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Active,
+                "cancelled" => arkret_models_collaboration::agent_operations::AgentKeyPairActivationState::Cancelled,
+                value => return Err(PersistenceError::Internal(format!("invalid Agent pairing receipt activation state: {value}"))),
+            };
+            let authorize_event_ref = arkret_wire::EventId::new(row.authorize_event_ref)
+                .map_err(|error| PersistenceError::Internal(format!("invalid Agent pairing receipt Event id: {error}")))?;
+            Ok(soland_storage::AgentPairingReceipt {
+                agent_id: row.agent_id,
+                controller_principal_id: row.controller_principal_id,
+                request_digest: row.request_digest,
+                authorize_event_ref: authorize_event_ref.to_string(),
+                outcome: arkret_models_collaboration::agent_operations::AgentKeyPairOutcome {
+                    activation_state,
+                    authorize_event_ref,
+                },
+            })
         })
         .transpose()
     }
