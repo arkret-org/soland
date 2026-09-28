@@ -431,6 +431,9 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
             }
         }
     }
+    if let Err(error @ (ServiceError::Database(_) | ServiceError::Internal(_))) = &result {
+        tracing::error!(error = %error, "self authority submission failed internally");
+    }
     render_result(res, result);
 }
 
