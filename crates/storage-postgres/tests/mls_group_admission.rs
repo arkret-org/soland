@@ -2098,6 +2098,12 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         panic!("complete installed Add history is authorized for the founder")
     };
     assert_eq!(facts.records.len(), 2);
+    assert_eq!(facts.historical_add_proofs.len(), 1);
+    assert_eq!(
+        arkret_canonical::canonical_json_bytes(&facts.historical_add_proofs[0]).unwrap(),
+        arkret_canonical::canonical_json_bytes(&verified.request).unwrap(),
+        "the private original claim outcome is selected from the same governing cut"
+    );
     assert_eq!(
         facts.authority_head_commit_event_ref,
         commit.authority_commit.event.event_id

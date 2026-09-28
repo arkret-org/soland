@@ -229,6 +229,7 @@ async fn read_in_connection(
         endpoint: payload.creator_leaf_authority.endpoint,
         authorization_event_ref: payload.creator_leaf_authority.authorization_event_ref,
     }];
+    let mut historical_add_proofs = Vec::new();
     let additions = sql_query(
         "SELECT commit_event_ref,commit_stream_position,epoch,consumed_proposal_ordinal, \
          proposal_type,proposal_wire,sender_actor_id,target_after_actor_id,target_after_signature_key \
@@ -310,7 +311,7 @@ async fn read_in_connection(
         {
             return Ok(unavailable());
         }
-        let attestation = proof.attestation;
+        let attestation = proof.attestation.clone();
         if attestation.realm_id != request.realm_id
             || attestation.effective_scope != request.effective_scope
             || attestation.mls_group_id != request.mls_group_id
@@ -389,6 +390,7 @@ async fn read_in_connection(
             proposal_wire_b64u,
             attestation,
         });
+        historical_add_proofs.push(proof);
     }
     Ok(MlsRosterAuthorityRead::Authorized {
         facts: Some(MlsRosterAuthorityFacts {
@@ -396,6 +398,7 @@ async fn read_in_connection(
             ratchet_tree_ref: payload.ratchet_tree_ref,
             authority_head_commit_event_ref: head_event.event_id,
             records,
+            historical_add_proofs,
         }),
     })
 }

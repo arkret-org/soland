@@ -29,7 +29,7 @@ use arkret_wire::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
-pub use mls_roster::MlsRosterAuthorityApplicationRead;
+pub use mls_roster::{MlsRosterAuthorityApplicationRead, MlsRosterAuthorityPreflight};
 use serde::Serialize;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,

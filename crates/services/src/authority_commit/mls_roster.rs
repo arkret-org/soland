@@ -1,9 +1,13 @@
 //! Signed, complete MLS roster pages over one governing read cut.
 
+use std::collections::{BTreeSet, HashMap};
+
 use arkret_models_collaboration::mls_roster_authority::{
     MlsRosterAuthorityManifest, MlsRosterAuthorityReadOutcome, MlsRosterAuthorityReadRequestBody,
+    MlsRosterRecord,
 };
 use arkret_models_crypto::KeyOperationSignature;
+use arkret_models_identity::AuthenticatedServiceResolution;
 use arkret_wire::{
     ActorId, Base64UrlString, Did, DidCoreId, DidUrl, EventId, Hash, NonEmptyString,
     project_did_to_core_id,
@@ -26,6 +30,19 @@ pub enum MlsRosterAuthorityApplicationRead {
     /// forward to governance and verify the signed complete result there.
     ForwardRequired,
     Page(MlsRosterAuthorityReadOutcome),
+}
+
+#[derive(Clone, Debug)]
+pub enum MlsRosterAuthorityPreflight {
+    NotFound,
+    RevisionUnavailable,
+    ForwardRequired,
+    /// Only an already authorized internal caller receives these historical
+    /// Station IDs. The signing read repeats authorization after resolution.
+    Authorized {
+        authority_head_commit_event_ref: EventId,
+        attestor_station_ids: Vec<DidCoreId>,
+    },
 }
 
 /// Internal page marker. It is not an authorization token: every page reruns
@@ -92,6 +109,41 @@ fn signing_method_belongs_to_issuer(method: &DidUrl, issuer: &DidCoreId) -> bool
 }
 
 impl AuthorityCommitApplication {
+    pub async fn mls_roster_authority_attestors(
+        &self,
+        request: &MlsRosterAuthorityReadRequestBody,
+        issuer: &DidCoreId,
+        source_peer: Option<&DidCoreId>,
+    ) -> ServiceResult<MlsRosterAuthorityPreflight> {
+        request
+            .validate()
+            .map_err(|error| invalid(error.to_string()))?;
+        Ok(
+            match self
+                .store()
+                .mls_roster_authority_read(request, issuer, source_peer)
+                .await?
+            {
+                MlsRosterAuthorityRead::NotFound => MlsRosterAuthorityPreflight::NotFound,
+                MlsRosterAuthorityRead::RevisionUnavailable => {
+                    MlsRosterAuthorityPreflight::RevisionUnavailable
+                }
+                MlsRosterAuthorityRead::Authorized { facts: None } => {
+                    MlsRosterAuthorityPreflight::ForwardRequired
+                }
+                MlsRosterAuthorityRead::Authorized { facts: Some(facts) } => {
+                    let Some(stations) = historical_attestor_ids(&facts) else {
+                        return Ok(MlsRosterAuthorityPreflight::RevisionUnavailable);
+                    };
+                    MlsRosterAuthorityPreflight::Authorized {
+                        authority_head_commit_event_ref: facts.authority_head_commit_event_ref,
+                        attestor_station_ids: stations,
+                    }
+                }
+            },
+        )
+    }
+
     /// Build one signed page from a freshly reauthorized and fully verified
     /// historical set. `now` comes from the serving Station clock; subsequent
     /// pages carry the first page's issuance instant in the opaque cursor.
@@ -100,6 +152,8 @@ impl AuthorityCommitApplication {
         request: &MlsRosterAuthorityReadRequestBody,
         issuer: &DidCoreId,
         source_peer: Option<&DidCoreId>,
+        preflight_head_commit_event_ref: &EventId,
+        attestor_resolutions: &HashMap<DidCoreId, AuthenticatedServiceResolution>,
         verification_method: &DidUrl,
         signing_key: &SigningKey,
         now: DateTime<Utc>,
@@ -128,6 +182,13 @@ impl AuthorityCommitApplication {
             }
             MlsRosterAuthorityRead::Authorized { facts: Some(facts) } => facts,
         };
+        if !facts_match_preflight(
+            &facts,
+            preflight_head_commit_event_ref,
+            attestor_resolutions,
+        ) {
+            return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
+        }
         sign_page(
             request,
             issuer,
@@ -137,6 +198,52 @@ impl AuthorityCommitApplication {
             facts,
         )
     }
+}
+
+fn historical_attestor_ids(facts: &MlsRosterAuthorityFacts) -> Option<Vec<DidCoreId>> {
+    let mut stations = BTreeSet::new();
+    let mut proofs = facts.historical_add_proofs.iter();
+    for record in &facts.records {
+        if let MlsRosterRecord::Add { attestation, .. } = record {
+            let proof = proofs.next()?;
+            if arkret_canonical::canonical_json_bytes(attestation).ok()?
+                != arkret_canonical::canonical_json_bytes(&proof.attestation).ok()?
+            {
+                return None;
+            }
+            stations.insert(attestation.attestor_station_id.clone());
+        }
+    }
+    proofs
+        .next()
+        .is_none()
+        .then(|| stations.into_iter().collect())
+}
+
+fn verify_historical_proofs(
+    facts: &MlsRosterAuthorityFacts,
+    resolutions: &HashMap<DidCoreId, AuthenticatedServiceResolution>,
+) -> bool {
+    let Some(ids) = historical_attestor_ids(facts) else {
+        return false;
+    };
+    ids.iter().all(|id| resolutions.contains_key(id))
+        && facts.historical_add_proofs.iter().all(|proof| {
+            resolutions
+                .get(&proof.attestation.attestor_station_id)
+                .is_some_and(|resolution| {
+                    arkret::verify_mls_attest_add_request(proof, resolution).is_ok()
+                })
+        })
+}
+
+fn facts_match_preflight(
+    facts: &MlsRosterAuthorityFacts,
+    preflight_head_commit_event_ref: &EventId,
+    resolutions: &HashMap<DidCoreId, AuthenticatedServiceResolution>,
+) -> bool {
+    &facts.authority_head_commit_event_ref == preflight_head_commit_event_ref
+        && verify_historical_proofs(facts, resolutions)
 }
 
 fn sign_page(
@@ -241,8 +348,22 @@ fn sign_page(
 
 #[cfg(test)]
 mod tests {
-    use arkret_models_collaboration::mls_roster_authority::MlsRosterRecord;
-    use arkret_wire::{AccountId, BlobRef, MlsWelcomeRecipientEndpoint, RealmId, ScopeRef};
+    use arkret_identity::{DidKeyResolver, DidResolver};
+    use arkret_models_collaboration::mls_roster_authority::{
+        MlsAddAuthorityAttestation, MlsAttestAddRequestBody, MlsRosterRecord,
+    };
+    use arkret_models_crypto::{
+        KeyPackageClaimRecord, PeerKeyPackageClaimReceipt, PeerKeyPackagesClaimOutcome,
+        PeerKeyPackagesClaimUnsignedRequest, peer_keypackage_claim_receipt_signing_bytes,
+    };
+    use arkret_models_identity::{
+        ResolutionDidBindingEvidenceKind, ResolutionDidBindingEvidenceReceipt,
+        ResolutionMethodEvidenceBoundary, ResolutionMethodHistoryEvidence,
+    };
+    use arkret_wire::{
+        AccountId, BlobRef, Did, MlsWelcomeRecipientEndpoint, RealmId, ScopeRef,
+        project_did_to_core_id,
+    };
 
     use super::*;
 
@@ -255,6 +376,228 @@ mod tests {
             MlsRosterAuthorityApplicationRead::Page(page) => page,
             _ => panic!("complete historical facts must produce a signed page"),
         }
+    }
+
+    fn signed_add_facts() -> (
+        MlsRosterAuthorityFacts,
+        HashMap<DidCoreId, AuthenticatedServiceResolution>,
+    ) {
+        let seed = [41_u8; 32];
+        let signer = SigningKey::from_bytes(&seed);
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            signer.verifying_key().as_bytes(),
+        );
+        let did = Did::new(format!("did:key:{multibase}")).unwrap();
+        let station = project_did_to_core_id(&did).unwrap();
+        let method = DidUrl::new(format!("{}#{multibase}", did.as_str())).unwrap();
+        let document = DidKeyResolver::new().resolve_did(&did).unwrap().document;
+        let head = arkret_canonical::sha256_digest(did.as_str().as_bytes());
+        let version = format!(
+            "synthetic-did-sha256:{}",
+            head.trim_start_matches("sha256:")
+        );
+        let resolution = AuthenticatedServiceResolution {
+            service_id: station.clone(),
+            service_kind: "station".to_owned(),
+            method_history_evidence: ResolutionMethodHistoryEvidence::DidKeyExpansion {
+                boundary: ResolutionMethodEvidenceBoundary {
+                    from_method_history_head: head.clone(),
+                    to_method_history_head: head,
+                    from_version_id: version.clone(),
+                    to_version_id: version,
+                },
+                evidence: ResolutionDidBindingEvidenceReceipt {
+                    kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                    method: "key".to_owned(),
+                    document_digest: arkret_models_identity::normalized_did_document_digest(
+                        &document,
+                    )
+                    .unwrap(),
+                    method_proofs: vec![],
+                },
+            },
+            normalized_did_document: document,
+        };
+        let genesis = event(11);
+        let commit = event(12);
+        let realm_id = RealmId::from_event_id(&event(13));
+        let scope = ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let group = scope.canonical_mls_group_id().unwrap();
+        let actor = ActorId::account(AccountId::new(
+            DidCoreId::new("ak:did_core:web:member.example".to_owned()).unwrap(),
+            station.clone(),
+        ));
+        let at: DateTime<Utc> = "2026-09-29T00:00:00Z".parse().unwrap();
+        let claim_id = arkret_wire::KeypackageClaimId::new(
+            "ak:keypackage_claim:01904100-0000-7000-8000-000000000073".to_owned(),
+        )
+        .unwrap();
+        let record = KeyPackageClaimRecord {
+            claim_id: claim_id.as_str().to_owned(),
+            keypackage_ref: format!("sha256:{}", "1".repeat(64)),
+            actor_id: actor.clone(),
+            principal_id: actor.signing_principal_id().clone(),
+            device_id: None,
+            agent_id: None,
+            agent_verification_method: Some(method.clone()),
+            pairwise_verification_method: None,
+            keypackage: "AQ".to_owned(),
+            capabilities: vec!["mls".to_owned()],
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: Some(event(14)),
+            expires_at: at + chrono::TimeDelta::hours(1),
+            revocation_status: None,
+            last_resort: None,
+        };
+        let claim_request: PeerKeyPackagesClaimUnsignedRequest = serde_json::from_value(
+            serde_json::json!({
+                "claim_request_id": "AQ",
+                "intended_realm_id": realm_id,
+                "mls_group_id": group,
+                "claim_purpose": "realm_membership",
+                "required_capabilities": ["mls"],
+                "expires_at": arkret_canonical::format_timestamp_canonical(at + chrono::TimeDelta::hours(1)),
+            }),
+        ).unwrap();
+        let placeholder = || KeyOperationSignature {
+            kid: NonEmptyString::new(method.as_str().to_owned()).unwrap(),
+            signature_algorithm: Some(NonEmptyString::new("Ed25519").unwrap()),
+            sig: Base64UrlString::new("AA").unwrap(),
+        };
+        let mut receipt = PeerKeyPackageClaimReceipt {
+            claim_request_id: claim_request.claim_request_id.clone(),
+            request_digest: Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+            claims_digest: Hash::new(arkret_canonical::canonical_sha256(&[&record]).unwrap())
+                .unwrap(),
+            source_id: station.clone(),
+            destination_id: station.clone(),
+            request: claim_request,
+            claimed_at: at,
+            expires_at: at + chrono::TimeDelta::hours(1),
+            signature: placeholder(),
+        };
+        receipt.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+            &seed,
+            method.as_str(),
+            &peer_keypackage_claim_receipt_signing_bytes(&receipt).unwrap(),
+        )
+        .unwrap();
+        let outcome = PeerKeyPackagesClaimOutcome {
+            claim_request_id: receipt.claim_request_id.clone(),
+            claims: vec![record],
+            claim_receipt: receipt.clone(),
+        };
+        let welcome_id = arkret_wire::MlsWelcomeDeliveryId::new(
+            "ak:mls_welcome_delivery:01904100-0000-7000-8000-000000000074".to_owned(),
+        )
+        .unwrap();
+        let mut attestation = MlsAddAuthorityAttestation {
+            attestor_station_id: station.clone(),
+            realm_id: realm_id.clone(),
+            effective_scope: scope,
+            mls_group_id: group,
+            genesis_event_ref: genesis.clone(),
+            commit_event_ref: commit.clone(),
+            commit_stream_position: 2,
+            epoch: 1,
+            welcome_id,
+            claim_id,
+            actor_id: actor.clone(),
+            endpoint: MlsWelcomeRecipientEndpoint::AgentRuntime {
+                verification_method: method.clone(),
+            },
+            authorization_event_ref: event(14),
+            leaf_signature_key_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
+                &[7; 32],
+            ))
+            .unwrap(),
+            claim_record_digest: Hash::new(
+                arkret_canonical::canonical_sha256(&outcome.claims[0]).unwrap(),
+            )
+            .unwrap(),
+            claim_receipt: receipt,
+            attested_at: at,
+            signature: placeholder(),
+        };
+        attestation.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+            &seed,
+            method.as_str(),
+            &attestation.signing_bytes().unwrap(),
+        )
+        .unwrap();
+        let proof = MlsAttestAddRequestBody {
+            attestation: attestation.clone(),
+            claim_outcome: outcome,
+        };
+        let facts = MlsRosterAuthorityFacts {
+            group_info_ref: BlobRef::new(format!("ak:blob:sha256:{}", "3".repeat(64))).unwrap(),
+            ratchet_tree_ref: BlobRef::new(format!("ak:blob:sha256:{}", "4".repeat(64))).unwrap(),
+            authority_head_commit_event_ref: commit.clone(),
+            records: vec![
+                MlsRosterRecord::Genesis {
+                    genesis_event_ref: genesis,
+                    actor_id: actor.clone(),
+                    leaf_signature_key_b64u: Base64UrlString::new(
+                        arkret_canonical::base64url_encode(&[5; 32]),
+                    )
+                    .unwrap(),
+                    endpoint: MlsWelcomeRecipientEndpoint::AgentRuntime {
+                        verification_method: method,
+                    },
+                    authorization_event_ref: event(15),
+                },
+                MlsRosterRecord::Add {
+                    commit_event_ref: commit,
+                    consumed_proposal_ordinal: 0,
+                    sender_actor_id: actor,
+                    proposal_wire_b64u: Base64UrlString::new("AQ").unwrap(),
+                    attestation,
+                },
+            ],
+            historical_add_proofs: vec![proof],
+        };
+        (facts, HashMap::from([(station, resolution)]))
+    }
+
+    #[test]
+    fn roster_signing_requires_original_historical_signatures_and_resolutions() {
+        let (facts, resolutions) = signed_add_facts();
+        assert_eq!(historical_attestor_ids(&facts).unwrap().len(), 1);
+        assert!(verify_historical_proofs(&facts, &resolutions));
+        assert!(facts_match_preflight(
+            &facts,
+            &facts.authority_head_commit_event_ref,
+            &resolutions
+        ));
+        assert!(!facts_match_preflight(&facts, &event(99), &resolutions));
+        assert!(!verify_historical_proofs(&facts, &HashMap::new()));
+        let mut altered_receipt = facts.clone();
+        altered_receipt.historical_add_proofs[0]
+            .claim_outcome
+            .claim_receipt
+            .signature
+            .sig = Base64UrlString::new("AQ").unwrap();
+        altered_receipt.historical_add_proofs[0]
+            .attestation
+            .claim_receipt
+            .signature
+            .sig = Base64UrlString::new("AQ").unwrap();
+        assert!(!verify_historical_proofs(&altered_receipt, &resolutions));
+        let mut altered_attestation = facts.clone();
+        altered_attestation.historical_add_proofs[0]
+            .attestation
+            .signature
+            .sig = Base64UrlString::new("AQ").unwrap();
+        assert!(!verify_historical_proofs(
+            &altered_attestation,
+            &resolutions
+        ));
+        let mut missing = facts;
+        missing.historical_add_proofs.clear();
+        assert!(historical_attestor_ids(&missing).is_none());
+        assert!(!verify_historical_proofs(&missing, &resolutions));
     }
 
     #[test]
@@ -296,6 +639,7 @@ mod tests {
                     authorization_event_ref: genesis.clone(),
                 })
                 .collect(),
+            historical_add_proofs: vec![],
         };
         let key = SigningKey::from_bytes(&[0x44; 32]);
         let now = DateTime::parse_from_rfc3339("2026-09-29T00:00:00Z")

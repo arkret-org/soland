@@ -843,6 +843,11 @@ pub struct MlsRosterAuthorityFacts {
     pub ratchet_tree_ref: arkret_wire::BlobRef,
     pub authority_head_commit_event_ref: EventId,
     pub records: Vec<arkret_models_collaboration::mls_roster_authority::MlsRosterRecord>,
+    /// The original signed private claim proof for each Add record, in the
+    /// same order. It is verified before governance signs a public manifest;
+    /// the claim batch is never included in the public roster response.
+    pub historical_add_proofs:
+        Vec<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
 }
 
 #[derive(Clone, Debug)]
