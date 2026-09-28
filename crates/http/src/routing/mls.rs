@@ -73,6 +73,8 @@ use crate::wire::now;
 #[path = "mls_payload_fields.rs"]
 pub(crate) mod payload_fields;
 
+#[path = "mls_roster_read.rs"]
+mod mls_roster_read;
 #[path = "mls_roster_signature.rs"]
 mod mls_roster_signature;
 
@@ -274,6 +276,10 @@ pub fn protocol_router() -> Router {
             Router::with_path("mls/group-state-material/query")
                 .post(resolve_self_mls_group_state_material),
         )
+        .push(
+            Router::with_path("mls/roster-authority/query")
+                .post(mls_roster_read::resolve_self_mls_roster_authority),
+        )
 }
 
 pub(crate) fn peer_router() -> Router {
@@ -286,6 +292,10 @@ pub(crate) fn peer_router() -> Router {
         .push(
             Router::with_path("mls/group-state-material")
                 .post(resolve_peer_mls_group_state_material),
+        )
+        .push(
+            Router::with_path("mls/roster-authority/query")
+                .post(mls_roster_read::resolve_peer_mls_roster_authority),
         )
         .push(Router::with_path("mls/add-authority-attestations").post(peer_mls_attest_add))
 }

@@ -25,6 +25,7 @@ const PAGE_SIZE: usize = 8;
 #[derive(Clone, Debug)]
 pub enum MlsRosterAuthorityApplicationRead {
     NotFound,
+    CursorInvalid,
     RevisionUnavailable,
     /// The Account Station proved its local member cut. The self route must
     /// forward to governance and verify the signed complete result there.
@@ -266,17 +267,20 @@ fn sign_page(
     let page_count = facts.records.len().div_ceil(PAGE_SIZE);
     let (page_index, issued_at) = if let Some(value) = request.cursor.as_deref() {
         let Some(cursor) = decode_cursor(value) else {
-            return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
+            return Ok(MlsRosterAuthorityApplicationRead::CursorInvalid);
         };
         if cursor.request_digest != request_digest
             || cursor.caller_actor_id != request.caller_actor_id
-            || cursor.authority_head_commit_event_ref != facts.authority_head_commit_event_ref
-            || cursor.records_digest != records_digest
             || cursor.page_index == 0
             || usize::try_from(cursor.page_index)
                 .ok()
                 .is_none_or(|index| index >= page_count)
             || cursor.issued_at > now
+        {
+            return Ok(MlsRosterAuthorityApplicationRead::CursorInvalid);
+        }
+        if cursor.authority_head_commit_event_ref != facts.authority_head_commit_event_ref
+            || cursor.records_digest != records_digest
         {
             return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
         }
@@ -670,13 +674,13 @@ mod tests {
         request.cursor = Some(format!("{original_cursor}!"));
         assert!(matches!(
             sign_page(&request, &issuer, &method, &key, now, facts.clone()).unwrap(),
-            MlsRosterAuthorityApplicationRead::RevisionUnavailable
+            MlsRosterAuthorityApplicationRead::CursorInvalid
         ));
         request.cursor = Some(original_cursor);
         request.caller_actor_id = ActorId::service(issuer.clone());
         assert!(matches!(
             sign_page(&request, &issuer, &method, &key, now, facts.clone()).unwrap(),
-            MlsRosterAuthorityApplicationRead::RevisionUnavailable
+            MlsRosterAuthorityApplicationRead::CursorInvalid
         ));
         request.caller_actor_id = actor;
         let mut changed_head = facts;
