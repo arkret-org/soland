@@ -730,6 +730,7 @@ async fn mls_lifecycle_body() {
             epoch: 0,
             public_state: genesis_state.clone(),
             member_principals: Default::default(),
+            consumed_proposals: Vec::new(),
             genesis_blobs: Vec::new(),
         }),
         Vec::new(),
@@ -829,6 +830,7 @@ async fn mls_lifecycle_body() {
         epoch: 1,
         public_state: public.export_state().unwrap(),
         member_principals: Default::default(),
+        consumed_proposals: Vec::new(),
         genesis_blobs: Vec::new(),
     });
     commit_request.authority_commit.welcomes = vec![VerifiedMlsWelcome {

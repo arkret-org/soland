@@ -216,6 +216,7 @@ DROP TABLE IF EXISTS strand_current_results CASCADE;
 DROP TABLE IF EXISTS strand_position_current_results CASCADE;
 DROP TABLE IF EXISTS rsvp_current_results CASCADE;
 DROP TABLE IF EXISTS mls_group_current_results CASCADE;
+DROP TABLE IF EXISTS mls_consumed_proposal_provenance CASCADE;
 DROP TABLE IF EXISTS message_revision_current_results CASCADE;
 DROP TABLE IF EXISTS object_redaction_current_results CASCADE;
 DROP TABLE IF EXISTS moderation_state_current_results CASCADE;

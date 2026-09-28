@@ -39,8 +39,8 @@ use arkret_wire::{
 };
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
-    ConflictCode, MlsGenesisBlob, MlsInstalledBase, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
-    VerifiedMlsWelcome,
+    ConflictCode, MlsConsumedProposalInstallation, MlsGenesisBlob, MlsInstalledBase,
+    MlsProposalLeafProvenance, MlsStateInstallation, MlsWelcomeClaimLedgerKey, VerifiedMlsWelcome,
 };
 
 use super::AppState;
@@ -225,6 +225,7 @@ async fn verify_genesis(
         epoch: 0,
         public_state,
         member_principals,
+        consumed_proposals: Vec::new(),
         genesis_blobs,
     })
 }
@@ -307,13 +308,23 @@ async fn verify_commit(
         arkret_canonical::base64url_decode(payload.commit_bytes_b64()).map_err(schema)?;
     let transition = tracker
         .process_public_handshake(&commit_bytes)
-        .map_err(|error| schema(format!("MLS Commit public transition is invalid: {error}")))?;
+        .map_err(|error| {
+            if matches!(error, arkret_mls::MlsError::UnsupportedFeature(_)) {
+                ServiceError::protocol(
+                    arkret_wire::ErrorCode::UnsupportedFeature,
+                    format!("MLS Commit public transition is unsupported: {error}"),
+                )
+            } else {
+                schema(format!("MLS Commit public transition is invalid: {error}"))
+            }
+        })?;
     let MlsPublicHandshakeTransition::Commit {
         sender_class,
         sender_leaf,
         previous_epoch,
         epoch,
         added_leaves,
+        consumed_proposals,
         ..
     } = transition
     else {
@@ -357,6 +368,18 @@ async fn verify_commit(
         .into_iter()
         .map(|leaf| leaf.actor_id)
         .collect();
+    let consumed_proposals = consumed_proposals
+        .into_iter()
+        .map(|proposal| MlsConsumedProposalInstallation {
+            ordinal: proposal.ordinal,
+            proposal_ref: proposal.proposal_ref,
+            proposal_type: proposal.proposal_type,
+            proposal_wire: proposal.proposal_wire,
+            sender_leaf: installed_leaf(proposal.sender_leaf),
+            target_before: proposal.target_before.map(installed_leaf),
+            target_after: proposal.target_after.map(installed_leaf),
+        })
+        .collect();
     Ok((
         MlsStateInstallation {
             effective_scope: event.scope_ref.clone(),
@@ -369,10 +392,19 @@ async fn verify_commit(
                 .export_state()
                 .map_err(|error| ServiceError::Internal(error.to_string()))?,
             member_principals,
+            consumed_proposals,
             genesis_blobs: Vec::new(),
         },
         added_leaves,
     ))
+}
+
+fn installed_leaf(leaf: MlsPublicEndpointLeaf) -> MlsProposalLeafProvenance {
+    MlsProposalLeafProvenance {
+        leaf_index: leaf.leaf_index,
+        actor_id: leaf.actor_id,
+        signature_key: leaf.signature_key,
+    }
 }
 
 /// Every Welcome, and exactly one per leaf the Commit adds.

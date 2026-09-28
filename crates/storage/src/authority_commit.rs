@@ -743,11 +743,37 @@ pub struct MlsStateInstallation {
     /// exact-pair group state from them (contact-and-direct-conversation.md
     /// §7.2, §8.3).
     pub member_principals: std::collections::BTreeSet<arkret_wire::ActorId>,
+    /// Every inline Proposal actually consumed by a verified Commit, in its
+    /// signed PublicMessage wire order. Empty for Genesis or self-update.
+    /// The accepting PG transaction freezes these with the winning Commit.
+    pub consumed_proposals: Vec<MlsConsumedProposalInstallation>,
     /// The GroupInfo and ratchet tree Blobs a forwarded `ak.mls.genesis`
     /// carried (encryption-and-audit.md §5.1.2), stored with its Commit;
     /// empty for a same-Station Genesis, whose Blobs are already local, and
     /// for every Commit.
     pub genesis_blobs: Vec<MlsGenesisBlob>,
+}
+
+/// Station-private historical leaf coordinates derived only from verified RFC
+/// public state. Leaf indices never enter the roster read wire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsProposalLeafProvenance {
+    pub leaf_index: u32,
+    pub actor_id: arkret_wire::ActorId,
+    pub signature_key: arkret_wire::Base64UrlString,
+}
+
+/// Exact accepted Commit Proposal provenance carried from the SDK public
+/// tracker into one PG acceptance transaction. It is not a protocol DTO.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MlsConsumedProposalInstallation {
+    pub ordinal: u64,
+    pub proposal_ref: Vec<u8>,
+    pub proposal_type: u16,
+    pub proposal_wire: Vec<u8>,
+    pub sender_leaf: MlsProposalLeafProvenance,
+    pub target_before: Option<MlsProposalLeafProvenance>,
+    pub target_after: Option<MlsProposalLeafProvenance>,
 }
 
 /// One content-addressed public Blob of a forwarded Genesis. Its exact bytes
@@ -983,6 +1009,7 @@ fn validate_mls_installation(
             if payload.effective_scope() != &event.scope_ref
                 || state.base.is_some()
                 || state.epoch != 0
+                || !state.consumed_proposals.is_empty()
             {
                 return Err(mismatch());
             }
@@ -1013,6 +1040,27 @@ fn validate_mls_installation(
             };
             if !state.genesis_blobs.is_empty() {
                 return Err(mismatch());
+            }
+            for (ordinal, proposal) in state.consumed_proposals.iter().enumerate() {
+                if proposal.ordinal != ordinal as u64
+                    || proposal.proposal_ref.is_empty()
+                    || proposal.proposal_wire.is_empty()
+                    || proposal.sender_leaf.actor_id != event.actor_id
+                    || !matches!(
+                        (
+                            proposal.proposal_type,
+                            &proposal.target_before,
+                            &proposal.target_after
+                        ),
+                        (1, None, Some(_))
+                            | (2, Some(_), Some(_))
+                            | (3, Some(_), None)
+                            | (4, None, None)
+                            | (7, None, None)
+                    )
+                {
+                    return Err(mismatch());
+                }
             }
             if binding.effective_scope() != &event.scope_ref
                 || base.current_mls_commit_event_ref != *payload.base_group_state_ref()
@@ -1875,6 +1923,7 @@ mod mls_installation_tests {
             epoch: 1,
             public_state: vec![1],
             member_principals: Default::default(),
+            consumed_proposals: Vec::new(),
             genesis_blobs: Vec::new(),
         };
         assert!(validate_mls_installation(&event, &installed).is_ok());

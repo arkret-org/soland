@@ -1177,6 +1177,7 @@ async fn postgres_agent_message_send_gate_checks_epoch_and_current_key() {
         epoch: 0,
         public_state: b"public-state-0".to_vec(),
         member_principals: Default::default(),
+        consumed_proposals: Vec::new(),
         genesis_blobs: Vec::new(),
     });
     genesis.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(

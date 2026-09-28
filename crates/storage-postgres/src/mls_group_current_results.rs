@@ -17,7 +17,7 @@
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_crypto::MlsCommitPayload;
 use arkret_wire::{EventKind, MlsGroupCurrent, ScopeRef};
-use diesel::sql_types::{BigInt, Binary, Jsonb, Nullable, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
     AuthorityCommitTransaction, ConflictCode, MlsGroupCurrentRecord, MlsGroupCurrentStore,
@@ -277,6 +277,9 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         commit,
     )
     .await?;
+    if event.kind == EventKind::MlsCommit {
+        freeze_consumed_proposals(conn, transaction, installation, &key).await?;
+    }
     store_genesis_blobs(conn, event, &installation.genesis_blobs, commit).await?;
     crate::direct_conversation_admission::record_group_state_in_connection(
         conn,
@@ -320,6 +323,62 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         .await
         .map_err(crate::PgTransactionError::into_persistence)?;
         bind_claim_welcome_in_connection(conn, claim, &welcome.delivery).await?;
+    }
+    Ok(())
+}
+
+async fn freeze_consumed_proposals(
+    conn: &mut AsyncPgConnection,
+    transaction: &AuthorityCommitTransaction,
+    installation: &soland_storage::MlsStateInstallation,
+    key: &str,
+) -> PersistenceResult<()> {
+    let event = &transaction.event;
+    let commit = &transaction.commit;
+    for proposal in &installation.consumed_proposals {
+        let before = proposal.target_before.as_ref();
+        let after = proposal.target_after.as_ref();
+        let before_actor = before
+            .map(|leaf| serde_json::to_value(&leaf.actor_id))
+            .transpose()
+            .map_err(PersistenceError::database)?;
+        let after_actor = after
+            .map(|leaf| serde_json::to_value(&leaf.actor_id))
+            .transpose()
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO mls_consumed_proposal_provenance \
+             (realm_id,scope_key,commit_event_ref,commit_stream_position,epoch,consumed_proposal_ordinal,\
+              proposal_type,proposal_wire,proposal_ref,sender_actor_id,sender_leaf_index,sender_signature_key,\
+              target_before_actor_id,target_before_leaf_index,target_before_signature_key,\
+              target_after_actor_id,target_after_leaf_index,target_after_signature_key,created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
+        )
+        .bind::<Text, _>(event.realm_id.as_str())
+        .bind::<Text, _>(key)
+        .bind::<Text, _>(event.event_id.as_str())
+        .bind::<BigInt, _>(position(commit.stream_position)?)
+        .bind::<BigInt, _>(position(installation.epoch)?)
+        .bind::<BigInt, _>(position(proposal.ordinal)?)
+        .bind::<Integer, _>(i32::from(proposal.proposal_type))
+        .bind::<Binary, _>(&proposal.proposal_wire)
+        .bind::<Binary, _>(&proposal.proposal_ref)
+        .bind::<Jsonb, _>(
+            serde_json::to_value(&proposal.sender_leaf.actor_id)
+                .map_err(PersistenceError::database)?,
+        )
+        .bind::<BigInt, _>(i64::from(proposal.sender_leaf.leaf_index))
+        .bind::<Text, _>(proposal.sender_leaf.signature_key.as_str())
+        .bind::<Nullable<Jsonb>, _>(before_actor)
+        .bind::<Nullable<BigInt>, _>(before.map(|leaf| i64::from(leaf.leaf_index)))
+        .bind::<Nullable<Text>, _>(before.map(|leaf| leaf.signature_key.as_str()))
+        .bind::<Nullable<Jsonb>, _>(after_actor)
+        .bind::<Nullable<BigInt>, _>(after.map(|leaf| i64::from(leaf.leaf_index)))
+        .bind::<Nullable<Text>, _>(after.map(|leaf| leaf.signature_key.as_str()))
+        .bind::<Timestamptz, _>(commit.committed_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
     }
     Ok(())
 }

@@ -1726,6 +1726,7 @@ fn with_group(
         epoch,
         public_state: format!("public-state-{epoch}").into_bytes(),
         member_principals: principals.iter().map(|actor| (*actor).clone()).collect(),
+        consumed_proposals: Vec::new(),
         genesis_blobs: Vec::new(),
     });
     request

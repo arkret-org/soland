@@ -15,13 +15,14 @@ mod pcr_genesis;
 mod support;
 
 use arkret_models_crypto::{MlsCommitEnvelope, MlsCommitPayload, MlsGovernanceBindingPayload};
-use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Binary, Jsonb, Text, Timestamptz};
 use diesel_async::RunQueryDsl;
 use soland_storage::{
     AuthorityCommitStore, ConflictCode, DeviceMessageStore, DeviceRevocationGateSelector,
     DeviceRevocationStore, EventCommitRequest, EventCommitUnitOfWork, IdentityStoreRegistry,
-    MlsGroupCurrentStore, MlsInstalledBase, MlsKeyPackageStore, MlsStateInstallation,
-    MlsWelcomeClaimLedgerKey, RecipientQueueSelector, VerifiedMlsWelcome,
+    MlsConsumedProposalInstallation, MlsGroupCurrentStore, MlsInstalledBase, MlsKeyPackageStore,
+    MlsProposalLeafProvenance, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
+    RecipientQueueSelector, VerifiedMlsWelcome,
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
@@ -47,6 +48,11 @@ fn genesis_payload(
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         "group_info_ref": blob('3'),
         "ratchet_tree_ref": blob('4'),
+        "creator_leaf_authority": {
+            "leaf_signature_key_b64u": arkret_canonical::base64url_encode([7_u8; 32]),
+            "endpoint": {"kind": "device", "device_id": format!("ak:device:{}", uuid::Uuid::now_v7())},
+            "authorization_event_ref": arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [8_u8; 32]),
+        },
         "governance_binding":
             MlsGovernanceBindingPayload::realm(realm_id.clone(), None, 0, 0, 0).unwrap(),
         "created_at": arkret_canonical::format_timestamp_canonical(at),
@@ -100,6 +106,7 @@ fn with_installation(
         epoch,
         public_state: format!("public-state-{epoch}").into_bytes(),
         member_principals: Default::default(),
+        consumed_proposals: Vec::new(),
         genesis_blobs: Vec::new(),
     });
     request
@@ -251,6 +258,20 @@ async fn welcome_count(pool: &PgPool) -> i64 {
         .count
 }
 
+async fn provenance_count(pool: &PgPool) -> i64 {
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM mls_consumed_proposal_provenance")
+        .get_result::<Count>(&mut *conn)
+        .await
+        .unwrap()
+        .count
+}
+
 /// `request` is refused with `code`; its Event, RealmCommit, group current
 /// and Welcomes are all absent.
 async fn assert_zero_write_refusal(
@@ -263,6 +284,7 @@ async fn assert_zero_write_refusal(
     let scope = &request.authority_commit.event.scope_ref;
     let before = groups.current(scope).await.unwrap();
     let welcomes = welcome_count(pool).await;
+    let provenance = provenance_count(pool).await;
     let error = uow.commit_event(request.clone()).await.unwrap_err();
     assert_eq!(error.conflict_code(), Some(code), "{error}");
     assert!(
@@ -274,6 +296,7 @@ async fn assert_zero_write_refusal(
     );
     assert_eq!(groups.current(scope).await.unwrap(), before);
     assert_eq!(welcome_count(pool).await, welcomes);
+    assert_eq!(provenance_count(pool).await, provenance);
 }
 
 /// Genesis creates the `mls_group` current at its Commit; a second Genesis
@@ -431,6 +454,160 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
         1,
     );
     assert_zero_write_refusal(&pool, &stale, ConflictCode::GovernanceBindingMismatch).await;
+}
+
+/// The PG unit consumes facts already verified by the serving layer. It does
+/// not reparse MLS bytes here; the public tracker test proves their origin.
+/// The exact Commit and ordinal remain distinct when Remove+Add restores the
+/// same leaf tuple, and an unsuccessful authority CAS inserts no history.
+#[tokio::test]
+async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacement() {
+    #[derive(diesel::QueryableByName)]
+    struct ProvenanceRow {
+        #[diesel(sql_type = Text)]
+        commit_event_ref: String,
+        #[diesel(sql_type = BigInt)]
+        consumed_proposal_ordinal: i64,
+        #[diesel(sql_type = Binary)]
+        proposal_wire: Vec<u8>,
+        #[diesel(sql_type = Jsonb)]
+        sender_actor_id: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+        target_after_actor_id: Option<serde_json::Value>,
+    }
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let discussion = ordinary_realm::open_discussion(&pool, "mls-proposal-provenance").await;
+    let realm_id = discussion.realm_id();
+    let founder = ordinary_realm::founder();
+    let at = discussion.committed_at();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let genesis = with_installation(
+        ordinary_realm::next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::MlsGenesis,
+            &founder,
+            genesis_payload(&realm_id, at),
+            at,
+        ),
+        None,
+        0,
+    );
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let genesis_ref = genesis.authority_commit.event.event_id.clone();
+    let leaf = MlsProposalLeafProvenance {
+        leaf_index: 1,
+        actor_id: genesis.authority_commit.event.actor_id.clone(),
+        signature_key: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            [7_u8; 32],
+        ))
+        .unwrap(),
+    };
+    let proposal = |ordinal, proposal_type, wire, before, after| MlsConsumedProposalInstallation {
+        ordinal,
+        proposal_ref: vec![wire],
+        proposal_type,
+        proposal_wire: vec![wire],
+        sender_leaf: leaf.clone(),
+        target_before: before,
+        target_after: after,
+    };
+    let mut first = with_installation(
+        ordinary_realm::next_request(
+            &genesis.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &founder,
+            commit_payload(&realm_id, &genesis_ref, 0, 0, b"first-proposal"),
+            at,
+        ),
+        Some((&genesis_ref, 0)),
+        1,
+    );
+    first
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .consumed_proposals = vec![proposal(0, 1, 11, None, Some(leaf.clone()))];
+    uow.commit_event(first.clone()).await.unwrap();
+    let first_ref = first.authority_commit.event.event_id.clone();
+
+    let mut replacement = with_installation(
+        ordinary_realm::next_request(
+            &first.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &founder,
+            commit_payload(&realm_id, &first_ref, 1, 0, b"replacement"),
+            at,
+        ),
+        Some((&first_ref, 1)),
+        2,
+    );
+    replacement
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .consumed_proposals = vec![
+        proposal(0, 3, 21, Some(leaf.clone()), None),
+        proposal(1, 1, 22, None, Some(leaf.clone())),
+    ];
+    uow.commit_event(replacement.clone()).await.unwrap();
+    let replacement_ref = replacement.authority_commit.event.event_id.clone();
+
+    let mut conn = pool.get().await.unwrap();
+    let rows = diesel::sql_query(
+        "SELECT commit_event_ref,consumed_proposal_ordinal,proposal_wire,sender_actor_id,target_after_actor_id \
+         FROM mls_consumed_proposal_provenance WHERE realm_id=$1 \
+         ORDER BY commit_stream_position,consumed_proposal_ordinal",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<ProvenanceRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].commit_event_ref, first_ref.as_str());
+    assert_eq!(rows[1].commit_event_ref, replacement_ref.as_str());
+    assert_eq!(rows[2].commit_event_ref, replacement_ref.as_str());
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.consumed_proposal_ordinal)
+            .collect::<Vec<_>>(),
+        vec![0, 0, 1]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.proposal_wire[0])
+            .collect::<Vec<_>>(),
+        vec![11, 21, 22]
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.sender_actor_id == serde_json::to_value(&leaf.actor_id).unwrap())
+    );
+    assert!(rows[1].target_after_actor_id.is_none());
+    assert_eq!(rows[0].target_after_actor_id, rows[2].target_after_actor_id);
+    drop(conn);
+
+    let mut stale = with_installation(
+        ordinary_realm::next_request(
+            &replacement.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &founder,
+            commit_payload(&realm_id, &first_ref, 1, 0, b"stale-provenance"),
+            at,
+        ),
+        Some((&first_ref, 1)),
+        2,
+    );
+    stale
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .consumed_proposals = vec![proposal(0, 1, 31, None, Some(leaf.clone()))];
+    assert_zero_write_refusal(&pool, &stale, ConflictCode::GovernanceBindingMismatch).await;
+    assert_eq!(provenance_count(&pool).await, 3);
 }
 
 /// A Commit and its Welcome commit together; a full recipient queue rolls the

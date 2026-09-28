@@ -141,6 +141,7 @@ async fn fixture() -> Fixture {
                 epoch: 0,
                 public_state: tracker.export_state().unwrap(),
                 member_principals: group.member_actor_ids().unwrap().into_iter().collect(),
+                consumed_proposals: Vec::new(),
                 genesis_blobs: Vec::new(),
             },
             Vec::new(),

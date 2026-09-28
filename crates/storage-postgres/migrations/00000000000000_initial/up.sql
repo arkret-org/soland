@@ -4729,6 +4729,45 @@ CREATE TABLE mls_group_current_results (
 );
 CREATE INDEX mls_group_current_results_realm ON mls_group_current_results(realm_id,scope_key);
 
+-- Historical, Station-private facts from the exact signed PublicMessage of
+-- each accepted MLS Commit. The row identity includes the creating Commit and
+-- original Proposal ordinal, so Remove+Add cannot reuse an old leaf tuple.
+-- No leaf index from this table is disclosed by roster read.
+CREATE TABLE mls_consumed_proposal_provenance (
+ realm_id TEXT NOT NULL,
+ scope_key TEXT COLLATE "C" NOT NULL,
+ commit_event_ref TEXT NOT NULL,
+ commit_stream_position BIGINT NOT NULL CHECK(commit_stream_position BETWEEN 1 AND 9007199254740991),
+ epoch BIGINT NOT NULL CHECK(epoch BETWEEN 1 AND 9007199254740991),
+ consumed_proposal_ordinal BIGINT NOT NULL CHECK(consumed_proposal_ordinal BETWEEN 0 AND 9007199254740991),
+ proposal_type INTEGER NOT NULL CHECK(proposal_type IN (1,2,3,4)),
+ proposal_wire BYTEA NOT NULL CHECK(octet_length(proposal_wire)>0),
+ proposal_ref BYTEA NOT NULL CHECK(octet_length(proposal_ref)>0),
+ sender_actor_id JSONB NOT NULL CHECK(jsonb_typeof(sender_actor_id)='object'),
+ sender_leaf_index BIGINT NOT NULL CHECK(sender_leaf_index>=0),
+ sender_signature_key TEXT NOT NULL CHECK(length(sender_signature_key)=43),
+ target_before_actor_id JSONB,
+ target_before_leaf_index BIGINT,
+ target_before_signature_key TEXT,
+ target_after_actor_id JSONB,
+ target_after_leaf_index BIGINT,
+ target_after_signature_key TEXT,
+ created_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(scope_key,commit_event_ref,consumed_proposal_ordinal),
+ CHECK((target_before_actor_id IS NULL AND target_before_leaf_index IS NULL AND target_before_signature_key IS NULL)
+    OR (target_before_actor_id IS NOT NULL AND target_before_leaf_index IS NOT NULL AND target_before_signature_key IS NOT NULL
+        AND jsonb_typeof(target_before_actor_id)='object' AND target_before_leaf_index>=0 AND length(target_before_signature_key)=43)),
+ CHECK((target_after_actor_id IS NULL AND target_after_leaf_index IS NULL AND target_after_signature_key IS NULL)
+    OR (target_after_actor_id IS NOT NULL AND target_after_leaf_index IS NOT NULL AND target_after_signature_key IS NOT NULL
+        AND jsonb_typeof(target_after_actor_id)='object' AND target_after_leaf_index>=0 AND length(target_after_signature_key)=43)),
+ CHECK((proposal_type=1 AND target_before_actor_id IS NULL AND target_after_actor_id IS NOT NULL)
+    OR (proposal_type=2 AND target_before_actor_id IS NOT NULL AND target_after_actor_id IS NOT NULL)
+    OR (proposal_type=3 AND target_before_actor_id IS NOT NULL AND target_after_actor_id IS NULL)
+    OR (proposal_type=4 AND target_before_actor_id IS NULL AND target_after_actor_id IS NULL))
+);
+CREATE INDEX mls_consumed_proposal_provenance_cut
+ ON mls_consumed_proposal_provenance(scope_key,commit_stream_position,consumed_proposal_ordinal);
+
 -- `object_redaction` typed current: the canonically sorted set of committed
 -- redaction assertions on one subject, keyed by the redaction target's typed-id
 -- string taken verbatim (`ak.message.redact` `message_id`, `ak.redaction`
