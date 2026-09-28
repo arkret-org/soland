@@ -116,6 +116,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::ModerationDecision
             | arkret_wire::EventKind::ModerationDecisionLift
             | arkret_wire::EventKind::SpaceCreate
+            | arkret_wire::EventKind::StrandCreate
             | arkret_wire::EventKind::RealmProfile
             | arkret_wire::EventKind::StrandUpdate
             | arkret_wire::EventKind::StrandArchive
@@ -380,7 +381,13 @@ pub(super) async fn commit_event_unit(
         }
         return super::authority_direct_conversation::relay_direct_conversation_refusal(error);
     }
-    if decided_at_cut && !poll_at_cut && event.kind != arkret_wire::EventKind::StrandWatchSet {
+    if decided_at_cut
+        && !poll_at_cut
+        && !matches!(
+            event.kind,
+            arkret_wire::EventKind::StrandCreate | arkret_wire::EventKind::StrandWatchSet
+        )
+    {
         return Ok(AuthoritySubmitOutcome::Accepted {
             status: AuthorityCommitStatus::Committed,
             commit: transaction.commit,

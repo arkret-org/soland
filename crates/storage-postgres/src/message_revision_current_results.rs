@@ -1,11 +1,9 @@
 //! The bounded `message_revision` writers at the accepting RealmCommit cut.
 //!
-//! The supported create carriers are a Realm-scope plain text Message and a
-//! Realm-scope MLS ciphertext Message under the same-cut send gate, in an
-//! active local discussion Strand, by a joined author the same-cut evaluator
-//! admits for `ak.message.create` (the Realm root controller included). Other
-//! Message forms require their own source-scope and effect admission and
-//! remain closed.
+//! Supported create carriers are plaintext or MLS ciphertext Messages under
+//! the same-cut send gate, in an active discussion Strand of the exact Realm
+//! or Circle source stream, by a joined author the same-cut evaluator admits
+//! for `ak.message.create`. Other Message forms remain closed.
 //!
 //! `ak.message.revise` replaces the chain's current carrier with the same plain
 //! body gate; the target, its creation history and the edit authority are read
@@ -195,11 +193,6 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
     let mls_carrier = supported_mls_carrier(&payload);
     let poll = crate::poll_state::supported_plaintext_poll(&payload);
-    if matches!(&event.scope_ref, arkret_wire::ScopeRef::Circle { .. }) && !mls_carrier {
-        return Err(conflict(
-            "Circle Message content requires its admitted MLS carrier",
-        ));
-    }
     if !mls_carrier && !supported_plain_text(&payload) && poll.is_none() {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
@@ -233,6 +226,10 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         commit.committed_at,
     )
     .await?;
+    if matches!(event.scope_ref, arkret_wire::ScopeRef::Circle { .. }) {
+        crate::circle_current_results::require_active_author_in_connection(conn, event, commit)
+            .await?;
+    }
     // A Direct Conversation Message names its profile authority source,
     // which the profile table already decided at this cut.
     if !cut.is_direct_conversation()

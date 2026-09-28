@@ -1,7 +1,7 @@
 //! Registered event-derived Strand current result at the RealmCommit cut.
 
 use diesel::OptionalExtension as _;
-use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
 use soland_storage::{PersistenceError, PersistenceResult};
@@ -16,6 +16,12 @@ struct StrandCurrentRow {
     current_stream_position: i64,
     #[diesel(sql_type = Jsonb)]
     value: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct PresentRow {
+    #[diesel(sql_type = Bool)]
+    present: bool,
 }
 
 fn reject(detail: impl Into<String>) -> PersistenceError {
@@ -82,6 +88,78 @@ pub(crate) async fn commit_strand_create_current_result_in_connection(
         return Ok(());
     }
     let (strand_id, value) = strand_create_current_value(event)?;
+    let expected_stream = match (
+        &event.scope_ref,
+        value.get("scope_circle_id").and_then(Value::as_str),
+    ) {
+        (arkret_wire::ScopeRef::Realm { realm_id }, None) if realm_id == &event.realm_id => {
+            arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            }
+        }
+        (
+            arkret_wire::ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            },
+            Some(authored_circle),
+        ) if realm_id == &event.realm_id && circle_id.as_str() == authored_circle => {
+            arkret_wire::CommitStreamRef::Circle {
+                realm_id: realm_id.clone(),
+                circle_id: circle_id.clone(),
+            }
+        }
+        _ => {
+            return Err(reject(
+                "Strand create signed scope differs from object scope",
+            ));
+        }
+    };
+    if commit.event_ref != event.event_id || commit.stream_ref != expected_stream {
+        return Err(reject("Strand create has no exact source stream"));
+    }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
+    if matches!(event.scope_ref, arkret_wire::ScopeRef::Circle { .. }) {
+        crate::circle_current_results::require_active_author_in_connection(conn, event, commit)
+            .await?;
+        // A newly activated Circle requires an encrypted object carrier with
+        // its own epoch proof. This bounded Strand-create writer admits only
+        // the pre-Genesis plaintext Circle branch, and cannot leak authored
+        // metadata into an MLS-backed scope.
+        let scope_key = String::from_utf8(
+            arkret_canonical::canonical_json_bytes(&event.scope_ref)
+                .map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?;
+        let activated = diesel::sql_query(
+            "SELECT EXISTS (SELECT 1 FROM mls_group_current_results WHERE scope_key=$1) AS present",
+        )
+        .bind::<Text, _>(scope_key)
+        .get_result::<PresentRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if activated.present {
+            return Err(reject(
+                "Circle Strand create needs an admitted MLS object carrier",
+            ));
+        }
+        if value
+            .get("encrypted_content")
+            .is_some_and(|value| !value.is_null())
+            || value
+                .get("encrypted_metadata")
+                .is_some_and(|value| !value.is_null())
+        {
+            return Err(reject(
+                "pre-Genesis Circle Strand cannot carry MLS ciphertext",
+            ));
+        }
+    }
     let stream_position = i64::try_from(commit.stream_position).map_err(|_| {
         PersistenceError::SchemaViolation("Strand stream position exceeds BIGINT".to_owned())
     })?;

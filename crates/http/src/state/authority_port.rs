@@ -35,7 +35,7 @@ enum SelfEventRoute {
     Consent,
     /// `ak.mls.genesis` and `ak.mls.commit`: the MLS public-transition unit.
     Mls,
-    /// Realm-scope kinds with a guarded current-result authority cut.
+    /// Kinds with a guarded current-result authority cut in their source scope.
     GuardedUnit,
 }
 
@@ -147,23 +147,14 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
             && matches!(
                 event.kind,
                 arkret_wire::EventKind::CircleMemberState
+                    | arkret_wire::EventKind::StrandCreate
+                    | arkret_wire::EventKind::MessageCreate
                     | arkret_wire::EventKind::ModerationDecision
                     | arkret_wire::EventKind::ModerationDecisionLift
             ))
     {
         return Err(ServiceError::Conflict(
-            "only a Realm-scope Event has a source target cut".to_owned(),
-        ));
-    }
-    if event.kind == arkret_wire::EventKind::StrandCreate
-        && event
-            .payload
-            .get("object")
-            .and_then(|object| object.get("scope_circle_id"))
-            .is_some()
-    {
-        return Err(ServiceError::Conflict(
-            "Circle-bound StrandCreate needs a Circle-scope authority cut".to_owned(),
+            "this Event kind has no source target cut in its signed scope".to_owned(),
         ));
     }
     Ok(())

@@ -7,7 +7,7 @@ use arkret_models_collaboration::governance::circle::CircleState;
 use arkret_wire::{
     ActorId, CircleId, CommitStreamRef, Event, EventKind, RealmCommit, SchemaId, ScopeRef,
 };
-use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension as _, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::{Value, json};
@@ -23,6 +23,77 @@ struct CircleRow {
 struct MemberRow {
     #[diesel(sql_type = Text)]
     membership: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct PresentRow {
+    #[diesel(sql_type = Bool)]
+    present: bool,
+}
+
+/// A Circle-scoped content writer must use the signed Circle stream and the
+/// durable active Circle/member currents at its accepting cut. The Realm
+/// authority lock held by capability authorization serializes governance
+/// changes; the covering Commit joins exclude unproved projection rows.
+pub(crate) async fn require_active_author_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    commit: &RealmCommit,
+) -> PersistenceResult<()> {
+    let ScopeRef::Circle {
+        realm_id,
+        circle_id,
+    } = &event.scope_ref
+    else {
+        return Err(conflict(
+            ConflictCode::FailedPrecondition,
+            "Circle source scope is absent",
+        ));
+    };
+    if realm_id != &event.realm_id
+        || commit.event_ref != event.event_id
+        || commit.stream_ref
+            != (CommitStreamRef::Circle {
+                realm_id: realm_id.clone(),
+                circle_id: circle_id.clone(),
+            })
+        || crate::member_state_admission::locked_membership(conn, realm_id, &event.actor_id).await?
+            != "join"
+    {
+        return Err(conflict(
+            ConflictCode::FailedPrecondition,
+            "Circle source or Realm membership differs",
+        ));
+    }
+    let present = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM circle_current_results circle \
+         JOIN realm_commits cc ON cc.commit_id=circle.current_commit_id \
+         JOIN circle_member_state_current_results member ON member.circle_id=circle.circle_id AND member.realm_id=circle.realm_id \
+         JOIN realm_commits mc ON mc.commit_id=member.current_commit_id \
+         WHERE circle.realm_id=$1 AND circle.circle_id=$2 AND circle.value->>'state'='active' \
+           AND cc.realm_id=circle.realm_id AND cc.stream_position=circle.current_stream_position \
+           AND cc.stream_ref=circle.source_stream_ref \
+           AND cc.stream_ref->>'kind'='realm' AND cc.stream_ref->>'realm_id'=circle.realm_id \
+           AND member.member_id=$3 AND member.membership='join' \
+           AND mc.realm_id=member.realm_id AND mc.stream_position=member.current_stream_position \
+           AND mc.stream_ref=member.source_stream_ref \
+           AND mc.stream_ref->>'kind'='circle' AND mc.stream_ref->>'realm_id'=member.realm_id \
+           AND mc.stream_ref->>'circle_id'=member.circle_id AND mc.stream_position<$4) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(event.actor_id.to_string())
+    .bind::<BigInt, _>(i64::try_from(commit.stream_position).map_err(PersistenceError::database)?)
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if !present.present {
+        return Err(conflict(
+            ConflictCode::FailedPrecondition,
+            "Circle is inactive or actor is not a confirmed member",
+        ));
+    }
+    Ok(())
 }
 
 fn conflict(code: ConflictCode, detail: &str) -> PersistenceError {
