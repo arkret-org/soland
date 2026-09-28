@@ -192,32 +192,12 @@ async fn replicate_one(
             "Circle and Sidecar replicas need their own scope membership basis".to_owned(),
         ));
     }
-    let welcomes = verified_replicated_welcomes(state, item).await?;
-    if let Some(existing) = state
-        .authority_commits()
-        .committed_event_by_commit_id(&commit.commit_id)
-        .await?
-    {
-        if existing.commit == *commit && existing.event == *event {
-            if welcomes.is_empty() {
-                return Ok(CommittedReplicaOutcome::Duplicate);
-            }
-            // Held through scan or an earlier attempt: the replay still
-            // queues the Welcomes not queued yet, in one transaction.
-            return state
-                .authority_commits()
-                .queue_replicated_welcomes(event, commit, &welcomes, crate::wire::now())
-                .await;
-        }
-        return Err(ServiceError::Conflict(format!(
-            "{}: the Commit id is held with different content",
-            ConflictCode::DuplicateConflict
-        )));
-    }
-    if state
+    let current_authority = state
         .authority_commits()
         .current_authority(&event.realm_id)
-        .await?
+        .await?;
+    if current_authority
+        .as_ref()
         .is_some_and(|authority| authority.service_id == state.service_core_id())
     {
         return Err(ServiceError::Conflict(format!(
@@ -232,12 +212,46 @@ async fn replicate_one(
             &peer.source_service_id,
         )
         .await
-        .map_err(|error| temporarily_unavailable(format!("source Realm authority: {error}")))?;
+        .map_err(|error| {
+            if current_authority
+                .as_ref()
+                .is_some_and(|authority| authority.service_id != peer.source_service_id)
+            {
+                ServiceError::Conflict(
+                    "capability_denied: the authenticated peer is not the Realm's current origin service"
+                        .to_owned(),
+                )
+            } else {
+                temporarily_unavailable(format!("source Realm authority: {error}"))
+            }
+        })?;
         authorities.insert(event.realm_id.clone(), located);
     }
     let located = authorities
         .get_mut(&event.realm_id)
         .ok_or_else(|| ServiceError::internal("verified Realm authority vanished"))?;
+    let welcomes = verified_replicated_welcomes(state, item).await?;
+    if let Some(existing) = state
+        .authority_commits()
+        .committed_event_by_commit_id(&commit.commit_id)
+        .await?
+    {
+        if existing.commit == *commit && existing.event == *event {
+            if welcomes.is_empty() {
+                return Ok(CommittedReplicaOutcome::Duplicate);
+            }
+            // A replay may queue outstanding Welcomes only after the current
+            // origin binding has been re-proved for this authenticated peer.
+            return state
+                .authority_commits()
+                .queue_replicated_welcomes(event, commit, &welcomes, crate::wire::now())
+                .await;
+        }
+        return Err(ServiceError::Conflict(format!(
+            "{}: the Commit id is held with different content",
+            ConflictCode::DuplicateConflict
+        )));
+    }
     if matches!(
         event.kind,
         arkret_wire::EventKind::SelfModerationReport
