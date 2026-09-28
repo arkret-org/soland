@@ -5,7 +5,7 @@ use arkret_identifiers::{CircleId, DidCoreId, RealmId};
 use arkret_models_collaboration::events_payloads::{ContentBlock, RealmPurpose};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
-use arkret_wire::{Event, PlaintextDataClassKind};
+use arkret_wire::{CommitStreamRef, Event, PlaintextDataClassKind};
 use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{CanonicalEventRecord, RealmMetaRecord};
@@ -888,7 +888,6 @@ pub async fn hydrate_projections_from_persistence(
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
-        CircleLifecycleState, CircleMembershipState, CircleProjection,
         KeyPackageLifetimeProjection, MlsKeyPackageProjection, MorphProjection,
         ObjectLifecycleState, SpaceContainerLifecycleState, SpaceContainerProjection,
         StrandProjection, StrandWatchProjection, object_stage_from_wire_value,
@@ -923,14 +922,6 @@ pub async fn hydrate_projections_from_persistence(
         )?;
     }
 
-    fn parse_circle_state(value: &str) -> Option<CircleLifecycleState> {
-        match value {
-            "active" => Some(CircleLifecycleState::Active),
-            "archived" => Some(CircleLifecycleState::Archived),
-            "tombstoned" => Some(CircleLifecycleState::Tombstoned),
-            _ => None,
-        }
-    }
     fn parse_object_state(value: &str) -> Option<ObjectLifecycleState> {
         match value {
             "active" => Some(ObjectLifecycleState::Active),
@@ -1068,79 +1059,155 @@ pub async fn hydrate_projections_from_persistence(
                 scope_circle_id: strand.scope_circle_id.map(|id| id.to_string()),
             },
         );
-    } // Circle membership is the set the wire validator enforces
-    // `Circle.members` is a subset of `Realm.members` against, so it is
-    // hydrated before the Circle rows that carry the active-member view.
-    let mut circle_memberships: BTreeMap<
-        String,
-        Vec<soland_storage::CircleMemberProjectionRecord>,
-    > = BTreeMap::new();
-    if let Ok(rows) = persistence
-        .circle_projections()
-        .snapshot_all_members()
-        .await
-    {
-        for record in rows {
-            proj.circle_memberships.insert(
-                (record.circle_id.clone(), record.actor_id.clone()),
-                CircleMembershipState {
-                    circle_id: record.circle_id.clone(),
-                    member: record.actor_id.clone(),
-                    state: record.state.clone(),
-                    invited_at: record.invited_at,
-                    joined_at: record.joined_at,
-                    updated_at: record.updated_at,
-                },
-            );
-            circle_memberships
-                .entry(record.circle_id.clone())
-                .or_default()
-                .push(record);
+    }
+    // The legacy projection_circles mirror can be absent or stale after
+    // direct Circle admission. Rebuild this process-local cache only from exact
+    // accepted Event/Commit pairs. Each Circle's transitions are ordered by
+    // its own authority stream position, never by Event reception time.
+    let mut circle_creates = BTreeMap::new();
+    let mut circle_transitions = BTreeMap::new();
+    for record in events.iter().filter(|record| {
+        matches!(
+            arkret_wire::EventKind::from_wire(&record.kind),
+            arkret_wire::EventKind::CircleCreate
+                | arkret_wire::EventKind::CircleUpdate
+                | arkret_wire::EventKind::CircleArchive
+                | arkret_wire::EventKind::CircleRestore
+                | arkret_wire::EventKind::CircleTombstone
+                | arkret_wire::EventKind::CircleHistoryAccess
+                | arkret_wire::EventKind::CircleMemberState
+        )
+    }) {
+        let id = arkret_wire::EventId::new(record.event_id.clone())
+            .map_err(soland_storage::PersistenceError::database)?;
+        let accepted = persistence
+            .authority_commits()
+            .committed_event(&id)
+            .await?
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "Circle hydration has no accepting Commit".to_owned(),
+                )
+            })?;
+        if serde_json::to_value(&accepted.event)
+            .map_err(soland_storage::PersistenceError::database)?
+            != record.envelope
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "Circle hydration canonical Event differs from its Commit binding".to_owned(),
+            ));
+        }
+        if record.kind == arkret_wire::EventKind::CircleCreate.as_str() {
+            let circle_id = CircleId::from_event_id(&id);
+            if !matches!(
+                &accepted.commit.stream_ref,
+                CommitStreamRef::Realm { realm_id } if realm_id == &accepted.event.realm_id
+            ) || accepted.event.scope_ref
+                != (arkret_wire::ScopeRef::Realm {
+                    realm_id: accepted.event.realm_id.clone(),
+                })
+                || circle_creates.insert(circle_id, record.clone()).is_some()
+            {
+                return Err(soland_storage::PersistenceError::Internal(
+                    "Circle create hydration has an invalid or duplicate Realm-stream source"
+                        .to_owned(),
+                ));
+            }
+        } else {
+            let CommitStreamRef::Circle {
+                realm_id,
+                circle_id,
+            } = &accepted.commit.stream_ref
+            else {
+                return Err(soland_storage::PersistenceError::Internal(
+                    "Circle transition hydration is outside its Circle stream".to_owned(),
+                ));
+            };
+            let declared_circle = accepted
+                .event
+                .payload
+                .get("circle_id")
+                .or_else(|| accepted.event.payload.get("target_ref"))
+                .and_then(Value::as_str);
+            if accepted.event.realm_id != *realm_id
+                || accepted.event.scope_ref
+                    != (arkret_wire::ScopeRef::Circle {
+                        realm_id: realm_id.clone(),
+                        circle_id: circle_id.clone(),
+                    })
+                || declared_circle != Some(circle_id.as_str())
+                || circle_transitions
+                    .insert(
+                        (circle_id.clone(), accepted.commit.stream_position),
+                        record.clone(),
+                    )
+                    .is_some()
+            {
+                return Err(soland_storage::PersistenceError::Internal(
+                    "Circle transition hydration has a conflicting Commit position".to_owned(),
+                ));
+            }
         }
     }
-    if let Ok(rows) = persistence.circle_projections().snapshot_all().await {
-        for record in rows {
-            let Some(state) = parse_circle_state(&record.state) else {
-                tracing::warn!(
-                    circle_id = %record.circle_id,
-                    state = %record.state,
-                    "skipping circle projection row with unknown state during hydrate"
-                );
-                continue;
-            };
-            let members = circle_memberships
-                .get(&record.circle_id)
-                .map(|members| {
-                    members
-                        .iter()
-                        .filter(|member| member.state == "active")
-                        .map(|member| member.actor_id.clone())
-                        .collect::<BTreeSet<String>>()
-                })
-                .unwrap_or_default();
-            proj.circles.insert(
-                record.circle_id.clone(),
-                CircleProjection {
-                    circle_id: record.circle_id,
-                    realm_id: record.realm_id,
-                    profile_ref: record.profile_ref,
-                    title: record.title,
-                    summary: record.summary,
-                    display: record.display,
-                    directory_visibility: record.directory_visibility,
-                    join_rule: record.join_rule,
-                    history_access: record.history_access,
-                    mls_group_ref: record.mls_group_ref,
-                    state,
-                    state_changed_at: record.state_changed_at,
-                    created_by: record.created_by,
-                    created_at: record.created_at,
-                    updated_by: record.updated_by,
-                    updated_at: record.updated_at,
-                    members,
-                },
-            );
+    let rebuilt_circle_ids = circle_creates
+        .keys()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    if circle_transitions
+        .keys()
+        .any(|(circle_id, _)| !rebuilt_circle_ids.contains(circle_id.as_str()))
+    {
+        return Err(soland_storage::PersistenceError::Internal(
+            "Circle transition hydration has no accepted create".to_owned(),
+        ));
+    }
+    for circle_id in &rebuilt_circle_ids {
+        proj.circles.remove(circle_id);
+    }
+    proj.circle_memberships
+        .retain(|(circle_id, _), _| !rebuilt_circle_ids.contains(circle_id));
+    for record in circle_creates
+        .into_values()
+        .chain(circle_transitions.into_values())
+    {
+        replay_hydration_record(
+            projection_adapter,
+            proj,
+            record,
+            &hydration_hlc,
+            "accepted-circle",
+        )?;
+    }
+    for circle_id in rebuilt_circle_ids {
+        let circle = proj.circles.get_mut(&circle_id).ok_or_else(|| {
+            soland_storage::PersistenceError::Internal(
+                "accepted Circle create did not rebuild its projection".to_owned(),
+            )
+        })?;
+        let realm_id = RealmId::new(circle.realm_id.clone())
+            .map_err(soland_storage::PersistenceError::database)?;
+        let scope = arkret_wire::ScopeRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: CircleId::new(circle_id)
+                .map_err(soland_storage::PersistenceError::database)?,
+        };
+        let group = persistence.mls_groups().current(&scope).await?;
+        if group
+            .as_ref()
+            .is_some_and(|group| group.realm_id != realm_id || group.value.effective_scope != scope)
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "Circle MLS current has a mismatched effective scope".to_owned(),
+            ));
         }
+        circle.mls_group_ref = group
+            .map(|_| {
+                scope
+                    .canonical_mls_group_id()
+                    .map(|id| id.to_string())
+                    .map_err(soland_storage::PersistenceError::database)
+            })
+            .transpose()?;
     }
     if let Ok(rows) = persistence.strand_watch_projections().snapshot_all().await {
         for record in rows {

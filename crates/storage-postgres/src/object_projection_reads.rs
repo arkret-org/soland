@@ -11,7 +11,8 @@ use arkret_models_collaboration::objects::relation::Relation;
 use arkret_models_collaboration::objects::space::Space;
 use arkret_models_collaboration::objects::strand::{Strand, StrandPositionCurrent};
 use arkret_wire::{
-    ActorId, CircleId, ObjectState, RealmId, ScopeRef, SpaceId, SpaceState, StrandId,
+    ActorId, CircleId, CommitStreamRef, ObjectState, RealmId, ScopeRef, SpaceId, SpaceState,
+    StrandId,
 };
 use diesel::sql_types::{Jsonb, Text};
 use diesel_async::{AsyncConnection, RunQueryDsl};
@@ -54,6 +55,18 @@ struct CurrentObjectRow {
     value: Value,
     #[diesel(sql_type = diesel::sql_types::Bool)]
     proved: bool,
+}
+
+#[derive(diesel::QueryableByName)]
+struct StrandSnapshotRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+    source_stream_ref: Option<Value>,
 }
 
 pub struct PgObjectCurrentSnapshotStore {
@@ -101,12 +114,11 @@ impl ObjectCurrentSnapshotStore for PgObjectCurrentSnapshotStore {
             ).load::<CurrentObjectRow>(&mut *conn).await?;
             let strands = diesel::sql_query(
                 "SELECT s.strand_id AS id,s.realm_id,s.value, \
-                 (rc.commit_id IS NOT NULL) AS proved FROM strand_current_results s \
+                 rc.stream_ref AS source_stream_ref FROM strand_current_results s \
                  LEFT JOIN realm_commits rc ON rc.commit_id=s.current_commit_id AND rc.realm_id=s.realm_id \
                    AND rc.stream_position=s.current_stream_position \
-                   AND rc.stream_ref=jsonb_build_object('kind','realm','realm_id',s.realm_id) \
                  ORDER BY s.realm_id,s.strand_id",
-            ).load::<CurrentObjectRow>(&mut *conn).await?;
+            ).load::<StrandSnapshotRow>(&mut *conn).await?;
             Ok((spaces,strands))
         }).await.map_err(PgTransactionError::into_persistence)?;
         let spaces = space_rows
@@ -128,15 +140,29 @@ impl ObjectCurrentSnapshotStore for PgObjectCurrentSnapshotStore {
         let strands = strand_rows
             .into_iter()
             .map(|row| {
-                if !row.proved {
-                    return Err(corrupt("Strand current has no covering RealmCommit"));
-                }
                 let strand: Strand =
                     serde_json::from_value(row.value).map_err(PersistenceError::database)?;
                 if strand.id.as_ref().is_none_or(|id| id.as_str() != row.id)
                     || strand.realm_id.as_str() != row.realm_id
                 {
                     return Err(corrupt("Strand current identity mismatch"));
+                }
+                let expected_stream_ref = match &strand.scope_circle_id {
+                    Some(circle_id) => CommitStreamRef::Circle {
+                        realm_id: strand.realm_id.clone(),
+                        circle_id: circle_id.clone(),
+                    },
+                    None => CommitStreamRef::Realm {
+                        realm_id: strand.realm_id.clone(),
+                    },
+                };
+                let source_stream_ref = row
+                    .source_stream_ref
+                    .ok_or_else(|| corrupt("Strand current has no covering RealmCommit"))?;
+                let source_stream_ref: CommitStreamRef = serde_json::from_value(source_stream_ref)
+                    .map_err(|_| corrupt("Strand current has invalid source stream"))?;
+                if source_stream_ref != expected_stream_ref {
+                    return Err(corrupt("Strand current source stream mismatches its scope"));
                 }
                 Ok(strand)
             })

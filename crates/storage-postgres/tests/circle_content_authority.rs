@@ -13,6 +13,7 @@ use diesel_async::RunQueryDsl;
 use serde_json::{Value, json};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, EventCommitRequest, EventCommitUnitOfWork,
+    EventProjectionStoreRegistry,
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
@@ -160,6 +161,43 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
     );
     uow.commit_event(strand.clone()).await.unwrap();
     let strand_id = StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let projection = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    let restored = projection
+        .object_current_snapshot()
+        .snapshot()
+        .await
+        .unwrap();
+    assert!(restored.strands.iter().any(|current| {
+        current.id.as_ref() == Some(&strand_id) && current.scope_circle_id.as_ref() == Some(&circle)
+    }));
+    // A Realm-stream Commit with a valid id and position still cannot cover
+    // a Circle-scoped Strand current during process restart.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE strand_current_results SET current_commit_id=$2,current_stream_position=$3 WHERE strand_id=$1",
+    )
+    .bind::<diesel::sql_types::Text, _>(strand_id.as_str())
+    .bind::<diesel::sql_types::Text, _>(create.authority_commit.commit.commit_id.as_str())
+    .bind::<BigInt, _>(i64::try_from(create.authority_commit.commit.stream_position).unwrap())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(
+        projection
+            .object_current_snapshot()
+            .snapshot()
+            .await
+            .is_err()
+    );
+    diesel::sql_query(
+        "UPDATE strand_current_results SET current_commit_id=$2,current_stream_position=$3 WHERE strand_id=$1",
+    )
+    .bind::<diesel::sql_types::Text, _>(strand_id.as_str())
+    .bind::<diesel::sql_types::Text, _>(strand.authority_commit.commit.commit_id.as_str())
+    .bind::<BigInt, _>(i64::try_from(strand.authority_commit.commit.stream_position).unwrap())
+    .execute(&mut conn)
+    .await
+    .unwrap();
     let account = actor.as_account_id().unwrap();
     let circle_stream = CommitStreamRef::Circle {
         realm_id: realm.clone(),
