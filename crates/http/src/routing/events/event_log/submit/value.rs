@@ -259,6 +259,7 @@ fn guarded_unit_error(error: soland_services::ServiceError) -> SubmitOneError {
             _ => (StatusCode::FORBIDDEN, "capability_denied"),
         },
         ServiceError::Database(_) | ServiceError::Internal(_) => {
+            tracing::error!(error = %error, "guarded Event unit failed internally");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
         }
     };
