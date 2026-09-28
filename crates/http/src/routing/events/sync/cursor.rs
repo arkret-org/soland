@@ -217,7 +217,10 @@ pub(crate) async fn sync_token_for_account_positions(
             expires_at_ms,
         })
         .await
-        .map_err(|_| SyncCursorError::Integrity("cannot persist account cursor"))?;
+        .map_err(|error| {
+            tracing::warn!(%error, "account cursor persistence failed");
+            SyncCursorError::Integrity("cannot persist account cursor")
+        })?;
     cursor
         .encode()
         .map_err(|_| SyncCursorError::Integrity("cannot encode account cursor"))

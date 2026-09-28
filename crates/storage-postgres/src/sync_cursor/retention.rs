@@ -116,7 +116,10 @@ pub(super) fn cursor_floors(record: &SyncCursorRecord) -> PersistenceResult<Opti
                 .get("global_baseline")
                 .filter(|value| !value.is_null())
             else {
-                return Ok(Some((summary, 0)));
+                // A Realm detail turn may precede the first account-global
+                // baseline. It has no global history to retain; pinning
+                // revision zero rejects valid cursors after global GC moves.
+                return Ok(Some((summary, i64::MAX)));
             };
             let snapshot = integer(progress.get("snapshot_watermark"))?;
             let completed = progress
@@ -327,6 +330,40 @@ mod tests {
         assert_eq!(count.revision, 1);
     }
 
+    /// A Realm-detail-only cursor has not yet chosen an account-global cut.
+    /// It must remain writable after unrelated global revisions were reclaimed.
+    #[tokio::test]
+    async fn detail_cursor_without_global_baseline_does_not_pin_revision_zero() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pg_conn(&pool).await.unwrap();
+        conn.batch_execute("UPDATE account_summary_clock SET revision=5;
+            UPDATE account_global_clock SET revision=5;
+            UPDATE account_sync_retention SET summary_floor=5,global_floor=5")
+            .await
+            .unwrap();
+        let now = Utc::now().timestamp_millis();
+        let cursor = SyncCursorRecord {
+            handle: "detail-before-global".into(),
+            binding_subject: Some("account".into()),
+            device_id: Some("device".into()),
+            service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example")
+                .unwrap(),
+            filter_digest: Some("digest".into()),
+            purpose: "ak.self.account.stream.subscribe.v1".into(),
+            positions: Some(serde_json::json!({
+                "account_summary": 5,
+                "global_baseline": null,
+                "detail_positions": {},
+            })),
+            target: None,
+            issued_at_ms: now,
+            expires_at_ms: now + 3_600_000,
+        };
+        assert_eq!(cursor_floors(&cursor).unwrap(), Some((5, i64::MAX)));
+        PgSyncCursorStore { pool }.upsert(&cursor).await.unwrap();
+    }
+
     /// Real PostgreSQL: an Account stream cursor that carries a frozen
     /// Realm window keeps the window's `retained_revision` readable even after
     /// its own summary position moved on and the minute reservation expired;
@@ -391,7 +428,7 @@ mod tests {
             Err(PersistenceError::SchemaViolation(_))
         ));
         let cursor = record("window-cursor", detail);
-        assert_eq!(cursor_floors(&cursor).unwrap(), Some((1, 0)));
+        assert_eq!(cursor_floors(&cursor).unwrap(), Some((1, i64::MAX)));
         store.upsert(&cursor).await.unwrap();
 
         // The minute reservation lapses; only the cursor now holds revision 1.
