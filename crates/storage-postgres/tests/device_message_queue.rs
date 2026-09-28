@@ -1116,13 +1116,11 @@ async fn postgres_paused_agent_sender_writes_nothing() {
     ));
 }
 
-/// encryption-and-audit.md §2.5.2: an Agent runtime whose `ak.agent.key.authorize`
-/// is revoked is refused its own ciphertext Message with the universal
-/// `capability_denied` at the cut the accepting transaction reads the current
-/// `mls_group`, ahead of the stale-epoch answer the same body gets while the
-/// authorization is current, and the group is left unchanged.
+/// The ordinary Event commit cut never accepts Agent Message authoring. Its
+/// MLS checks belong to the dedicated Agent admission cut. The common producer
+/// guard still rejects a revoked key before the ordinary cut is reached.
 #[tokio::test]
-async fn postgres_agent_message_after_committed_key_revoke_is_capability_denied() {
+async fn postgres_agent_message_requires_dedicated_admission_cut() {
     use soland_storage::{
         AuthorityCommitStore as _, EventCommitUnitOfWork as _, MlsGroupCurrentStore as _,
     };
@@ -1169,7 +1167,7 @@ async fn postgres_agent_message_after_committed_key_revoke_is_capability_denied(
     let groups = soland_storage_postgres::PgMlsGroupCurrentStore { pool: pool.clone() };
     let before = groups.current(&scope).await.unwrap().unwrap();
 
-    // The Agent's ciphertext frozen at an epoch the scope never had.
+    // The Agent's ciphertext is frozen at an epoch the scope never had.
     let mut request = ordinary_realm::next_request_for_actor(
         &genesis.authority_commit,
         arkret_wire::EventKind::MessageCreate,
@@ -1206,7 +1204,7 @@ async fn postgres_agent_message_after_committed_key_revoke_is_capability_denied(
     let current = uow.commit_event(request.clone()).await.unwrap_err();
     assert_eq!(
         current.conflict_code(),
-        Some(soland_storage::ConflictCode::EpochMismatch),
+        Some(soland_storage::ConflictCode::FailedPrecondition),
         "{current}"
     );
     agent.revoke_key().await;
