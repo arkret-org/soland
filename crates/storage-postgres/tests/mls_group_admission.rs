@@ -1536,6 +1536,31 @@ async fn replication_payloads(
     .collect()
 }
 
+async fn frozen_remote_welcomes(
+    pool: &PgPool,
+    commit: &EventCommitRequest,
+) -> Vec<(String, Vec<u8>)> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        welcome_id: String,
+        #[diesel(sql_type = Binary)]
+        delivery_canonical_json: Vec<u8>,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT welcome_id,delivery_canonical_json FROM mls_remote_welcome_provenance \
+         WHERE commit_event_ref=$1 ORDER BY welcome_id",
+    )
+    .bind::<Text, _>(commit.authority_commit.event.event_id.as_str())
+    .load::<Row>(&mut *conn)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| (row.welcome_id, row.delivery_canonical_json))
+    .collect()
+}
+
 /// encryption-and-audit.md §2.2 "跨站 recipient": the governance Station
 /// verifies everything but the claim of a Welcome whose recipient another
 /// Station hosts and writes it, in submission order, into the Commit's
@@ -1611,6 +1636,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     stranger.authority_commit.recipient_queue_capacity = 4;
     assert_zero_write_refusal(&pool, &stranger, ConflictCode::FailedPrecondition).await;
     assert!(replication_payloads(&pool, &stranger).await.is_empty());
+    assert!(frozen_remote_welcomes(&pool, &stranger).await.is_empty());
 
     let mut commit = add(b"cross-station add");
     let local_claim = claim_id();
@@ -1635,6 +1661,21 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     );
 
     let payloads = replication_payloads(&pool, &commit).await;
+    let expected_frozen = welcomes
+        .iter()
+        .filter(|welcome| welcome.claim.is_none())
+        .map(|welcome| {
+            (
+                welcome.delivery.welcome_id.to_string(),
+                arkret_canonical::canonical_json_bytes(&welcome.delivery).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        frozen_remote_welcomes(&pool, &commit).await,
+        expected_frozen,
+        "the original producer-signed remote delivery is retained independently"
+    );
     assert_eq!(
         payloads
             .iter()
@@ -1663,6 +1704,12 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let request: arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest =
         serde_json::from_value(payloads[0].1.clone()).unwrap();
     request.validate().unwrap();
+    uow.commit_event(commit.clone()).await.unwrap();
+    assert_eq!(
+        frozen_remote_welcomes(&pool, &commit).await,
+        expected_frozen,
+        "an exact accepted Commit replay cannot duplicate or rewrite remote Welcome provenance"
+    );
 
     let commit_ref = commit.authority_commit.event.event_id.clone();
     let later = with_installation(
@@ -1676,7 +1723,29 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         Some((&commit_ref, 1)),
         2,
     );
+    let mut conflicting_later = later.clone();
+    let mut reused_welcome = remote_welcome(&conflicting_later, &first);
+    reused_welcome.delivery.welcome_id = welcomes
+        .iter()
+        .find(|welcome| welcome.claim.is_none())
+        .unwrap()
+        .delivery
+        .welcome_id
+        .clone();
+    conflicting_later.authority_commit.welcomes = vec![reused_welcome];
+    conflicting_later.authority_commit.recipient_queue_capacity = 4;
+    assert_zero_write_refusal(&pool, &conflicting_later, ConflictCode::DuplicateConflict).await;
+    assert_eq!(
+        frozen_remote_welcomes(&pool, &commit).await,
+        expected_frozen
+    );
+    assert!(
+        frozen_remote_welcomes(&pool, &conflicting_later)
+            .await
+            .is_empty()
+    );
     uow.commit_event(later.clone()).await.unwrap();
+    assert!(frozen_remote_welcomes(&pool, &later).await.is_empty());
     for (_, payload) in replication_payloads(&pool, &later).await {
         assert_eq!(
             item(&payload)["genesis_event_ref"],

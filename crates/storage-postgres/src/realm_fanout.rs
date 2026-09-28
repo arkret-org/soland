@@ -32,7 +32,7 @@ use arkret_models_collaboration::authority_commit::{
     CommittedEventSubmission, CommittedReplicationBranch, PeerAuthoritySubmitRequest,
     PeerCommittedReplicationRequest,
 };
-use diesel::sql_types::{BigInt, Binary, Jsonb, Text};
+use diesel::sql_types::{BigInt, Binary, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension as _, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
@@ -64,6 +64,107 @@ struct CurrentValueRow {
 struct GenesisEnvelopeRow {
     #[diesel(sql_type = Jsonb)]
     envelope: Value,
+}
+
+#[derive(diesel::QueryableByName)]
+struct FrozenRemoteWelcomeRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    scope_key: String,
+    #[diesel(sql_type = Text)]
+    commit_event_ref: String,
+    #[diesel(sql_type = Text)]
+    recipient_station_id: String,
+    #[diesel(sql_type = Text)]
+    claim_id: String,
+    #[diesel(sql_type = Text)]
+    delivery_digest: String,
+    #[diesel(sql_type = Binary)]
+    delivery_canonical_json: Vec<u8>,
+}
+
+async fn freeze_remote_welcomes_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    welcomes: &[&arkret_wire::MlsWelcomeDelivery],
+) -> Result<(), PgTransactionError> {
+    if welcomes.is_empty() {
+        return Ok(());
+    }
+    if event.kind != arkret_wire::EventKind::MlsCommit {
+        return Err(PersistenceError::SchemaViolation(
+            "remote Welcomes accompany only an MLS Commit".into(),
+        )
+        .into());
+    }
+    let key = String::from_utf8(
+        arkret_canonical::canonical_json_bytes(&event.scope_ref)
+            .map_err(PersistenceError::database)?,
+    )
+    .map_err(internal)?;
+    for welcome in welcomes {
+        welcome.validate_shape().map_err(internal)?;
+        if welcome.realm_id != event.realm_id
+            || welcome.effective_scope != event.scope_ref
+            || welcome.commit_event_ref != event.event_id
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "remote Welcome differs from its accepted Commit".into(),
+            )
+            .into());
+        }
+        let bytes =
+            arkret_canonical::canonical_json_bytes(welcome).map_err(PersistenceError::database)?;
+        let digest =
+            arkret_canonical::canonical_sha256(welcome).map_err(PersistenceError::database)?;
+        let station = welcome.recipient_actor_id.route_service_id();
+        sql_query(
+            "INSERT INTO mls_remote_welcome_provenance \
+             (welcome_id,realm_id,scope_key,commit_event_ref,recipient_station_id,claim_id, \
+              delivery_digest,delivery_canonical_json,accepted_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
+        )
+        .bind::<Text, _>(welcome.welcome_id.as_str())
+        .bind::<Text, _>(event.realm_id.as_str())
+        .bind::<Text, _>(&key)
+        .bind::<Text, _>(event.event_id.as_str())
+        .bind::<Text, _>(station.as_str())
+        .bind::<Text, _>(welcome.keypackage_claim_ref.as_str())
+        .bind::<Text, _>(&digest)
+        .bind::<Binary, _>(&bytes)
+        .bind::<Timestamptz, _>(commit.committed_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        let frozen = sql_query(
+            "SELECT realm_id,scope_key,commit_event_ref,recipient_station_id,claim_id, \
+             delivery_digest,delivery_canonical_json FROM mls_remote_welcome_provenance \
+             WHERE welcome_id=$1 FOR SHARE",
+        )
+        .bind::<Text, _>(welcome.welcome_id.as_str())
+        .get_result::<FrozenRemoteWelcomeRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if !frozen.is_some_and(|row| {
+            row.realm_id == event.realm_id.as_str()
+                && row.scope_key == key
+                && row.commit_event_ref == event.event_id.as_str()
+                && row.recipient_station_id == station.as_str()
+                && row.claim_id == welcome.keypackage_claim_ref.as_str()
+                && row.delivery_digest == digest
+                && row.delivery_canonical_json == bytes
+        }) {
+            return Err(PersistenceError::Conflict(format!(
+                "{}: remote Welcome replay differs from the frozen signed delivery",
+                soland_storage::ConflictCode::DuplicateConflict
+            ))
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Read the immutable Genesis from the just-installed accepted group and
@@ -603,6 +704,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         .pk;
     let idempotency_key = fanout_idempotency_key(&commit.commit_id);
     let genesis_event_ref = accepted_mls_genesis_for_fanout(conn, event).await?;
+    freeze_remote_welcomes_in_connection(conn, event, commit, welcomes).await?;
     let mut inserted = 0;
     for (station, authority_witnesses) in targets {
         let request =

@@ -4768,6 +4768,22 @@ CREATE TABLE mls_consumed_proposal_provenance (
 CREATE INDEX mls_consumed_proposal_provenance_cut
  ON mls_consumed_proposal_provenance(scope_key,commit_stream_position,consumed_proposal_ordinal);
 
+-- Governance retains the original producer-signed remote Welcome beyond
+-- federation outbox delivery/cleanup, for exact historical Add attestation.
+CREATE TABLE mls_remote_welcome_provenance (
+ welcome_id TEXT PRIMARY KEY,
+ realm_id TEXT NOT NULL,
+ scope_key TEXT COLLATE "C" NOT NULL,
+ commit_event_ref TEXT NOT NULL,
+ recipient_station_id TEXT NOT NULL,
+ claim_id TEXT NOT NULL UNIQUE,
+ delivery_digest TEXT NOT NULL,
+ delivery_canonical_json BYTEA NOT NULL CHECK(octet_length(delivery_canonical_json)>0),
+ accepted_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX mls_remote_welcome_provenance_commit
+ ON mls_remote_welcome_provenance(scope_key,commit_event_ref);
+
 -- Recipient-Station proof frozen with the replicated Commit and Welcome.
 -- This outbox is independent of the short-lived claim ledger and its
 -- ON DELETE CASCADE Welcome binding. The full original claim outcome stays
