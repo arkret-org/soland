@@ -614,8 +614,10 @@ async fn still_disclosable(
 /// basis reservation. The window's rows are the live delta after the
 /// Account's delivered head when that head is still an accepted ancestor
 /// within `window_limit`, otherwise the last `window_limit` Commits of the
-/// Realm stream, never below the Account's readable floor; `limited` states
-/// whether readable history lies below them. A window above the floor names
+/// Realm stream, never below the Account's readable floor. A caller with an
+/// already-issued exact current head can instead start with an empty tail
+/// immediately after that head. `limited` states whether readable history
+/// lies below the window. A window above the floor names
 /// the committed prefix through its anchor, backed by a snapshot already
 /// issued to the Account at that anchor. A window starting exactly at a
 /// floor above genesis has no issuable prefix state inside the Account's
@@ -700,6 +702,60 @@ pub(crate) async fn freeze_account_realm_window(
             return Err(window_rejected("the proved cut has no single Realm floor").into());
         };
         let floor = floor.oldest_position;
+        let live_reservations = sql_query(
+            "SELECT count(*) AS present FROM realm_state_snapshot_window_reservations \
+             WHERE account_id=$1 AND stream_key=$2 AND expires_at_ms > $3",
+        )
+        .bind::<Text, _>(&account_key)
+        .bind::<Text, _>(&stream_key)
+        .bind::<super::BigInt, _>(request.now_ms)
+        .get_result::<CountRow>(&mut *conn)
+        .await?
+        .present;
+        // A member whose readable floor is above genesis can bootstrap at an
+        // already-issued current head without waiting for another Event. The
+        // empty tail is still a bounded stream window, with the signed head
+        // reserved as its exact start basis below.
+        let mut head_basis_available = false;
+        if floor > 0
+            && request.delivered_head.is_none()
+            && live_reservations < soland_storage::MAX_LIVE_WINDOW_RESERVATIONS_PER_ACCOUNT_STREAM
+        {
+            let candidates = sql_query(
+                "SELECT snapshot.snapshot_json FROM realm_state_snapshots snapshot \
+                 JOIN realm_state_snapshot_issuances issued \
+                   ON issued.snapshot_id = snapshot.snapshot_id \
+                 WHERE snapshot.realm_id=$1 AND snapshot.governance_generation=$2 \
+                   AND issued.account_id=$3 \
+                   AND snapshot.snapshot_json->'visible_stream_heads' = $4 \
+                 ORDER BY issued.issued_at DESC, snapshot.snapshot_id \
+                 LIMIT $5 FOR KEY SHARE OF issued",
+            )
+            .bind::<Text, _>(request.realm_id.as_str())
+            .bind::<super::BigInt, _>(tenure.generation)
+            .bind::<Text, _>(&account_key)
+            .bind::<Jsonb, _>(
+                serde_json::to_value(std::slice::from_ref(head))
+                    .map_err(PersistenceError::database)?,
+            )
+            .bind::<super::BigInt, _>(
+                soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM,
+            )
+            .load::<SnapshotJsonRow>(&mut *conn)
+            .await?;
+            for candidate in candidates {
+                let snapshot: arkret_wire::RealmStateSnapshot =
+                    serde_json::from_value(candidate.snapshot_json)
+                        .map_err(PersistenceError::database)?;
+                if basis_from_snapshot(&snapshot, &stream_ref, head, floor).is_some()
+                    && derived_snapshot_id(&snapshot)? == snapshot.snapshot_id
+                    && still_disclosable(conn, &request.account, &request.issuer, &snapshot).await?
+                {
+                    head_basis_available = true;
+                    break;
+                }
+            }
+        }
         let tail_start = (head.stream_position + 1)
             .saturating_sub(u64::from(request.window_limit))
             .max(floor);
@@ -726,9 +782,13 @@ pub(crate) async fn freeze_account_realm_window(
             }
             _ => false,
         };
-        let start = match &request.delivered_head {
-            Some(delivered) if delivered_is_ancestor => delivered.stream_position + 1,
-            _ => tail_start,
+        let start = if head_basis_available && !delivered_is_ancestor {
+            head.stream_position + 1
+        } else {
+            match &request.delivered_head {
+                Some(delivered) if delivered_is_ancestor => delivered.stream_position + 1,
+                _ => tail_start,
+            }
         };
         // Load only the delivered rows and, for a start above genesis, the
         // anchor Commit just below them: never the whole stream history.
@@ -785,16 +845,6 @@ pub(crate) async fn freeze_account_realm_window(
         // Readable history lies below the window only above the proved floor.
         let limited = start > floor;
         let mut basis = None;
-        let live_reservations = sql_query(
-            "SELECT count(*) AS present FROM realm_state_snapshot_window_reservations \
-             WHERE account_id=$1 AND stream_key=$2 AND expires_at_ms > $3",
-        )
-        .bind::<Text, _>(&account_key)
-        .bind::<Text, _>(&stream_key)
-        .bind::<super::BigInt, _>(request.now_ms)
-        .get_result::<CountRow>(&mut *conn)
-        .await?
-        .present;
         // At the cap no further reservation is taken, so a limited window
         // names no basis and is preview only (0441).
         if start > floor
