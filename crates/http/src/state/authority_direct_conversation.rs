@@ -16,6 +16,7 @@ use arkret_models_collaboration::objects::direct_conversation::DirectConversatio
 use arkret_wire::{AuthorityRejectionStatus, AuthoritySubmitOutcome, Event};
 use chrono::Utc;
 use soland_services::identity::SessionIdentityState;
+use soland_services::projection::StagedRealmBootstrap;
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
     AuthorityCommitTransaction, ConflictCode, CurrentRealmAuthority,
@@ -23,6 +24,99 @@ use soland_storage::{
 };
 
 use super::AppState;
+
+/// Stage the exact four caller-authored Events without making them visible.
+/// The accepted PG unit remains authoritative if this rebuildable cache is
+/// temporarily unable to stage (for example, during an exact retry).
+fn stage_founding_projection(
+    state: &AppState,
+    events: &[&Event; 4],
+) -> Option<StagedRealmBootstrap> {
+    let operations = events
+        .iter()
+        .map(|event| {
+            let envelope = serde_json::to_value(event).ok()?;
+            let operation_id = crate::routing::events::event_log::event_operation_id(
+                &envelope,
+                event.event_id.as_str(),
+            )?;
+            arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+                operation_id,
+                arkret_wire::OperationKind::Create,
+                None,
+                event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .ok()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    match state.projections().stage_realm_bootstrap(&operations, true) {
+        Ok(staged) => Some(staged),
+        Err(error) => {
+            tracing::warn!(realm_id = %events[0].realm_id, slot = error.operation_index,
+                reason = %error.reason, "Direct Conversation founding projection needs durable repair");
+            None
+        }
+    }
+}
+
+/// Reconcile process-local views only after the four-Commit unit is durable.
+/// A failed cache install never changes the authority outcome; confirmed
+/// Events can rebuild both views through the normal hydration path.
+async fn reconcile_founding_projection(
+    state: &AppState,
+    realm_id: &arkret_wire::RealmId,
+    staged: Option<StagedRealmBootstrap>,
+) {
+    let mut repair_needed = staged.is_none();
+    if let Some(staged) = staged {
+        if let Err(error) = state.projections().install_staged_realm_bootstrap(staged) {
+            tracing::error!(%realm_id, slot = error.operation_index, reason = %error.reason,
+                "durable Direct Conversation founding projection install failed");
+            repair_needed = true;
+        }
+    }
+    repair_needed |= state
+        .projections()
+        .snapshot()
+        .realm_ordinary_writes_blocked(realm_id.as_str());
+    match state.persistence().hydrate_realm_directory().await {
+        Ok(directory) => {
+            if let Some(entry) = directory.get(realm_id) {
+                state.realm_directory().upsert(entry.clone());
+            } else {
+                tracing::error!(%realm_id, "durable Direct Conversation founding is absent from directory hydration");
+                repair_needed = true;
+            }
+        }
+        Err(error) => {
+            tracing::error!(%realm_id, %error, "durable Direct Conversation directory hydration failed");
+            repair_needed = true;
+        }
+    }
+    if repair_needed {
+        // In particular, recover a process that accepted the durable unit
+        // before this projection path existed. The resolver must see the
+        // confirmed Realm state before founding is acknowledged.
+        if let Err(error) = state.hydrate().await {
+            tracing::error!(%realm_id, %error, "durable Direct Conversation projection hydration failed");
+            let repair_state = state.clone();
+            tokio::spawn(async move {
+                let mut delay = std::time::Duration::from_secs(1);
+                loop {
+                    match repair_state.hydrate().await {
+                        Ok(()) => break,
+                        Err(error) => {
+                            tracing::error!(%error, "Direct Conversation projection repair failed")
+                        }
+                    }
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(30));
+                }
+            });
+        }
+    }
+}
 
 /// The closed Event outcome for a table refusal, or the refusal as an error
 /// when the code is not one of the seven mapped reasons.
@@ -105,6 +199,8 @@ pub(super) async fn submit_self_direct_conversation_founding(
         .try_into()
         .map_err(|_| ServiceError::internal("four founding producer guards expected"))?;
     let genesis = &request.events[0].event;
+    let staged =
+        stage_founding_projection(state, &request.events.each_ref().map(|item| &item.event));
     let authority = soland_storage::CurrentRealmAuthority {
         realm_id: arkret_wire::RealmId::from_event_id(&genesis.event_id),
         generation: 0,
@@ -142,6 +238,7 @@ pub(super) async fn submit_self_direct_conversation_founding(
             (AggregateAcceptanceStatus::Duplicate, commits)
         }
     };
+    reconcile_founding_projection(state, &genesis.realm_id, staged).await;
     let outcome = DirectConversationFoundingAcceptanceOutcome {
         unit_kind: request.unit_kind,
         status,
@@ -299,6 +396,8 @@ pub(super) async fn submit_peer_direct_conversation_founding(
         )
         .await?;
     }
+    let staged =
+        stage_founding_projection(state, &unit.transactions.each_ref().map(|item| &item.event));
     let status = state
         .authority_commits()
         .materialize_peer_direct_conversation_founding_unit(
@@ -308,6 +407,7 @@ pub(super) async fn submit_peer_direct_conversation_founding(
             crate::wire::now(),
         )
         .await?;
+    reconcile_founding_projection(state, &facts.realm_id, staged).await;
     Ok(DirectConversationFoundingAcceptanceOutcome {
         unit_kind: request.unit_kind,
         status,

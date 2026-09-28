@@ -894,6 +894,91 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
 }
 
 #[tokio::test]
+async fn committed_direct_conversation_founding_rebuilds_resolver_projection_after_restart() {
+    struct Adapter;
+    impl soland_services::hydration::HydrationProjectionAdapter for Adapter {
+        fn operation_from_canonical_record(
+            &self,
+            record: &soland_services::events::AcceptedEvent,
+        ) -> Option<arkret_event_draft::ProjectedEventOperation> {
+            let event =
+                serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).ok()?;
+            let operation_id =
+                arkret_wire::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                    .ok()?;
+            arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+                operation_id,
+                arkret_wire::OperationKind::Create,
+                None,
+                &event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .ok()
+        }
+    }
+
+    let pool = contract_pool().await;
+    let pair = pair(&pool).await;
+    let at = now();
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let realm = realm_of(&unit);
+    let live = soland_services::projection::ProjectionService::new("dm-live-test");
+    let operations = unit
+        .transactions
+        .iter()
+        .map(|transaction| {
+            arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+                arkret_wire::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                    .unwrap(),
+                arkret_wire::OperationKind::Create,
+                None,
+                &transaction.event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let staged = live.stage_realm_bootstrap(&operations, true).unwrap();
+    pair.store()
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await
+        .unwrap();
+    let strand = arkret_wire::StrandId::from_event_id(&unit.transactions[3].event.event_id);
+    live.install_staged_realm_bootstrap(staged).unwrap();
+    assert!(
+        !live
+            .snapshot()
+            .realm_ordinary_writes_blocked(realm.as_str())
+    );
+    assert!(
+        live.snapshot()
+            .member(realm.as_str(), &pair.peer_actor().to_string())
+            .is_some()
+    );
+    for _ in 0..2 {
+        let projection = soland_services::projection::ProjectionService::new("dm-restart-test");
+        let persistence = PgPersistenceStore::new(pool.clone());
+        projection
+            .hydrate_from_persistence(&persistence, &Adapter, [realm.clone()])
+            .await
+            .unwrap();
+        let state = projection.snapshot();
+        assert!(!state.realm_ordinary_writes_blocked(realm.as_str()));
+        assert!(
+            state
+                .member(realm.as_str(), &pair.founder_actor().to_string())
+                .is_some()
+        );
+        assert!(
+            state
+                .member(realm.as_str(), &pair.peer_actor().to_string())
+                .is_some()
+        );
+        assert!(state.strands.contains_key(strand.as_str()));
+    }
+}
+
+#[tokio::test]
 async fn cross_station_founding_commits_one_exact_peer_delivery_atomically() {
     let pool = contract_pool().await;
     let mut pair = pair(&pool).await;

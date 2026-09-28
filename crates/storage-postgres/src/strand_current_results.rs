@@ -84,6 +84,33 @@ pub(crate) async fn commit_strand_create_current_result_in_connection(
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<()> {
+    commit_strand_create_current_result_with_authority_in_connection(conn, event, commit, true)
+        .await
+}
+
+/// Only the validated four-Event Direct Conversation founding transaction may
+/// write its main Strand without an earlier capability basis. The fourth
+/// Event shares one atomic acceptance cut with the two founding joins.
+pub(crate) async fn commit_direct_conversation_founding_strand_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::StrandCreate {
+        return Err(reject(
+            "Direct Conversation founding has no main Strand Event",
+        ));
+    }
+    commit_strand_create_current_result_with_authority_in_connection(conn, event, commit, false)
+        .await
+}
+
+async fn commit_strand_create_current_result_with_authority_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    require_existing_authority: bool,
+) -> PersistenceResult<()> {
     if event.kind != arkret_wire::EventKind::StrandCreate {
         return Ok(());
     }
@@ -118,12 +145,14 @@ pub(crate) async fn commit_strand_create_current_result_in_connection(
     if commit.event_ref != event.event_id || commit.stream_ref != expected_stream {
         return Err(reject("Strand create has no exact source stream"));
     }
-    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
-        conn,
-        event,
-        commit.committed_at,
-    )
-    .await?;
+    if require_existing_authority {
+        crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
     if matches!(event.scope_ref, arkret_wire::ScopeRef::Circle { .. }) {
         crate::circle_current_results::require_active_author_in_connection(conn, event, commit)
             .await?;

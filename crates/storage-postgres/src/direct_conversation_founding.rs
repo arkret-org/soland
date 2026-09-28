@@ -787,10 +787,12 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
             .await?;
             crate::unit_of_work::commit_parent_membership_current_results(conn, event, commit)
                 .await?;
-            crate::strand_current_results::commit_strand_create_current_result_in_connection(
-                conn, event, commit,
-            )
-            .await?;
+            if event.kind == arkret_wire::EventKind::StrandCreate {
+                crate::strand_current_results::commit_direct_conversation_founding_strand_in_connection(
+                    conn, event, commit,
+                )
+                .await?;
+            }
         }
         crate::account_summary::publish_realm_account_summary_in_connection(
             conn,

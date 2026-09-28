@@ -430,6 +430,42 @@ impl ProjectionService {
             operation.event_kind == arkret_wire::EventKind::RealmCreate
                 && live.realm_create_log(operation.realm_id.as_str()).is_some()
         }) {
+            if staged.direct_conversation_founding {
+                // The genesis Seal can win the race against the local four
+                // Event install. A visible genesis alone does not prove the
+                // founder/peer joins and main Strand were projected. Force
+                // durable hydration in that case, while preserving any
+                // successor state when all founding facets are already here.
+                for (index, operation) in staged.operations.iter().enumerate().skip(1) {
+                    let present = match operation.event_kind {
+                        arkret_wire::EventKind::MemberState => operation
+                            .payload
+                            .get("member_id")
+                            .and_then(|value| {
+                                serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
+                            })
+                            .is_some_and(|member| {
+                                live.member(operation.realm_id.as_str(), &member.to_string())
+                                    .is_some()
+                            }),
+                        arkret_wire::EventKind::StrandCreate => {
+                            let strand =
+                                arkret_wire::StrandId::from_event_id(&operation.context.event_id);
+                            live.strands.contains_key(strand.as_str())
+                        }
+                        _ => false,
+                    };
+                    if !present {
+                        return Err(RealmBootstrapProjectionError {
+                            operation_index: index,
+                            reason:
+                                "confirmed Direct Conversation founding is only partially projected"
+                                    .to_owned(),
+                            ignored: false,
+                        });
+                    }
+                }
+            }
             return Ok(());
         }
         let mut merged = live.clone();
@@ -1058,5 +1094,75 @@ mod projection_service_tests {
             Some("public"),
             "an exact bootstrap replay must not replace a concurrent successor projection",
         );
+    }
+
+    #[test]
+    fn direct_conversation_genesis_alone_requires_durable_founding_repair() {
+        let service = service();
+        let actor =
+            project_did_to_core_id(&Did::new("did:web:dm-founder.example").unwrap()).unwrap();
+        let station =
+            project_did_to_core_id(&Did::new("did:web:dm-station.example").unwrap()).unwrap();
+        let genesis = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::RealmCreate.as_str(),
+            ScopeRef::RealmGenesis,
+            actor.clone(),
+            station.clone(),
+            serde_json::json!({"object": {"purpose": "direct_conversation"}}),
+            Utc::now(),
+        )
+        .unwrap();
+        let founder = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor.clone(),
+            station.clone(),
+        ));
+        let join = arkret_wire::test_support::raw_event_for_actor_at(
+            arkret_wire::EventKind::MemberState.as_str(),
+            ScopeRef::Realm { realm_id: genesis.realm_id.clone() },
+            founder.clone(),
+            serde_json::json!({"member_id": founder, "membership": "join", "reason": "direct_conversation_bootstrap"}),
+            Utc::now(),
+        )
+        .unwrap();
+        let operation = Operation::from_accepted_event(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:0196419b-0000-7000-8000-000000000002",
+            )
+            .unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            &join,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        {
+            let mut live = service.state.lock();
+            live.set_realm_facet(
+                genesis.realm_id.as_str(),
+                facet::REALM_CREATE,
+                serde_json::json!([genesis.realm_id.clone()]),
+            );
+        }
+        let error = service
+            .install_staged_realm_bootstrap(StagedRealmBootstrap {
+                operations: vec![
+                    Operation::from_accepted_event(
+                        arkret_identifiers::OperationId::new(
+                            "ak:operation:0196419b-0000-7000-8000-000000000003",
+                        )
+                        .unwrap(),
+                        arkret_wire::OperationKind::Create,
+                        None,
+                        &genesis,
+                        arkret_canonical::DigestSuite::Sha256,
+                    )
+                    .unwrap(),
+                    operation,
+                ],
+                direct_conversation_founding: true,
+            })
+            .unwrap_err();
+        assert_eq!(error.operation_index, 1);
+        assert!(error.reason.contains("partially projected"));
     }
 }
