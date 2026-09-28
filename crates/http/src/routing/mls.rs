@@ -256,14 +256,21 @@ pub fn router() -> Router {
 }
 
 pub fn protocol_router() -> Router {
-    Router::with_path("keys").push(
-        Router::with_path("keypackages")
-            .push(Router::with_path("upload").post(upload_keypackage))
-            .push(Router::with_path("claim").post(claim_keypackage))
-            .push(Router::with_path("claims/query").post(query_own_keypackage_claim))
-            .push(Router::with_path("consume").post(consume_keypackages))
-            .push(Router::with_path("revoke").post(revoke_keypackages)),
-    )
+    Router::new()
+        .push(
+            Router::with_path("keys").push(
+                Router::with_path("keypackages")
+                    .push(Router::with_path("upload").post(upload_keypackage))
+                    .push(Router::with_path("claim").post(claim_keypackage))
+                    .push(Router::with_path("claims/query").post(query_own_keypackage_claim))
+                    .push(Router::with_path("consume").post(consume_keypackages))
+                    .push(Router::with_path("revoke").post(revoke_keypackages)),
+            ),
+        )
+        .push(
+            Router::with_path("mls/group-state-material/query")
+                .post(resolve_self_mls_group_state_material),
+        )
 }
 
 pub(crate) fn peer_router() -> Router {
@@ -283,6 +290,100 @@ fn mls_group_state_material_not_found() -> AppError {
     AppError::not_found("MLS group-state material not found")
 }
 
+fn mls_group_state_material_revision_unavailable() -> AppError {
+    AppError::new(
+        arkret_wire::ErrorCode::RevisionUnavailable,
+        "authorized MLS group-state material is unavailable at the requested cut",
+    )
+}
+
+/// A member's Account Station checks the exact session Actor and the current
+/// and target membership cut before asking governance for the public bytes.
+/// Governance independently repeats that check for the signed peer request.
+#[salvo::oapi::endpoint(operation_id = "ak.self.mls.read.group_state_material", tags("mls.rs"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.mls.read.group_state_material.v1"))]
+async fn resolve_self_mls_group_state_material(
+    aa: AuthArgs,
+    body: JsonBody<arkret_models_collaboration::mls_group_state_material::MlsMemberGroupStateMaterialReadRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome>
+{
+    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
+
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let caller =
+        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
+    let request = body.into_inner();
+    request
+        .validate()
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
+    if request.caller_actor_id != caller || caller.route_service_id() != &state.service_core_id() {
+        return Err(mls_group_state_material_not_found());
+    }
+    let peer_request = request.as_peer_request();
+    let local_read = state
+        .authority_commits()
+        .mls_member_group_state_material_read(&peer_request, &state.service_core_id(), None)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("member MLS material authorization: {error}"))
+        })?;
+    let genesis = match local_read {
+        Read::NotFound => return Err(mls_group_state_material_not_found()),
+        Read::RevisionUnavailable => return Err(mls_group_state_material_revision_unavailable()),
+        Read::Authorized { genesis } => genesis,
+    };
+    let authority = state
+        .authority_commits()
+        .current_authority(&request.realm_id)
+        .await
+        .map_err(|error| AppError::internal(format!("MLS material authority lookup: {error}")))?
+        .ok_or_else(mls_group_state_material_not_found)?;
+    if authority.service_id == state.service_core_id() {
+        let event = genesis.ok_or_else(mls_group_state_material_revision_unavailable)?;
+        return json_ok(serve_group_state_material(state, &peer_request, &event.event).await?);
+    }
+
+    crate::routing::realm_join::resolve_verified_authority_of_service(
+        state,
+        &request.realm_id,
+        &authority.service_id,
+    )
+    .await
+    .map_err(|_| mls_group_state_material_revision_unavailable())?;
+
+    // The Account Station never exposes a peer credential to the device. The
+    // signed request carries the same exact caller and target selectors that
+    // the governance Station will recheck at its own durable cut.
+    let body = arkret_canonical::canonical_json_bytes(&peer_request)
+        .map_err(|error| AppError::internal(format!("MLS material peer body: {error}")))?;
+    let max_bytes = arkret_models_collaboration::mls_group_state_material::MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES as usize * 2;
+    let response = crate::routing::federation::outbox::signed_peer_request(
+        state,
+        authority.service_id.as_str(),
+        arkret_wire::PATH_PEER_MLS_GROUP_STATE_MATERIAL,
+        &body,
+        max_bytes,
+    )
+    .await
+    .map_err(|error| AppError::internal(format!("MLS material peer read: {error}")))?;
+    match response.status {
+        404 => return Err(mls_group_state_material_not_found()),
+        409 | 503 => return Err(mls_group_state_material_revision_unavailable()),
+        200 => {}
+        _ => return Err(mls_group_state_material_revision_unavailable()),
+    }
+    let outcome: arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome =
+        serde_json::from_slice(&response.body)
+            .map_err(|_| mls_group_state_material_revision_unavailable())?;
+    outcome
+        .validate_for_request(&peer_request)
+        .map_err(|_| mls_group_state_material_revision_unavailable())?;
+    json_ok(outcome)
+}
+
 // The body is parsed by hand after the peer trust check, so the extractor does
 // not document it; the registry declares this POST with a request schema, so
 // the generated document must still publish it.
@@ -297,10 +398,7 @@ async fn resolve_peer_mls_group_state_material(
     req: &mut Request,
 ) -> JsonResult<arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome>
 {
-    use arkret_models_collaboration::mls_group_state_material::{
-        MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES, MlsGroupStateMaterialOutcome,
-        MlsGroupStateMaterialRequestBody, material_digest_from_ref,
-    };
+    use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
 
     let state = depot.get_typed::<AppState>().expect("state injected");
     super::events::peer::validate_peer_request(state, req, true).await?;
@@ -318,18 +416,71 @@ async fn resolve_peer_mls_group_state_material(
     // governing cut, the rule a peer stream scan applies.
     let source = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|_| mls_group_state_material_not_found())?;
-    let event = state
-        .authority_commits()
-        .committed_event_for_peer(
-            &request.group_state_event_id,
-            &source,
-            &state.service_core_id(),
-        )
-        .await
-        .map_err(|error| AppError::internal(format!("peer MLS Genesis read: {error}")))?
-        .ok_or_else(mls_group_state_material_not_found)?
-        .event;
-    if event.kind != arkret_wire::EventKind::MlsGenesis || event.realm_id != request.realm_id {
+    let event = if let Some(caller) = &request.caller_actor_id {
+        use soland_storage::MlsMemberGroupStateMaterialRead as Read;
+
+        if caller.route_service_id() != &source {
+            return Err(mls_group_state_material_not_found());
+        }
+        match state
+            .authority_commits()
+            .mls_member_group_state_material_read(&request, &state.service_core_id(), Some(&source))
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("peer member MLS material read: {error}"))
+            })? {
+            Read::NotFound => return Err(mls_group_state_material_not_found()),
+            Read::RevisionUnavailable => {
+                return Err(mls_group_state_material_revision_unavailable());
+            }
+            Read::Authorized {
+                genesis: Some(genesis),
+            } => genesis.event,
+            Read::Authorized { genesis: None } => {
+                return Err(mls_group_state_material_revision_unavailable());
+            }
+        }
+    } else {
+        state
+            .authority_commits()
+            .committed_event_for_peer(
+                &request.group_state_event_id,
+                &source,
+                &state.service_core_id(),
+            )
+            .await
+            .map_err(|error| AppError::internal(format!("peer MLS Genesis read: {error}")))?
+            .ok_or_else(mls_group_state_material_not_found)?
+            .event
+    };
+    json_ok(serve_group_state_material(state, &request, &event).await?)
+}
+
+/// The accepted Genesis selector and raw public bytes are checked identically
+/// for the original peer replication read and the member-authorized path.
+async fn serve_group_state_material(
+    state: &AppState,
+    request: &arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody,
+    event: &arkret_wire::Event,
+) -> Result<
+    arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome,
+    AppError,
+> {
+    use arkret_models_collaboration::mls_group_state_material::{
+        MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES, MlsGroupStateMaterialOutcome,
+        material_digest_from_ref,
+    };
+    let unavailable_material = || {
+        if request.caller_actor_id.is_some() {
+            mls_group_state_material_revision_unavailable()
+        } else {
+            mls_group_state_material_not_found()
+        }
+    };
+    if event.kind != arkret_wire::EventKind::MlsGenesis
+        || event.event_id != request.group_state_event_id
+        || event.realm_id != request.realm_id
+    {
         return Err(mls_group_state_material_not_found());
     }
     let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
@@ -368,14 +519,16 @@ async fn resolve_peer_mls_group_state_material(
     let limit = request
         .max_response_bytes
         .unwrap_or(MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES) as usize;
-    let group_info_bytes =
-        load_mls_public_blob(state, request.group_info_ref.as_str(), limit).await?;
+    let group_info_bytes = load_mls_public_blob(state, request.group_info_ref.as_str(), limit)
+        .await
+        .map_err(|_| unavailable_material())?;
     let ratchet_tree_bytes = load_mls_public_blob(
         state,
         request.ratchet_tree_ref.as_str(),
         limit - group_info_bytes.len(),
     )
-    .await?;
+    .await
+    .map_err(|_| unavailable_material())?;
     let outcome = MlsGroupStateMaterialOutcome {
         realm_id: request.realm_id.clone(),
         effective_scope: request.effective_scope.clone(),
@@ -399,20 +552,20 @@ async fn resolve_peer_mls_group_state_material(
     // epoch zero. Stored material failing either is not served.
     let validated = outcome
         .validate_for_request(&request)
-        .map_err(|_| mls_group_state_material_not_found())?;
+        .map_err(|_| unavailable_material())?;
     arkret_mls::validate_public_group_state(
         &validated.group_info_bytes,
         &validated.ratchet_tree_bytes,
         request.mls_group_id.as_str(),
         0,
     )
-    .map_err(|_| mls_group_state_material_not_found())?;
-    json_ok(outcome)
+    .map_err(|_| unavailable_material())?;
+    Ok(outcome)
 }
 
 fn mls_group_state_material_schema_violation(message: impl Into<String>) -> AppError {
     super::events::peer::schema_violation(format!(
-        "invalid peer MLS group-state material request: {}",
+        "invalid MLS group-state material request: {}",
         message.into()
     ))
 }
