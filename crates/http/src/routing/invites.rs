@@ -2304,10 +2304,11 @@ async fn verify_invite_commit(
     )
     .await
     .map_err(|error| unavailable(format!("invite Realm authority is unavailable: {error}")))?;
-    super::realm_join::insert_method_key(
+    super::realm_join::insert_historical_method_key(
         state,
         &mut located.keys,
         &delivery.invite_commit.signature.verification_method,
+        delivery.invite_commit.signature.created_at,
     )
     .await
     .map_err(|error| unavailable(format!("invite_commit signing key is unavailable: {error}")))?;

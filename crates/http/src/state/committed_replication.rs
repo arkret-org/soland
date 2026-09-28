@@ -280,16 +280,18 @@ async fn replicate_one(
             )));
         }
     }
-    if arkret_identity::RealmAuthorityKeyDirectory::public_key(
+    if arkret_identity::RealmAuthorityKeyDirectory::public_key_at(
         &located.keys,
         &commit.signature.verification_method,
+        commit.signature.created_at,
     )
     .is_none()
     {
-        crate::routing::realm_join::insert_method_key(
+        crate::routing::realm_join::insert_historical_method_key(
             state,
             &mut located.keys,
             &commit.signature.verification_method,
+            commit.signature.created_at,
         )
         .await
         .map_err(|error| temporarily_unavailable(format!("RealmCommit signing key: {error}")))?;

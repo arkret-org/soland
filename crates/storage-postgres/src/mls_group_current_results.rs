@@ -183,13 +183,19 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             "the MLS effective scope has no supported authority cut".to_owned(),
         ));
     }
-    crate::moderation_report_current_results::ensure_scope_member(
+    if !crate::moderation_report_current_results::scope_member_in_connection(
         conn,
         &event.realm_id,
         &event.scope_ref,
         &event.actor_id,
     )
-    .await?;
+    .await?
+    {
+        return Err(refused(
+            ConflictCode::CapabilityDenied,
+            "MLS author is not joined to the exact scope",
+        ));
+    }
     crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
         conn,
         event,

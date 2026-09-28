@@ -246,7 +246,7 @@ impl SolandDidResolver {
         self.fallback.resolve_did_document(did)
     }
 
-    async fn fetch_verified_webvh_history(
+    pub(crate) async fn fetch_verified_webvh_history(
         &self,
         did: &Did,
     ) -> Result<arkret_identity::VerifiedDidWebvhLog, String> {
