@@ -283,6 +283,29 @@ pub(crate) async fn pair_contacts_in_connection(
     .collect()
 }
 
+/// Read the pair at a repeatable-read Snapshot cut without row locks.
+/// Signal eligibility uses this inside a READ ONLY transaction; admission
+/// continues to use `pair_contacts_in_connection` and its share locks.
+pub(crate) async fn pair_contacts_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    left: &ActorId,
+    right: &ActorId,
+) -> PersistenceResult<Vec<ContactRecord>> {
+    sql_query(format!(
+        "SELECT {CONTACT_COLUMNS} FROM contacts \
+         WHERE (requester_id = $1 AND target_id = $2) OR (requester_id = $2 AND target_id = $1) \
+         ORDER BY updated_at ASC, requester_id ASC"
+    ))
+    .bind::<Text, _>(left.to_string())
+    .bind::<Text, _>(right.to_string())
+    .load::<ContactRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .into_iter()
+    .map(contact_record_from_row)
+    .collect()
+}
+
 /// The one Contact row of a pair, in either orientation, locked for update.
 pub(crate) async fn lock_pair_contact_in_connection(
     conn: &mut AsyncPgConnection,

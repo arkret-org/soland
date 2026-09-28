@@ -508,7 +508,8 @@ async fn read_in_connection(
         }
         let actors = pair.iter().copied().collect::<Vec<_>>();
         let contacts =
-            crate::contacts::pair_contacts_in_connection(conn, actors[0], actors[1]).await?;
+            crate::contacts::pair_contacts_snapshot_in_connection(conn, actors[0], actors[1])
+                .await?;
         let Some(contact) = crate::direct_conversation_founding::current_contact(contacts) else {
             return Ok(None);
         };

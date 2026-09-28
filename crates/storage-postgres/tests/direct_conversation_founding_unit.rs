@@ -1920,7 +1920,8 @@ async fn group_state(pool: &PgPool, realm_id: &RealmId) -> (bool, Option<String>
 /// `direct_message`. A request authored against an older cut is re-decided
 /// at the current one, and every refusal writes nothing.
 #[tokio::test]
-async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zero_write_refusals() {
+async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_binding_at_the_cut()
+{
     let pool = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
@@ -2218,6 +2219,28 @@ async fn participant_authority_follows_the_group_and_binding_at_the_cut_with_zer
         ),
         "a nonparticipant must fail closed on Direct Conversation Snapshot disclosure"
     );
+    // Session eligibility reads the same accepted pair and Contact heads in
+    // a REPEATABLE READ, READ ONLY transaction. A row lock here caused 503.
+    let signal_at = head.commit.committed_at + chrono::TimeDelta::seconds(1);
+    let signal_cut = store
+        .signal_scope_authority(
+            &arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            &head.commit.commit_id,
+            &founder,
+            arkret_wire::SignalClass::Session,
+            signal_at,
+            signal_at,
+        )
+        .await
+        .unwrap()
+        .expect("accepted DM pair has a complete read-only Signal cut");
+    assert_eq!(signal_cut.historical_mls_event_ref, add_ref);
+    assert_eq!(signal_cut.current_mls.current_mls_commit_event_ref, add_ref);
+    assert_eq!(signal_cut.recipient_actors.len(), 2);
+    assert!(signal_cut.recipient_actors.contains(&founder));
+    assert!(signal_cut.recipient_actors.contains(&peer));
     let durable = PgEventStore { pool: pool.clone() }
         .direct_conversation_durable_state(TRUST_DOMAIN, facts.pair_key.as_str())
         .await
