@@ -55,6 +55,7 @@ struct RealmCommitIdentityBody<'a> {
     event_ref: &'a arkret_wire::EventId,
     governance_generation: u64,
     authority_ref: &'a arkret_wire::RealmCommitAuthorityRef,
+    #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     committed_at: DateTime<Utc>,
 }
 
@@ -68,6 +69,7 @@ struct RealmCommitUnsignedBody<'a> {
     event_ref: &'a arkret_wire::EventId,
     governance_generation: u64,
     authority_ref: &'a arkret_wire::RealmCommitAuthorityRef,
+    #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     committed_at: DateTime<Utc>,
 }
 
@@ -78,6 +80,7 @@ struct RealmSnapshotIdentityBody<'a> {
     visible_stream_heads: &'a [CommitStreamHead],
     current_state_entries: &'a [arkret_wire::TypedCurrentResult],
     retention_and_history_floor: &'a arkret_wire::RetentionAndHistoryFloor,
+    #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
 }
 
@@ -89,6 +92,7 @@ struct RealmSnapshotUnsignedBody<'a> {
     visible_stream_heads: &'a [CommitStreamHead],
     current_state_entries: &'a [arkret_wire::TypedCurrentResult],
     retention_and_history_floor: &'a arkret_wire::RetentionAndHistoryFloor,
+    #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
 }
 
@@ -2247,6 +2251,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit, replay, "same closed input must produce one Commit");
+
+        let whole_second = chrono::DateTime::parse_from_rfc3339("2026-09-20T08:00:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let commit = build_signed_event_commit(
+            &event,
+            &authority,
+            None,
+            DidUrl::new("did:web:station.example#notary-key").unwrap(),
+            &signing_key,
+            whole_second,
+        )
+        .unwrap();
+        let unsigned = arkret_canonical::unsigned_value(&commit, &["signature"]).unwrap();
+        assert_eq!(
+            commit.signature.signed_digest,
+            arkret_signatures::detached_object::detached_object_signed_digest(&unsigned).unwrap(),
+            "whole-second Commit must seal the exact wire body"
+        );
     }
 
     #[test]
@@ -2313,6 +2336,23 @@ mod tests {
             snapshot.signature.signed_digest,
             arkret_signatures::detached_object::detached_object_signed_digest(&unsigned).unwrap(),
             "the signature must seal the exact wire Snapshot minus signature"
+        );
+
+        let whole_second = chrono::DateTime::parse_from_rfc3339("2026-09-22T08:00:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let snapshot = build_signed_realm_state_snapshot(
+            &material,
+            DidUrl::new("did:web:station.example#notary-key").unwrap(),
+            &signing_key,
+            whole_second,
+        )
+        .unwrap();
+        let unsigned = arkret_canonical::unsigned_value(&snapshot, &["signature"]).unwrap();
+        assert_eq!(
+            snapshot.signature.signed_digest,
+            arkret_signatures::detached_object::detached_object_signed_digest(&unsigned).unwrap(),
+            "whole-second Snapshot must seal the exact wire body"
         );
     }
 }
