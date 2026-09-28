@@ -111,6 +111,7 @@ impl ProjectionState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| operation.context.sender.to_string());
 
+        let has_calendar_schedule = fields.contains_key("calendar");
         let projection = StrandProjection {
             strand_id: strand_id.clone(),
             realm_id,
@@ -134,6 +135,8 @@ impl ProjectionState {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
             schema_refs: strand_schema_refs(object),
+            schedule_revision_source: has_calendar_schedule
+                .then(|| operation.context.event_id.event_digest().to_string()),
         };
         self.strands.insert(strand_id.clone(), projection);
         ProjectionEffect::StrandLifecycle {
@@ -210,6 +213,10 @@ impl ProjectionState {
             strand.fields = next_fields;
             if let Some(refs) = patched_schema_refs(patch) {
                 strand.schema_refs = refs;
+            }
+            if patch_touches_calendar_schedule(patch) {
+                strand.schedule_revision_source =
+                    Some(operation.context.event_id.event_digest().to_string());
             }
         }
         strand.updated_by = Some(operation.context.sender.to_string());
@@ -604,6 +611,15 @@ impl ProjectionState {
             level_public,
         }
     }
+}
+
+fn patch_touches_calendar_schedule(patch: &serde_json::Map<String, Value>) -> bool {
+    patch.keys().any(|path| {
+        path == "metadata"
+            || path == "metadata.fields"
+            || path == "metadata.fields.calendar"
+            || path.starts_with("metadata.fields.calendar.")
+    })
 }
 
 struct StrandNarrativePost {

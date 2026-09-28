@@ -481,6 +481,7 @@ mod tests {
                 updated_at: None,
                 scope_circle_id: circle.then(|| CIRCLE.to_owned()),
                 schema_refs: Vec::new(),
+                schedule_revision_source: None,
             },
         );
         if circle {

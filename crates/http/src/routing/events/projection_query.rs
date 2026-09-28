@@ -976,6 +976,8 @@ struct StrandProjectionView {
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     schema_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_revision_source: Option<String>,
     /// One deterministic current RSVP value for every occurrence/responder Cell.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rsvps: Vec<StrandRsvpProjectionView>,
@@ -1198,6 +1200,7 @@ async fn get_strand_projection(
         encrypted_content: strand.encrypted_content,
         fields: strand.fields,
         schema_refs: strand.schema_refs,
+        schedule_revision_source: strand.schedule_revision_source,
         rsvps,
         board_space_id: board_space_id.map(|id| id.to_string()),
         list_space_id: list_space_id.map(|id| id.to_string()),

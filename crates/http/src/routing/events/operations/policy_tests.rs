@@ -562,6 +562,7 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
                 updated_by: None,
                 updated_at: None,
                 schema_refs: Vec::new(),
+                schedule_revision_source: None,
                 scope_circle_id: Some(circle_id.to_owned()),
             },
         );

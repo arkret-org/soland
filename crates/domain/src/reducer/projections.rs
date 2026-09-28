@@ -314,6 +314,9 @@ pub struct StrandProjection {
     /// `schema_refs` — the profile activation axis. Its calendar entry and the
     /// `metadata.fields.calendar` subtree co-occur in both directions.
     pub schema_refs: Vec<String>,
+    /// Digest of the last accepted Event that explicitly wrote the Calendar
+    /// subtree. Non-Calendar patches leave this winner unchanged.
+    pub schedule_revision_source: Option<String>,
 }
 
 pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrack> {

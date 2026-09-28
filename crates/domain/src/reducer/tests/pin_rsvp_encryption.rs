@@ -269,6 +269,53 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
 }
 
 #[test]
+fn calendar_schedule_source_tracks_only_calendar_writes() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    seed_pin_target(&mut state, &hlc);
+    assert_eq!(
+        state.strands[STRAND_ID].schedule_revision_source.as_deref(),
+        Some(SCHEDULE_BASIS_DIGEST)
+    );
+
+    let title_update = make_operation(
+        arkret_wire::EventKind::StrandUpdate,
+        REALM_ID,
+        serde_json::json!({
+            "target_ref": STRAND_ID,
+            "patch": {"metadata.title": {"$op": "set", "value": "Renamed"}}
+        }),
+    );
+    assert!(matches!(
+        state.apply(&title_update, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(
+        state.strands[STRAND_ID].schedule_revision_source.as_deref(),
+        Some(SCHEDULE_BASIS_DIGEST)
+    );
+
+    let next_digest = "sha256:7777777777777777777777777777777777777777777777777777777777777777";
+    let mut schedule_update = make_operation(
+        arkret_wire::EventKind::StrandUpdate,
+        REALM_ID,
+        serde_json::json!({
+            "target_ref": STRAND_ID,
+            "patch": {"metadata.fields.calendar": {"$op": "unset"}}
+        }),
+    );
+    set_event_identity(&mut schedule_update, next_digest);
+    assert!(matches!(
+        state.apply(&schedule_update, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(
+        state.strands[STRAND_ID].schedule_revision_source.as_deref(),
+        Some(next_digest)
+    );
+}
+
+#[test]
 fn rsvp_projects_the_complete_entry_as_the_settled_value() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");

@@ -1056,6 +1056,7 @@ pub async fn hydrate_projections_from_persistence(
                 updated_by: strand.updated_by.map(|id| id.to_string()),
                 updated_at: strand.updated_at,
                 schema_refs: strand.schema_refs.unwrap_or_default(),
+                schedule_revision_source: None,
                 scope_circle_id: strand.scope_circle_id.map(|id| id.to_string()),
             },
         );
