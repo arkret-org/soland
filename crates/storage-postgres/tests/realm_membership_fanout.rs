@@ -198,7 +198,11 @@ fn assert_owed(
     assert_eq!(body.replications.len(), 1);
     assert_eq!(
         body.replications[0].event_submission,
-        request.realm_fanout_source.clone().unwrap()
+        arkret_wire::EventAdmissionSubmission::new(request.authority_commit.event.clone())
+    );
+    assert!(
+        !row.payload_json.contains("approval_signatures"),
+        "approval votes belong only to first admission, never committed replication"
     );
     assert_eq!(
         body.replications[0].source_commit,

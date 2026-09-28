@@ -532,11 +532,11 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         let request =
             PeerAuthoritySubmitRequest::CommittedReplication(PeerCommittedReplicationRequest {
                 branch: CommittedReplicationBranch::CommittedReplication,
-                replications: vec![CommittedEventSubmission {
-                    event_submission: source.clone(),
-                    source_commit: commit.clone(),
-                    welcomes: replicated_welcomes.remove(&station),
-                }],
+                replications: vec![CommittedEventSubmission::from_source_submission(
+                    source,
+                    commit.clone(),
+                    replicated_welcomes.remove(&station),
+                )],
             });
         request
             .validate()

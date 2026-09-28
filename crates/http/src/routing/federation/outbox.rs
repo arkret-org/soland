@@ -2447,7 +2447,11 @@ mod tests {
             .join("fixtures/approval-signature-kat-fixture.json");
         let fixture: serde_json::Value =
             serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
-        let submission = fixture["event_id_invariance"]["submission_with_evidence"].clone();
+        let mut submission = fixture["event_id_invariance"]["submission_with_evidence"].clone();
+        submission
+            .as_object_mut()
+            .unwrap()
+            .remove("approval_signatures");
         let event = &submission["event"];
         let source_commit = serde_json::json!({
             "commit_id": "ak:realm_commit:ARNRmzDi2r78zveOLmoHOb6AephFMwVuGE1fwXmCoeo4",
@@ -2469,6 +2473,29 @@ mod tests {
             }
         });
         serde_json::json!({"event_submission": submission, "source_commit": source_commit})
+    }
+
+    #[test]
+    fn replicated_event_rejects_first_admission_approval_votes() {
+        let fixture_path = arkret_schema_conformance::default_spec_artifacts_dir()
+            .expect("arkret-spec artifacts checkout")
+            .join("fixtures/approval-signature-kat-fixture.json");
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture_path).unwrap()).unwrap();
+        let mut item = replication_item();
+        item["event_submission"]["approval_signatures"] =
+            fixture["event_id_invariance"]["submission_with_evidence"]["approval_signatures"]
+                .clone();
+        let request: arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest =
+            serde_json::from_value(serde_json::json!({
+                "branch": "committed_replication", "replications": [item]
+            }))
+            .unwrap();
+        let error = request.validate().unwrap_err();
+        assert!(
+            error.to_string().contains("schema_violation"),
+            "the peer dispatch must reject the entire body before a replica write: {error}"
+        );
     }
 
     #[test]
