@@ -720,15 +720,13 @@ pub(super) async fn install_committed_chain_node_in_connection(
     anchored_head(locked_anchor(conn, &key).await?)?;
     require_direct_successor(head.as_ref(), commit)?;
     insert_commit_row(conn, commit, &key, None).await?;
-    if matches!(
-        commit.stream_ref,
-        arkret_wire::CommitStreamRef::Realm { .. }
-    ) {
-        let source =
-            serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM replica_authorization_cuts WHERE realm_id=$1 AND source_stream_ref=$2 AND head_stream_position<$3")
-            .bind::<Text, _>(commit.realm_id.as_str()).bind::<Jsonb, _>(source).bind::<BigInt, _>(to_i64(commit.stream_position,"withheld authorization cut")?).execute(&mut *conn).await?;
-    }
+    // A withheld Event may have changed authorization on either held stream.
+    // Its Commit advances continuity, but its undisclosed body cannot advance
+    // the verified authorization cut. Reusing the old cut would also reject
+    // the next full successor as non-contiguous after this chain node.
+    let source = serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?;
+    sql_query("DELETE FROM replica_authorization_cuts WHERE realm_id=$1 AND source_stream_ref=$2 AND head_stream_position<$3")
+        .bind::<Text, _>(commit.realm_id.as_str()).bind::<Jsonb, _>(source).bind::<BigInt, _>(to_i64(commit.stream_position,"withheld authorization cut")?).execute(&mut *conn).await?;
 
     Ok(CommittedReplicaOutcome::Stored)
 }

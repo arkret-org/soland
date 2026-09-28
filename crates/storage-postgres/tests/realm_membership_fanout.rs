@@ -3748,10 +3748,10 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
     };
     let circle_join = circle_transition(&create.authority_commit, "join", None);
     uow.commit_event(circle_join.clone()).await.unwrap();
-    let rows = fanout_rows(&pool, &circle_join).await;
-    assert_eq!(rows.len(), 1);
+    let join_rows = fanout_rows(&pool, &circle_join).await;
+    assert_eq!(join_rows.len(), 1);
     let witnesses: Vec<RealmFanoutAuthorityWitness> =
-        serde_json::from_value(rows[0].realm_fanout["authority_witnesses"].clone()).unwrap();
+        serde_json::from_value(join_rows[0].realm_fanout["authority_witnesses"].clone()).unwrap();
     assert_eq!(
         witnesses[0].membership_event_ref,
         join.authority_commit.event.event_id.to_string()
@@ -3859,8 +3859,129 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         ),
         vec![true]
     );
-    let leave = circle_transition(&circle_join.authority_commit, "leave", Some("join"));
+    // The Circle's creator joins as well, then writes a plaintext Message.
+    // Alice's Station holds the Circle stream but is not in the Realm's
+    // plaintext-visible service set, so it gets only the Message Commit via
+    // peer scan. The next full replica must wait for that chain node.
+    let circle_event = |previous: &AuthorityCommitTransaction,
+                        kind: arkret_wire::EventKind,
+                        payload: serde_json::Value| {
+        let event =
+            ordinary_realm::event_for_actor(kind, scope.clone(), creator.clone(), payload, at);
+        let mut request = ordinary_realm::request_for_event(previous, event, at);
+        request.authority_commit.commit.stream_ref = stream.clone();
+        sourced(request)
+    };
+    let creator_join = circle_event(
+        &circle_join.authority_commit,
+        arkret_wire::EventKind::CircleMemberState,
+        serde_json::json!({"circle_id":circle,"member_id":creator,"membership":"join",
+            "expected_membership":null}),
+    );
+    uow.commit_event(creator_join.clone()).await.unwrap();
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &creator_join, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let strand = circle_event(
+        &creator_join.authority_commit,
+        arkret_wire::EventKind::StrandCreate,
+        serde_json::json!({"object":{
+            "schema":"ak.schema.strand.v1","realm_id":realm,"scope_circle_id":circle,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Withheld gap discussion"},"state":"active",
+            "created_by":creator,"created_at":at}}),
+    );
+    uow.commit_event(strand.clone()).await.unwrap();
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &strand, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    let message = circle_event(
+        &strand.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        message_payload(&strand_id, "Circle plaintext stays at the governor"),
+    );
+    uow.commit_event(message.clone()).await.unwrap();
+    assert!(fanout_rows(&pool, &message).await.is_empty());
+    let leave = circle_transition(&message.authority_commit, "leave", Some("join"));
     uow.commit_event(leave.clone()).await.unwrap();
+    assert_code(
+        &member
+            .install_committed_replica(&replica(&unit, &leave, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    assert!(
+        member
+            .committed_event(&leave.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the successor cannot skip a withheld Circle Commit"
+    );
+    let scan_gap = arkret_wire::StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: stream.clone(),
+        direction: arkret_wire::StreamScanDirection::After(Some(
+            strand.authority_commit.commit.stream_position,
+        )),
+        limit: 16,
+    };
+    let soland_storage::AccountStreamScan::Page(gap) =
+        peer_page(&governor, scan_gap, &member_station()).await
+    else {
+        panic!("the hosting Station must receive a Circle peer scan")
+    };
+    assert_eq!(
+        rows(&gap),
+        vec![
+            (message.authority_commit.commit.stream_position, false),
+            (leave.authority_commit.commit.stream_position, true),
+        ]
+    );
+    let arkret_wire::CommittedEventView::Withheld(withheld) = &gap.committed_events[0] else {
+        panic!("plaintext Message must be withheld")
+    };
+    assert_eq!(withheld.commit, message.authority_commit.commit);
+    assert!(
+        !serde_json::to_string(&gap)
+            .unwrap()
+            .contains("Circle plaintext stays at the governor")
+    );
+    assert_eq!(
+        member
+            .install_committed_chain_node(&CommittedChainNode {
+                local_service_id: member_station(),
+                authority: governance_authority(&unit),
+                commit: withheld.commit.clone(),
+            })
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert!(
+        member
+            .committed_event(&message.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        member
+            .install_committed_replica(&replica(&unit, &leave, false))
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
     assert!(
         !governor
             .realm_fanout_still_owed(
