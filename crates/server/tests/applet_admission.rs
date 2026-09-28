@@ -271,6 +271,80 @@ async fn accepted_applet_revoke_fences_original_bot_authority_from_durable_curre
 }
 
 #[tokio::test]
+async fn delegated_session_revoke_modes_fail_closed_without_account_authority_inventory() {
+    let fixture = Fixture::new().await;
+    let install = fixture.install(false).await;
+    let before = authority_snapshot(&fixture.pool).await;
+    let scope = ScopeRef::Realm {
+        realm_id: fixture.realm.clone(),
+    };
+    for mode in [
+        arkret_wire::AppletRevokeMode::RevokeAll,
+        arkret_wire::AppletRevokeMode::RevokeDelegatedSessions,
+    ] {
+        let preview_body = serde_json::to_value(AppletRevokePreviewRequestBody {
+            effective_scope: scope.clone(),
+            reason_code: arkret_wire::ReasonCode::from_wire("applet_revoked"),
+            revoke_mode: mode,
+        })
+        .unwrap();
+        let preview_path = format!(
+            "/_arkret/self/applets/{}/revoke/preview",
+            install.package.applet_id
+        );
+        let (status, rejection) = fixture
+            .admin_post(
+                &preview_path,
+                arkret_wire::ServiceOperationId::SELF_APPLET_REVOKE_COMMAND_PREVIEW_V1,
+                &preview_body,
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{mode:?}: {rejection}");
+        assert_eq!(
+            rejection["type"],
+            "https://arkret.org/problems/failed_precondition"
+        );
+        assert_eq!(
+            rejection["detail"],
+            "delegated-session revoke preview requires an Account Authority enumeration binding"
+        );
+        assert_eq!(authority_snapshot(&fixture.pool).await, before);
+
+        let commit_body = serde_json::to_value(AppletRevokeRequestBody {
+            revoke_plan_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            effective_scope: scope.clone(),
+            reason_code: arkret_wire::ReasonCode::from_wire("applet_revoked"),
+            revoke_mode: mode,
+            capability_revoke_events: Vec::new(),
+            membership_state_events: Vec::new(),
+            proof: None,
+        })
+        .unwrap();
+        let commit_path = format!("/_arkret/self/applets/{}/revoke", install.package.applet_id);
+        let (status, rejection) = fixture
+            .admin_post(
+                &commit_path,
+                arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_REVOKE_V1,
+                &commit_body,
+                Some(&format!("revoke-inventory-{}", uuid::Uuid::now_v7())),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{mode:?}: {rejection}");
+        assert_eq!(
+            rejection["type"],
+            "https://arkret.org/problems/failed_precondition"
+        );
+        assert_eq!(
+            rejection["detail"],
+            "delegated-session revoke preview requires an Account Authority enumeration binding"
+        );
+        assert_eq!(authority_snapshot(&fixture.pool).await, before);
+    }
+}
+
+#[tokio::test]
 async fn service_bridge_relinquishes_real_installed_grant_and_replays_durable_commit() {
     let fixture = Fixture::new().await;
     let install = fixture.install(false).await;
