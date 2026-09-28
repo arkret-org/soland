@@ -8,7 +8,7 @@ mod ordinary_realm;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use arkret_identifiers::{AppletId, Did, EventId, RealmId};
+use arkret_identifiers::{AppletId, Did, EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::{
     CapabilityGrantCreateBody, CapabilityGrantPayload,
 };
@@ -913,10 +913,8 @@ impl Fixture {
             .await;
         assert_eq!(status, StatusCode::OK, "revoke preview: {preview}");
         let preview: AppletRevokePreviewOutcome = serde_json::from_value(preview).unwrap();
-        assert_eq!(
-            preview.revoke_plan_digest.as_str(),
-            arkret_canonical::canonical_sha256(&preview.revoke_plan).unwrap()
-        );
+        let revoke_plan_digest =
+            Hash::new(arkret_canonical::canonical_sha256(&preview.revoke_plan).unwrap()).unwrap();
         let events = preview
             .revoke_plan
             .capability_revocations
@@ -943,7 +941,7 @@ impl Fixture {
             event:self.admin_event(EventKind::MemberState,ScopeRef::Realm {realm_id:self.realm.clone()},json!({"member_id":intent.member_id,"membership":intent.membership,"reason":intent.reason_code})), approval_signatures:None,
         }).collect();
         let body = serde_json::to_value(AppletRevokeRequestBody {
-            revoke_plan_digest: preview.revoke_plan_digest,
+            revoke_plan_digest,
             effective_scope: preview.revoke_plan.effective_scope,
             reason_code: reason,
             revoke_mode: arkret_wire::AppletRevokeMode::RevokeRuntimeOnly,
