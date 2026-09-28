@@ -240,7 +240,7 @@ pub(crate) async fn commit_authority_position_in_connection(
             return Err(refused("source List is not in the Board"));
         }
     }
-    crate::realm_authorization_cut::authorize_strand_position_in_connection(
+    let wip_override = crate::realm_authorization_cut::authorize_strand_position_in_connection(
         conn,
         event,
         current.as_ref().map(|value| &value.list_space_id),
@@ -262,7 +262,7 @@ pub(crate) async fn commit_authority_position_in_connection(
                     .as_ref()
                     .is_none_or(|value| value.list_space_id != destination),
             );
-            if counts.count + additional > limit {
+            if counts.count + additional > limit && !wip_override {
                 match fields.get("wip_limit_enforcement").and_then(Value::as_str) {
                     Some("warn") => {
                         tracing::warn!(realm=%event.realm_id, list=%destination, "accepted Strand move exceeds List WIP limit")

@@ -427,10 +427,9 @@ fn constraint_is_evaluable(constraint: &GrantConstraint) -> bool {
         (GrantConstraintKind::ScopeLimitation, None) => {
             // Placement resolves the source from durable current and the
             // destination from the signed payload at the accepting cut.
-            // An override=true grant needs a separate WIP-proof path and
-            // remains closed until that path exists.
+            // The position authority separately counts only a satisfied,
+            // quota-free matching grant carrying override=true as WIP proof.
             constraint.allowed_relation_kinds.is_empty()
-                && constraint.wip_limit_override != Some(true)
         }
         _ => false,
     }

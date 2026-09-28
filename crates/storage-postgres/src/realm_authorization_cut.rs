@@ -44,7 +44,8 @@ use std::collections::BTreeMap;
 
 use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilityGrant, CapabilitySubject, IssuerAuthorityRef,
+    CapabilityGrant, CapabilitySubject, GrantConstraintEffect, GrantConstraintKind,
+    IssuerAuthorityRef,
 };
 use arkret_wire::{
     ActorId, CapabilityActionId, CurrentRevision, EventKind, GrantId, RealmId, StrandId,
@@ -517,11 +518,11 @@ impl RealmAuthorizationCut {
         source: Option<&arkret_wire::SpaceId>,
         destination: &arkret_wire::SpaceId,
         at: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<()> {
+    ) -> PersistenceResult<bool> {
         self.require_open_lifecycle(event)?;
         self.require_governed_member(&event.kind)?;
         if self.profile_authorized() {
-            return Ok(());
+            return Ok(false);
         }
         let actions = Self::unconditional_actions(&event.kind);
         let owner =
@@ -541,12 +542,37 @@ impl RealmAuthorizationCut {
             )
             .await?
         {
-            ActionAdmission::Admitted => Ok(()),
-            ActionAdmission::NotHeld { .. } => Err(capability_denied(format!(
-                "the actor holds no placement action authorizing {}",
-                event.kind.as_str()
-            ))),
-        }
+            ActionAdmission::Admitted => {}
+            ActionAdmission::NotHeld { .. } => {
+                return Err(capability_denied(format!(
+                    "the actor holds no placement action authorizing {}",
+                    event.kind.as_str()
+                )));
+            }
+        };
+        // Only a grant that names this action and exact Strand, admits the
+        // durable source/target List facts, and owes no quota reservation may
+        // override the List policy. Root ownership alone does not imply it.
+        Ok(self
+            .evaluate(&actions, &target, &facts, at)
+            .unreserved()
+            .iter()
+            .any(|grant| {
+                let wip_allow = |constraint: &&arkret_models_collaboration::governance::grant_constraint::GrantConstraint| {
+                    constraint.constraint_kind == GrantConstraintKind::ScopeLimitation
+                        && constraint.effect == GrantConstraintEffect::Allow
+                };
+                grant
+                    .constraints
+                    .iter()
+                    .filter(wip_allow)
+                    .any(|constraint| constraint.wip_limit_override == Some(true))
+                    && !grant
+                        .constraints
+                        .iter()
+                        .filter(wip_allow)
+                        .any(|constraint| constraint.wip_limit_override == Some(false))
+            }))
     }
 
     /// The capability-gated verdict for an `event` that acts on one authored
@@ -941,7 +967,7 @@ pub(crate) async fn authorize_strand_position_in_connection(
     source: Option<&arkret_wire::SpaceId>,
     destination: &arkret_wire::SpaceId,
     at: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<()> {
+) -> PersistenceResult<bool> {
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
     cut.require_position_in_connection(conn, event, source, destination, at)
