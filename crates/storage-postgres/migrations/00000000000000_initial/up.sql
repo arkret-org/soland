@@ -3013,7 +3013,15 @@ BEGIN
         priority, state, projection_action,
         projection_data, created_at, updated_at
     ) VALUES (
-        notification_id, controller_principal_id, account_pk, service_id,
+        notification_id,
+        jsonb_build_object(
+            'kind', 'account',
+            'account_id', jsonb_build_object(
+                'principal_id', controller_principal_id,
+                'station_id', service_id
+            )
+        )::text,
+        account_pk, service_id,
         'agent_runtime_approval', artifact_id,
         'normal', 'unread', delta_action,
         notification_data, now(), now()

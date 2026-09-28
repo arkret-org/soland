@@ -2279,6 +2279,80 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
 }
 
 #[tokio::test]
+async fn postgres_agent_approval_trigger_emits_a_readable_account_notification() {
+    use diesel::{QueryableByName, sql_query, sql_types};
+    use diesel_async::RunQueryDsl;
+
+    #[derive(QueryableByName)]
+    struct AccountRow {
+        #[diesel(sql_type = sql_types::BigInt)]
+        pk: i64,
+    }
+
+    let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let station_id = format!("ak:did_core:webvh:Qs{suffix}");
+    let controller_id = format!("ak:did_core:webvh:Qc{suffix}");
+    let agent_scid = format!("Qa{suffix}");
+    let agent_id = format!("ak:did_core:webvh:{agent_scid}");
+    let realm_id = event_derived_realm_id(suffix.as_bytes());
+    let approval_request_id = format!("agent_runtime_approval:{}", uuid::Uuid::now_v7());
+    let approval_notification_id = uuid::Uuid::now_v7();
+    let controller_authorization_ref =
+        format!("did:webvh:{agent_scid}:station.example#managed-controller");
+    let mut conn = pool.get().await.unwrap();
+    let account =
+        sql_query("INSERT INTO accounts(principal_id, station_id) VALUES($1, $2) RETURNING pk")
+            .bind::<sql_types::Text, _>(&controller_id)
+            .bind::<sql_types::Text, _>(&station_id)
+            .get_result::<AccountRow>(&mut *conn)
+            .await
+            .unwrap();
+    sql_query(
+        "INSERT INTO agent_principals(
+            id, controller_principal_id, principal_control_realm_id,
+            controller_authorization_ref, controller_account_pk, recipient_id,
+            approval_request_id, approval_notification_id,
+            approval_requested_at, pairing_expires_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                  NOW(), NOW() + INTERVAL '15 minutes', NOW(), NOW())",
+    )
+    .bind::<sql_types::Text, _>(&agent_id)
+    .bind::<sql_types::Text, _>(&controller_id)
+    .bind::<sql_types::Text, _>(&realm_id)
+    .bind::<sql_types::Text, _>(&controller_authorization_ref)
+    .bind::<sql_types::BigInt, _>(account.pk)
+    .bind::<sql_types::Text, _>(&station_id)
+    .bind::<sql_types::Text, _>(&approval_request_id)
+    .bind::<sql_types::Uuid, _>(approval_notification_id)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+
+    let rows = PgNotificationStore { pool }
+        .list_for_account(&soland_storage::AccountPk(account.pk), &station_id, None)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].record.recipient_actor_id,
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(controller_id).unwrap(),
+            arkret_wire::DidCoreId::new(station_id).unwrap(),
+        ))
+    );
+    let data = rows[0]
+        .record
+        .delta
+        .agent_runtime_approval()
+        .expect("typed Agent approval notification");
+    assert_eq!(data.approval_request_id.as_str(), approval_request_id);
+    assert_eq!(data.agent_id.as_str(), agent_id);
+}
+
+#[tokio::test]
 async fn postgres_adapter_satisfies_mimi_consent_correlation_contract() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
