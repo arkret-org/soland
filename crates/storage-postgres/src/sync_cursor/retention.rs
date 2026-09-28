@@ -353,6 +353,7 @@ mod tests {
             window_cursor: arkret_wire::Cursor::new("ak:cursor:window".to_owned()).unwrap(),
             expires_at_ms: now + 3_600_000,
             retained_revision,
+            governance_generation: 0,
             stream_heads: vec![arkret_wire::CommitStreamHead {
                 stream_ref: arkret_wire::CommitStreamRef::Realm {
                     realm_id: realm_id.clone(),

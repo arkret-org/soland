@@ -40,6 +40,12 @@ struct AuthorityRow {
 }
 
 #[derive(QueryableByName)]
+struct RealmGenerationRow {
+    #[diesel(sql_type = BigInt)]
+    generation: i64,
+}
+
+#[derive(QueryableByName)]
 struct EventRow {
     #[diesel(sql_type = Jsonb)]
     envelope: Value,
@@ -3263,25 +3269,43 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn realm_stream_heads(
         &self,
         realm_id: &arkret_wire::RealmId,
-    ) -> PersistenceResult<Vec<arkret_wire::CommitStreamHead>> {
+    ) -> PersistenceResult<Option<soland_storage::RealmStreamFrontier>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let rows = sql_query(REALM_STREAM_HEADS_SQL)
-            .bind::<Text, _>(realm_id.as_str())
-            .load::<HeadRow>(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
-        let mut heads = rows
-            .into_iter()
-            .map(|row| {
-                Ok(arkret_wire::CommitStreamHead {
-                    stream_ref: decode_json(row.stream_ref, "commit stream ref")?,
-                    stream_position: to_u64(row.stream_position, "stream position")?,
-                    commit_id: decode_text(row.commit_id, "RealmCommit id")?,
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let Some(generation) =
+                sql_query("SELECT generation FROM realm_authorities WHERE realm_id=$1")
+                    .bind::<Text, _>(realm_id.as_str())
+                    .get_result::<RealmGenerationRow>(&mut *conn)
+                    .await
+                    .optional()?
+            else {
+                return Ok(None);
+            };
+            let rows = sql_query(REALM_STREAM_HEADS_SQL)
+                .bind::<Text, _>(realm_id.as_str())
+                .load::<HeadRow>(&mut *conn)
+                .await?;
+            let mut stream_heads = rows
+                .into_iter()
+                .map(|row| {
+                    Ok(arkret_wire::CommitStreamHead {
+                        stream_ref: decode_json(row.stream_ref, "commit stream ref")?,
+                        stream_position: to_u64(row.stream_position, "stream position")?,
+                        commit_id: decode_text(row.commit_id, "RealmCommit id")?,
+                    })
                 })
-            })
-            .collect::<PersistenceResult<Vec<_>>>()?;
-        heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
-        Ok(heads)
+                .collect::<PersistenceResult<Vec<_>>>()?;
+            stream_heads.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
+            Ok(Some(soland_storage::RealmStreamFrontier {
+                governance_generation: to_u64(generation.generation, "governance generation")?,
+                stream_heads,
+            }))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn realm_state_snapshot_material(

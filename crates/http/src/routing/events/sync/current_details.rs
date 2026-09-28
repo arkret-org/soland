@@ -77,11 +77,18 @@ fn realm_selection(filter: &AccountFilter, realm: &RealmId) -> RealmSelection {
 /// Whether a delivered window must be replaced by a newly frozen one.
 fn needs_new_window(
     progress: Option<&AccountDetailProgress>,
-    heads: &[arkret_wire::CommitStreamHead],
+    frontier: &soland_storage::RealmStreamFrontier,
+    realm: &RealmId,
     now_ms: i64,
 ) -> bool {
+    let realm_head = frontier.stream_heads.iter().find(|head| {
+        matches!(&head.stream_ref, arkret_wire::CommitStreamRef::Realm { realm_id } if realm_id == realm)
+    });
     progress.is_none_or(|progress| {
-        progress.expires_at_ms - now_ms < WINDOW_RENEW_BEFORE_MS || progress.stream_heads != heads
+        progress.expires_at_ms - now_ms < WINDOW_RENEW_BEFORE_MS
+            || progress.governance_generation != frontier.governance_generation
+            || realm_head
+                .is_none_or(|head| progress.stream_heads.as_slice() != std::slice::from_ref(head))
     })
 }
 
@@ -188,6 +195,7 @@ async fn freeze(
                 window_cursor: window_cursor.clone(),
                 expires_at_ms,
                 retained_revision,
+                governance_generation: window.governance_generation,
                 stream_heads: vec![head.clone()],
             };
             Ok(Freeze::Window(
@@ -271,15 +279,26 @@ pub(super) async fn frame(
                 Some(RealmDetailErrorCode::NotFound)
             }
             (RealmSelection::RealmStream, Some(account)) => {
-                let heads = match state.authority_commits().realm_stream_heads(&realm).await {
-                    Ok(heads) => heads,
+                let frontier = match state.authority_commits().realm_stream_heads(&realm).await {
+                    Ok(Some(frontier)) => frontier,
+                    Ok(None) => {
+                        positions.remove(realm.as_str());
+                        if report_unavailable {
+                            entries.insert(
+                                realm.to_string(),
+                                unavailable(RealmDetailErrorCode::NotFound),
+                            );
+                            last_realm = Some(realm.to_string());
+                        }
+                        continue;
+                    }
                     Err(error) => {
                         tracing::warn!(%error, realm_id = %realm, "Realm stream heads unavailable");
                         return Some(control("resync_required"));
                     }
                 };
                 let delivered = positions.get(realm.as_str());
-                if !needs_new_window(delivered, &heads, now_ms) {
+                if !needs_new_window(delivered, &frontier, &realm, now_ms) {
                     continue;
                 }
                 // The Realm stream head this cursor already delivered, if
@@ -436,22 +455,66 @@ mod tests {
     }
 
     #[test]
-    fn a_delivered_window_is_refrozen_only_on_head_change_or_near_expiry() {
+    fn a_delivered_window_is_refrozen_on_generation_head_or_expiry_change() {
         let a = realm(1);
         let now = 1_000_000_000;
         let heads = vec![head(&a, 8, 3)];
+        let frontier = soland_storage::RealmStreamFrontier {
+            governance_generation: 0,
+            stream_heads: heads.clone(),
+        };
         let progress = AccountDetailProgress {
             window_cursor: arkret_wire::Cursor::new("ak:cursor:window".to_owned()).unwrap(),
             expires_at_ms: now + WINDOW_TTL_MS,
             retained_revision: 4,
+            governance_generation: 0,
             stream_heads: heads.clone(),
         };
-        assert!(needs_new_window(None, &heads, now));
-        assert!(!needs_new_window(Some(&progress), &heads, now));
-        assert!(needs_new_window(Some(&progress), &[head(&a, 9, 4)], now));
+        assert!(needs_new_window(None, &frontier, &a, now));
+        assert!(!needs_new_window(Some(&progress), &frontier, &a, now));
         assert!(needs_new_window(
             Some(&progress),
-            &heads,
+            &soland_storage::RealmStreamFrontier {
+                governance_generation: 1,
+                stream_heads: heads.clone(),
+            },
+            &a,
+            now,
+        ));
+        assert!(needs_new_window(
+            Some(&progress),
+            &soland_storage::RealmStreamFrontier {
+                governance_generation: 0,
+                stream_heads: vec![head(&a, 9, 4)],
+            },
+            &a,
+            now,
+        ));
+        let circle = arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [9; 32],
+        ));
+        let mut hidden_scope_frontier = frontier.clone();
+        hidden_scope_frontier
+            .stream_heads
+            .push(arkret_wire::CommitStreamHead {
+                stream_ref: arkret_wire::CommitStreamRef::Circle {
+                    realm_id: a.clone(),
+                    circle_id: circle,
+                },
+                stream_position: 2,
+                commit_id: arkret_wire::RealmCommitId::from_digest([10; 32]),
+            });
+        assert!(!needs_new_window(
+            Some(&progress),
+            &hidden_scope_frontier,
+            &a,
+            now
+        ));
+        assert!(needs_new_window(
+            Some(&progress),
+            &frontier,
+            &a,
             now + WINDOW_TTL_MS - WINDOW_RENEW_BEFORE_MS + 1,
         ));
     }
@@ -463,16 +526,24 @@ mod tests {
             window_cursor: arkret_wire::Cursor::new("ak:cursor:window".to_owned()).unwrap(),
             expires_at_ms: 7,
             retained_revision: 4,
+            governance_generation: 0,
             stream_heads: vec![head(&a, 8, 3)],
         };
         let value = serde_json::to_value(&progress).unwrap();
         assert_eq!(value["retained_revision"], 4);
+        assert_eq!(value["governance_generation"], 0);
         let mut open = value.clone();
         open["timeline_limit"] = json!(20);
         assert!(serde_json::from_value::<AccountDetailProgress>(open).is_err());
-        let mut missing = value;
+        let mut missing = value.clone();
         missing.as_object_mut().unwrap().remove("retained_revision");
         assert!(serde_json::from_value::<AccountDetailProgress>(missing).is_err());
+        let mut missing_generation = value;
+        missing_generation
+            .as_object_mut()
+            .unwrap()
+            .remove("governance_generation");
+        assert!(serde_json::from_value::<AccountDetailProgress>(missing_generation).is_err());
     }
 
     #[test]

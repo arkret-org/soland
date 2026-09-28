@@ -1565,12 +1565,12 @@ pub trait AuthorityCommitStore: Send + Sync {
         selector: &arkret_wire::CurrentSelector,
     ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>>;
 
-    /// Current heads for every independent Realm, Circle, and Sidecar stream
-    /// belonging to one Realm, sorted by `stream_ref`.
+    /// Governance generation and current heads for every independent Realm,
+    /// Circle, and Sidecar stream at one durable cut, sorted by `stream_ref`.
     async fn realm_stream_heads(
         &self,
         realm_id: &arkret_wire::RealmId,
-    ) -> PersistenceResult<Vec<CommitStreamHead>>;
+    ) -> PersistenceResult<Option<crate::RealmStreamFrontier>>;
 
     /// Read the maximal-disclosure snapshot material from one consistent
     /// durable cut. Implementations must sort every repeated field.

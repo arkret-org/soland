@@ -1375,7 +1375,7 @@ impl AuthorityCommitApplication {
     pub async fn realm_stream_heads(
         &self,
         realm_id: &arkret_wire::RealmId,
-    ) -> ServiceResult<Vec<CommitStreamHead>> {
+    ) -> ServiceResult<Option<soland_storage::RealmStreamFrontier>> {
         Ok(self.store().realm_stream_heads(realm_id).await?)
     }
 

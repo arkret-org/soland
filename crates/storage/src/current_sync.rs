@@ -19,5 +19,13 @@ pub struct AccountDetailProgress {
     pub window_cursor: Cursor,
     pub expires_at_ms: i64,
     pub retained_revision: i64,
+    pub governance_generation: u64,
+    pub stream_heads: Vec<CommitStreamHead>,
+}
+
+/// One consistent durable cut used to decide whether a detail window changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmStreamFrontier {
+    pub governance_generation: u64,
     pub stream_heads: Vec<CommitStreamHead>,
 }
