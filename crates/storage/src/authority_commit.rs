@@ -1112,6 +1112,8 @@ pub struct ReplicaStreamAnchor {
 pub struct ReplicaAnchorInstall {
     pub realm_id: arkret_wire::RealmId,
     pub join_commit_id: arkret_wire::RealmCommitId,
+    /// Generation authenticated by the signed bootstrap snapshot.
+    pub governance_generation: u64,
     /// The snapshot's head on the Realm stream, at or after the join.
     pub snapshot_head: CommitStreamHead,
     pub visible_stream_heads: Vec<CommitStreamHead>,

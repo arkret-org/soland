@@ -323,6 +323,7 @@ async fn anchor_stream(
         .install_replica_anchor(&ReplicaAnchorInstall {
             realm_id: realm_id.clone(),
             join_commit_id: join.commit_id.clone(),
+            governance_generation: snapshot.governance_generation,
             snapshot_head: head.clone(),
             visible_stream_heads: snapshot.visible_stream_heads.clone(),
             current_state_entries: snapshot.current_state_entries.clone(),

@@ -89,6 +89,26 @@ fn validate_authority_shape(authority: &CurrentRealmAuthority) -> Result<(), PgT
     Ok(())
 }
 
+async fn require_current_replica_authority(
+    conn: &mut AsyncPgConnection,
+    authority: &CurrentRealmAuthority,
+    commit: &arkret_wire::RealmCommit,
+) -> Result<(), PgTransactionError> {
+    let current = locked_authority(conn, &authority.realm_id)
+        .await?
+        .ok_or_else(|| PersistenceError::Internal("remote authority row disappeared".into()))?;
+    if !same_authority(&current, authority)
+        || commit.governance_generation != authority.generation
+        || commit.authority_ref != authority.authority_ref
+    {
+        return Err(conflict(
+            ConflictCode::ForkQuarantine,
+            "replica Commit is outside the current governance tenure",
+        ));
+    }
+    Ok(())
+}
+
 /// Upsert one verified remote authority under the Realm authority row lock.
 pub(super) async fn record_remote_authority_in_connection(
     conn: &mut AsyncPgConnection,
@@ -580,6 +600,7 @@ async fn install_replica_commit_in_connection(
     if let Some(outcome) = held_duplicate(conn, commit, Some(event)).await? {
         return Ok(outcome);
     }
+    require_current_replica_authority(conn, &replica.authority, commit).await?;
     let key = stream_key(&commit.stream_ref)?;
     let head = locked_head(conn, &key).await?;
     let anchor = locked_anchor(conn, &key).await?;
@@ -715,6 +736,7 @@ pub(super) async fn install_committed_chain_node_in_connection(
     if let Some(outcome) = held_duplicate(conn, commit, None).await? {
         return Ok(outcome);
     }
+    require_current_replica_authority(conn, &node.authority, commit).await?;
     let key = stream_key(&commit.stream_ref)?;
     let head = locked_head(conn, &key).await?;
     anchored_head(locked_anchor(conn, &key).await?)?;
@@ -777,6 +799,20 @@ pub(super) async fn install_replica_anchor_in_connection(
             )
         })?;
     let join = &anchor.join_commit;
+    let current = locked_authority(conn, &install.realm_id)
+        .await?
+        .ok_or_else(|| {
+            conflict(
+                ConflictCode::DependencyMissing,
+                "replica authority is absent",
+            )
+        })?;
+    if current.generation != install.governance_generation {
+        return Err(conflict(
+            ConflictCode::ForkQuarantine,
+            "bootstrap snapshot is outside the current governance tenure",
+        ));
+    }
     if join.commit_id != install.join_commit_id {
         return Err(invalid("the anchor names another opening join").into());
     }

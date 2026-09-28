@@ -901,6 +901,16 @@ fn governance_authority(unit: &OrdinaryRealmBootstrapCommitUnit) -> CurrentRealm
     unit.transactions[0].expected_authority.clone()
 }
 
+fn successor_authority(mut authority: CurrentRealmAuthority) -> CurrentRealmAuthority {
+    let handoff = arkret_wire::RealmAuthorityHandoffId::from_digest([0x72; 32]);
+    authority.generation += 1;
+    authority.service_id =
+        arkret_wire::DidCoreId::new("ak:did_core:web:next-governor.example").unwrap();
+    authority.authority_ref = arkret_wire::RealmCommitAuthorityRef::Handoff(handoff.clone());
+    authority.last_handoff_ref = Some(handoff);
+    authority
+}
+
 /// A replica as the member Station receives it: `opens_stream` marks the
 /// hosted member's own join on a stream this Station does not hold yet.
 fn replica(
@@ -944,6 +954,7 @@ async fn anchor_at_join(
         .install_replica_anchor(&ReplicaAnchorInstall {
             realm_id: commit.realm_id.clone(),
             join_commit_id: commit.commit_id.clone(),
+            governance_generation: commit.governance_generation,
             snapshot_head: arkret_wire::CommitStreamHead {
                 stream_ref: commit.stream_ref.clone(),
                 stream_position: commit.stream_position,
@@ -1292,6 +1303,133 @@ async fn remote_authority_records_only_move_forward() {
             .unwrap()
             .unwrap(),
         authority
+    );
+}
+
+#[tokio::test]
+async fn old_governance_replica_replay_is_idempotent_but_successor_writes_nothing() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = bootstrap_unit_with_join_rule("old-replica-tenure", "public");
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let actor = remote_member("old-replica-tenure-member");
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        actor.clone(),
+        &actor,
+        "join",
+    );
+    let opening = replica(&unit, &join, true);
+    assert_eq!(
+        store.install_committed_replica(&opening).await.unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    anchor_at_join(&store, &join, vec![joined_row(&join, &actor)]).await;
+    store
+        .record_remote_authority(
+            &successor_authority(governance_authority(&unit)),
+            &member_station(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.install_committed_replica(&opening).await.unwrap(),
+        CommittedReplicaOutcome::Duplicate
+    );
+    let leave = membership_request(&join.authority_commit, actor.clone(), &actor, "leave");
+    let error = store
+        .install_committed_replica(&replica(&unit, &leave, false))
+        .await
+        .unwrap_err();
+    assert_code(&error, ConflictCode::ForkQuarantine);
+    let error = store
+        .install_committed_chain_node(&CommittedChainNode {
+            local_service_id: member_station(),
+            authority: governance_authority(&unit),
+            commit: leave.authority_commit.commit.clone(),
+        })
+        .await
+        .unwrap_err();
+    assert_code(&error, ConflictCode::ForkQuarantine);
+    assert!(
+        store
+            .committed_event(&leave.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        member_state(&pool, &realm_id, &actor).await.as_deref(),
+        Some("join")
+    );
+    assert_eq!(
+        store
+            .current_authority(&realm_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .generation,
+        1
+    );
+}
+
+#[tokio::test]
+async fn old_governance_snapshot_cannot_anchor_or_publish_current() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = bootstrap_unit_with_join_rule("old-snapshot-tenure", "public");
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let actor = remote_member("old-snapshot-tenure-member");
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        actor.clone(),
+        &actor,
+        "join",
+    );
+    store
+        .install_committed_replica(&replica(&unit, &join, true))
+        .await
+        .unwrap();
+    store
+        .record_remote_authority(
+            &successor_authority(governance_authority(&unit)),
+            &member_station(),
+        )
+        .await
+        .unwrap();
+    let commit = &join.authority_commit.commit;
+    let head = arkret_wire::CommitStreamHead {
+        stream_ref: commit.stream_ref.clone(),
+        stream_position: commit.stream_position,
+        commit_id: commit.commit_id.clone(),
+    };
+    let error = store
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: realm_id.clone(),
+            join_commit_id: commit.commit_id.clone(),
+            governance_generation: 0,
+            snapshot_head: head.clone(),
+            visible_stream_heads: vec![head],
+            current_state_entries: vec![joined_row(&join, &actor)],
+        })
+        .await
+        .unwrap_err();
+    assert_code(&error, ConflictCode::ForkQuarantine);
+    assert!(
+        store
+            .replica_stream_anchor(&realm_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .anchored_head
+            .is_none()
+    );
+    assert_eq!(
+        member_state(&pool, &realm_id, &actor).await.as_deref(),
+        Some("join")
     );
 }
 
@@ -1645,6 +1783,7 @@ async fn circle_create_withheld_gap_allows_next_realm_replica() {
         .install_replica_anchor(&ReplicaAnchorInstall {
             realm_id: realm_id.clone(),
             join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            governance_generation: join.authority_commit.commit.governance_generation,
             snapshot_head: material.visible_stream_heads[0].clone(),
             visible_stream_heads: material.visible_stream_heads.clone(),
             current_state_entries: material.current_state_entries,
@@ -3122,6 +3261,7 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         .install_replica_anchor(&ReplicaAnchorInstall {
             realm_id: realm_id.clone(),
             join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            governance_generation: join.authority_commit.commit.governance_generation,
             snapshot_head: head.clone(),
             visible_stream_heads: material.visible_stream_heads.clone(),
             current_state_entries: material.current_state_entries.clone(),
@@ -3696,6 +3836,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         .install_replica_anchor(&ReplicaAnchorInstall {
             realm_id: realm.clone(),
             join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            governance_generation: join.authority_commit.commit.governance_generation,
             snapshot_head: realm_head,
             visible_stream_heads: material.visible_stream_heads,
             current_state_entries: material.current_state_entries,
@@ -3838,6 +3979,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         .install_replica_anchor(&ReplicaAnchorInstall {
             realm_id: realm.clone(),
             join_commit_id: circle_join.authority_commit.commit.commit_id.clone(),
+            governance_generation: circle_join.authority_commit.commit.governance_generation,
             snapshot_head: circle_head,
             visible_stream_heads: material.visible_stream_heads.clone(),
             current_state_entries: material.current_state_entries.clone(),
