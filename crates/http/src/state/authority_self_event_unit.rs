@@ -119,6 +119,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::StrandCreate
             | arkret_wire::EventKind::RealmProfile
             | arkret_wire::EventKind::StrandUpdate
+            | arkret_wire::EventKind::RsvpSet
             | arkret_wire::EventKind::StrandArchive
             | arkret_wire::EventKind::StrandRestore
             | arkret_wire::EventKind::StrandStageSet

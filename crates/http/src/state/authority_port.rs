@@ -59,6 +59,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::StrandCreate
         | EventKind::RealmProfile
         | EventKind::StrandUpdate
+        | EventKind::RsvpSet
         | EventKind::StrandArchive
         | EventKind::StrandRestore
         | EventKind::StrandStageSet
@@ -569,6 +570,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
+            EventKind::RsvpSet,
             EventKind::StrandArchive,
             EventKind::StrandRestore,
             EventKind::StrandStageSet,
@@ -616,6 +618,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
+            EventKind::RsvpSet,
             EventKind::StrandArchive,
             EventKind::StrandRestore,
             EventKind::StrandStageSet,
