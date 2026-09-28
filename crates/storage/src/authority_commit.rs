@@ -6,7 +6,7 @@
 //! Sidecar stream advances independently.
 
 use arkret_wire::{
-    CommitStreamHead, CommitStreamRef, Event, MlsWelcomeDelivery, RealmAuthorityHandoff,
+    CommitStreamHead, CommitStreamRef, Event, EventId, MlsWelcomeDelivery, RealmAuthorityHandoff,
     RealmCommit, RealmCommitId, RealmStateSnapshot,
 };
 use async_trait::async_trait;
@@ -810,6 +810,18 @@ pub struct MlsInstalledBase {
 pub struct VerifiedMlsWelcome {
     pub delivery: MlsWelcomeDelivery,
     pub claim: Option<MlsWelcomeClaimLedgerKey>,
+    /// Absent until the immutable Genesis selector is verified from the
+    /// accepted committed-replication carrier.
+    pub roster_witness: Option<VerifiedMlsRecipientRosterWitness>,
+}
+
+/// Serving-layer verified, recipient-Station signed Add attestation and its
+/// independent accepted Genesis selector. Canonical JSON is the exact typed
+/// `MlsAttestAddRequestBody` after signature verification, not a new wire DTO.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedMlsRecipientRosterWitness {
+    pub accepted_genesis_event_ref: EventId,
+    pub signed_attest_add_request_canonical_json: Vec<u8>,
 }
 
 /// The durable claim ledger row `keypackage_claim_ref` resolved to, with the

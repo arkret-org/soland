@@ -15,10 +15,11 @@
 //! groups need their own scope membership basis and stay closed.
 
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
+use arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody;
 use arkret_models_crypto::MlsCommitPayload;
 use arkret_wire::{EventKind, MlsGroupCurrent, ScopeRef};
 use diesel::sql_types::{BigInt, Binary, Integer, Jsonb, Nullable, Text, Timestamptz};
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
     AuthorityCommitTransaction, ConflictCode, MlsGroupCurrentRecord, MlsGroupCurrentStore,
     PersistenceError, PersistenceResult,
@@ -64,6 +65,20 @@ struct ClaimLedgerRow {
 struct EventPkRow {
     #[diesel(sql_type = BigInt)]
     pk: i64,
+}
+
+#[derive(QueryableByName)]
+struct RosterOutboxRow {
+    #[diesel(sql_type = Text)]
+    attestation_digest: String,
+    #[diesel(sql_type = Jsonb)]
+    request_json: serde_json::Value,
+}
+
+#[derive(QueryableByName)]
+struct ClaimOutcomeRow {
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    outcome: Option<serde_json::Value>,
 }
 
 fn refused(code: ConflictCode, detail: impl std::fmt::Display) -> PersistenceError {
@@ -395,6 +410,7 @@ async fn freeze_consumed_proposals(
 pub(crate) async fn queue_replicated_welcomes_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
     welcomes: &[soland_storage::VerifiedMlsWelcome],
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
@@ -420,7 +436,17 @@ pub(crate) async fn queue_replicated_welcomes_in_connection(
         })?
         .pk;
     for welcome in welcomes {
-        match queue_one_replicated_welcome(conn, event, event_pk, welcome, at).await {
+        // A refused Welcome must roll back its own queue/binding/outbox rows,
+        // while the already accepted source Commit remains installed.
+        let attempt = conn
+            .transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+                queue_one_replicated_welcome(conn, event, commit, event_pk, welcome, at)
+                    .await
+                    .map_err(crate::PgTransactionError::from)
+            })
+            .await
+            .map_err(crate::PgTransactionError::into_persistence);
+        match attempt {
             Ok(()) => {}
             Err(PersistenceError::Conflict(detail) | PersistenceError::SchemaViolation(detail)) => {
                 tracing::warn!(
@@ -438,6 +464,7 @@ pub(crate) async fn queue_replicated_welcomes_in_connection(
 async fn queue_one_replicated_welcome(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
     event_pk: i64,
     welcome: &soland_storage::VerifiedMlsWelcome,
     at: chrono::DateTime<chrono::Utc>,
@@ -462,13 +489,148 @@ async fn queue_one_replicated_welcome(
         .await?
         .is_some()
     {
-        return bind_claim_welcome_in_connection(conn, claim, delivery).await;
+        bind_claim_welcome_in_connection(conn, claim, delivery).await?;
+        return store_recipient_roster_outbox(conn, event, commit, welcome, at).await;
     }
     require_live_claim(conn, claim, at).await?;
     crate::devices::enqueue_mls_welcome_in_connection(conn, delivery, event_pk, at, None)
         .await
         .map_err(crate::PgTransactionError::into_persistence)?;
-    bind_claim_welcome_in_connection(conn, claim, delivery).await
+    bind_claim_welcome_in_connection(conn, claim, delivery).await?;
+    store_recipient_roster_outbox(conn, event, commit, welcome, at).await
+}
+
+async fn store_recipient_roster_outbox(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    welcome: &soland_storage::VerifiedMlsWelcome,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let Some(witness) = &welcome.roster_witness else {
+        return Ok(());
+    };
+    let request: MlsAttestAddRequestBody =
+        serde_json::from_slice(&witness.signed_attest_add_request_canonical_json)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    request
+        .validate_claim_binding()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let exact_bytes =
+        arkret_canonical::canonical_json_bytes(&request).map_err(PersistenceError::database)?;
+    if exact_bytes != witness.signed_attest_add_request_canonical_json {
+        return Err(PersistenceError::SchemaViolation(
+            "MLS Add attestation outbox body is not canonical JSON".to_owned(),
+        ));
+    }
+    let attestation = &request.attestation;
+    let delivery = &welcome.delivery;
+    let payload: MlsCommitPayload = serde_json::from_value(
+        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+    )
+    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if attestation.realm_id != event.realm_id
+        || attestation.effective_scope != event.scope_ref
+        || attestation.mls_group_id
+            != event
+                .scope_ref
+                .canonical_mls_group_id()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+        || attestation.genesis_event_ref != witness.accepted_genesis_event_ref
+        || attestation.commit_event_ref != event.event_id
+        || attestation.commit_stream_position != commit.stream_position
+        || attestation.epoch != payload.next_epoch()
+        || attestation.welcome_id != delivery.welcome_id
+        || attestation.claim_id != delivery.keypackage_claim_ref
+        || attestation.actor_id != delivery.recipient_actor_id
+        || attestation.endpoint != delivery.recipient_endpoint
+        || attestation.attestor_station_id != *delivery.recipient_actor_id.route_service_id()
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "MLS Add attestation differs from accepted Commit and Welcome".to_owned(),
+        ));
+    }
+    let digest =
+        arkret_canonical::canonical_sha256(&request).map_err(PersistenceError::database)?;
+    let request_json = serde_json::to_value(&request).map_err(PersistenceError::database)?;
+    let existing = sql_query(
+        "SELECT attestation_digest,request_json FROM mls_add_authority_attestation_outbox \
+         WHERE commit_event_ref=$1 AND welcome_id=$2 FOR UPDATE",
+    )
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Text, _>(delivery.welcome_id.as_str())
+    .get_result::<RosterOutboxRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if let Some(existing) = existing {
+        return if existing.attestation_digest == digest && existing.request_json == request_json {
+            Ok(())
+        } else {
+            Err(refused(
+                ConflictCode::DuplicateConflict,
+                "MLS Add attestation replay differs from frozen outbox",
+            ))
+        };
+    }
+    let claim = welcome.claim.as_ref().ok_or_else(|| {
+        PersistenceError::SchemaViolation("MLS Add attestation lacks local claim".to_owned())
+    })?;
+    let Some(claim_row) = sql_query(
+        "SELECT outcome FROM peer_keypackage_claims \
+         WHERE source_id=$1 AND claim_request_id=$2 AND request_digest=$3 FOR UPDATE",
+    )
+    .bind::<Text, _>(&claim.source_id)
+    .bind::<Text, _>(&claim.claim_request_id)
+    .bind::<Text, _>(&claim.request_digest)
+    .get_result::<ClaimOutcomeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    else {
+        return Err(failed_precondition(
+            "MLS Add attestation original claim ledger row is unavailable",
+        ));
+    };
+    if claim_row.outcome
+        != Some(serde_json::to_value(&request.claim_outcome).map_err(PersistenceError::database)?)
+    {
+        return Err(refused(
+            ConflictCode::DuplicateConflict,
+            "MLS Add attestation outcome differs from original claim",
+        ));
+    }
+    let key = scope_key(&event.scope_ref)?;
+    let inserted = sql_query(
+        "INSERT INTO mls_add_authority_attestation_outbox \
+         (attestor_station_id,realm_id,scope_key,mls_group_id,genesis_event_ref, \
+          commit_event_ref,commit_stream_position,epoch,welcome_id,claim_id, \
+          attestation_digest,request_json,created_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING",
+    )
+    .bind::<Text, _>(attestation.attestor_station_id.as_str())
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&key)
+    .bind::<Text, _>(attestation.mls_group_id.as_str())
+    .bind::<Text, _>(attestation.genesis_event_ref.as_str())
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<BigInt, _>(position(commit.stream_position)?)
+    .bind::<BigInt, _>(position(attestation.epoch)?)
+    .bind::<Text, _>(delivery.welcome_id.as_str())
+    .bind::<Text, _>(delivery.keypackage_claim_ref.as_str())
+    .bind::<Text, _>(&digest)
+    .bind::<Jsonb, _>(request_json)
+    .bind::<Timestamptz, _>(at)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if inserted != 1 {
+        return Err(refused(
+            ConflictCode::DuplicateConflict,
+            "MLS Add attestation claim or Welcome is already frozen elsewhere",
+        ));
+    }
+    Ok(())
 }
 
 /// The Welcome id a claim is bound to, if its Welcome was queued.

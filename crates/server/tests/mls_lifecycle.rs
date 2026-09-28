@@ -840,6 +840,7 @@ async fn mls_lifecycle_body() {
             claim_request_id: ledger.claim_request_id.clone(),
             request_digest: ledger.request_digest.clone(),
         }),
+        roster_witness: None,
     }];
     commit_request.authority_commit.recipient_queue_capacity = 16;
     uow.commit_event(commit_request.clone())

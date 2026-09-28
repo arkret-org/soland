@@ -3595,7 +3595,150 @@ fn replicated_welcome(
             },
         },
         claim: Some(claim),
+        roster_witness: None,
     }
+}
+
+/// A signed fixture handed to storage after the serving layer has verified
+/// both Station signatures and the exact committed-replication provenance.
+/// This PG test checks atomic durability, not historical DID resolution.
+fn recipient_roster_witness(
+    commit: &EventCommitRequest,
+    genesis_ref: &arkret_wire::EventId,
+    welcome: &soland_storage::VerifiedMlsWelcome,
+    claim_key: &soland_storage::MlsWelcomeClaimLedgerKey,
+    authorization_event_ref: &arkret_wire::EventId,
+) -> (
+    soland_storage::VerifiedMlsRecipientRosterWitness,
+    serde_json::Value,
+) {
+    use arkret_models_collaboration::mls_roster_authority::{
+        MlsAddAuthorityAttestation, MlsAttestAddRequestBody,
+    };
+    use arkret_models_crypto::{
+        KeyOperationSignature, KeyPackageClaimRecord, PeerKeyPackageClaimReceipt,
+        PeerKeyPackagesClaimOutcome, PeerKeyPackagesClaimUnsignedRequest,
+        peer_keypackage_claim_receipt_signing_bytes,
+    };
+    let delivery = &welcome.delivery;
+    let at = commit.authority_commit.commit.committed_at;
+    let verification_method = format!(
+        "{}#station-key-1",
+        device_authorization_history::did_web_station(&member_station())
+    );
+    let placeholder = || KeyOperationSignature {
+        kid: arkret_wire::NonEmptyString::new(verification_method.clone()).unwrap(),
+        signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+        sig: arkret_wire::Base64UrlString::new("AA").unwrap(),
+    };
+    let record = KeyPackageClaimRecord {
+        claim_id: delivery.keypackage_claim_ref.to_string(),
+        keypackage_ref: "ak:keypackage:test".to_owned(),
+        actor_id: delivery.recipient_actor_id.clone(),
+        principal_id: delivery
+            .recipient_actor_id
+            .as_account_id()
+            .unwrap()
+            .principal_id
+            .clone(),
+        device_id: Some(match &delivery.recipient_endpoint {
+            arkret_wire::MlsWelcomeRecipientEndpoint::Device { device_id } => device_id.clone(),
+            _ => unreachable!("fixture uses a device"),
+        }),
+        agent_id: None,
+        agent_verification_method: None,
+        pairwise_verification_method: None,
+        keypackage: "AQ".to_owned(),
+        capabilities: vec!["mls".to_owned()],
+        device_authorize_event_id: Some(authorization_event_ref.clone()),
+        agent_key_authorize_event_id: None,
+        expires_at: at + chrono::Duration::hours(1),
+        revocation_status: None,
+        last_resort: None,
+    };
+    record.validate_shape().unwrap();
+    let request: PeerKeyPackagesClaimUnsignedRequest = serde_json::from_value(serde_json::json!({
+        "claim_request_id": claim_key.claim_request_id,
+        "intended_realm_id": delivery.realm_id,
+        "mls_group_id": delivery.effective_scope.canonical_mls_group_id().unwrap(),
+        "claim_purpose": "realm_membership",
+        "required_capabilities": ["mls"],
+        "expires_at": arkret_canonical::format_timestamp_canonical(at + chrono::Duration::hours(1)),
+    }))
+    .unwrap();
+    let mut receipt = PeerKeyPackageClaimReceipt {
+        claim_request_id: request.claim_request_id.clone(),
+        request_digest: arkret_wire::Hash::new(claim_key.request_digest.clone()).unwrap(),
+        claims_digest: arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&[&record]).unwrap(),
+        )
+        .unwrap(),
+        source_id: STATION.parse().unwrap(),
+        destination_id: member_station(),
+        request,
+        claimed_at: at,
+        expires_at: at + chrono::Duration::hours(1),
+        signature: placeholder(),
+    };
+    receipt.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &[19; 32],
+        &verification_method,
+        &peer_keypackage_claim_receipt_signing_bytes(&receipt).unwrap(),
+    )
+    .unwrap();
+    let outcome = PeerKeyPackagesClaimOutcome {
+        claim_request_id: receipt.claim_request_id.clone(),
+        claims: vec![record],
+        claim_receipt: receipt.clone(),
+    };
+    let mut attestation = MlsAddAuthorityAttestation {
+        attestor_station_id: member_station(),
+        realm_id: delivery.realm_id.clone(),
+        effective_scope: delivery.effective_scope.clone(),
+        mls_group_id: delivery.effective_scope.canonical_mls_group_id().unwrap(),
+        genesis_event_ref: genesis_ref.clone(),
+        commit_event_ref: delivery.commit_event_ref.clone(),
+        commit_stream_position: commit.authority_commit.commit.stream_position,
+        epoch: 1,
+        welcome_id: delivery.welcome_id.clone(),
+        claim_id: delivery.keypackage_claim_ref.clone(),
+        actor_id: delivery.recipient_actor_id.clone(),
+        endpoint: delivery.recipient_endpoint.clone(),
+        authorization_event_ref: authorization_event_ref.clone(),
+        leaf_signature_key_b64u: arkret_wire::Base64UrlString::new(
+            arkret_canonical::base64url_encode([7; 32]),
+        )
+        .unwrap(),
+        claim_record_digest: arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&outcome.claims[0]).unwrap(),
+        )
+        .unwrap(),
+        claim_receipt: receipt,
+        attested_at: at,
+        signature: placeholder(),
+    };
+    attestation.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &[19; 32],
+        &verification_method,
+        &attestation.signing_bytes().unwrap(),
+    )
+    .unwrap();
+    let request = MlsAttestAddRequestBody {
+        attestation,
+        claim_outcome: outcome,
+    };
+    request.validate_claim_binding().unwrap();
+    let json = serde_json::to_value(&request.claim_outcome).unwrap();
+    (
+        soland_storage::VerifiedMlsRecipientRosterWitness {
+            accepted_genesis_event_ref: genesis_ref.clone(),
+            signed_attest_add_request_canonical_json: arkret_canonical::canonical_json_bytes(
+                &request,
+            )
+            .unwrap(),
+        },
+        json,
+    )
 }
 
 /// The `ak.mls.commit` payload of a Commit over `base` at `previous_epoch`.
@@ -3641,6 +3784,20 @@ async fn queued_welcomes(pool: &PgPool) -> Vec<String> {
         .into_iter()
         .map(|row| row.welcome_id)
         .collect()
+}
+
+async fn recipient_roster_outbox_count(pool: &PgPool) -> i64 {
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = BigInt)]
+        count: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT COUNT(*) AS count FROM mls_add_authority_attestation_outbox")
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap()
+        .count
 }
 
 /// encryption-and-audit.md §2.2 "跨站 recipient" and decision 0121 on the
@@ -3776,6 +3933,173 @@ async fn replicated_welcomes_queue_with_their_commit_replica_or_on_replay() {
     ];
     expected.sort();
     assert_eq!(queued_welcomes(&pool).await, expected);
+}
+
+/// The recipient's preverified signed Add proof is frozen with its exact
+/// Welcome. A conflicting replay or a refused Welcome cannot leave a partial
+/// queue/binding/outbox, and short-lived claim cleanup cannot erase the proof.
+#[tokio::test]
+async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent() {
+    use soland_storage::MlsKeyPackageStore as _;
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)",
+        )
+        .bind::<Text, _>(MEMBER_STATION)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    let device = pcr_genesis::PcrGenesisFixture::new(
+        device_authorization_history::did_web_station(&member_station()),
+    )
+    .admit_founding_device(&persistence)
+    .await
+    .unwrap();
+    let bob = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        device.principal_id.clone(),
+        member_station(),
+    ));
+    let unit = bootstrap_unit_with_join_rule("roster-outbox", "public");
+    let last = unit.transactions.last().unwrap();
+    let realm_id = last.event.realm_id.clone();
+    let join = membership_request(last, bob.clone(), &bob, "join");
+    store
+        .install_committed_replica(&replica(&unit, &join, true))
+        .await
+        .unwrap();
+    anchor_at_join(&store, &join, vec![joined_row(&join, &bob)]).await;
+    // This storage test treats the Genesis reference as an input already
+    // verified by the serving layer. It does not assert MLS admission here.
+    let genesis_ref = join.authority_commit.event.event_id.clone();
+    let commit = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::MlsCommit,
+        &founder(),
+        mls_commit_payload(&realm_id, &genesis_ref, 0, b"recipient roster proof"),
+        last.commit.committed_at,
+    ));
+    store
+        .install_committed_replica(&replica(&unit, &commit, false))
+        .await
+        .unwrap();
+    let claim_id = format!("ak:keypackage_claim:{}", uuid::Uuid::now_v7());
+    let claim = member_claim(&pool, &claim_id, "claimed").await;
+    let mut first = replicated_welcome(&commit, &bob, &device.device_id, &claim_id, claim.clone());
+    let (witness, outcome_json) = recipient_roster_witness(
+        &commit,
+        &genesis_ref,
+        &first,
+        &claim,
+        &device.authorization_ref.event_id,
+    );
+    first.roster_witness = Some(witness.clone());
+    {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "UPDATE peer_keypackage_claims SET outcome=$1 \
+             WHERE source_id=$2 AND claim_request_id=$3 AND request_digest=$4",
+        )
+        .bind::<Jsonb, _>(outcome_json)
+        .bind::<Text, _>(&claim.source_id)
+        .bind::<Text, _>(&claim.claim_request_id)
+        .bind::<Text, _>(&claim.request_digest)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            store
+                .queue_replicated_welcomes(
+                    &commit.authority_commit.event,
+                    &commit.authority_commit.commit,
+                    std::slice::from_ref(&first),
+                    commit.authority_commit.commit.committed_at,
+                )
+                .await
+                .unwrap(),
+            CommittedReplicaOutcome::Duplicate
+        );
+    }
+    assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
+    assert_eq!(
+        queued_welcomes(&pool).await,
+        vec![first.delivery.welcome_id.to_string()]
+    );
+
+    // Same Welcome, different signed historical claim: the frozen row wins.
+    let mut conflicting = first.clone();
+    let other_auth =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x46; 32]);
+    let (other_witness, _) =
+        recipient_roster_witness(&commit, &genesis_ref, &first, &claim, &other_auth);
+    conflicting.roster_witness = Some(other_witness);
+    store
+        .queue_replicated_welcomes(
+            &commit.authority_commit.event,
+            &commit.authority_commit.commit,
+            &[conflicting],
+            commit.authority_commit.commit.committed_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
+
+    // A fresh claim's malformed witness is rejected *after* queue/binding
+    // staging; its nested transaction rolls every such write back.
+    let refused_claim_id = format!("ak:keypackage_claim:{}", uuid::Uuid::now_v7());
+    let refused_claim = member_claim(&pool, &refused_claim_id, "claimed").await;
+    let mut refused = replicated_welcome(
+        &commit,
+        &bob,
+        &device.device_id,
+        &refused_claim_id,
+        refused_claim,
+    );
+    refused.roster_witness = Some(witness);
+    store
+        .queue_replicated_welcomes(
+            &commit.authority_commit.event,
+            &commit.authority_commit.commit,
+            &[refused],
+            commit.authority_commit.commit.committed_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
+    assert_eq!(
+        queued_welcomes(&pool).await,
+        vec![first.delivery.welcome_id.to_string()]
+    );
+    assert!(
+        soland_storage_postgres::PgMlsKeyPackageStore { pool: pool.clone() }
+            .get_claim_welcome_binding(&refused_claim_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The claim ledger's normal retention does not own this durable proof.
+    {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "DELETE FROM peer_keypackage_claims \
+             WHERE source_id=$1 AND claim_request_id=$2 AND request_digest=$3",
+        )
+        .bind::<Text, _>(&claim.source_id)
+        .bind::<Text, _>(&claim.claim_request_id)
+        .bind::<Text, _>(&claim.request_digest)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
+    assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
 }
 
 /// Structural producer proofs isolate accepted-state replication and disclosure.

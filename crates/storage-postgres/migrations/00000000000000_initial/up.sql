@@ -4768,6 +4768,33 @@ CREATE TABLE mls_consumed_proposal_provenance (
 CREATE INDEX mls_consumed_proposal_provenance_cut
  ON mls_consumed_proposal_provenance(scope_key,commit_stream_position,consumed_proposal_ordinal);
 
+-- Recipient-Station proof frozen with the replicated Commit and Welcome.
+-- This outbox is independent of the short-lived claim ledger and its
+-- ON DELETE CASCADE Welcome binding. The full original claim outcome stays
+-- Station-private until governance confirms durable attestation install.
+CREATE TABLE mls_add_authority_attestation_outbox (
+ attestor_station_id TEXT NOT NULL,
+ realm_id TEXT NOT NULL,
+ -- Internal index for the attestation's effective_scope (canonical ScopeRef JSON).
+ scope_key TEXT COLLATE "C" NOT NULL,
+ mls_group_id TEXT NOT NULL,
+ genesis_event_ref TEXT NOT NULL,
+ commit_event_ref TEXT NOT NULL,
+ commit_stream_position BIGINT NOT NULL CHECK(commit_stream_position BETWEEN 1 AND 9007199254740991),
+ epoch BIGINT NOT NULL CHECK(epoch BETWEEN 1 AND 9007199254740991),
+ welcome_id TEXT NOT NULL,
+ claim_id TEXT NOT NULL,
+ attestation_digest TEXT NOT NULL,
+ request_json JSONB NOT NULL CHECK(jsonb_typeof(request_json)='object'),
+ created_at TIMESTAMPTZ NOT NULL,
+ acknowledged_at TIMESTAMPTZ,
+ PRIMARY KEY(commit_event_ref,welcome_id),
+ UNIQUE(claim_id)
+);
+CREATE INDEX mls_add_authority_attestation_outbox_pending
+ ON mls_add_authority_attestation_outbox(realm_id,created_at)
+ WHERE acknowledged_at IS NULL;
+
 -- `object_redaction` typed current: the canonically sorted set of committed
 -- redaction assertions on one subject, keyed by the redaction target's typed-id
 -- string taken verbatim (`ak.message.redact` `message_id`, `ak.redaction`

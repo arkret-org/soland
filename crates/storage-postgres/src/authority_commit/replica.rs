@@ -552,6 +552,7 @@ pub(super) async fn install_committed_replica_in_connection(
     crate::mls_group_current_results::queue_replicated_welcomes_in_connection(
         conn,
         &replica.event,
+        &replica.commit,
         &replica.welcomes,
         replica.received_at,
     )
@@ -576,7 +577,7 @@ pub(super) async fn queue_welcomes_of_held_replica_in_connection(
         ));
     }
     crate::mls_group_current_results::queue_replicated_welcomes_in_connection(
-        conn, event, welcomes, at,
+        conn, event, commit, welcomes, at,
     )
     .await?;
     Ok(CommittedReplicaOutcome::Duplicate)

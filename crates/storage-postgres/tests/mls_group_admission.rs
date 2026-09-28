@@ -1079,6 +1079,7 @@ async fn mls_commit_welcome_queue_is_atomic_exact_endpoint_and_revocation_gated(
     commit.authority_commit.welcomes = vec![VerifiedMlsWelcome {
         delivery: welcome(&commit, &recipient, &first_claim),
         claim: Some(first_key.clone()),
+        roster_witness: None,
     }];
     commit.authority_commit.recipient_queue_capacity = 1;
     assert_zero_write_refusal(&pool, &commit, ConflictCode::FailedPrecondition).await;
@@ -1119,6 +1120,7 @@ async fn mls_commit_welcome_queue_is_atomic_exact_endpoint_and_revocation_gated(
     full.authority_commit.welcomes = vec![VerifiedMlsWelcome {
         delivery: welcome(&full, &recipient, &second_claim),
         claim: Some(second_key),
+        roster_witness: None,
     }];
     full.authority_commit.recipient_queue_capacity = 1;
     assert_zero_write_refusal(&pool, &full, ConflictCode::RecipientQueueAtCapacity).await;
@@ -1137,6 +1139,7 @@ async fn mls_commit_welcome_queue_is_atomic_exact_endpoint_and_revocation_gated(
     reused.authority_commit.welcomes = vec![VerifiedMlsWelcome {
         delivery: welcome(&reused, &recipient, &first_claim),
         claim: Some(first_key),
+        roster_witness: None,
     }];
     reused.authority_commit.recipient_queue_capacity = 10;
     assert_zero_write_refusal(&pool, &reused, ConflictCode::DuplicateConflict).await;
@@ -1496,6 +1499,7 @@ fn remote_welcome(
     VerifiedMlsWelcome {
         delivery: welcome(commit, &recipient, &claim_id()),
         claim: None,
+        roster_witness: None,
     }
 }
 
@@ -1616,6 +1620,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         VerifiedMlsWelcome {
             delivery: welcome(&commit, &local, &local_claim),
             claim: Some(local_key),
+            roster_witness: None,
         },
         remote_welcome(&commit, &second),
     ];

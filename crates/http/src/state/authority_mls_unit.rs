@@ -493,6 +493,7 @@ async fn verify_welcomes(
         verified.push(VerifiedMlsWelcome {
             delivery: welcome.clone(),
             claim,
+            roster_witness: None,
         });
     }
     Ok(verified)

@@ -163,6 +163,7 @@ async fn verified_replicated_welcomes(
             Ok((claim, _)) => verified.push(VerifiedMlsWelcome {
                 delivery: welcome.clone(),
                 claim: Some(claim),
+                roster_witness: None,
             }),
             Err(error @ (ServiceError::Database(_) | ServiceError::Internal(_))) => {
                 return Err(error);
