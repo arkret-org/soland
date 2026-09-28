@@ -35,12 +35,9 @@ pub(crate) async fn require_message_actor(
         return crate::managed_message_actor::require_managed_actor_in_connection(conn, event, at)
             .await;
     }
-    if event.executed_by.is_some()
-        || event.applet_id.is_some()
-        || event.payload.contains_key("agent_context")
-    {
+    if event.executed_by.is_some() || event.payload.contains_key("agent_context") {
         return Err(rejected(
-            "Agent Message authoring requires its dedicated admission cut",
+            "ordinary Message has unsupported delegated producer fields",
         ));
     }
     event

@@ -2387,24 +2387,6 @@ async fn commit_one_in_connection(
         .await?;
     }
 
-    // Producer identity comes from verified holder evidence, never Profile display fields.
-    if event.applet_id.is_none()
-        && matches!(
-            event.kind,
-            arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
-        )
-        && matches!(
-            request.self_producer_guard.as_ref(),
-            Some(soland_storage::SelfProducerCommitGuard::Agent { .. })
-        )
-    {
-        return Err(PersistenceError::Conflict(
-            "failed_precondition: Agent Message authoring requires its dedicated admission cut"
-                .to_owned(),
-        )
-        .into());
-    }
-
     if let Some(guard) = request.applet_producer_guard.as_ref() {
         if request.self_producer_guard.is_some() || request.forwarded_producer_evidence.is_some() {
             return Err(PersistenceError::SchemaViolation(
