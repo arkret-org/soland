@@ -1140,6 +1140,9 @@ pub struct CommittedReplica {
     pub authority: CurrentRealmAuthority,
     pub event: arkret_wire::Event,
     pub commit: arkret_wire::RealmCommit,
+    /// The immutable Genesis selector carried by an authenticated
+    /// committed-replication item. A verified scan has no such carrier.
+    pub genesis_event_ref: Option<EventId>,
     pub role: CommittedReplicaRole,
     pub received_at: chrono::DateTime<chrono::Utc>,
     /// The Welcomes the item carried for recipients this Station hosts whose
@@ -1335,6 +1338,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         event: &arkret_wire::Event,
         commit: &arkret_wire::RealmCommit,
+        genesis_event_ref: Option<&EventId>,
         welcomes: &[VerifiedMlsWelcome],
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<CommittedReplicaOutcome>;

@@ -405,6 +405,7 @@ async fn store_scanned(
                     authority: located.current_authority(),
                     event: view.event.clone(),
                     commit: commit.clone(),
+                    genesis_event_ref: None,
                     role: CommittedReplicaRole::HeldStream,
                     received_at: crate::wire::now(),
                     // A scanned item carries no Welcome; its item's

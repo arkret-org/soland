@@ -61,6 +61,81 @@ struct CurrentValueRow {
 }
 
 #[derive(diesel::QueryableByName)]
+struct GenesisEnvelopeRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+}
+
+/// Read the immutable Genesis from the just-installed accepted group and
+/// cross-check the original committed Genesis Event before freezing it into
+/// every authenticated peer intent. A later Commit base is never a selector.
+async fn accepted_mls_genesis_for_fanout(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+) -> Result<Option<arkret_wire::EventId>, PgTransactionError> {
+    if event.kind != arkret_wire::EventKind::MlsCommit {
+        return Ok(None);
+    }
+    let key = String::from_utf8(
+        arkret_canonical::canonical_json_bytes(&event.scope_ref)
+            .map_err(PersistenceError::database)?,
+    )
+    .map_err(internal)?;
+    let row = sql_query("SELECT value FROM mls_group_current_results WHERE scope_key=$1 FOR SHARE")
+        .bind::<Text, _>(&key)
+        .get_result::<CurrentValueRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation("MLS fanout has no accepted group current".into())
+        })?;
+    let group: arkret_wire::MlsGroupCurrent =
+        serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+    if group.effective_scope != event.scope_ref
+        || group.current_mls_commit_event_ref != event.event_id
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "MLS fanout group current differs from the accepted Commit".into(),
+        )
+        .into());
+    }
+    let token = ids::parse_event_id(group.genesis_event_ref.as_str()).ok_or_else(|| {
+        PersistenceError::SchemaViolation("MLS Genesis id is not canonical".into())
+    })?;
+    let genesis = sql_query(
+        "SELECT envelope FROM canonical_events WHERE id=$1 AND realm_id=$2 \
+         AND kind='ak.mls.genesis' AND state='committed' FOR SHARE",
+    )
+    .bind::<Binary, _>(token.to_vec())
+    .bind::<Text, _>(event.realm_id.as_str())
+    .get_result::<GenesisEnvelopeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| {
+        PersistenceError::SchemaViolation("MLS fanout has no exact accepted Genesis".into())
+    })?;
+    let genesis: arkret_wire::Event =
+        serde_json::from_value(genesis.envelope).map_err(PersistenceError::database)?;
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(Value::Object(genesis.payload.clone().into_iter().collect()))
+            .map_err(PersistenceError::database)?;
+    if genesis.event_id != group.genesis_event_ref
+        || genesis.realm_id != event.realm_id
+        || genesis.scope_ref != event.scope_ref
+        || payload.mls_group_id().map_err(internal)?
+            != event.scope_ref.canonical_mls_group_id().map_err(internal)?
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "MLS fanout Genesis provenance differs from its accepted group".into(),
+        )
+        .into());
+    }
+    Ok(Some(group.genesis_event_ref))
+}
+
+#[derive(diesel::QueryableByName)]
 struct MembershipEventRow {
     #[diesel(sql_type = Text)]
     event_id: String,
@@ -527,6 +602,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         .map_err(PersistenceError::database)?
         .pk;
     let idempotency_key = fanout_idempotency_key(&commit.commit_id);
+    let genesis_event_ref = accepted_mls_genesis_for_fanout(conn, event).await?;
     let mut inserted = 0;
     for (station, authority_witnesses) in targets {
         let request =
@@ -535,6 +611,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
                 replications: vec![CommittedEventSubmission::from_source_submission(
                     source,
                     commit.clone(),
+                    genesis_event_ref.clone(),
                     replicated_welcomes.remove(&station),
                 )],
             });

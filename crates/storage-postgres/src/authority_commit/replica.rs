@@ -17,6 +17,7 @@
 //! Commit whose Event no hosted member may hold in full is kept as a
 //! continuity-only chain node without Event bytes.
 
+use arkret_models_crypto::MlsCommitPayload;
 use soland_storage::{
     CommittedChainNode, CommittedReplica, CommittedReplicaOutcome, CommittedReplicaRole,
     ConflictCode, ReplicaAnchorInstall, ReplicaStreamAnchor,
@@ -67,6 +68,87 @@ struct AnchorRow {
 struct ValueRow {
     #[diesel(sql_type = Jsonb)]
     value: Value,
+}
+
+#[derive(QueryableByName)]
+struct MlsGenesisProvenanceRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    mls_group_id: String,
+    #[diesel(sql_type = Text)]
+    genesis_event_ref: String,
+}
+
+/// Freeze the governance-signed Genesis selector at the exact held Commit
+/// cut. A scan has no such signed carrier and may only hold the Event/Commit;
+/// a later committed-replication item establishes the immutable selector.
+pub(super) async fn bind_mls_replica_genesis_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    genesis_event_ref: Option<&arkret_wire::EventId>,
+    has_welcomes: bool,
+    at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), PgTransactionError> {
+    if event.kind != arkret_wire::EventKind::MlsCommit {
+        if genesis_event_ref.is_some() {
+            return Err(invalid("non-MLS replica carries a Genesis selector").into());
+        }
+        return Ok(());
+    }
+    let Some(genesis_event_ref) = genesis_event_ref else {
+        if has_welcomes {
+            return Err(invalid("MLS Welcome has no signed Genesis selector").into());
+        }
+        return Ok(());
+    };
+    let payload: MlsCommitPayload = serde_json::from_value(
+        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+    )
+    .map_err(invalid)?;
+    let mls_group_id = event.scope_ref.canonical_mls_group_id().map_err(invalid)?;
+    if payload.mls_group_id().map_err(invalid)? != mls_group_id
+        || commit.event_ref != event.event_id
+        || genesis_event_ref == &event.event_id
+    {
+        return Err(invalid("MLS replica Genesis selector differs from its Commit group").into());
+    }
+    let scope_key = String::from_utf8(
+        arkret_canonical::canonical_json_bytes(&event.scope_ref)
+            .map_err(PersistenceError::database)?,
+    )
+    .map_err(invalid)?;
+    sql_query(
+        "INSERT INTO mls_replica_genesis_provenance \
+         (realm_id,scope_key,mls_group_id,genesis_event_ref,first_carried_commit_event_ref,created_at) \
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (scope_key) DO NOTHING",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&scope_key)
+    .bind::<Text, _>(mls_group_id.as_str())
+    .bind::<Text, _>(genesis_event_ref.as_str())
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Timestamptz, _>(at)
+    .execute(&mut *conn)
+    .await?;
+    let frozen = sql_query(
+        "SELECT realm_id,mls_group_id,genesis_event_ref \
+         FROM mls_replica_genesis_provenance WHERE scope_key=$1 FOR UPDATE",
+    )
+    .bind::<Text, _>(&scope_key)
+    .get_result::<MlsGenesisProvenanceRow>(&mut *conn)
+    .await?;
+    if frozen.realm_id != event.realm_id.as_str()
+        || frozen.mls_group_id != mls_group_id.as_str()
+        || frozen.genesis_event_ref != genesis_event_ref.as_str()
+    {
+        return Err(conflict(
+            ConflictCode::DuplicateConflict,
+            "MLS replica changed its immutable Genesis selector",
+        ));
+    }
+    Ok(())
 }
 
 fn conflict(code: ConflictCode, detail: &str) -> PgTransactionError {
@@ -549,6 +631,15 @@ pub(super) async fn install_committed_replica_in_connection(
     replica: &CommittedReplica,
 ) -> Result<CommittedReplicaOutcome, PgTransactionError> {
     let outcome = install_replica_commit_in_connection(conn, replica).await?;
+    bind_mls_replica_genesis_in_connection(
+        conn,
+        &replica.event,
+        &replica.commit,
+        replica.genesis_event_ref.as_ref(),
+        !replica.welcomes.is_empty(),
+        replica.received_at,
+    )
+    .await?;
     crate::mls_group_current_results::queue_replicated_welcomes_in_connection(
         conn,
         &replica.event,
@@ -566,6 +657,7 @@ pub(super) async fn queue_welcomes_of_held_replica_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
+    genesis_event_ref: Option<&arkret_wire::EventId>,
     welcomes: &[soland_storage::VerifiedMlsWelcome],
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<CommittedReplicaOutcome, PgTransactionError> {
@@ -576,6 +668,15 @@ pub(super) async fn queue_welcomes_of_held_replica_in_connection(
             "the replicated Commit is not held",
         ));
     }
+    bind_mls_replica_genesis_in_connection(
+        conn,
+        event,
+        commit,
+        genesis_event_ref,
+        !welcomes.is_empty(),
+        at,
+    )
+    .await?;
     crate::mls_group_current_results::queue_replicated_welcomes_in_connection(
         conn, event, commit, welcomes, at,
     )

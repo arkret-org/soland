@@ -2584,13 +2584,21 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         &self,
         event: &arkret_wire::Event,
         commit: &arkret_wire::RealmCommit,
+        genesis_event_ref: Option<&arkret_wire::EventId>,
         welcomes: &[soland_storage::VerifiedMlsWelcome],
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<soland_storage::CommittedReplicaOutcome> {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            replica::queue_welcomes_of_held_replica_in_connection(conn, event, commit, welcomes, at)
-                .await
+            replica::queue_welcomes_of_held_replica_in_connection(
+                conn,
+                event,
+                commit,
+                genesis_event_ref,
+                welcomes,
+                at,
+            )
+            .await
         })
         .await
         .map_err(PgTransactionError::into_persistence)

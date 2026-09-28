@@ -1643,6 +1643,13 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         [remote_station, other_station]
     );
     let item = |payload: &serde_json::Value| payload["replications"][0].clone();
+    for (_, payload) in &payloads {
+        assert_eq!(
+            item(payload)["genesis_event_ref"],
+            serde_json::json!(genesis_ref),
+            "each signed peer item freezes the same accepted Genesis"
+        );
+    }
     assert!(item(&payloads[1].1).get("welcomes").is_none());
     let expected = welcomes
         .iter()
@@ -1656,4 +1663,25 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let request: arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest =
         serde_json::from_value(payloads[0].1.clone()).unwrap();
     request.validate().unwrap();
+
+    let commit_ref = commit.authority_commit.event.event_id.clone();
+    let later = with_installation(
+        ordinary_realm::next_request(
+            &commit.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &founder,
+            commit_payload(&realm_id, &commit_ref, 1, 0, b"later epoch"),
+            at,
+        ),
+        Some((&commit_ref, 1)),
+        2,
+    );
+    uow.commit_event(later.clone()).await.unwrap();
+    for (_, payload) in replication_payloads(&pool, &later).await {
+        assert_eq!(
+            item(&payload)["genesis_event_ref"],
+            serde_json::json!(genesis_ref),
+            "a later Commit's base is not substituted for immutable Genesis"
+        );
+    }
 }

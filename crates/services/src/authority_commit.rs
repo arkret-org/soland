@@ -1230,12 +1230,13 @@ impl AuthorityCommitApplication {
         &self,
         event: &arkret_wire::Event,
         commit: &arkret_wire::RealmCommit,
+        genesis_event_ref: Option<&arkret_wire::EventId>,
         welcomes: &[soland_storage::VerifiedMlsWelcome],
         at: chrono::DateTime<chrono::Utc>,
     ) -> ServiceResult<soland_storage::CommittedReplicaOutcome> {
         Ok(self
             .store()
-            .queue_replicated_welcomes(event, commit, welcomes, at)
+            .queue_replicated_welcomes(event, commit, genesis_event_ref, welcomes, at)
             .await?)
     }
 

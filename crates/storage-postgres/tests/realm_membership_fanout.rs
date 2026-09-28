@@ -935,6 +935,7 @@ fn replica(
         authority: governance_authority(unit),
         event: event.clone(),
         commit: request.authority_commit.commit.clone(),
+        genesis_event_ref: None,
         role,
         received_at: request.authority_commit.commit.committed_at,
         welcomes: Vec::new(),
@@ -3875,6 +3876,19 @@ async fn replicated_welcomes_queue_with_their_commit_replica_or_on_replay() {
     ];
     let mut item = replica(&unit, &commit, false);
     item.welcomes = welcomes.clone();
+    assert!(
+        store.install_committed_replica(&item).await.is_err(),
+        "a Welcome cannot be queued without the signed Genesis selector"
+    );
+    assert!(
+        store
+            .committed_event_by_commit_id(&commit.authority_commit.commit.commit_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the missing-selector refusal rolls the replica back"
+    );
+    item.genesis_event_ref = Some(genesis_ref.clone());
     assert_eq!(
         store.install_committed_replica(&item).await.unwrap(),
         CommittedReplicaOutcome::Stored,
@@ -3919,6 +3933,7 @@ async fn replicated_welcomes_queue_with_their_commit_replica_or_on_replay() {
                 .queue_replicated_welcomes(
                     &second.authority_commit.event,
                     &second.authority_commit.commit,
+                    Some(&genesis_ref),
                     std::slice::from_ref(&late),
                     second.authority_commit.commit.committed_at,
                 )
@@ -4019,6 +4034,7 @@ async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent()
                 .queue_replicated_welcomes(
                     &commit.authority_commit.event,
                     &commit.authority_commit.commit,
+                    Some(&genesis_ref),
                     std::slice::from_ref(&first),
                     commit.authority_commit.commit.committed_at,
                 )
@@ -4033,6 +4049,23 @@ async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent()
         vec![first.delivery.welcome_id.to_string()]
     );
 
+    let wrong_genesis =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x47; 32]);
+    assert!(
+        store
+            .queue_replicated_welcomes(
+                &commit.authority_commit.event,
+                &commit.authority_commit.commit,
+                Some(&wrong_genesis),
+                &[],
+                commit.authority_commit.commit.committed_at,
+            )
+            .await
+            .is_err(),
+        "an exact Commit replay cannot change immutable Genesis provenance"
+    );
+    assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
+
     // Same Welcome, different signed historical claim: the frozen row wins.
     let mut conflicting = first.clone();
     let other_auth =
@@ -4044,6 +4077,7 @@ async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent()
         .queue_replicated_welcomes(
             &commit.authority_commit.event,
             &commit.authority_commit.commit,
+            Some(&genesis_ref),
             &[conflicting],
             commit.authority_commit.commit.committed_at,
         )
@@ -4067,6 +4101,7 @@ async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent()
         .queue_replicated_welcomes(
             &commit.authority_commit.event,
             &commit.authority_commit.commit,
+            Some(&genesis_ref),
             &[refused],
             commit.authority_commit.commit.committed_at,
         )

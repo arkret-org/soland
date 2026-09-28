@@ -238,14 +238,20 @@ async fn replicate_one(
         .await?
     {
         if existing.commit == *commit && existing.event == *event {
-            if welcomes.is_empty() {
+            if welcomes.is_empty() && event.kind != arkret_wire::EventKind::MlsCommit {
                 return Ok(CommittedReplicaOutcome::Duplicate);
             }
             // A replay may queue outstanding Welcomes only after the current
             // origin binding has been re-proved for this authenticated peer.
             return state
                 .authority_commits()
-                .queue_replicated_welcomes(event, commit, &welcomes, crate::wire::now())
+                .queue_replicated_welcomes(
+                    event,
+                    commit,
+                    item.genesis_event_ref.as_ref(),
+                    &welcomes,
+                    crate::wire::now(),
+                )
                 .await;
         }
         return Err(ServiceError::Conflict(format!(
@@ -339,6 +345,7 @@ async fn replicate_one(
             authority: located.current_authority(),
             event: event.clone(),
             commit: commit.clone(),
+            genesis_event_ref: item.genesis_event_ref.clone(),
             role,
             received_at: crate::wire::now(),
             welcomes,

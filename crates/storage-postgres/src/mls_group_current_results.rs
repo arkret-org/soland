@@ -550,6 +550,43 @@ async fn store_recipient_roster_outbox(
             "MLS Add attestation differs from accepted Commit and Welcome".to_owned(),
         ));
     }
+    #[derive(QueryableByName)]
+    struct GenesisRefRow {
+        #[diesel(sql_type = Text)]
+        genesis_event_ref: String,
+    }
+    let key = scope_key(&event.scope_ref)?;
+    let replica_genesis = sql_query(
+        "SELECT genesis_event_ref FROM mls_replica_genesis_provenance \
+         WHERE scope_key=$1 FOR SHARE",
+    )
+    .bind::<Text, _>(&key)
+    .get_result::<GenesisRefRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let governance_genesis = sql_query(
+        "SELECT value->>'genesis_event_ref' AS genesis_event_ref \
+         FROM mls_group_current_results WHERE scope_key=$1 FOR SHARE",
+    )
+    .bind::<Text, _>(&key)
+    .get_result::<GenesisRefRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if replica_genesis.is_none() && governance_genesis.is_none()
+        || replica_genesis
+            .as_ref()
+            .is_some_and(|row| row.genesis_event_ref != attestation.genesis_event_ref.as_str())
+        || governance_genesis
+            .as_ref()
+            .is_some_and(|row| row.genesis_event_ref != attestation.genesis_event_ref.as_str())
+    {
+        return Err(refused(
+            ConflictCode::DuplicateConflict,
+            "MLS Add attestation has no matching frozen group Genesis",
+        ));
+    }
     let digest =
         arkret_canonical::canonical_sha256(&request).map_err(PersistenceError::database)?;
     let request_json = serde_json::to_value(&request).map_err(PersistenceError::database)?;
@@ -600,7 +637,6 @@ async fn store_recipient_roster_outbox(
             "MLS Add attestation outcome differs from original claim",
         ));
     }
-    let key = scope_key(&event.scope_ref)?;
     let inserted = sql_query(
         "INSERT INTO mls_add_authority_attestation_outbox \
          (attestor_station_id,realm_id,scope_key,mls_group_id,genesis_event_ref, \

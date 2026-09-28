@@ -832,6 +832,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                                 CommittedEventSubmission {
                                     event_submission: unit.submission.events[index].clone(),
                                     source_commit: commits[index].clone(),
+                                    genesis_event_ref: None,
                                     welcomes: None,
                                 }
                             }),

@@ -4795,6 +4795,17 @@ CREATE INDEX mls_add_authority_attestation_outbox_pending
  ON mls_add_authority_attestation_outbox(realm_id,created_at)
  WHERE acknowledged_at IS NULL;
 
+-- A verified scan can hold a postjoin MLS Commit without the prejoin Genesis.
+-- Only a signed committed-replication item establishes this immutable selector.
+CREATE TABLE mls_replica_genesis_provenance (
+ realm_id TEXT NOT NULL,
+ scope_key TEXT COLLATE "C" PRIMARY KEY,
+ mls_group_id TEXT NOT NULL,
+ genesis_event_ref TEXT NOT NULL,
+ first_carried_commit_event_ref TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL
+);
+
 -- `object_redaction` typed current: the canonically sorted set of committed
 -- redaction assertions on one subject, keyed by the redaction target's typed-id
 -- string taken verbatim (`ak.message.redact` `message_id`, `ak.redaction`

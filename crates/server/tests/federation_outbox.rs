@@ -137,6 +137,7 @@ fn committed_replication_payload() -> String {
             replications: vec![CommittedEventSubmission {
                 event_submission: arkret_wire::EventAdmissionSubmission::new(event),
                 source_commit,
+                genesis_event_ref: None,
                 welcomes: None,
             }],
         });
