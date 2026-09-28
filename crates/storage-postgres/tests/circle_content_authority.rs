@@ -220,7 +220,9 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
     let baseline = counts(&pool).await;
     let error = uow.commit_event(cross_circle_vote.clone()).await.unwrap_err();
     assert!(
-        error.to_string().contains("poll is outside the response's accepted source scope"),
+        error
+            .to_string()
+            .contains("Message reference differs from its effective stream"),
         "{error}"
     );
     assert_eq!(counts(&pool).await, baseline);
