@@ -2115,7 +2115,8 @@ CREATE TABLE public.device_revocation_gate_receipts (
     station_id text NOT NULL,
     device_id text NOT NULL,
     action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
-        'session_grant_issue', 'session_grant_refresh', 'device_pairing_code_claim', 'keypackage_claim',
+        'session_grant_issue', 'session_grant_refresh', 'session_grant_revoke',
+        'device_pairing_code_claim', 'keypackage_claim',
         'to_device_write', 'event_write'
     ])),
     intent_digest text NOT NULL,

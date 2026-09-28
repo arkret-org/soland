@@ -159,6 +159,7 @@ fn private_current_device_action(
             Ok(Gate::SessionGrantIssue)
         }
         DeviceRevocationAdmissionAction::SessionGrantRefresh => Ok(Gate::SessionGrantRefresh),
+        DeviceRevocationAdmissionAction::SessionGrantRevoke => Ok(Gate::SessionGrantRevoke),
         DeviceRevocationAdmissionAction::DevicePairingCodeClaim => Ok(Gate::DevicePairingCodeClaim),
         // The Account Authority checks the approver before admitting its exact
         // device-authorize Event. This is eligibility, not Event acceptance.
@@ -167,6 +168,23 @@ fn private_current_device_action(
             "private current-device check only admits account-authority device actions",
         )),
     }
+}
+
+fn require_session_revoke_device_binding(
+    request: &CurrentDeviceCheckRequest,
+) -> Result<(), AppError> {
+    if request.action_class == DeviceRevocationAdmissionAction::SessionGrantRevoke
+        && (request.expected_device_authorize_event_id.is_none()
+            || !request
+                .expected_device_generation_ref
+                .is_some_and(|generation| generation > 0)
+            || request.accepted_device_possession_proof.is_some())
+    {
+        return Err(schema_violation(
+            "session_grant_revoke requires the issuer grant's exact positive device binding and no accepted-device possession proof",
+        ));
+    }
+    Ok(())
 }
 
 #[handler]
@@ -199,6 +217,7 @@ pub(super) async fn check_private_current_device(
         .await
         .map_err(|_| AppError::json_invalid("invalid private current-device check request body"))?;
     let action_class = private_current_device_action(request.action_class)?;
+    require_session_revoke_device_binding(&request)?;
 
     // The target Station is the local fixed-route receiver, not an identity
     // repeated in channel headers.
@@ -424,10 +443,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn private_pairing_approver_check_uses_event_write_eligibility() {
+    fn private_account_authority_actions_keep_distinct_device_gate_classes() {
         assert_eq!(
             private_current_device_action(DeviceRevocationAdmissionAction::EventWrite).unwrap(),
             soland_storage::DeviceRevocationGateAction::EventWrite,
+        );
+        assert_eq!(
+            private_current_device_action(DeviceRevocationAdmissionAction::SessionGrantRevoke)
+                .unwrap(),
+            soland_storage::DeviceRevocationGateAction::SessionGrantRevoke,
         );
         for action in [
             DeviceRevocationAdmissionAction::KeypackageClaim,
@@ -464,6 +488,26 @@ mod tests {
                 event_id,
             },
         }
+    }
+
+    #[test]
+    fn private_session_revoke_requires_complete_current_device_binding() {
+        let current = selector();
+        let mut request = CurrentDeviceCheckRequest {
+            account_id: AccountId::new(current.principal_id, current.station_id),
+            device_id: DeviceId::new(DEVICE).unwrap(),
+            expected_device_authorize_event_id: Some(current.authorization_ref.event_id),
+            expected_device_generation_ref: Some(1),
+            action_class: DeviceRevocationAdmissionAction::SessionGrantRevoke,
+            intent_digest: Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
+            accepted_device_possession_proof: None,
+            requested_at: Utc::now(),
+        };
+        assert!(require_session_revoke_device_binding(&request).is_ok());
+        request.expected_device_generation_ref = None;
+        assert!(require_session_revoke_device_binding(&request).is_err());
+        request.expected_device_generation_ref = Some(0);
+        assert!(require_session_revoke_device_binding(&request).is_err());
     }
 
     #[test]

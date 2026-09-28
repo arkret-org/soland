@@ -1,7 +1,11 @@
 //! HTTP endpoint handlers and router assembly for the applet bridge.
 
+use arkret_models_collaboration::account_lifecycle::{
+    AppletDelegatedSessionInventoryOutcome, AppletDelegatedSessionInventoryRequestBody,
+    SessionRevokeOutcome, SessionRevokeRequestBody,
+};
 use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilityGrant, CapabilityGrantStatus, CapabilitySubject,
+    CapabilityGrantStatus, CapabilitySubject,
 };
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_integration::{
@@ -51,6 +55,9 @@ use super::signature::{
 };
 use super::transaction::process_verified_transaction;
 use super::types::{AppletRecord, GhostActorRecord, SOLAND_EDGE_APPLET_ID};
+use crate::routing::identity::account_authority_client::{
+    AppletAccountOperation, post_signed_applet_account_request,
+};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -586,7 +593,15 @@ async fn revoke_preview_endpoint(
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &preview.effective_scope)?;
     require_realm_admin(state, &session, &preview.effective_scope).await?;
-    json_ok(build_revoke_plan(state, &record, &preview).await?)
+    json_ok(
+        build_revoke_plan(
+            state,
+            &record,
+            &preview,
+            session.session_grant.as_ref().map(|grant| &grant.issuer_id),
+        )
+        .await?,
+    )
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.revoke", tags("extensions"))]
@@ -624,13 +639,46 @@ async fn revoke_install_endpoint(
     // A durable execution owns the idempotency decision. Exact replay resumes
     // its persisted submissions even when the live projection has moved since
     // preview; conflicting bytes fail before any plan rebuild or side effect.
-    let stored_outcome = load_stored_revoke_outcome(
-        record.revoke_execution.as_ref(),
-        state.service_id(),
-        &admin_actor_key,
-        &idempotency_key,
-        &request_digest,
-    )?;
+    let prior_execution = record.revoke_execution.as_ref();
+    let prior_is_terminal_zero_effect = prior_execution.is_some_and(|execution| {
+        execution
+            .get("terminal_zero_effect")
+            .and_then(Value::as_bool)
+            == Some(true)
+            && execution
+                .get("outcome")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<AppletRevokeOutcome>(value).ok())
+                .is_some_and(|outcome| revoke_outcome_terminal_zero_effect(&outcome))
+    });
+    let same_prior_request = prior_execution.is_some_and(|execution| {
+        execution.get("principal_id").and_then(Value::as_str) == Some(state.service_id())
+            && execution.get("admin_actor_id").and_then(Value::as_str)
+                == Some(admin_actor_key.as_str())
+            && execution.get("idempotency_key").and_then(Value::as_str)
+                == Some(idempotency_key.as_str())
+            && execution.get("request_digest").and_then(Value::as_str)
+                == Some(request_digest.as_str())
+    });
+    let stored_outcome = if prior_is_terminal_zero_effect && !same_prior_request {
+        None
+    } else {
+        load_stored_revoke_outcome(
+            prior_execution,
+            state.service_id(),
+            &admin_actor_key,
+            &idempotency_key,
+            &request_digest,
+        )?
+    };
+    if prior_is_terminal_zero_effect && same_prior_request {
+        return json_ok(stored_outcome.ok_or_else(|| {
+            AppError::internal("terminal zero-effect revoke ledger has no outcome")
+        })?);
+    }
+    let mut revoke_plan = None;
+    let mut delegated_session_request = None;
+    let mut delegated_session_authority_id = None;
 
     if stored_outcome.is_none() {
         let preview = AppletRevokePreviewRequestBody {
@@ -638,12 +686,138 @@ async fn revoke_install_endpoint(
             reason_code: revoke.reason_code.clone(),
             revoke_mode: revoke.revoke_mode,
         };
-        let recomputed = build_revoke_plan(state, &record, &preview).await?;
-        if recomputed.revoke_plan_digest != revoke.revoke_plan_digest {
+        let recomputed = build_revoke_plan(
+            state,
+            &record,
+            &preview,
+            session.session_grant.as_ref().map(|grant| &grant.issuer_id),
+        )
+        .await?;
+        let recomputed_digest = arkret_canonical::canonical_sha256(&recomputed.revoke_plan)
+            .map_err(|error| AppError::internal(format!("revoke plan digest failed: {error}")))?;
+        if recomputed_digest != revoke.revoke_plan_digest.as_str() {
             return Err(AppError::conflict("revoke plan changed; preview again")
                 .with_wire_code("failed_precondition"));
         }
         validate_revoke_submissions(&admin_actor, &recomputed.revoke_plan, &revoke)?;
+        if revoke_mode_revokes_sessions(revoke.revoke_mode) {
+            let grant = session.session_grant.as_ref().ok_or_else(|| {
+                crate::app_error!(
+                    FailedPrecondition,
+                    "delegated-session revoke requires an Account Authority session grant",
+                )
+            })?;
+            delegated_session_authority_id = Some(grant.issuer_id.clone());
+            let proof = revoke.proof.clone().ok_or_else(|| {
+                crate::app_error!(
+                    FailedPrecondition,
+                    "delegated-session revoke requires AccountLifecycleProof",
+                )
+            })?;
+            let witness = recomputed
+                .revoke_plan
+                .delegated_session_snapshot_digest
+                .clone()
+                .ok_or_else(|| {
+                    AppError::internal("delegated-session plan has no inventory witness")
+                })?;
+            let selector = applet_delegated_inventory_selector(&record);
+            let subrequest = SessionRevokeRequestBody {
+                target_session_grant_id: None,
+                target_device_id: None,
+                all_sessions: None,
+                applet_id: Some(selector.applet_id),
+                effective_scope: Some(selector.effective_scope),
+                registration_epoch: Some(selector.registration_epoch),
+                service_id: Some(selector.service_id),
+                capability_grant_refs: Some(selector.capability_grant_refs),
+                expected_inventory_digest: Some(witness),
+                authorizing_session_grant_id: Some(grant.grant_id.clone()),
+                proof: Some(proof),
+            };
+            subrequest.validate_shape().map_err(|error| {
+                AppError::internal(format!(
+                    "invalid delegated-session revoke subrequest: {error}"
+                ))
+            })?;
+            delegated_session_request = Some(subrequest);
+        }
+        revoke_plan = Some(recomputed.revoke_plan);
+    } else if let Some(execution) = record.revoke_execution.as_ref() {
+        revoke_plan = execution
+            .get("revoke_plan")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("stored revoke plan is invalid: {error}"))
+            })?;
+        delegated_session_request = execution
+            .get("delegated_session_request")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored delegated-session subrequest is invalid: {error}"
+                ))
+            })?;
+        delegated_session_authority_id = execution
+            .get("delegated_session_authority_id")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored delegated-session authority id is invalid: {error}"
+                ))
+            })?;
+        if revoke_mode_revokes_sessions(revoke.revoke_mode)
+            && (revoke_plan.is_none()
+                || delegated_session_request.is_none()
+                || delegated_session_authority_id.is_none())
+        {
+            return Err(AppError::internal(
+                "stored delegated-session revoke ledger lacks its exact plan or subrequest",
+            ));
+        }
+        if let Some(plan) = revoke_plan.as_ref() {
+            let digest = arkret_canonical::canonical_sha256(plan).map_err(|error| {
+                AppError::internal(format!("stored revoke plan digest failed: {error}"))
+            })?;
+            if digest != revoke.revoke_plan_digest.as_str() {
+                return Err(AppError::internal(
+                    "stored revoke plan disagrees with the exact request digest",
+                ));
+            }
+        }
+        if let (Some(plan), Some(subrequest)) =
+            (revoke_plan.as_ref(), delegated_session_request.as_ref())
+        {
+            let selector = applet_delegated_inventory_selector(&record);
+            if subrequest.applet_id.as_ref() != Some(&plan.applet_id)
+                || subrequest.effective_scope.as_ref() != Some(&plan.effective_scope)
+                || subrequest.registration_epoch.as_ref() != Some(&plan.registration_epoch)
+                || subrequest.service_id.as_ref() != Some(&selector.service_id)
+                || subrequest.capability_grant_refs.as_ref()
+                    != Some(&selector.capability_grant_refs)
+                || subrequest.expected_inventory_digest.as_ref()
+                    != plan.delegated_session_snapshot_digest.as_ref()
+                || subrequest.proof != revoke.proof
+            {
+                return Err(AppError::internal(
+                    "stored delegated-session subrequest disagrees with its accepted plan",
+                ));
+            }
+            subrequest.validate_shape().map_err(|error| {
+                AppError::internal(format!(
+                    "stored delegated-session selector is invalid: {error}"
+                ))
+            })?;
+        }
     }
 
     let mut outcome = if let Some(stored_outcome) = stored_outcome {
@@ -652,22 +826,42 @@ async fn revoke_install_endpoint(
         let operation_id =
             ProtocolOperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .map_err(AppError::internal)?;
-        let mut steps = revoke
-            .capability_revoke_events
-            .iter()
-            .map(|submission| {
-                pending_revoke_event_step(
-                    AppletRevokeEventEffectKind::CapabilityRevokeEvent,
-                    submission.event.event_id.clone(),
-                )
-            })
-            .chain(revoke.membership_state_events.iter().map(|submission| {
-                pending_revoke_event_step(
-                    AppletRevokeEventEffectKind::MembershipStateEvent,
-                    submission.event.event_id.clone(),
-                )
-            }))
-            .collect::<Vec<_>>();
+        let mut steps = Vec::new();
+        if revoke_mode_revokes_sessions(revoke.revoke_mode) {
+            let witness = revoke_plan
+                .as_ref()
+                .and_then(|plan: &AppletRevokePlan| plan.delegated_session_snapshot_digest.as_ref())
+                .ok_or_else(|| {
+                    AppError::internal("delegated-session revoke witness disappeared")
+                })?;
+            steps.push(AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                effect_kind: AppletRevokeLocalEffectKind::DelegatedSessionRevocation,
+                effect_ref: applet_revoke_local_ref(format!(
+                    "ak:applet_session_inventory:{}",
+                    witness.as_str()
+                ))?,
+                status: AppletRevokeLocalEffectStatus::Pending,
+                reason_code: None,
+            }));
+        }
+        steps.extend(
+            revoke
+                .capability_revoke_events
+                .iter()
+                .map(|submission| {
+                    pending_revoke_event_step(
+                        AppletRevokeEventEffectKind::CapabilityRevokeEvent,
+                        submission.event.event_id.clone(),
+                    )
+                })
+                .chain(revoke.membership_state_events.iter().map(|submission| {
+                    pending_revoke_event_step(
+                        AppletRevokeEventEffectKind::MembershipStateEvent,
+                        submission.event.event_id.clone(),
+                    )
+                }))
+                .collect::<Vec<_>>(),
+        );
         if revoke_mode_fences_runtime(revoke.revoke_mode) {
             steps.push(AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
                 effect_kind: AppletRevokeLocalEffectKind::LocalAppletFence,
@@ -691,6 +885,9 @@ async fn revoke_install_endpoint(
             &idempotency_key,
             &request_digest,
             &request_value,
+            revoke_plan.as_ref(),
+            delegated_session_request.as_ref(),
+            delegated_session_authority_id.as_ref(),
             &mut outcome,
         )
         .await?;
@@ -701,13 +898,144 @@ async fn revoke_install_endpoint(
         return json_ok(outcome);
     }
 
+    if let Some(subrequest) = delegated_session_request.as_ref() {
+        let account_authority_id = delegated_session_authority_id.as_ref().ok_or_else(|| {
+            AppError::internal("delegated-session revoke authority id is missing")
+        })?;
+        let effect_ref = match outcome.steps.first() {
+            Some(AppletRevokeStep::LocalEffect(step))
+                if step.effect_kind == AppletRevokeLocalEffectKind::DelegatedSessionRevocation =>
+            {
+                step.effect_ref.clone()
+            }
+            _ => {
+                return Err(AppError::internal(
+                    "delegated-session revoke step is missing",
+                ));
+            }
+        };
+        if !revoke_step_is_successful(&outcome.steps[0]) {
+            outcome.steps[0] = AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                effect_kind: AppletRevokeLocalEffectKind::DelegatedSessionRevocation,
+                effect_ref: effect_ref.clone(),
+                status: AppletRevokeLocalEffectStatus::Pending,
+                reason_code: None,
+            });
+            persist_revoke_execution(
+                state,
+                &mut record,
+                &admin_actor_key,
+                &idempotency_key,
+                &request_digest,
+                &request_value,
+                revoke_plan.as_ref(),
+                delegated_session_request.as_ref(),
+                delegated_session_authority_id.as_ref(),
+                &mut outcome,
+            )
+            .await?;
+            if !revoke_step_is_successful(&outcome.steps[0]) {
+                let response: SessionRevokeOutcome = match post_signed_applet_account_request(
+                    state,
+                    AppletAccountOperation::Revoke,
+                    account_authority_id,
+                    subrequest,
+                    Some(&idempotency_key),
+                )
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error)
+                        if error.wire_code() == "failed_precondition"
+                            || error.reason_code.as_deref() == Some("proof_invalid") =>
+                    {
+                        let reason = arkret_wire::ReasonCode::from_wire(
+                            error.reason_code.as_deref().unwrap_or(error.wire_code()),
+                        );
+                        outcome.steps[0] =
+                            AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                                effect_kind:
+                                    AppletRevokeLocalEffectKind::DelegatedSessionRevocation,
+                                effect_ref: effect_ref.clone(),
+                                status: AppletRevokeLocalEffectStatus::Rejected,
+                                reason_code: Some(reason.clone()),
+                            });
+                        outcome
+                            .rejections
+                            .push(arkret_models_integration::AppletScopeRejection {
+                                requested_scope: Some(effect_ref.as_str().to_owned()),
+                                reason_code: reason,
+                            });
+                        outcome.status = AppletRevokeSagaStatus::PartiallyCompleted;
+                        persist_revoke_execution(
+                            state,
+                            &mut record,
+                            &admin_actor_key,
+                            &idempotency_key,
+                            &request_digest,
+                            &request_value,
+                            revoke_plan.as_ref(),
+                            delegated_session_request.as_ref(),
+                            delegated_session_authority_id.as_ref(),
+                            &mut outcome,
+                        )
+                        .await?;
+                        return json_ok(outcome);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let expected = revoke_plan
+                    .as_ref()
+                    .ok_or_else(|| AppError::internal("delegated-session revoke plan disappeared"))?
+                    .delegated_session_refs
+                    .as_slice();
+                let actual = response
+                    .revoked_session_grant_ids
+                    .iter()
+                    .map(|id| id.as_str())
+                    .collect::<Vec<_>>();
+                if response.revoked_count != expected.len() as u64
+                    || actual != expected.iter().map(String::as_str).collect::<Vec<_>>()
+                {
+                    return Err(AppError::internal(
+                        "Account Authority revoke outcome differs from the accepted Applet plan",
+                    ));
+                }
+                outcome.steps[0] = AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                    effect_kind: AppletRevokeLocalEffectKind::DelegatedSessionRevocation,
+                    effect_ref: effect_ref.clone(),
+                    status: AppletRevokeLocalEffectStatus::Accepted,
+                    reason_code: None,
+                });
+                outcome
+                    .revoked_refs
+                    .push(AppletRevokeEffectRef::TypedResource(effect_ref));
+                persist_revoke_execution(
+                    state,
+                    &mut record,
+                    &admin_actor_key,
+                    &idempotency_key,
+                    &request_digest,
+                    &request_value,
+                    revoke_plan.as_ref(),
+                    delegated_session_request.as_ref(),
+                    delegated_session_authority_id.as_ref(),
+                    &mut outcome,
+                )
+                .await?;
+            }
+        }
+    }
+
     let submissions = revoke
         .capability_revoke_events
         .iter()
         .cloned()
         .chain(revoke.membership_state_events.iter().cloned())
         .collect::<Vec<_>>();
-    for (index, submission) in submissions.into_iter().enumerate() {
+    let event_step_offset = usize::from(delegated_session_request.is_some());
+    for (event_index, submission) in submissions.into_iter().enumerate() {
+        let index = event_index + event_step_offset;
         if matches!(outcome.steps[index], AppletRevokeStep::CommittedEvent(_)) {
             continue;
         }
@@ -727,6 +1055,9 @@ async fn revoke_install_endpoint(
             &idempotency_key,
             &request_digest,
             &request_value,
+            revoke_plan.as_ref(),
+            delegated_session_request.as_ref(),
+            delegated_session_authority_id.as_ref(),
             &mut outcome,
         )
         .await?;
@@ -756,6 +1087,9 @@ async fn revoke_install_endpoint(
                 &idempotency_key,
                 &request_digest,
                 &request_value,
+                revoke_plan.as_ref(),
+                delegated_session_request.as_ref(),
+                delegated_session_authority_id.as_ref(),
                 &mut outcome,
             )
             .await?;
@@ -812,6 +1146,9 @@ async fn revoke_install_endpoint(
                     &idempotency_key,
                     &request_digest,
                     &request_value,
+                    revoke_plan.as_ref(),
+                    delegated_session_request.as_ref(),
+                    delegated_session_authority_id.as_ref(),
                     &mut outcome,
                 )
                 .await?;
@@ -825,6 +1162,9 @@ async fn revoke_install_endpoint(
             &idempotency_key,
             &request_digest,
             &request_value,
+            revoke_plan.as_ref(),
+            delegated_session_request.as_ref(),
+            delegated_session_authority_id.as_ref(),
             &mut outcome,
         )
         .await?;
@@ -891,6 +1231,9 @@ async fn revoke_install_endpoint(
         &idempotency_key,
         &request_digest,
         &request_value,
+        revoke_plan.as_ref(),
+        delegated_session_request.as_ref(),
+        delegated_session_authority_id.as_ref(),
         &mut outcome,
     )
     .await?;
@@ -958,6 +1301,13 @@ fn revoke_mode_fences_runtime(mode: AppletRevokeMode) -> bool {
     matches!(
         mode,
         AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeRuntimeOnly
+    )
+}
+
+fn revoke_mode_revokes_sessions(mode: AppletRevokeMode) -> bool {
+    matches!(
+        mode,
+        AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeDelegatedSessions
     )
 }
 
@@ -1094,17 +1444,9 @@ async fn build_revoke_plan(
     state: &AppState,
     record: &AppletRecord,
     preview: &AppletRevokePreviewRequestBody,
+    account_authority_id: Option<&arkret_wire::DidCoreId>,
 ) -> Result<AppletRevokePreviewOutcome, AppError> {
     ensure_not_revoked(record)?;
-    if matches!(
-        preview.revoke_mode,
-        AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeDelegatedSessions
-    ) {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "delegated-session revoke preview requires an Account Authority enumeration binding",
-        ));
-    }
     let response = &record.install_response;
     if matches!(
         preview.revoke_mode,
@@ -1116,6 +1458,35 @@ async fn build_revoke_plan(
             "widget-token revoke preview requires the durable token inventory",
         ));
     }
+    let delegated_inventory = if matches!(
+        preview.revoke_mode,
+        AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeDelegatedSessions
+    ) {
+        let account_authority_id = account_authority_id.ok_or_else(|| {
+            crate::app_error!(
+                FailedPrecondition,
+                "delegated-session inventory requires an Account Authority session grant",
+            )
+        })?;
+        let request = applet_delegated_inventory_selector(record);
+        let inventory: AppletDelegatedSessionInventoryOutcome = post_signed_applet_account_request(
+            state,
+            AppletAccountOperation::Inventory,
+            account_authority_id,
+            &request,
+            None,
+        )
+        .await?;
+        inventory.validate_against(&request).map_err(|error| {
+            crate::app_error!(
+                TemporarilyUnavailable,
+                format!("invalid Account Authority delegated-session inventory: {error}"),
+            )
+        })?;
+        Some(inventory)
+    } else {
+        None
+    };
     let package = &record.package;
     let mut capability_revocations = Vec::new();
     let mut membership_removals = Vec::new();
@@ -1166,19 +1537,39 @@ async fn build_revoke_plan(
         capability_revocations,
         membership_removals,
         widget_token_refs: Vec::new(),
-        delegated_session_refs: Vec::new(),
+        delegated_session_refs: delegated_inventory
+            .as_ref()
+            .map(|inventory| {
+                inventory
+                    .active_session_grant_ids
+                    .iter()
+                    .map(|id| id.as_str().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        delegated_session_snapshot_digest: delegated_inventory
+            .as_ref()
+            .map(|inventory| inventory.snapshot_digest.clone()),
     };
-    let plan_value = serde_json::to_value(&plan).map_err(|error| {
-        AppError::internal(format!("revoke plan serialization failed: {error}"))
-    })?;
-    let digest = arkret_canonical::canonical_sha256(&plan_value)
-        .map_err(|error| AppError::internal(format!("revoke plan digest failed: {error}")))?;
-    Ok(AppletRevokePreviewOutcome {
-        revoke_plan_digest: Hash::new(digest).map_err(|error| {
-            AppError::internal(format!("revoke plan digest is invalid: {error}"))
-        })?,
-        revoke_plan: plan,
-    })
+    Ok(AppletRevokePreviewOutcome { revoke_plan: plan })
+}
+
+fn applet_delegated_inventory_selector(
+    record: &AppletRecord,
+) -> AppletDelegatedSessionInventoryRequestBody {
+    let capability_grant_refs = record
+        .install_response
+        .capability_grant_refs
+        .iter()
+        .map(|grant| grant.as_str().to_owned())
+        .collect::<Vec<_>>();
+    AppletDelegatedSessionInventoryRequestBody {
+        applet_id: record.applet_id.clone(),
+        effective_scope: record.effective_scope.clone(),
+        registration_epoch: record.package.registration_epoch.clone(),
+        service_id: record.package.service_id.clone(),
+        capability_grant_refs,
+    }
 }
 
 fn active_applet_grant_revisions(
@@ -1496,6 +1887,9 @@ async fn persist_revoke_execution(
     idempotency_key: &str,
     request_digest: &str,
     request: &Value,
+    revoke_plan: Option<&AppletRevokePlan>,
+    delegated_session_request: Option<&SessionRevokeRequestBody>,
+    delegated_session_authority_id: Option<&arkret_wire::DidCoreId>,
     outcome: &mut AppletRevokeOutcome,
 ) -> Result<(), AppError> {
     let execution = json!({
@@ -1504,6 +1898,10 @@ async fn persist_revoke_execution(
         "idempotency_key": idempotency_key,
         "request_digest": request_digest,
         "request": request,
+        "revoke_plan": revoke_plan,
+        "delegated_session_request": delegated_session_request,
+        "delegated_session_authority_id": delegated_session_authority_id,
+        "terminal_zero_effect": revoke_outcome_terminal_zero_effect(outcome),
         "outcome": outcome,
     });
     for _ in 0..8 {
@@ -1562,6 +1960,23 @@ fn revoke_outcome_progress(outcome: &AppletRevokeOutcome) -> (bool, usize, usize
         accepted,
         status_rank,
     )
+}
+
+/// Only an explicit Account Authority terminal rejection before every other
+/// effect can release this installation for a newly signed preview/request.
+/// A pending step after an unknown transport result never qualifies.
+fn revoke_outcome_terminal_zero_effect(outcome: &AppletRevokeOutcome) -> bool {
+    outcome.status == AppletRevokeSagaStatus::PartiallyCompleted
+        && outcome.revoked_refs.is_empty()
+        && matches!(
+            outcome.steps.first(),
+            Some(AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                effect_kind: AppletRevokeLocalEffectKind::DelegatedSessionRevocation,
+                status: AppletRevokeLocalEffectStatus::Rejected,
+                ..
+            }))
+        )
+        && outcome.steps.iter().skip(1).all(revoke_step_is_pending)
 }
 
 fn revoke_step_is_pending(step: &AppletRevokeStep) -> bool {
@@ -2679,6 +3094,36 @@ mod revoke_saga_tests {
                 "steps": []
             }
         })
+    }
+
+    #[test]
+    fn only_authority_rejected_first_session_step_can_release_a_zero_effect_ledger() {
+        let pending: AppletRevokeOutcome = serde_json::from_value(json!({
+            "operation_id": "ak:operation:01904100-0000-7000-8000-000000000001",
+            "revoke_plan_digest": format!("sha256:{}", "b".repeat(64)),
+            "status": "in_progress",
+            "steps": [{
+                "effect_kind": "delegated_session_revocation",
+                "effect_ref": format!("ak:applet_session_inventory:sha256:{}", "a".repeat(64)),
+                "status": "pending"
+            }]
+        }))
+        .unwrap();
+        assert!(!revoke_outcome_terminal_zero_effect(&pending));
+
+        let mut rejected = pending.clone();
+        rejected.status = AppletRevokeSagaStatus::PartiallyCompleted;
+        let AppletRevokeStep::LocalEffect(first) = &mut rejected.steps[0] else {
+            panic!("session step has a local effect ref")
+        };
+        first.status = AppletRevokeLocalEffectStatus::Rejected;
+        assert!(revoke_outcome_terminal_zero_effect(&rejected));
+        rejected
+            .revoked_refs
+            .push(AppletRevokeEffectRef::TypedResource(
+                applet_revoke_local_ref("ak:applet_session_inventory:accepted").unwrap(),
+            ));
+        assert!(!revoke_outcome_terminal_zero_effect(&rejected));
     }
 
     #[test]

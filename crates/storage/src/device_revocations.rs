@@ -17,6 +17,7 @@ pub struct DeviceRevocationGateSelector {
 pub enum DeviceRevocationGateAction {
     SessionGrantIssue,
     SessionGrantRefresh,
+    SessionGrantRevoke,
     DevicePairingCodeClaim,
     KeyPackageClaim,
     ToDeviceWrite,
@@ -29,6 +30,7 @@ impl DeviceRevocationGateAction {
         match self {
             Self::SessionGrantIssue => "session_grant_issue",
             Self::SessionGrantRefresh => "session_grant_refresh",
+            Self::SessionGrantRevoke => "session_grant_revoke",
             Self::DevicePairingCodeClaim => "device_pairing_code_claim",
             Self::KeyPackageClaim => "keypackage_claim",
             Self::ToDeviceWrite => "to_device_write",
