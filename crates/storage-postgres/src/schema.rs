@@ -865,8 +865,6 @@ diesel::table! {
     }
 }
 
-
-
 diesel::table! {
     member_identity_handle_claims (subject_id, digest) {
         digest -> Text,
