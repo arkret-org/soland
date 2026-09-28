@@ -610,6 +610,418 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
     assert_eq!(provenance_count(&pool).await, 3);
 }
 
+/// A member's public Genesis material read is decided at one accepted Realm
+/// cut. The peer path additionally binds the source Station's replication
+/// interval at that target Commit, while a mismatched Actor/epoch is opaque.
+#[tokio::test]
+async fn realm_mls_material_read_authorizes_exact_member_and_target_cut() {
+    use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
+    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let discussion = ordinary_realm::open_discussion(&pool, "mls-material-member-cut").await;
+    let realm_id = discussion.realm_id();
+    let station = ordinary_realm::station();
+    let founder = ordinary_realm::founder();
+    let at = discussion.committed_at();
+    let genesis = with_installation(
+        ordinary_realm::next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::MlsGenesis,
+            &founder,
+            genesis_payload(&realm_id, at),
+            at,
+        ),
+        None,
+        0,
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(genesis.clone())
+        .await
+        .unwrap();
+    let event = &genesis.authority_commit.event;
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).unwrap()).unwrap();
+    let mut request = MlsGroupStateMaterialRequestBody {
+        realm_id: realm_id.clone(),
+        effective_scope: realm_scope(&realm_id),
+        mls_group_id: payload.mls_group_id().unwrap(),
+        epoch: Default::default(),
+        group_state_event_id: event.event_id.clone(),
+        caller_actor_id: Some(event.actor_id.clone()),
+        target_commit_event_ref: Some(event.event_id.clone()),
+        target_epoch: Some(0),
+        group_info_ref: payload.group_info_ref,
+        ratchet_tree_ref: payload.ratchet_tree_ref,
+        max_response_bytes: None,
+    };
+    let store = PgAuthorityCommitStore { pool };
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::Authorized { genesis: Some(_) }
+    ));
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, Some(&station))
+            .await
+            .unwrap(),
+        Read::Authorized { genesis: Some(_) }
+    ));
+    let outsider =
+        arkret_wire::DidCoreId::new("ak:did_core:web:mls-material-outsider.example").unwrap();
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, Some(&outsider))
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+    request.caller_actor_id = Some(arkret_wire::ActorId::service(outsider));
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+    request.caller_actor_id = Some(event.actor_id.clone());
+    request.target_epoch = Some(1);
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+}
+
+/// A Station hosting a since-join member cannot replicate the prejoin
+/// Genesis Event, but it can request epoch-0 public bytes at a later accepted
+/// MLS Commit cut that it is allowed to replicate.
+#[tokio::test]
+async fn realm_mls_material_peer_uses_joined_target_cut_not_prejoin_genesis_cut() {
+    use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
+    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let station = ordinary_realm::station();
+    let unit = ordinary_realm::bootstrap_unit_with_join_rule("mls-material-since-join", "public");
+    let at = unit.transactions[0].commit.committed_at;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let founder = ordinary_realm::founder();
+    let genesis = with_installation(
+        ordinary_realm::next_request(
+            unit.transactions.last().unwrap(),
+            arkret_wire::EventKind::MlsGenesis,
+            &founder,
+            genesis_payload(&realm_id, at),
+            at,
+        ),
+        None,
+        0,
+    );
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let genesis_ref = genesis.authority_commit.event.event_id.clone();
+    let remote_station =
+        arkret_wire::DidCoreId::new("ak:did_core:web:mls-material-member.example").unwrap();
+    let bob = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:mls-material-bob.example").unwrap(),
+        remote_station.clone(),
+    ));
+    let mut join = ordinary_realm::next_request_for_actor(
+        &genesis.authority_commit,
+        arkret_wire::EventKind::MemberState,
+        bob.clone(),
+        serde_json::json!({
+            "realm_id": realm_id,
+            "member_id": bob,
+            "membership": "join",
+            "reason": "MLS material target-cut fixture",
+        }),
+        at,
+    );
+    join.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        join.authority_commit.event.clone(),
+    ));
+    uow.commit_event(join.clone()).await.unwrap();
+    let target = with_installation(
+        ordinary_realm::next_request(
+            &join.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &founder,
+            commit_payload(&realm_id, &genesis_ref, 0, 1, b"member-target-cut"),
+            at,
+        ),
+        Some((&genesis_ref, 0)),
+        1,
+    );
+    uow.commit_event(target.clone()).await.unwrap();
+    let genesis_payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(
+            serde_json::to_value(&genesis.authority_commit.event.payload).unwrap(),
+        )
+        .unwrap();
+    let request = MlsGroupStateMaterialRequestBody {
+        realm_id: realm_id.clone(),
+        effective_scope: realm_scope(&realm_id),
+        mls_group_id: genesis_payload.mls_group_id().unwrap(),
+        epoch: Default::default(),
+        group_state_event_id: genesis_ref.clone(),
+        caller_actor_id: Some(bob.clone()),
+        target_commit_event_ref: Some(target.authority_commit.event.event_id.clone()),
+        target_epoch: Some(1),
+        group_info_ref: genesis_payload.group_info_ref,
+        ratchet_tree_ref: genesis_payload.ratchet_tree_ref,
+        max_response_bytes: None,
+    };
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    assert!(
+        store
+            .committed_event_for_peer(&genesis_ref, &remote_station, &station)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, Some(&remote_station))
+            .await
+            .unwrap(),
+        Read::Authorized { genesis: Some(_) }
+    ));
+    let mut wrong_genesis = request.clone();
+    wrong_genesis.group_state_event_id =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x7c; 32]);
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&wrong_genesis, &station, Some(&remote_station))
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+    // Simulate the Account Station's verified anchored since-join replica:
+    // it has the target Commit but no prejoin Genesis or governance MLS
+    // current. Its only authorized result is a forwarding decision, never
+    // public bytes or a locally invented Genesis selector.
+    let mut conn = pool.get().await.unwrap();
+    let stream_key = String::from_utf8(
+        arkret_canonical::canonical_json_bytes(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO replica_stream_anchors \
+         (stream_key,realm_id,join_commit_id,member_account_id,anchor_commit_id,anchor_stream_position,anchored_at) \
+         VALUES ($1,$2,$3,$4,$3,$5,now())",
+    )
+    .bind::<Text, _>(stream_key)
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(join.authority_commit.commit.commit_id.as_str())
+    .bind::<Jsonb, _>(serde_json::to_value(bob.as_account_id().unwrap()).unwrap())
+    .bind::<BigInt, _>(join.authority_commit.commit.stream_position as i64)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    diesel::sql_query("DELETE FROM mls_group_current_results WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&wrong_genesis, &remote_station, None)
+            .await
+            .unwrap(),
+        Read::Authorized { genesis: None }
+    ));
+}
+
+#[tokio::test]
+async fn realm_mls_material_read_rejects_wrong_genesis_ref() {
+    use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
+    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let discussion = ordinary_realm::open_discussion(&pool, "mls-material-wrong-genesis").await;
+    let realm_id = discussion.realm_id();
+    let station = ordinary_realm::station();
+    let at = discussion.committed_at();
+    let genesis = with_installation(
+        ordinary_realm::next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::MlsGenesis,
+            &ordinary_realm::founder(),
+            genesis_payload(&realm_id, at),
+            at,
+        ),
+        None,
+        0,
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(genesis.clone())
+        .await
+        .unwrap();
+    let event = &genesis.authority_commit.event;
+    let target = with_installation(
+        ordinary_realm::next_request(
+            &genesis.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &ordinary_realm::founder(),
+            commit_payload(&realm_id, &event.event_id, 0, 0, b"genesis-selector-target"),
+            at,
+        ),
+        Some((&event.event_id, 0)),
+        1,
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(target.clone())
+        .await
+        .unwrap();
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).unwrap()).unwrap();
+    let mut request = MlsGroupStateMaterialRequestBody {
+        realm_id: realm_id.clone(),
+        effective_scope: realm_scope(&realm_id),
+        mls_group_id: payload.mls_group_id().unwrap(),
+        epoch: Default::default(),
+        group_state_event_id: event.event_id.clone(),
+        caller_actor_id: Some(event.actor_id.clone()),
+        target_commit_event_ref: Some(target.authority_commit.event.event_id.clone()),
+        target_epoch: Some(1),
+        group_info_ref: payload.group_info_ref,
+        ratchet_tree_ref: payload.ratchet_tree_ref,
+        max_response_bytes: None,
+    };
+    let store = PgAuthorityCommitStore { pool };
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::Authorized { genesis: Some(_) }
+    ));
+    request.group_state_event_id =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x7b; 32]);
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+}
+
+#[tokio::test]
+async fn realm_mls_material_read_rejects_target_retention_and_redaction() {
+    use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
+    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let discussion = ordinary_realm::open_discussion(&pool, "mls-material-withheld-target").await;
+    let realm_id = discussion.realm_id();
+    let station = ordinary_realm::station();
+    let at = discussion.committed_at();
+    let genesis = with_installation(
+        ordinary_realm::next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::MlsGenesis,
+            &ordinary_realm::founder(),
+            genesis_payload(&realm_id, at),
+            at,
+        ),
+        None,
+        0,
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(genesis.clone())
+        .await
+        .unwrap();
+    let event = &genesis.authority_commit.event;
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).unwrap()).unwrap();
+    let request = MlsGroupStateMaterialRequestBody {
+        realm_id: realm_id.clone(),
+        effective_scope: realm_scope(&realm_id),
+        mls_group_id: payload.mls_group_id().unwrap(),
+        epoch: Default::default(),
+        group_state_event_id: event.event_id.clone(),
+        caller_actor_id: Some(event.actor_id.clone()),
+        target_commit_event_ref: Some(event.event_id.clone()),
+        target_epoch: Some(0),
+        group_info_ref: payload.group_info_ref,
+        ratchet_tree_ref: payload.ratchet_tree_ref,
+        max_response_bytes: None,
+    };
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::Authorized { genesis: Some(_) }
+    ));
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO retention_tombstones \
+         (event_id,realm_id,reason,policy_ttl_seconds,expired_at,tombstoned_at) \
+         SELECT id,realm_id,'retention_policy.ttl',60,now(),now() \
+         FROM canonical_events WHERE envelope->>'event_id'=$1",
+    )
+    .bind::<Text, _>(event.event_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+    diesel::sql_query(
+        "DELETE FROM retention_tombstones WHERE event_id IN \
+         (SELECT id FROM canonical_events WHERE envelope->>'event_id'=$1)",
+    )
+    .bind::<Text, _>(event.event_id.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO object_redaction_current_results \
+         (realm_id,target_ref,current_commit_id,current_stream_position,value,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,now())",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Text, _>(genesis.authority_commit.commit.commit_id.as_str())
+    .bind::<BigInt, _>(genesis.authority_commit.commit.stream_position as i64)
+    .bind::<Jsonb, _>(serde_json::json!({"assertions": [{"test": true}]}))
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(&request, &station, None)
+            .await
+            .unwrap(),
+        Read::NotFound
+    ));
+}
+
 /// A Commit and its Welcome commit together; a full recipient queue rolls the
 /// whole Commit back; a reused claim is `duplicate_conflict`; the queued
 /// Welcome is read and ACKed only by its exact endpoint and becomes

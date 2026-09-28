@@ -549,7 +549,7 @@ async fn replica_circle_floor_in_connection(
 /// as an anchored replica: under `since_join` its own held join Commit, at
 /// or after the join that opened the held stream. Earlier history is not
 /// held here, so any other interval is unproved.
-async fn replica_realm_floor_in_connection(
+pub(crate) async fn replica_realm_floor_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
     caller: &ActorId,
@@ -854,6 +854,18 @@ async fn peer_stream_intervals(
         } => peer_circle_intervals(conn, realm_id, circle_id, peer).await,
         _ => Ok((Vec::new(), Vec::new())),
     }
+}
+
+/// The authenticated source Station's replication interval at one already
+/// selected accepted Commit, inside the caller's governing RR read cut.
+pub(crate) async fn peer_replication_right_at_in_connection(
+    conn: &mut AsyncPgConnection,
+    stream: &CommitStreamRef,
+    peer: &DidCoreId,
+    position: u64,
+) -> PersistenceResult<bool> {
+    let (intervals, _) = peer_stream_intervals(conn, stream, peer).await?;
+    Ok(intervals.iter().any(|interval| interval.covers(position)))
 }
 
 /// Whether `peer` may hold the complete canonical bytes of `event` at this

@@ -1188,8 +1188,36 @@ pub struct SignalScopeAuthority {
     pub cipher_suite: String,
 }
 
+/// One atomic read cut for a member's MLS Genesis material request. A member
+/// Station may authorize from its verified replica without holding Genesis
+/// FullView; the governing Station must return the exact accepted Genesis.
+#[derive(Clone, Debug)]
+pub enum MlsMemberGroupStateMaterialRead {
+    NotFound,
+    RevisionUnavailable,
+    Authorized {
+        genesis: Option<arkret_wire::CommittedEventFullView>,
+    },
+}
+
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    /// Evaluate current and target-cut membership, history and policy in one
+    /// repeatable-read transaction. `source_peer` additionally requires the
+    /// peer's replication right at that cut. Caller-bearing requests must
+    /// never be authorized from independent point reads.
+    async fn mls_member_group_state_material_read(
+        &self,
+        request: &arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody,
+        issuer: &arkret_wire::DidCoreId,
+        source_peer: Option<&arkret_wire::DidCoreId>,
+    ) -> PersistenceResult<MlsMemberGroupStateMaterialRead> {
+        let _ = (request, issuer, source_peer);
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: atomic MLS material authorization is unavailable".to_owned(),
+        ))
+    }
+
     async fn signal_recipient_realms(
         &self,
         actor: &arkret_wire::ActorId,

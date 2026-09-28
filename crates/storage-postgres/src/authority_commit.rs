@@ -2092,6 +2092,15 @@ pub(crate) async fn accepted_current_member_joined_in_connection(
 
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
+    async fn mls_member_group_state_material_read(
+        &self,
+        request: &arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody,
+        issuer: &arkret_wire::DidCoreId,
+        source_peer: Option<&arkret_wire::DidCoreId>,
+    ) -> PersistenceResult<soland_storage::MlsMemberGroupStateMaterialRead> {
+        crate::mls_group_state_material_read::read(&self.pool, request, issuer, source_peer).await
+    }
+
     async fn admit_accepted_device_authorization(
         &self,
         transaction: &AuthorityCommitTransaction,

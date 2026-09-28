@@ -1624,6 +1624,21 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// One repeatable-read authorization cut for a member's exact MLS
+    /// Genesis material request. The caller's session Actor binding is
+    /// checked by the self route before this storage read.
+    pub async fn mls_member_group_state_material_read(
+        &self,
+        request: &arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody,
+        issuer: &DidCoreId,
+        source_peer: Option<&DidCoreId>,
+    ) -> ServiceResult<soland_storage::MlsMemberGroupStateMaterialRead> {
+        Ok(self
+            .store()
+            .mls_member_group_state_material_read(request, issuer, source_peer)
+            .await?)
+    }
+
     /// `ak.self.committed_event.resource.get.v1` on an ordinary Realm's Realm
     /// stream. See
     /// [`soland_storage::AuthorityCommitStore::committed_event_for_member`].
