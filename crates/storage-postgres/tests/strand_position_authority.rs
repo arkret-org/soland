@@ -256,3 +256,136 @@ async fn placement_has_whole_position_cas_reorder_and_postimage_wip_at_accepting
         json!({"list_space_id":list_a_id,"rank":"a"})
     );
 }
+
+#[tokio::test]
+async fn wip_warn_accepts_but_require_review_without_proof_refuses_without_writes() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let opened = open_discussion(&pool, "strand-position-wip-enforcement").await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let realm = opened.head.authority_commit.event.realm_id.clone();
+    let actor = opened.head.authority_commit.event.actor_id.clone();
+    let at = opened.head.authority_commit.commit.committed_at;
+    let board = next_request(
+        &opened.head.authority_commit,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        space_payload(&realm, &actor, at, "board", "Board", None, json!({})),
+        at,
+    );
+    let board_id = arkret_wire::SpaceId::from_event_id(&board.authority_commit.event.event_id);
+    uow.commit_event(board.clone()).await.unwrap();
+    let warn_list = next_request(
+        &board.authority_commit,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        space_payload(
+            &realm,
+            &actor,
+            at,
+            "list",
+            "Warn",
+            Some(&board_id),
+            json!({"wip_limit":1,"wip_limit_enforcement":"warn"}),
+        ),
+        at,
+    );
+    let warn_id = arkret_wire::SpaceId::from_event_id(&warn_list.authority_commit.event.event_id);
+    uow.commit_event(warn_list.clone()).await.unwrap();
+    let review_list = next_request(
+        &warn_list.authority_commit,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        space_payload(
+            &realm,
+            &actor,
+            at,
+            "list",
+            "Review",
+            Some(&board_id),
+            json!({"wip_limit":1,"wip_limit_enforcement":"require_review"}),
+        ),
+        at,
+    );
+    let review_id =
+        arkret_wire::SpaceId::from_event_id(&review_list.authority_commit.event.event_id);
+    uow.commit_event(review_list.clone()).await.unwrap();
+    let second_strand = next_request(
+        &review_list.authority_commit,
+        arkret_wire::EventKind::StrandCreate,
+        &founder(),
+        json!({"object":{"schema":"ak.schema.strand.v1","realm_id":realm,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Second"},"state":"active","created_by":actor,
+            "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
+        at,
+    );
+    let second_id =
+        arkret_wire::StrandId::from_event_id(&second_strand.authority_commit.event.event_id);
+    uow.commit_event(second_strand.clone()).await.unwrap();
+
+    let warn_first = next_request(
+        &second_strand.authority_commit,
+        arkret_wire::EventKind::StrandMove,
+        &founder(),
+        json!({"board_space_id":board_id,"strand_id":opened.strand_id,
+            "target_space_id":warn_id,"rank":"a"}),
+        at,
+    );
+    uow.commit_event(warn_first.clone()).await.unwrap();
+    let warn_over_limit = next_request(
+        &warn_first.authority_commit,
+        arkret_wire::EventKind::StrandMove,
+        &founder(),
+        json!({"board_space_id":board_id,"strand_id":second_id,
+            "target_space_id":warn_id,"rank":"b"}),
+        at,
+    );
+    uow.commit_event(warn_over_limit.clone()).await.unwrap();
+    assert_eq!(
+        position(&pool, &board_id, &second_id).await.value,
+        json!({"list_space_id":warn_id,"rank":"b"})
+    );
+
+    let review_first = next_request(
+        &warn_over_limit.authority_commit,
+        arkret_wire::EventKind::StrandMove,
+        &founder(),
+        json!({"board_space_id":board_id,"strand_id":opened.strand_id,
+            "from_space_id":warn_id,"target_space_id":review_id,"rank":"a",
+            "expected_position":{"list_space_id":warn_id,"rank":"a"}}),
+        at,
+    );
+    uow.commit_event(review_first.clone()).await.unwrap();
+    let review_over_limit = next_request(
+        &review_first.authority_commit,
+        arkret_wire::EventKind::StrandMove,
+        &founder(),
+        json!({"board_space_id":board_id,"strand_id":second_id,
+            "from_space_id":warn_id,"target_space_id":review_id,"rank":"b",
+            "expected_position":{"list_space_id":warn_id,"rank":"b"}}),
+        at,
+    );
+    let before = (
+        count(&pool, &realm, "canonical_events").await,
+        count(&pool, &realm, "realm_commits").await,
+    );
+    assert_eq!(
+        uow.commit_event(review_over_limit)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(ConflictCode::FailedPrecondition)
+    );
+    assert_eq!(
+        before,
+        (
+            count(&pool, &realm, "canonical_events").await,
+            count(&pool, &realm, "realm_commits").await
+        )
+    );
+    assert_eq!(
+        position(&pool, &board_id, &second_id).await.value,
+        json!({"list_space_id":warn_id,"rank":"b"})
+    );
+}
