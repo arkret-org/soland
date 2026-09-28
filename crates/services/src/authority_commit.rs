@@ -1,5 +1,6 @@
 //! Current governance-Station application boundary.
 
+mod mls_roster;
 use arkret_models_collaboration::authority_commit::{
     AuthorityForwardBranch, DirectConversationFoundingAcceptanceOutcome,
     DirectConversationFoundingFederationSubmission, DirectConversationFoundingUnitSubmission,
@@ -28,6 +29,7 @@ use arkret_wire::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
+pub use mls_roster::MlsRosterAuthorityApplicationRead;
 use serde::Serialize;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,

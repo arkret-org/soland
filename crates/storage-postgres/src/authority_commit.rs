@@ -2092,6 +2092,15 @@ pub(crate) async fn accepted_current_member_joined_in_connection(
 
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
+    async fn mls_roster_authority_read(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody,
+        issuer: &arkret_wire::DidCoreId,
+        source_peer: Option<&arkret_wire::DidCoreId>,
+    ) -> PersistenceResult<soland_storage::MlsRosterAuthorityRead> {
+        crate::mls_roster_authority_read::read(&self.pool, request, issuer, source_peer).await
+    }
+
     async fn install_mls_add_authority_attestation(
         &self,
         verified: &soland_storage::VerifiedMlsAddAuthorityAttestation,

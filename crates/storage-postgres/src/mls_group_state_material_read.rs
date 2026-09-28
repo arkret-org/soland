@@ -7,8 +7,8 @@
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
 use arkret_wire::{
-    CommitStreamRef, CommittedEventFullView, CommittedEventView, DidCoreId, EventKind,
-    MlsGroupCurrent, ScopeRef,
+    ActorId, CommitStreamRef, CommittedEventFullView, CommittedEventView, DidCoreId, EventId,
+    EventKind, MlsGroupCurrent, MlsGroupId, RealmId, ScopeRef,
 };
 use diesel::sql_types::{Binary, Jsonb, Nullable};
 use soland_storage::MlsMemberGroupStateMaterialRead as Read;
@@ -55,6 +55,19 @@ struct GroupRow {
     mls_group_id: String,
     #[diesel(sql_type = Jsonb)]
     value: serde_json::Value,
+}
+
+/// The selectors common to public material and signed historical roster
+/// reads. In particular it has no Genesis Blob refs: a newly joined member
+/// must be able to authorize the roster before learning those refs.
+pub(crate) struct MemberMlsTargetSelector {
+    pub realm_id: RealmId,
+    pub effective_scope: ScopeRef,
+    pub mls_group_id: MlsGroupId,
+    pub group_state_event_id: EventId,
+    pub caller_actor_id: ActorId,
+    pub target_commit_event_ref: EventId,
+    pub target_epoch: u64,
 }
 
 async fn accepted_row(
@@ -123,19 +136,15 @@ async fn founding_join(
     .present)
 }
 
-async fn read_in_connection(
+pub(crate) async fn read_in_connection(
     conn: &mut AsyncPgConnection,
-    request: &MlsGroupStateMaterialRequestBody,
+    request: &MemberMlsTargetSelector,
     issuer: &DidCoreId,
     source_peer: Option<&DidCoreId>,
 ) -> PersistenceResult<Read> {
-    let (Some(caller), Some(target_ref), Some(target_epoch)) = (
-        request.caller_actor_id.as_ref(),
-        request.target_commit_event_ref.as_ref(),
-        request.target_epoch,
-    ) else {
-        return Ok(Read::NotFound);
-    };
+    let caller = &request.caller_actor_id;
+    let target_ref = &request.target_commit_event_ref;
+    let target_epoch = request.target_epoch;
     let ScopeRef::Realm { realm_id } = &request.effective_scope else {
         // A Circle's current row does not persist the parent join generation.
         return Ok(Read::NotFound);
@@ -369,12 +378,28 @@ pub(crate) async fn read(
     request
         .validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let (Some(caller_actor_id), Some(target_commit_event_ref), Some(target_epoch)) = (
+        request.caller_actor_id.clone(),
+        request.target_commit_event_ref.clone(),
+        request.target_epoch,
+    ) else {
+        return Ok(Read::NotFound);
+    };
+    let selector = MemberMlsTargetSelector {
+        realm_id: request.realm_id.clone(),
+        effective_scope: request.effective_scope.clone(),
+        mls_group_id: request.mls_group_id.clone(),
+        group_state_event_id: request.group_state_event_id.clone(),
+        caller_actor_id,
+        target_commit_event_ref,
+        target_epoch,
+    };
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *conn)
             .await?;
-        read_in_connection(conn, request, issuer, source_peer)
+        read_in_connection(conn, &selector, issuer, source_peer)
             .await
             .map_err(PgTransactionError::from)
     })

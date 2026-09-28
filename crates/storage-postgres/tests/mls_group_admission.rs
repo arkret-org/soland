@@ -1974,6 +1974,27 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         add_leaf.leaf_signature_key,
     );
     let governance = PgAuthorityCommitStore { pool: pool.clone() };
+    let roster_request =
+        arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody {
+            realm_id: realm_id.clone(),
+            effective_scope: realm_scope(&realm_id),
+            mls_group_id: realm_scope(&realm_id).canonical_mls_group_id().unwrap(),
+            genesis_event_ref: genesis_ref.clone(),
+            target_commit_event_ref: commit.authority_commit.event.event_id.clone(),
+            target_epoch: 1,
+            caller_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                founder.clone(),
+                station.clone(),
+            )),
+            cursor: None,
+        };
+    assert!(matches!(
+        governance
+            .mls_roster_authority_read(&roster_request, &station, None)
+            .await
+            .unwrap(),
+        soland_storage::MlsRosterAuthorityRead::RevisionUnavailable
+    ));
     let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: arkret_wire::DidCoreId::new(remote_station).unwrap(),
         request: proof.clone(),
@@ -2069,6 +2090,28 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         arkret_models_collaboration::mls_roster_authority::MlsAttestAddStatus::Duplicate
     );
     assert_eq!(installed_add_attestation_count(&pool).await, 1);
+    let roster = governance
+        .mls_roster_authority_read(&roster_request, &station, None)
+        .await
+        .unwrap();
+    let soland_storage::MlsRosterAuthorityRead::Authorized { facts: Some(facts) } = roster else {
+        panic!("complete installed Add history is authorized for the founder")
+    };
+    assert_eq!(facts.records.len(), 2);
+    assert_eq!(
+        facts.authority_head_commit_event_ref,
+        commit.authority_commit.event.event_id
+    );
+    assert!(matches!(
+        &facts.records[0],
+        arkret_models_collaboration::mls_roster_authority::MlsRosterRecord::Genesis { genesis_event_ref, .. }
+            if genesis_event_ref == &genesis_ref
+    ));
+    assert!(matches!(
+        &facts.records[1],
+        arkret_models_collaboration::mls_roster_authority::MlsRosterRecord::Add { commit_event_ref, consumed_proposal_ordinal, .. }
+            if commit_event_ref == &commit.authority_commit.event.event_id && *consumed_proposal_ordinal == 0
+    ));
     let conflicting_replay = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: verified.source_station_id.clone(),
         request: signed_remote_add_attestation(
@@ -2165,4 +2208,23 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
             "a later Commit's base is not substituted for immutable Genesis"
         );
     }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE mls_add_authority_attestations SET request_json = request_json - 'attestation' WHERE commit_event_ref = $1",
+    )
+    .bind::<Text, _>(commit.authority_commit.event.event_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(
+        matches!(
+            governance
+                .mls_roster_authority_read(&roster_request, &station, None)
+                .await
+                .unwrap(),
+            soland_storage::MlsRosterAuthorityRead::RevisionUnavailable
+        ),
+        "an installed Add with missing signed historical proof cannot be disclosed"
+    );
 }

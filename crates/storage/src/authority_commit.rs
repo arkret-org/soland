@@ -834,6 +834,28 @@ pub struct VerifiedMlsAddAuthorityAttestation {
     pub request: arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
 }
 
+/// Historical facts selected and cross-checked at one governing read cut.
+/// The Station service signs a manifest over these complete ordered records;
+/// leaf indices and the claim batch never enter this result.
+#[derive(Clone, Debug)]
+pub struct MlsRosterAuthorityFacts {
+    pub group_info_ref: arkret_wire::BlobRef,
+    pub ratchet_tree_ref: arkret_wire::BlobRef,
+    pub authority_head_commit_event_ref: EventId,
+    pub records: Vec<arkret_models_collaboration::mls_roster_authority::MlsRosterRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub enum MlsRosterAuthorityRead {
+    NotFound,
+    RevisionUnavailable,
+    /// `None` means the caller's Account Station proved its local cut but
+    /// must forward to governance for the complete historical facts.
+    Authorized {
+        facts: Option<MlsRosterAuthorityFacts>,
+    },
+}
+
 /// The durable claim ledger row `keypackage_claim_ref` resolved to, with the
 /// exact request digest the verification read; the accepting transaction
 /// requires the row to still hold that request and a live claim.
@@ -1227,6 +1249,21 @@ pub enum MlsMemberGroupStateMaterialRead {
 
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    /// Recheck current and target-cut disclosure, history, membership and
+    /// peer replication right in one read transaction, then return only a
+    /// complete, internally consistent historical roster.
+    async fn mls_roster_authority_read(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody,
+        issuer: &arkret_wire::DidCoreId,
+        source_peer: Option<&arkret_wire::DidCoreId>,
+    ) -> PersistenceResult<MlsRosterAuthorityRead> {
+        let _ = (request, issuer, source_peer);
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: atomic MLS roster authorization is unavailable".to_owned(),
+        ))
+    }
+
     /// Install a historical recipient proof only after the caller verified
     /// its authenticated source and historical Station signatures. The store
     /// binds it to frozen accepted facts and returns `Duplicate` only for an
