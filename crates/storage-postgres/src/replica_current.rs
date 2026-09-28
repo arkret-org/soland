@@ -38,6 +38,7 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "strand_current_results",
     "strand_position_current_results",
     "strand_watch_current_results",
+    "rsvp_current_results",
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
     "object_redaction_current_results",
@@ -671,6 +672,24 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
                 )
                 .await?;
             }
+            S::Rsvp {
+                event_ref,
+                occurrence,
+                responder_actor_id,
+            } => {
+                crate::rsvp_current_results::install_verified_rsvp_in_connection(
+                    conn,
+                    realm_id,
+                    event_ref,
+                    occurrence,
+                    responder_actor_id,
+                    source_stream_ref,
+                    revision,
+                    value,
+                    installed_at,
+                )
+                .await?;
+            }
             S::StrandWatch {
                 strand_id,
                 watcher_actor_id,
@@ -970,6 +989,10 @@ pub(crate) async fn advance_in_connection(
                 conn, event, commit,
             )
             .await?;
+        }
+        arkret_wire::EventKind::RsvpSet => {
+            crate::rsvp_current_results::project_verified_rsvp_in_connection(conn, event, commit)
+                .await?;
         }
         arkret_wire::EventKind::StrandArchive
         | arkret_wire::EventKind::StrandRestore
@@ -2174,5 +2197,147 @@ mod tests {
                 .get_result(&mut conn).await.unwrap();
             assert_eq!(actual.value, json!({"list_space_id":list,"rank":rank}));
         }
+    }
+
+    #[tokio::test]
+    async fn rsvp_snapshot_install_and_replica_advance_keep_one_winner() {
+        let database = TestDatabase::lease().await;
+        let mut conn = database.pool().get().await.unwrap();
+        let id = |byte| {
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [byte; 32])
+        };
+        let realm = arkret_wire::RealmId::from_event_id(&id(81));
+        let strand = arkret_wire::StrandId::from_event_id(&id(82));
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:rsvp-replica.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:rsvp-host.example").unwrap(),
+        ));
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        };
+        let entry = |ciphertext| {
+            json!({
+                "schedule_basis_refs": [id(83)],
+                "encrypted_response": {
+                    "version": "1.0",
+                    "content_type": "application/vnd.arkret.calendar-rsvp-response+json",
+                    "encryption_context": {
+                        "epoch": 7,
+                        "group_state_ref": id(84)
+                    },
+                    "ciphertext": ciphertext
+                }
+            })
+        };
+        let selector = arkret_wire::CurrentSelector::Rsvp {
+            event_ref: strand.clone(),
+            occurrence: None,
+            responder_actor_id: actor.clone(),
+        };
+        install_snapshot_in_connection(
+            &mut conn,
+            &realm,
+            &head,
+            &[arkret_wire::TypedCurrentResult::Value {
+                selector: selector.clone(),
+                source_stream_ref: stream.clone(),
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: head.commit_id.clone(),
+                    stream_position: 7,
+                },
+                value: entry("first"),
+            }],
+            at,
+        )
+        .await
+        .unwrap();
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            arkret_wire::EventKind::RsvpSet.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            actor.clone(),
+            json!({"event_ref":strand,"occurrence":null,"entry":entry("second")}),
+            at,
+        )
+        .unwrap();
+        let commit = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest([8; 32]),
+            realm_id: realm.clone(),
+            stream_ref: stream.clone(),
+            stream_position: 8,
+            previous_commit_ref: Some(head.commit_id.clone()),
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                event.event_id.clone(),
+            ),
+            committed_at: at,
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:rsvp-host.example#authority",
+                )
+                .unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                    .unwrap(),
+                created_at: at,
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+            },
+        };
+        advance_in_connection(&mut conn, &event, &commit)
+            .await
+            .unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct CurrentRow {
+            #[diesel(sql_type = Jsonb)]
+            value: Value,
+        }
+        let current: CurrentRow = diesel::sql_query(
+            "SELECT jsonb_build_object('count',COUNT(*),'entry',MAX(value::text)) AS value \
+             FROM rsvp_current_results WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(current.value["count"], 1);
+        let accepted: Value =
+            serde_json::from_str(current.value["entry"].as_str().unwrap()).unwrap();
+        assert_eq!(accepted, entry("second"));
+        crate::rsvp_current_results::project_verified_rsvp_in_connection(
+            &mut conn, &event, &commit,
+        )
+        .await
+        .unwrap();
+        let stale = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest([6; 32]),
+            stream_position: 6,
+            previous_commit_ref: None,
+            ..commit
+        };
+        assert!(
+            crate::rsvp_current_results::project_verified_rsvp_in_connection(
+                &mut conn, &event, &stale
+            )
+            .await
+            .is_err()
+        );
+        let unchanged: CurrentRow = diesel::sql_query(
+            "SELECT jsonb_build_object('count',COUNT(*),'entry',MAX(value::text)) AS value \
+             FROM rsvp_current_results WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(unchanged.value, current.value);
     }
 }

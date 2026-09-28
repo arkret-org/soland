@@ -8,9 +8,9 @@ use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use ordinary_realm::{founder, next_request, next_request_for_actor, open_discussion, station};
 use serde_json::{Value, json};
-use soland_storage::EventCommitUnitOfWork;
+use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
-use soland_storage_postgres::{PgEventCommitUnitOfWork, PgPool};
+use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
 #[derive(Clone, diesel::QueryableByName, Debug, PartialEq)]
 struct Current {
@@ -199,6 +199,33 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
         second.authority_commit.commit.commit_id.as_str()
     );
     assert!(settled.current_stream_position > first_current.current_stream_position);
+    let snapshot = PgAuthorityCommitStore { pool: pool.clone() }
+        .realm_state_snapshot_material_for_account(
+            &realm_id,
+            responder
+                .as_account_id()
+                .expect("RSVP responder is an Account"),
+        )
+        .await
+        .unwrap()
+        .expect("joined responder sees the complete RSVP current");
+    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
+        entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::Rsvp {
+                event_ref,
+                occurrence: None,
+                responder_actor_id,
+            },
+            source_stream_ref,
+            revision,
+            value,
+        } if event_ref == &discussion.strand_id
+            && responder_actor_id == &responder
+            && source_stream_ref == &second.authority_commit.commit.stream_ref
+            && revision.commit_id == second.authority_commit.commit.commit_id
+            && value == &encrypted_entry(basis, "rsvpBravo")
+    )));
     assert!(
         !uow.commit_event(second.clone())
             .await

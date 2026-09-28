@@ -231,6 +231,154 @@ pub(crate) async fn commit_rsvp_current_result_in_connection(
     Ok(())
 }
 
+/// A member Station folds only an already verified, consecutive source
+/// RealmCommit. The governing Station has decided capability, schedule basis
+/// and lifecycle admission; the replica retains the signed entry and order.
+pub(crate) async fn project_verified_rsvp_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RsvpSet
+        || event.realm_id != commit.realm_id
+        || event.event_id != commit.event_ref
+        || arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None)
+            .map_err(PersistenceError::database)?
+            != commit.stream_ref
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "RSVP replica Event and covering Commit differ".to_owned(),
+        ));
+    }
+    let payload: arkret_models_collaboration::objects::productivity::RsvpSetPayload =
+        serde_json::from_value(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    payload
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let position = i64::try_from(commit.stream_position).map_err(|_| {
+        PersistenceError::SchemaViolation("RSVP stream position exceeds BIGINT".to_owned())
+    })?;
+    let occurrence =
+        serde_json::to_value(&payload.occurrence).map_err(PersistenceError::database)?;
+    let actor = serde_json::to_value(&event.actor_id).map_err(PersistenceError::database)?;
+    let source = serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?;
+    let value = event
+        .payload
+        .get("entry")
+        .cloned()
+        .ok_or_else(|| PersistenceError::SchemaViolation("RSVP entry is missing".to_owned()))?;
+    let written = diesel::sql_query(
+        "INSERT INTO rsvp_current_results \
+         (realm_id,event_ref,occurrence,responder_actor_id,current_commit_id, \
+          current_stream_position,source_stream_ref,value,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+         ON CONFLICT (realm_id,event_ref,occurrence,responder_actor_id) DO UPDATE SET \
+           current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_position=EXCLUDED.current_stream_position, \
+           source_stream_ref=EXCLUDED.source_stream_ref,value=EXCLUDED.value, \
+           updated_at=EXCLUDED.updated_at \
+         WHERE rsvp_current_results.source_stream_ref=EXCLUDED.source_stream_ref \
+           AND (rsvp_current_results.current_stream_position<EXCLUDED.current_stream_position \
+             OR (rsvp_current_results.current_stream_position=EXCLUDED.current_stream_position \
+               AND rsvp_current_results.current_commit_id=EXCLUDED.current_commit_id \
+               AND rsvp_current_results.value=EXCLUDED.value))",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(payload.event_ref.as_str())
+    .bind::<Jsonb, _>(&occurrence)
+    .bind::<Jsonb, _>(&actor)
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<BigInt, _>(position)
+    .bind::<Jsonb, _>(&source)
+    .bind::<Jsonb, _>(&value)
+    .bind::<Timestamptz, _>(commit.committed_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if written != 1 {
+        return Err(PersistenceError::Conflict(
+            "RSVP replica conflicts with the retained source revision".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Install one signed Snapshot row at its verified source revision. The row
+/// may precede locally retained history, so it cannot depend on a basis Event
+/// or a local capability grant.
+pub(crate) async fn install_verified_rsvp_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    event_ref: &arkret_wire::StrandId,
+    occurrence: &Option<String>,
+    responder_actor_id: &arkret_wire::ActorId,
+    source_stream_ref: &arkret_wire::CommitStreamRef,
+    revision: &arkret_wire::CurrentRevision,
+    value: &Value,
+    installed_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    if source_stream_ref.realm_id() != realm_id {
+        return Err(PersistenceError::SchemaViolation(
+            "RSVP snapshot row belongs to another Realm".to_owned(),
+        ));
+    }
+    if let Some(occurrence) = occurrence {
+        arkret_models_collaboration::objects::productivity::validate_canonical_occurrence_key(
+            occurrence,
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    }
+    let entry: arkret_models_collaboration::objects::productivity::RsvpEntry =
+        serde_json::from_value(value.clone())
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    entry
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let occurrence = serde_json::to_value(occurrence).map_err(PersistenceError::database)?;
+    let actor = serde_json::to_value(responder_actor_id).map_err(PersistenceError::database)?;
+    let source = serde_json::to_value(source_stream_ref).map_err(PersistenceError::database)?;
+    let position = i64::try_from(revision.stream_position).map_err(|_| {
+        PersistenceError::SchemaViolation("RSVP stream position exceeds BIGINT".to_owned())
+    })?;
+    let written = diesel::sql_query(
+        "INSERT INTO rsvp_current_results \
+         (realm_id,event_ref,occurrence,responder_actor_id,current_commit_id, \
+          current_stream_position,source_stream_ref,value,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+         ON CONFLICT (realm_id,event_ref,occurrence,responder_actor_id) DO UPDATE SET \
+           current_commit_id=EXCLUDED.current_commit_id, \
+           current_stream_position=EXCLUDED.current_stream_position, \
+           source_stream_ref=EXCLUDED.source_stream_ref,value=EXCLUDED.value, \
+           updated_at=EXCLUDED.updated_at \
+         WHERE rsvp_current_results.source_stream_ref=EXCLUDED.source_stream_ref \
+           AND (rsvp_current_results.current_stream_position<EXCLUDED.current_stream_position \
+             OR (rsvp_current_results.current_stream_position=EXCLUDED.current_stream_position \
+               AND rsvp_current_results.current_commit_id=EXCLUDED.current_commit_id \
+               AND rsvp_current_results.value=EXCLUDED.value))",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(event_ref.as_str())
+    .bind::<Jsonb, _>(&occurrence)
+    .bind::<Jsonb, _>(&actor)
+    .bind::<Text, _>(revision.commit_id.as_str())
+    .bind::<BigInt, _>(position)
+    .bind::<Jsonb, _>(&source)
+    .bind::<Jsonb, _>(value)
+    .bind::<Timestamptz, _>(installed_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if written != 1 {
+        return Err(PersistenceError::Conflict(
+            "RSVP snapshot conflicts with the retained source revision".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn basis_names_target(
     basis: &BasisRow,
     basis_id: &arkret_wire::EventId,

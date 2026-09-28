@@ -48,6 +48,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::CapabilityRelinquish,
     EventKind::StrandCreate,
     EventKind::StrandUpdate,
+    EventKind::RsvpSet,
     EventKind::StrandArchive,
     EventKind::StrandRestore,
     EventKind::StrandStageSet,
@@ -417,7 +418,6 @@ async fn disclosure_facts_in_connection(
         "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM sidecar_context_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM rsvp_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM policy_current_results WHERE realm_id=$1) \
@@ -832,6 +832,18 @@ pub(crate) fn disclose_to_account(
             ));
         }
     }
+    let strands = material
+        .current_state_entries
+        .iter()
+        .filter_map(|row| match row {
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::Strand { strand_id },
+                value,
+                ..
+            } => Some((strand_id.clone(), value.clone())),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     for row in &material.current_state_entries {
         let TypedCurrentResult::Value {
             selector,
@@ -866,6 +878,12 @@ pub(crate) fn disclose_to_account(
             }
             CurrentSelector::Strand { .. } | CurrentSelector::Space { .. } => {
                 Some(object_scope(value)?)
+            }
+            CurrentSelector::Rsvp { event_ref, .. } => {
+                let strand = strands
+                    .get(event_ref)
+                    .ok_or_else(|| rejected("RSVP target has no disclosed Strand current"))?;
+                Some(object_scope(strand)?)
             }
             CurrentSelector::MlsGroup { scope_ref } => Some(
                 CommitStreamRef::from_scope(scope_ref, None).map_err(PersistenceError::database)?,
@@ -1097,6 +1115,31 @@ pub(crate) fn disclose_to_account(
                 let _: arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
             }
             CurrentSelector::Strand { .. } => {}
+            CurrentSelector::Rsvp {
+                event_ref,
+                occurrence,
+                responder_actor_id: _,
+            } => {
+                let entry: arkret_models_collaboration::objects::productivity::RsvpEntry =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                entry
+                    .validate()
+                    .map_err(|error| rejected(&error.to_string()))?;
+                if let Some(occurrence) = occurrence {
+                    arkret_models_collaboration::objects::productivity::validate_canonical_occurrence_key(occurrence)
+                        .map_err(|error| rejected(&error.to_string()))?;
+                }
+                let target = strands
+                    .get(event_ref)
+                    .ok_or_else(|| rejected("RSVP target has no disclosed Strand current"))?;
+                if target
+                    .get("state")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none()
+                {
+                    return Err(rejected("RSVP target Strand state is malformed"));
+                }
+            }
             CurrentSelector::StrandPosition {
                 board_space_id,
                 strand_id,
@@ -1254,6 +1297,15 @@ pub(crate) fn disclose_to_account(
             "the cut omits the genesis, authority root, or the Account's join",
         ));
     }
+    let redacted_strands = strands
+        .iter()
+        .filter_map(|(strand_id, value)| {
+            match value.get("state").and_then(serde_json::Value::as_str) {
+                Some("redacted") => Some(strand_id.clone()),
+                _ => None,
+            }
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     material.current_state_entries.retain(|row| {
         if let TypedCurrentResult::Value {
             selector:
@@ -1272,6 +1324,13 @@ pub(crate) fn disclose_to_account(
                         value.get("level").and_then(serde_json::Value::as_str),
                         Some("all" | "participating")
                     ));
+        }
+        if matches!(row, TypedCurrentResult::Value {
+            selector: CurrentSelector::Rsvp { event_ref, .. },
+            ..
+        } if redacted_strands.contains(event_ref))
+        {
+            return false;
         }
         !matches!(
             row,

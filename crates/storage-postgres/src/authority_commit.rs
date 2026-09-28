@@ -700,6 +700,12 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'rsvp'::text AS selector_kind, \
+                jsonb_build_object('kind','rsvp','event_ref',event_ref, \
+                    'occurrence',occurrence,'responder_actor_id',responder_actor_id) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM rsvp_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'strand_watch'::text AS selector_kind, \
                 jsonb_build_object('kind','strand_watch','strand_id',strand_id,'watcher_actor_id',watcher_actor_id::jsonb) AS selector_subject, \
                 current_commit_id,current_stream_position,value \
@@ -883,6 +889,14 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         ))
                     })?,
                 },
+                ("rsvp", Some(selector)) => {
+                    serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
+                        .map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "stored RSVP selector is invalid: {error}"
+                            ))
+                        })?
+                }
                 ("strand_position", Some(selector)) => {
                     serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
                         .map_err(PersistenceError::database)?
