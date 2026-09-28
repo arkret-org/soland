@@ -15,6 +15,7 @@
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_identity::member_identity::MemberIdentityUpdatePayload;
 use arkret_wire::{EventEffectOwnership, EventKind, EventWireScope};
 use serde_json::Value;
 
@@ -694,38 +695,26 @@ fn apply_member_identity_update_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    let realm_id = op
-        .payload
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let actor_id = op
-        .payload
-        .get("member_id")
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
-        .map(|actor| actor.to_string())
-        .unwrap_or_default();
-    let segment = op
+    if op
         .payload
         .get("segment")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    if realm_id.is_empty() || actor_id.is_empty() || segment.is_empty() {
-        return ProjectionEffect::Rejected {
-            reason: "member_identity_update_missing_subject".to_owned(),
-        };
-    }
-    if segment != "member_identity" {
+        .is_some_and(|segment| segment != "member_identity")
+    {
         return ProjectionEffect::Rejected {
             reason: arkret_wire::ReasonCode::MEMBER_IDENTITY_UNKNOWN_SEGMENT.to_owned(),
         };
     }
+    let Ok(payload) = serde_json::from_value::<MemberIdentityUpdatePayload>(op.payload.clone())
+    else {
+        return ProjectionEffect::Rejected {
+            reason: "member_identity_update_missing_subject".to_owned(),
+        };
+    };
     ProjectionEffect::MemberIdentityProjected {
-        realm_id,
-        actor_id,
-        segment,
+        realm_id: payload.realm_id.to_string(),
+        actor_id: payload.member_id.to_string(),
+        segment: "member_identity".to_owned(),
         event_id: op.operation_id.to_string(),
     }
 }
@@ -1071,6 +1060,7 @@ mod tests {
                     "realm_id": realm_id,
                     "member_id": actor,
                     "segment": "member_identity",
+                    "identity_payload": { "encrypted_content": {} },
                 }),
             );
             let mut state = super::ProjectionState::default();

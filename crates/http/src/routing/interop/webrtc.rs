@@ -639,9 +639,8 @@ async fn handle_rtc_token(
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
     // (no screen): screen capture is an opt-in source gated by
-    // `ak.call.screen_share`. Durable moderator mute overrides are applied
-    // here so every backend token is minted with the narrowed send permission.
-    let mut desired_media = body
+    // `ak.call.screen_share`. Moderator force mute is unavailable in v1.
+    let desired_media = body
         .desired_media
         .as_ref()
         .map(|media| {
@@ -652,14 +651,6 @@ async fn handle_rtc_token(
             )
         })
         .unwrap_or((true, true, false));
-    let (audio_muted, video_muted) =
-        call_cells.participant_mute_override(&body.actor_id, body.device_id.as_str());
-    if audio_muted {
-        desired_media.0 = false;
-    }
-    if video_muted {
-        desired_media.1 = false;
-    }
     // `bindings/livekit.md` §5 — the `screen_share` publish source is gated by
     // a real `ak.call.screen_share` capability, not merely the presence of any
     // `capability_refs`. Resolve it against the projected grants so an actor
@@ -761,12 +752,11 @@ fn session_focus_for_call(
     ))
 }
 
-/// Read-only view of the committed focus, moderation and per-leg mute facets
-/// consumed by the media token issuer.
+/// Read-only view of the committed focus and moderation facets consumed by
+/// the media token issuer.
 struct CallMediaCells {
     focus: Option<Value>,
     moderation: Option<Value>,
-    mute_override: Option<Value>,
 }
 
 impl CallMediaCells {
@@ -778,21 +768,30 @@ impl CallMediaCells {
         device_id: &str,
     ) -> Result<Self, AppError> {
         let projection = state.projections().snapshot();
+        if projection
+            .facet_value(
+                realm_id,
+                &FacetRef::composite(
+                    facet::CALL_MUTE_OVERRIDE,
+                    &[call_id, &actor_id.to_string(), device_id],
+                ),
+            )
+            .is_some()
+            || projection
+                .facet_value(realm_id, &FacetRef::new(facet::CALL_MUTE_OVERRIDE, call_id))
+                .is_some()
+        {
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "v1 cannot interpret a retained moderator mute override"
+            ));
+        }
         Ok(Self {
             focus: projection
                 .facet_value(realm_id, &FacetRef::new(facet::CALL_FOCUS, call_id))
                 .cloned(),
             moderation: projection
                 .facet_value(realm_id, &FacetRef::new(facet::CALL_MODERATION, call_id))
-                .cloned(),
-            mute_override: projection
-                .facet_value(
-                    realm_id,
-                    &FacetRef::composite(
-                        facet::CALL_MUTE_OVERRIDE,
-                        &[call_id, &actor_id.to_string(), device_id],
-                    ),
-                )
                 .cloned(),
         })
     }
@@ -828,41 +827,6 @@ impl CallMediaCells {
                     .as_ref()
                     == Some(actor_id)
         })
-    }
-
-    /// Current moderator mute override for this call leg. Duplicate malformed
-    /// rows fail closed: any matching `*_muted=true` removes that publish
-    /// permission from the issued backend token.
-    fn participant_mute_override(
-        &self,
-        actor_id: &arkret_wire::ActorId,
-        device_id: &str,
-    ) -> (bool, bool) {
-        let Some(value) = self.mute_override.as_ref() else {
-            return (false, false);
-        };
-        if value.get("status").and_then(Value::as_str) != Some("active")
-            || value
-                .get("actor_id")
-                .and_then(|value| {
-                    serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
-                })
-                .as_ref()
-                != Some(actor_id)
-            || value.get("device_id").and_then(Value::as_str) != Some(device_id)
-        {
-            return (false, false);
-        }
-        (
-            value
-                .get("audio_muted")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
-            value
-                .get("video_muted")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
-        )
     }
 }
 
@@ -1166,31 +1130,6 @@ mod tests {
     }
 
     #[test]
-    fn participant_mute_override_reads_the_per_leg_cas_cell() {
-        let cell = CallMediaCells {
-            focus: None,
-            moderation: None,
-            mute_override: Some(json!({
-                "status": "active",
-                "actor_id": actor("ak:did_core:web:alice.example"),
-                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                "audio_muted": true,
-                "video_muted": false,
-                "changed_by": actor("ak:did_core:web:mod.example"),
-                "changed_at": "2026-06-16T00:00:01.000Z"
-            })),
-        };
-
-        assert_eq!(
-            cell.participant_mute_override(
-                &actor("ak:did_core:web:alice.example"),
-                "ak:device:01904100-0000-7000-8000-000000000001",
-            ),
-            (true, false)
-        );
-    }
-
-    #[test]
     fn removed_moderation_dot_does_not_remain_an_effective_ban() {
         let cell = CallMediaCells {
             focus: None,
@@ -1211,7 +1150,6 @@ mod tests {
                     }
                 }
             ])),
-            mute_override: None,
         };
 
         assert!(!cell.actor_is_banned(&actor("ak:did_core:web:bob.example")));
@@ -1224,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn token_media_permissions_gate_screen_after_mute_adjustment() {
+    fn token_media_permissions_gate_screen_share() {
         let focus = MediaProviderConfig {
             provider: MediaProviderKind::ArkretNative,
             focus_id: "arkret_native_test".to_owned(),
