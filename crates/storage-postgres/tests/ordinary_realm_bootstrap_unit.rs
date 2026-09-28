@@ -995,6 +995,15 @@ fn message_create_request(
     strand_id: &arkret_wire::StrandId,
     body: &str,
 ) -> EventCommitRequest {
+    message_create_request_with_format(previous, strand_id, body, "plain")
+}
+
+fn message_create_request_with_format(
+    previous: &EventCommitRequest,
+    strand_id: &arkret_wire::StrandId,
+    body: &str,
+    format: &str,
+) -> EventCommitRequest {
     let mut request = previous.clone();
     let previous_commit = &previous.authority_commit.commit;
     let previous_event = &previous.authority_commit.event;
@@ -1010,7 +1019,7 @@ fn message_create_request(
         serde_json::json!({
             "strand_id":strand_id,
             "track_name":"discussion",
-            "content":{"kind":"ak.content.text","body":body,"format":"plain"}
+            "content":{"kind":"ak.content.text","body":body,"format":format}
         }),
         previous_commit.committed_at,
     );
@@ -1693,7 +1702,7 @@ async fn account_summary_follows_bootstrap_and_default_strand_in_the_commit_tran
 }
 
 #[tokio::test]
-async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_strand() {
+async fn local_markdown_text_message_writes_exact_revision_and_rejects_missing_strand() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     // PG authoring uses the internal structural TCB boundary here. A display
@@ -1734,7 +1743,7 @@ async fn local_plain_text_message_writes_exact_revision_and_rejects_missing_stra
             .is_none()
     );
 
-    let request = message_create_request(&default, &strand_id, "hello");
+    let request = message_create_request_with_format(&default, &strand_id, "hello", "markdown");
     let outcome = uow.commit_event(request.clone()).await.unwrap();
     assert!(outcome.event_inserted);
     assert_eq!(outcome.projections_inserted, 1);

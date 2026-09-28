@@ -5,7 +5,7 @@
 //! or Circle source stream, by a joined author the same-cut evaluator admits
 //! for `ak.message.create`. Other Message forms remain closed.
 //!
-//! `ak.message.revise` replaces the chain's current carrier with the same plain
+//! `ak.message.revise` replaces the chain's current carrier with the same text
 //! body gate; the target, its creation history and the edit authority are read
 //! under the Realm authority lock, and redaction lives in its own
 //! `object_redaction` family (`crate::object_redaction_current_results`).
@@ -54,9 +54,9 @@ fn strand_lifecycle_conflict(code: soland_storage::ConflictCode, detail: &str) -
     PersistenceError::Conflict(format!("{}: {detail}", code.as_str()))
 }
 
-/// The one Message body this Station admits: a plain `ak.content.text` block
-/// with no mention, part or extension member, so the create and revise
-/// carriers share one content and mention gate.
+/// The bounded text Message body this Station admits: plain or Markdown
+/// source without parts or extension members. Mentions use the separate
+/// create carrier gate below.
 fn plain_text_content(content: Option<&Value>) -> bool {
     let Some(content) = content.and_then(Value::as_object) else {
         return false;
@@ -65,7 +65,9 @@ fn plain_text_content(content: Option<&Value>) -> bool {
         .keys()
         .all(|key| matches!(key.as_str(), "kind" | "format" | "body"))
         && content.get("kind") == Some(&Value::String("ak.content.text".to_owned()))
-        && content.get("format").is_none_or(|format| format == "plain")
+        && content
+            .get("format")
+            .is_none_or(|format| format == "plain" || format == "markdown")
         && content.get("body").is_some_and(Value::is_string)
 }
 
@@ -89,7 +91,9 @@ fn supported_plain_text(payload: &Value) -> bool {
                         && content
                             .get("kind")
                             .is_some_and(|kind| kind == "ak.content.text")
-                        && content.get("format").is_none_or(|format| format == "plain")
+                        && content
+                            .get("format")
+                            .is_none_or(|format| format == "plain" || format == "markdown")
                         && content.get("body").is_some_and(Value::is_string)
                 })
         })
@@ -100,10 +104,11 @@ mod plain_text_format_tests {
     use super::{supported_plain_text, supported_plain_text_revision};
 
     #[test]
-    fn optional_plain_format_is_accepted_without_admitting_rich_carriers() {
+    fn plain_and_markdown_text_are_accepted_without_admitting_rich_carriers() {
         for content in [
             serde_json::json!({"kind":"ak.content.text","body":"hello"}),
             serde_json::json!({"kind":"ak.content.text","format":"plain","body":"hello"}),
+            serde_json::json!({"kind":"ak.content.text","format":"markdown","body":"hello"}),
         ] {
             assert!(supported_plain_text(&serde_json::json!({
                 "strand_id":"fixture","track_name":"discussion","content":content.clone()
@@ -113,7 +118,7 @@ mod plain_text_format_tests {
             })));
         }
         for content in [
-            serde_json::json!({"kind":"ak.content.text","format":"markdown","body":"hello"}),
+            serde_json::json!({"kind":"ak.content.text","format":"html","body":"hello"}),
             serde_json::json!({"kind":"ak.content.text","format":null,"body":"hello"}),
             serde_json::json!({"kind":"ak.content.text"}),
         ] {
@@ -146,7 +151,7 @@ fn supported_mls_carrier(payload: &Value) -> bool {
         && object.get("track_name") == Some(&Value::String("discussion".to_owned()))
 }
 
-/// A revise carrier of the same plain body: the target, the body, and
+/// A revise carrier of the same text body: the target, the body, and
 /// optionally the discussion track and a reason. Metadata, encrypted and MIMI
 /// carriers need their own authority cut.
 fn supported_plain_text_revision(payload: &Value) -> bool {
