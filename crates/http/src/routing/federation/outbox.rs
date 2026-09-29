@@ -2362,7 +2362,9 @@ mod tests {
         assert!(causal_dependencies_pending(&problem(
             "direct_binding_dependencies_pending"
         )));
-        assert!(!causal_dependencies_pending(&problem("service_unavailable")));
+        assert!(!causal_dependencies_pending(&problem(
+            "service_unavailable"
+        )));
         assert!(!causal_dependencies_pending(
             r#"{"ok":false,"error":{"code":"dependency_missing"}}"#
         ));

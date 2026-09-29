@@ -283,10 +283,15 @@ pub(crate) async fn materialize_founding_in_connection(
         )
         .await?;
         crate::unit_of_work::commit_parent_membership_current_results(conn, event, commit).await?;
-        crate::strand_current_results::commit_strand_create_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
+        // The replayed main Strand belongs to the validated four-Event
+        // founding unit, exactly as at the source Station: it carries no
+        // earlier capability basis for the per-Event authority path.
+        if event.kind == arkret_wire::EventKind::StrandCreate {
+            crate::strand_current_results::commit_direct_conversation_founding_strand_in_connection(
+                conn, event, commit,
+            )
+            .await?;
+        }
     }
     let facts = unit.facts().map_err(invalid)?;
     let member_account_id = facts.peer_id.as_account_id().ok_or_else(|| {

@@ -1015,13 +1015,9 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
             )
             .into());
         }
-        crate::authority_commit::replica::materialize_founding_in_connection(
-            conn,
-            unit,
-            local_station,
-            received_at,
-        )
-        .await?;
+        // The replayed founding Events are evaluated by the Direct
+        // Conversation admission table, which reads the pair from this slot;
+        // the slot and the four Commits land in the same transaction.
         sql_query(
             "INSERT INTO direct_conversation_founding_slots \
              (founder_id,trust_domain_id,pair_key,peer_id,founding_unit_digest,realm_id,\
@@ -1041,6 +1037,13 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
         .bind::<Text, _>(format!("peer:{digest}"))
         .bind::<Timestamptz, _>(commits[3].committed_at)
         .execute(&mut *conn)
+        .await?;
+        crate::authority_commit::replica::materialize_founding_in_connection(
+            conn,
+            unit,
+            local_station,
+            received_at,
+        )
         .await?;
         Ok(AggregateAcceptanceStatus::Committed)
     })
