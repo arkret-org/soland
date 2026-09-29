@@ -632,6 +632,7 @@ mod tests {
     const SERVED_BY_ACCOUNT_AUTHORITY: &[arkret_wire::ServiceOperationId] = &[
         arkret_wire::ServiceOperationId::GateAccountCommandPairDeviceV1,
         arkret_wire::ServiceOperationId::GateAccountCommandRevokeSessionV1,
+        arkret_wire::ServiceOperationId::GateAccountReadAppletDelegatedSessionInventoryV1,
     ];
 
     /// `service-surface.md` §3: Describe advertises only bundles this

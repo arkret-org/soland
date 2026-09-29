@@ -228,14 +228,34 @@ fn verify_historical_proofs(
     let Some(ids) = historical_attestor_ids(facts) else {
         return false;
     };
-    ids.iter().all(|id| resolutions.contains_key(id))
-        && facts.historical_add_proofs.iter().all(|proof| {
-            resolutions
-                .get(&proof.attestation.attestor_station_id)
-                .is_some_and(|resolution| {
-                    arkret::verify_mls_attest_add_request(proof, resolution).is_ok()
-                })
-        })
+    if !ids.iter().all(|id| resolutions.contains_key(id)) {
+        return false;
+    }
+    let mut proofs = facts.historical_add_proofs.iter();
+    for record in &facts.records {
+        if let MlsRosterRecord::Add {
+            attestation,
+            attestor_resolution,
+            ..
+        } = record
+        {
+            let Some(proof) = proofs.next() else {
+                return false;
+            };
+            if &proof.attestation.attestor_station_id != &attestation.attestor_station_id
+                || arkret_identity::verify_authenticated_service_resolution_history(
+                    attestor_resolution,
+                    &attestation.attestor_station_id,
+                    chrono::Utc::now(),
+                )
+                .is_err()
+                || arkret::verify_mls_attest_add_request(proof, attestor_resolution).is_err()
+            {
+                return false;
+            }
+        }
+    }
+    proofs.next().is_none()
 }
 
 fn facts_match_preflight(
@@ -558,6 +578,7 @@ mod tests {
                     sender_actor_id: actor,
                     proposal_wire_b64u: Base64UrlString::new("AQ").unwrap(),
                     attestation,
+                    attestor_resolution: resolution.clone(),
                 },
             ],
             historical_add_proofs: vec![proof],

@@ -1599,6 +1599,44 @@ async fn frozen_remote_welcomes(
     .collect()
 }
 
+fn stored_attestor_resolution(
+    station: arkret_wire::DidCoreId,
+) -> arkret_models_identity::AuthenticatedServiceResolution {
+    use arkret_models_identity::{
+        AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
+        ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
+        ResolutionMethodHistoryEvidence,
+    };
+
+    let did = arkret_wire::Did::new(station.as_str().replacen("ak:did_core:", "did:", 1)).unwrap();
+    let digest = arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+    AuthenticatedServiceResolution {
+        service_id: station,
+        service_kind: "station".to_owned(),
+        method_history_evidence: ResolutionMethodHistoryEvidence::DidWebDocument {
+            boundary: ResolutionMethodEvidenceBoundary {
+                from_method_history_head: digest.to_string(),
+                from_version_id: "fixture".to_owned(),
+                to_method_history_head: digest.to_string(),
+                to_version_id: "fixture".to_owned(),
+            },
+            evidence: ResolutionDidBindingEvidenceReceipt {
+                kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                method: "web".to_owned(),
+                document_digest: digest,
+                method_proofs: vec![],
+            },
+        },
+        normalized_did_document: DidDocument {
+            id: did,
+            verification_methods: Default::default(),
+            also_known_as: vec![],
+            updated_at: None,
+            raw_properties: Default::default(),
+        },
+    }
+}
+
 fn signed_remote_add_attestation(
     commit: &EventCommitRequest,
     genesis_ref: &arkret_wire::EventId,
@@ -1998,6 +2036,9 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: arkret_wire::DidCoreId::new(remote_station).unwrap(),
         request: proof.clone(),
+        attestor_resolution: stored_attestor_resolution(
+            arkret_wire::DidCoreId::new(remote_station).unwrap(),
+        ),
     };
     let mut wrong_source = verified.clone();
     wrong_source.source_station_id = station.clone();
@@ -2037,6 +2078,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     .unwrap();
     let wrong_keypackage = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: verified.source_station_id.clone(),
+        attestor_resolution: verified.attestor_resolution.clone(),
         request: signed_remote_add_attestation(
             &commit,
             &genesis_ref,
@@ -2056,6 +2098,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let unknown_welcome = remote_welcome(&commit, &first);
     let wrong_welcome = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: verified.source_station_id.clone(),
+        attestor_resolution: verified.attestor_resolution.clone(),
         request: signed_remote_add_attestation(
             &commit,
             &genesis_ref,
@@ -2120,6 +2163,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     ));
     let conflicting_replay = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: verified.source_station_id.clone(),
+        attestor_resolution: verified.attestor_resolution.clone(),
         request: signed_remote_add_attestation(
             &commit,
             &genesis_ref,

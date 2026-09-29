@@ -386,7 +386,7 @@ async fn peer_mls_attest_add(
     request.validate_claim_binding().map_err(|error| {
         super::events::peer::schema_violation(format!("invalid MLS Add attestation: {error}"))
     })?;
-    mls_roster_signature::verify_peer_attest_add_signatures(
+    let attestor_resolution = mls_roster_signature::verify_peer_attest_add_signatures(
         state,
         &peer.source_service_id,
         &request,
@@ -395,6 +395,7 @@ async fn peer_mls_attest_add(
     let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: peer.source_service_id,
         request,
+        attestor_resolution,
     };
     let outcome = state
         .authority_commits()

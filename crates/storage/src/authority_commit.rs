@@ -832,6 +832,7 @@ pub struct VerifiedMlsRecipientRosterWitness {
 pub struct VerifiedMlsAddAuthorityAttestation {
     pub source_station_id: arkret_wire::DidCoreId,
     pub request: arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
+    pub attestor_resolution: arkret_models_identity::AuthenticatedServiceResolution,
 }
 
 /// Historical facts selected and cross-checked at one governing read cut.

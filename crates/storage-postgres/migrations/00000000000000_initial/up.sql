@@ -4801,6 +4801,7 @@ CREATE TABLE mls_add_authority_attestations (
  consumed_proposal_ordinal BIGINT NOT NULL CHECK(consumed_proposal_ordinal BETWEEN 0 AND 9007199254740991),
  attestation_digest TEXT NOT NULL,
  request_json JSONB NOT NULL CHECK(jsonb_typeof(request_json)='object'),
+ attestor_resolution_json JSONB NOT NULL CHECK(jsonb_typeof(attestor_resolution_json)='object'),
  installed_at TIMESTAMPTZ NOT NULL,
  UNIQUE(scope_key,commit_event_ref,consumed_proposal_ordinal)
 );

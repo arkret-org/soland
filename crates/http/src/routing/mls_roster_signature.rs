@@ -82,7 +82,7 @@ pub(super) async fn verify_peer_attest_add_signatures(
     state: &crate::state::AppState,
     source_id: &DidCoreId,
     request: &MlsAttestAddRequestBody,
-) -> Result<(), AppError> {
+) -> Result<AuthenticatedServiceResolution, AppError> {
     if &request.attestation.attestor_station_id != source_id
         || &request.claim_outcome.claim_receipt.destination_id != source_id
     {
@@ -116,7 +116,8 @@ pub(super) async fn verify_peer_attest_add_signatures(
         &attestation.signature,
         &attestation_bytes,
         &resolution,
-    )
+    )?;
+    Ok(resolution)
 }
 
 #[cfg(test)]
