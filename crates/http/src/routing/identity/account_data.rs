@@ -308,9 +308,18 @@ async fn admit_caller_signed_account_data_set(
     state: &AppState,
     session: &soland_services::identity::SessionIdentityState,
     account_data_key: &str,
-    set_event: arkret_wire::Event,
+    submission: arkret_wire::EventAdmissionSubmission,
     expect_tombstone: bool,
 ) -> Result<u64, AppError> {
+    submission.validate().map_err(|error| {
+        AppError::schema_violation(format!("invalid account data submission: {error}"))
+    })?;
+    if submission.approval_signatures.is_some() {
+        return Err(AppError::schema_violation(
+            "account data set does not accept approval signatures",
+        ));
+    }
+    let set_event = submission.event;
     let event = &set_event;
     let session_actor = super::session_actor::session_actor_from_credential(state, session)?;
     validate_account_data_holder(event, &session_actor)?;
