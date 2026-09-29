@@ -65,8 +65,8 @@ struct InstalledRow {
     attestation_digest: String,
     #[diesel(sql_type = Jsonb)]
     request_json: serde_json::Value,
-    #[diesel(sql_type = Jsonb)]
-    attestor_resolution_json: serde_json::Value,
+    #[diesel(sql_type = Binary)]
+    attestor_resolution_canonical_json: Vec<u8>,
 }
 
 #[derive(QueryableByName)]
@@ -290,7 +290,7 @@ async fn read_in_connection(
             return Ok(unavailable());
         }
         let Some(installed) = sql_query(
-            "SELECT attestation_digest,request_json,attestor_resolution_json FROM mls_add_authority_attestations \
+            "SELECT attestation_digest,request_json,attestor_resolution_canonical_json FROM mls_add_authority_attestations \
              WHERE scope_key=$1 AND commit_event_ref=$2 AND consumed_proposal_ordinal=$3",
         )
         .bind::<Text, _>(&key)
@@ -307,11 +307,6 @@ async fn read_in_connection(
         else {
             return Ok(unavailable());
         };
-        let Ok(attestor_resolution) = serde_json::from_value::<
-            arkret_models_identity::AuthenticatedServiceResolution,
-        >(installed.attestor_resolution_json) else {
-            return Ok(unavailable());
-        };
         if proof.validate_claim_binding().is_err()
             || arkret_canonical::canonical_sha256(&proof).ok().as_deref()
                 != Some(installed.attestation_digest.as_str())
@@ -319,7 +314,16 @@ async fn read_in_connection(
             return Ok(unavailable());
         }
         let attestation = proof.attestation.clone();
-        if attestor_resolution.service_id != attestation.attestor_station_id
+        let Ok(attestor_resolution) = serde_json::from_slice::<
+            arkret_models_identity::AuthenticatedServiceResolution,
+        >(&installed.attestor_resolution_canonical_json) else {
+            return Ok(unavailable());
+        };
+        if arkret_canonical::canonical_json_bytes(&attestor_resolution)
+            .ok()
+            .as_deref()
+            != Some(installed.attestor_resolution_canonical_json.as_slice())
+            || attestor_resolution.service_id != attestation.attestor_station_id
             || attestor_resolution.service_kind != "station"
         {
             return Ok(unavailable());

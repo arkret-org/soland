@@ -1,11 +1,8 @@
 //! Member-authorized signed MLS roster reads through Account and governance Stations.
 
-use std::collections::HashMap;
-
 use arkret_models_collaboration::mls_roster_authority::{
     MlsRosterAuthorityReadOutcome, MlsRosterAuthorityReadRequestBody,
 };
-use arkret_models_identity::AuthenticatedServiceResolution;
 use arkret_wire::{DidCoreId, ErrorCode};
 use soland_services::authority_commit::{
     MlsRosterAuthorityApplicationRead as Read, MlsRosterAuthorityPreflight as Preflight,
@@ -59,7 +56,7 @@ async fn governance_page(
     source_peer: Option<&DidCoreId>,
 ) -> Result<MlsRosterAuthorityReadOutcome, AppError> {
     let issuer = state.service_core_id();
-    let (head, attestors) = match state
+    let head = match state
         .authority_commits()
         .mls_roster_authority_attestors(request, &issuer, source_peer)
         .await
@@ -69,18 +66,8 @@ async fn governance_page(
         Preflight::RevisionUnavailable | Preflight::ForwardRequired => return Err(unavailable()),
         Preflight::Authorized {
             authority_head_commit_event_ref,
-            attestor_station_ids,
-        } => (authority_head_commit_event_ref, attestor_station_ids),
+        } => authority_head_commit_event_ref,
     };
-    let mut resolutions: HashMap<DidCoreId, AuthenticatedServiceResolution> = HashMap::new();
-    for station in attestors {
-        let resolution = crate::routing::identity::agents::evidence::fetch_service_resolution(
-            state, &station, None,
-        )
-        .await
-        .map_err(|_| unavailable())?;
-        resolutions.insert(station, resolution);
-    }
     let verification_method = state
         .service_verification_method("notary-key")
         .map_err(|_| unavailable())?;
@@ -92,7 +79,6 @@ async fn governance_page(
             &issuer,
             source_peer,
             &head,
-            &resolutions,
             &verification_method,
             key.as_ref(),
             chrono::Utc::now(),

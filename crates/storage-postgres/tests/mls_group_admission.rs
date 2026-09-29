@@ -1599,44 +1599,6 @@ async fn frozen_remote_welcomes(
     .collect()
 }
 
-fn stored_attestor_resolution(
-    station: arkret_wire::DidCoreId,
-) -> arkret_models_identity::AuthenticatedServiceResolution {
-    use arkret_models_identity::{
-        AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
-        ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
-        ResolutionMethodHistoryEvidence,
-    };
-
-    let did = arkret_wire::Did::new(station.as_str().replacen("ak:did_core:", "did:", 1)).unwrap();
-    let digest = arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
-    AuthenticatedServiceResolution {
-        service_id: station,
-        service_kind: "station".to_owned(),
-        method_history_evidence: ResolutionMethodHistoryEvidence::DidWebDocument {
-            boundary: ResolutionMethodEvidenceBoundary {
-                from_method_history_head: digest.to_string(),
-                from_version_id: "fixture".to_owned(),
-                to_method_history_head: digest.to_string(),
-                to_version_id: "fixture".to_owned(),
-            },
-            evidence: ResolutionDidBindingEvidenceReceipt {
-                kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
-                method: "web".to_owned(),
-                document_digest: digest,
-                method_proofs: vec![],
-            },
-        },
-        normalized_did_document: DidDocument {
-            id: did,
-            verification_methods: Default::default(),
-            also_known_as: vec![],
-            updated_at: None,
-            raw_properties: Default::default(),
-        },
-    }
-}
-
 fn signed_remote_add_attestation(
     commit: &EventCommitRequest,
     genesis_ref: &arkret_wire::EventId,
@@ -1656,7 +1618,10 @@ fn signed_remote_add_attestation(
 
     let delivery = &welcome.delivery;
     let at = commit.authority_commit.commit.committed_at;
-    let method = format!("did:web:mls-member-station.example#station-key-1");
+    let signer = ed25519_dalek::SigningKey::from_bytes(&[19; 32]);
+    let multibase =
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
+    let method = format!("did:key:{multibase}#{multibase}");
     let placeholder = || KeyOperationSignature {
         kid: arkret_wire::NonEmptyString::new(method.clone()).unwrap(),
         signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
@@ -1764,6 +1729,47 @@ fn signed_remote_add_attestation(
     request
 }
 
+fn historical_roster_attestor_resolution() -> arkret_models_identity::AuthenticatedServiceResolution
+{
+    use arkret_identity::{DidKeyResolver, DidResolver};
+    use arkret_models_identity::{
+        AuthenticatedServiceResolution, DidDocument, ResolutionDidBindingEvidenceKind,
+        ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
+        ResolutionMethodHistoryEvidence,
+    };
+    let signer = ed25519_dalek::SigningKey::from_bytes(&[19; 32]);
+    let multibase =
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
+    let did = arkret_wire::Did::new(format!("did:key:{multibase}")).unwrap();
+    let station = arkret_wire::project_did_to_core_id(&did).unwrap();
+    let document: DidDocument = DidKeyResolver::new().resolve_did(&did).unwrap().document;
+    let digest = arkret_models_identity::normalized_did_document_digest(&document).unwrap();
+    let head = arkret_canonical::sha256_digest(did.as_str().as_bytes());
+    let version = format!(
+        "synthetic-did-sha256:{}",
+        head.trim_start_matches("sha256:")
+    );
+    AuthenticatedServiceResolution {
+        service_id: station,
+        service_kind: "station".to_owned(),
+        normalized_did_document: document,
+        method_history_evidence: ResolutionMethodHistoryEvidence::DidKeyExpansion {
+            boundary: ResolutionMethodEvidenceBoundary {
+                from_method_history_head: head.clone(),
+                to_method_history_head: head,
+                from_version_id: version.clone(),
+                to_version_id: version,
+            },
+            evidence: ResolutionDidBindingEvidenceReceipt {
+                kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
+                method: "key".to_owned(),
+                document_digest: digest,
+                method_proofs: vec![],
+            },
+        },
+    }
+}
+
 async fn installed_add_attestation_count(pool: &PgPool) -> i64 {
     #[derive(diesel::QueryableByName)]
     struct Row {
@@ -1776,6 +1782,22 @@ async fn installed_add_attestation_count(pool: &PgPool) -> i64 {
         .await
         .unwrap()
         .count
+}
+
+async fn frozen_roster_attestor_resolution(pool: &PgPool) -> Vec<u8> {
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Binary)]
+        attestor_resolution_canonical_json: Vec<u8>,
+    }
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "SELECT attestor_resolution_canonical_json FROM mls_add_authority_attestations",
+    )
+    .get_result::<Row>(&mut *conn)
+    .await
+    .unwrap()
+    .attestor_resolution_canonical_json
 }
 
 /// encryption-and-audit.md §2.2 "跨站 recipient": the governance Station
@@ -1802,7 +1824,9 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let founder = ordinary_realm::founder();
     let at = discussion.committed_at();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let remote_station = "ak:did_core:web:mls-member-station.example";
+    let attestor = historical_roster_attestor_resolution();
+    let remote_station_id = attestor.service_id.clone();
+    let remote_station = remote_station_id.as_str();
     let other_station = "ak:did_core:web:mls-other-station.example";
     let member = |label: &str, station: &str| {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -2036,10 +2060,20 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: arkret_wire::DidCoreId::new(remote_station).unwrap(),
         request: proof.clone(),
-        attestor_resolution: stored_attestor_resolution(
-            arkret_wire::DidCoreId::new(remote_station).unwrap(),
-        ),
+        attestor_resolution: attestor,
     };
+    arkret::verify_mls_attest_add_request(&verified.request, &verified.attestor_resolution)
+        .unwrap();
+    let closure_bytes =
+        arkret_canonical::canonical_json_bytes(&verified.attestor_resolution).unwrap();
+    let closure_roundtrip: arkret_models_identity::AuthenticatedServiceResolution =
+        serde_json::from_slice(&closure_bytes).unwrap();
+    assert_eq!(
+        closure_bytes,
+        arkret_canonical::canonical_json_bytes(&closure_roundtrip).unwrap(),
+        "historical closure must have stable typed canonical bytes"
+    );
+    arkret::verify_mls_attest_add_request(&verified.request, &closure_roundtrip).unwrap();
     let mut wrong_source = verified.clone();
     wrong_source.source_station_id = station.clone();
     assert!(
@@ -2047,6 +2081,15 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
             .install_mls_add_authority_attestation(&wrong_source, &station)
             .await
             .is_err()
+    );
+    let mut wrong_resolution = verified.clone();
+    wrong_resolution.attestor_resolution.service_kind = "other".to_owned();
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_resolution, &station)
+            .await
+            .is_err(),
+        "a non-Station historical closure cannot be installed"
     );
     let mut wrong_leaf = verified.clone();
     wrong_leaf.request.attestation.leaf_signature_key_b64u =
@@ -2133,6 +2176,23 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         arkret_models_collaboration::mls_roster_authority::MlsAttestAddStatus::Duplicate
     );
     assert_eq!(installed_add_attestation_count(&pool).await, 1);
+    let original_resolution = frozen_roster_attestor_resolution(&pool).await;
+    assert_eq!(
+        original_resolution,
+        arkret_canonical::canonical_json_bytes(&verified.attestor_resolution).unwrap(),
+        "ingress freezes the complete verified method-native closure"
+    );
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&wrong_resolution, &station)
+            .await
+            .is_err(),
+        "a replay cannot replace retained evidence with a non-Station closure"
+    );
+    assert_eq!(
+        frozen_roster_attestor_resolution(&pool).await,
+        original_resolution
+    );
     let roster = governance
         .mls_roster_authority_read(&roster_request, &station, None)
         .await
@@ -2158,8 +2218,10 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     ));
     assert!(matches!(
         &facts.records[1],
-        arkret_models_collaboration::mls_roster_authority::MlsRosterRecord::Add { commit_event_ref, consumed_proposal_ordinal, .. }
-            if commit_event_ref == &commit.authority_commit.event.event_id && *consumed_proposal_ordinal == 0
+        arkret_models_collaboration::mls_roster_authority::MlsRosterRecord::Add { commit_event_ref, consumed_proposal_ordinal, attestor_resolution, .. }
+            if commit_event_ref == &commit.authority_commit.event.event_id
+                && *consumed_proposal_ordinal == 0
+                && arkret_canonical::canonical_json_bytes(attestor_resolution).unwrap() == original_resolution
     ));
     let conflicting_replay = soland_storage::VerifiedMlsAddAuthorityAttestation {
         source_station_id: verified.source_station_id.clone(),
@@ -2181,6 +2243,38 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         "same Welcome with a different signed historical claim must not replace the winner"
     );
     assert_eq!(installed_add_attestation_count(&pool).await, 1);
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE mls_add_authority_attestations SET attestor_resolution_canonical_json=$1",
+    )
+    .bind::<Binary, _>(vec![b'{'])
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(matches!(
+        governance
+            .mls_roster_authority_read(&roster_request, &station, None)
+            .await
+            .unwrap(),
+        soland_storage::MlsRosterAuthorityRead::RevisionUnavailable
+    ));
+    assert!(
+        governance
+            .install_mls_add_authority_attestation(&verified, &station)
+            .await
+            .is_err(),
+        "a damaged retained closure cannot be replaced by replay"
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE mls_add_authority_attestations SET attestor_resolution_canonical_json=$1",
+    )
+    .bind::<Binary, _>(original_resolution)
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
     assert_eq!(
         payloads
             .iter()

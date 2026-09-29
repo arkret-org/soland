@@ -832,6 +832,8 @@ pub struct VerifiedMlsRecipientRosterWitness {
 pub struct VerifiedMlsAddAuthorityAttestation {
     pub source_station_id: arkret_wire::DidCoreId,
     pub request: arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
+    /// Exact method-native Station resolution used to verify both historical
+    /// signatures at ingress. Governance freezes this with the Add proof.
     pub attestor_resolution: arkret_models_identity::AuthenticatedServiceResolution,
 }
 

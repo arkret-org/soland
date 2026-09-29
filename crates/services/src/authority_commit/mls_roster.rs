@@ -1,13 +1,10 @@
 //! Signed, complete MLS roster pages over one governing read cut.
 
-use std::collections::{BTreeSet, HashMap};
-
 use arkret_models_collaboration::mls_roster_authority::{
     MlsRosterAuthorityManifest, MlsRosterAuthorityReadOutcome, MlsRosterAuthorityReadRequestBody,
     MlsRosterRecord,
 };
 use arkret_models_crypto::KeyOperationSignature;
-use arkret_models_identity::AuthenticatedServiceResolution;
 use arkret_wire::{
     ActorId, Base64UrlString, Did, DidCoreId, DidUrl, EventId, Hash, NonEmptyString,
     project_did_to_core_id,
@@ -21,6 +18,7 @@ use super::AuthorityCommitApplication;
 use crate::{ServiceError, ServiceResult};
 
 const PAGE_SIZE: usize = 8;
+const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub enum MlsRosterAuthorityApplicationRead {
@@ -38,11 +36,10 @@ pub enum MlsRosterAuthorityPreflight {
     NotFound,
     RevisionUnavailable,
     ForwardRequired,
-    /// Only an already authorized internal caller receives these historical
-    /// Station IDs. The signing read repeats authorization after resolution.
+    /// The signing read repeats authorization and verifies every frozen
+    /// historical resolution before disclosing a page.
     Authorized {
         authority_head_commit_event_ref: EventId,
-        attestor_station_ids: Vec<DidCoreId>,
     },
 }
 
@@ -56,6 +53,7 @@ struct Cursor {
     authority_head_commit_event_ref: EventId,
     records_digest: Hash,
     page_index: u64,
+    next_record_offset: u64,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     issued_at: DateTime<Utc>,
 }
@@ -133,12 +131,11 @@ impl AuthorityCommitApplication {
                     MlsRosterAuthorityPreflight::ForwardRequired
                 }
                 MlsRosterAuthorityRead::Authorized { facts: Some(facts) } => {
-                    let Some(stations) = historical_attestor_ids(&facts) else {
+                    if !verify_historical_proofs(&facts) {
                         return Ok(MlsRosterAuthorityPreflight::RevisionUnavailable);
-                    };
+                    }
                     MlsRosterAuthorityPreflight::Authorized {
                         authority_head_commit_event_ref: facts.authority_head_commit_event_ref,
-                        attestor_station_ids: stations,
                     }
                 }
             },
@@ -154,7 +151,6 @@ impl AuthorityCommitApplication {
         issuer: &DidCoreId,
         source_peer: Option<&DidCoreId>,
         preflight_head_commit_event_ref: &EventId,
-        attestor_resolutions: &HashMap<DidCoreId, AuthenticatedServiceResolution>,
         verification_method: &DidUrl,
         signing_key: &SigningKey,
         now: DateTime<Utc>,
@@ -183,11 +179,7 @@ impl AuthorityCommitApplication {
             }
             MlsRosterAuthorityRead::Authorized { facts: Some(facts) } => facts,
         };
-        if !facts_match_preflight(
-            &facts,
-            preflight_head_commit_event_ref,
-            attestor_resolutions,
-        ) {
+        if !facts_match_preflight(&facts, preflight_head_commit_event_ref) {
             return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
         }
         sign_page(
@@ -201,36 +193,7 @@ impl AuthorityCommitApplication {
     }
 }
 
-fn historical_attestor_ids(facts: &MlsRosterAuthorityFacts) -> Option<Vec<DidCoreId>> {
-    let mut stations = BTreeSet::new();
-    let mut proofs = facts.historical_add_proofs.iter();
-    for record in &facts.records {
-        if let MlsRosterRecord::Add { attestation, .. } = record {
-            let proof = proofs.next()?;
-            if arkret_canonical::canonical_json_bytes(attestation).ok()?
-                != arkret_canonical::canonical_json_bytes(&proof.attestation).ok()?
-            {
-                return None;
-            }
-            stations.insert(attestation.attestor_station_id.clone());
-        }
-    }
-    proofs
-        .next()
-        .is_none()
-        .then(|| stations.into_iter().collect())
-}
-
-fn verify_historical_proofs(
-    facts: &MlsRosterAuthorityFacts,
-    resolutions: &HashMap<DidCoreId, AuthenticatedServiceResolution>,
-) -> bool {
-    let Some(ids) = historical_attestor_ids(facts) else {
-        return false;
-    };
-    if !ids.iter().all(|id| resolutions.contains_key(id)) {
-        return false;
-    }
+fn verify_historical_proofs(facts: &MlsRosterAuthorityFacts) -> bool {
     let mut proofs = facts.historical_add_proofs.iter();
     for record in &facts.records {
         if let MlsRosterRecord::Add {
@@ -242,7 +205,9 @@ fn verify_historical_proofs(
             let Some(proof) = proofs.next() else {
                 return false;
             };
-            if &proof.attestation.attestor_station_id != &attestation.attestor_station_id
+            if arkret_canonical::canonical_json_bytes(attestation).ok()
+                != arkret_canonical::canonical_json_bytes(&proof.attestation).ok()
+                || record.validate_shape().is_err()
                 || arkret_identity::verify_authenticated_service_resolution_history(
                     attestor_resolution,
                     &attestation.attestor_station_id,
@@ -261,10 +226,91 @@ fn verify_historical_proofs(
 fn facts_match_preflight(
     facts: &MlsRosterAuthorityFacts,
     preflight_head_commit_event_ref: &EventId,
-    resolutions: &HashMap<DidCoreId, AuthenticatedServiceResolution>,
 ) -> bool {
     &facts.authority_head_commit_event_ref == preflight_head_commit_event_ref
-        && verify_historical_proofs(facts, resolutions)
+        && verify_historical_proofs(facts)
+}
+
+fn signed_manifest(
+    manifest: &mut MlsRosterAuthorityManifest,
+    request: &MlsRosterAuthorityReadRequestBody,
+    verification_method: &DidUrl,
+    signing_key: &SigningKey,
+) -> ServiceResult<()> {
+    manifest
+        .validate_for_request(request)
+        .map_err(|error| internal(error.to_string()))?;
+    manifest.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &signing_key.to_bytes(),
+        verification_method.as_str(),
+        &manifest
+            .signing_bytes()
+            .map_err(|error| internal(error.to_string()))?,
+    )
+    .map_err(|error| internal(error.to_string()))?;
+    Ok(())
+}
+
+fn roster_page(
+    records: &[MlsRosterRecord],
+    manifest: &MlsRosterAuthorityManifest,
+    request_digest: &Hash,
+    start: usize,
+    end: usize,
+    page_index: usize,
+) -> ServiceResult<MlsRosterAuthorityReadOutcome> {
+    let next_cursor = if end < records.len() {
+        Some(encode_cursor(&Cursor {
+            request_digest: request_digest.clone(),
+            caller_actor_id: manifest.caller_actor_id.clone(),
+            authority_head_commit_event_ref: manifest.authority_head_commit_event_ref.clone(),
+            records_digest: manifest.records_digest.clone(),
+            page_index: u64::try_from(page_index + 1)
+                .map_err(|_| internal("MLS roster page index exceeds u64"))?,
+            next_record_offset: u64::try_from(end)
+                .map_err(|_| internal("MLS roster record offset exceeds u64"))?,
+            issued_at: manifest.issued_at,
+        })?)
+    } else {
+        None
+    };
+    Ok(MlsRosterAuthorityReadOutcome {
+        manifest: manifest.clone(),
+        page_index: u64::try_from(page_index)
+            .map_err(|_| internal("MLS roster page index exceeds u64"))?,
+        records: records[start..end].to_vec(),
+        next_cursor,
+    })
+}
+
+/// Find the longest complete prefix fitting the signed, canonical response.
+/// `None` means even one complete record cannot fit the wire bound.
+fn partition_pages(
+    records: &[MlsRosterRecord],
+    manifest: &MlsRosterAuthorityManifest,
+    request_digest: &Hash,
+) -> ServiceResult<Option<Vec<(usize, usize)>>> {
+    let mut pages = Vec::new();
+    let mut start = 0;
+    while start < records.len() {
+        let mut selected = None;
+        for end in (start + 1)..=(start + PAGE_SIZE).min(records.len()) {
+            let page = roster_page(records, manifest, request_digest, start, end, pages.len())?;
+            let size = arkret_canonical::canonical_json_bytes(&page)
+                .map_err(|error| internal(error.to_string()))?
+                .len();
+            if size > MAX_PAGE_BYTES {
+                break;
+            }
+            selected = Some(end);
+        }
+        let Some(end) = selected else {
+            return Ok(None);
+        };
+        pages.push((start, end));
+        start = end;
+    }
+    Ok(Some(pages))
 }
 
 fn sign_page(
@@ -284,17 +330,14 @@ fn sign_page(
     )
     .map_err(|error| internal(error.to_string()))?;
     let request_digest = cursor_request_digest(request)?;
-    let page_count = facts.records.len().div_ceil(PAGE_SIZE);
-    let (page_index, issued_at) = if let Some(value) = request.cursor.as_deref() {
+    let cursor = if let Some(value) = request.cursor.as_deref() {
         let Some(cursor) = decode_cursor(value) else {
             return Ok(MlsRosterAuthorityApplicationRead::CursorInvalid);
         };
         if cursor.request_digest != request_digest
             || cursor.caller_actor_id != request.caller_actor_id
             || cursor.page_index == 0
-            || usize::try_from(cursor.page_index)
-                .ok()
-                .is_none_or(|index| index >= page_count)
+            || cursor.next_record_offset == 0
             || cursor.issued_at > now
         {
             return Ok(MlsRosterAuthorityApplicationRead::CursorInvalid);
@@ -304,10 +347,12 @@ fn sign_page(
         {
             return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
         }
-        (cursor.page_index, cursor.issued_at)
+        Some(cursor)
     } else {
-        (0, now)
+        None
     };
+    let issued_at = cursor.as_ref().map_or(now, |cursor| cursor.issued_at);
+    let total_records = facts.records.len();
     let mut manifest = MlsRosterAuthorityManifest {
         governance_station_id: issuer.clone(),
         realm_id: request.realm_id.clone(),
@@ -320,9 +365,9 @@ fn sign_page(
         target_epoch: request.target_epoch,
         authority_head_commit_event_ref: facts.authority_head_commit_event_ref.clone(),
         caller_actor_id: request.caller_actor_id.clone(),
-        total_records: u64::try_from(facts.records.len())
+        total_records: u64::try_from(total_records)
             .map_err(|_| internal("MLS roster record count exceeds u64"))?,
-        page_count: u64::try_from(page_count)
+        page_count: u64::try_from(total_records)
             .map_err(|_| internal("MLS roster page count exceeds u64"))?,
         records_digest: records_digest.clone(),
         issued_at,
@@ -333,41 +378,55 @@ fn sign_page(
             sig: Base64UrlString::new("AA").expect("canonical placeholder"),
         },
     };
-    manifest
-        .validate_for_request(request)
-        .map_err(|error| internal(error.to_string()))?;
-    manifest.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
-        &signing_key.to_bytes(),
-        verification_method.as_str(),
-        &manifest
-            .signing_bytes()
-            .map_err(|error| internal(error.to_string()))?,
-    )
-    .map_err(|error| internal(error.to_string()))?;
-    let start = usize::try_from(page_index)
-        .map_err(|_| internal("MLS roster page index exceeds usize"))?
-        * PAGE_SIZE;
-    let end = start.saturating_add(PAGE_SIZE).min(facts.records.len());
-    let next_cursor = if end < facts.records.len() {
-        Some(encode_cursor(&Cursor {
-            request_digest,
-            caller_actor_id: request.caller_actor_id.clone(),
-            authority_head_commit_event_ref: facts.authority_head_commit_event_ref,
-            records_digest,
-            page_index: page_index + 1,
-            issued_at,
-        })?)
-    } else {
-        None
+    // `page_count` is included in the signed manifest and therefore in the
+    // response size. Start with the upper bound and repeat until it agrees
+    // with the deterministic longest-prefix partition.
+    let pages = loop {
+        signed_manifest(&mut manifest, request, verification_method, signing_key)?;
+        let Some(pages) = partition_pages(&facts.records, &manifest, &request_digest)? else {
+            return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
+        };
+        let actual = u64::try_from(pages.len())
+            .map_err(|_| internal("MLS roster page count exceeds u64"))?;
+        if actual == manifest.page_count {
+            break pages;
+        }
+        if actual > manifest.page_count {
+            return Err(internal("MLS roster page partition did not converge"));
+        }
+        manifest.page_count = actual;
     };
-    Ok(MlsRosterAuthorityApplicationRead::Page(
-        MlsRosterAuthorityReadOutcome {
-            manifest,
-            page_index,
-            records: facts.records[start..end].to_vec(),
-            next_cursor,
-        },
-    ))
+    let page_index = cursor
+        .as_ref()
+        .map(|cursor| usize::try_from(cursor.page_index))
+        .transpose()
+        .map_err(|_| internal("MLS roster cursor page index exceeds usize"))?
+        .unwrap_or(0);
+    let Some(&(start, end)) = pages.get(page_index) else {
+        return Ok(MlsRosterAuthorityApplicationRead::CursorInvalid);
+    };
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| usize::try_from(cursor.next_record_offset).ok() != Some(start))
+    {
+        return Ok(MlsRosterAuthorityApplicationRead::CursorInvalid);
+    }
+    let page = roster_page(
+        &facts.records,
+        &manifest,
+        &request_digest,
+        start,
+        end,
+        page_index,
+    )?;
+    if arkret_canonical::canonical_json_bytes(&page)
+        .map_err(|error| internal(error.to_string()))?
+        .len()
+        > MAX_PAGE_BYTES
+    {
+        return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
+    }
+    Ok(MlsRosterAuthorityApplicationRead::Page(page))
 }
 
 #[cfg(test)]
@@ -381,8 +440,9 @@ mod tests {
         PeerKeyPackagesClaimUnsignedRequest, peer_keypackage_claim_receipt_signing_bytes,
     };
     use arkret_models_identity::{
-        ResolutionDidBindingEvidenceKind, ResolutionDidBindingEvidenceReceipt,
-        ResolutionMethodEvidenceBoundary, ResolutionMethodHistoryEvidence,
+        AuthenticatedServiceResolution, ResolutionDidBindingEvidenceKind,
+        ResolutionDidBindingEvidenceReceipt, ResolutionMethodEvidenceBoundary,
+        ResolutionMethodHistoryEvidence,
     };
     use arkret_wire::{
         AccountId, BlobRef, Did, MlsWelcomeRecipientEndpoint, RealmId, ScopeRef,
@@ -402,10 +462,7 @@ mod tests {
         }
     }
 
-    fn signed_add_facts() -> (
-        MlsRosterAuthorityFacts,
-        HashMap<DidCoreId, AuthenticatedServiceResolution>,
-    ) {
+    fn signed_add_facts() -> MlsRosterAuthorityFacts {
         let seed = [41_u8; 32];
         let signer = SigningKey::from_bytes(&seed);
         let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
@@ -578,26 +635,32 @@ mod tests {
                     sender_actor_id: actor,
                     proposal_wire_b64u: Base64UrlString::new("AQ").unwrap(),
                     attestation,
-                    attestor_resolution: resolution.clone(),
+                    attestor_resolution: resolution,
                 },
             ],
             historical_add_proofs: vec![proof],
         };
-        (facts, HashMap::from([(station, resolution)]))
+        facts
     }
 
     #[test]
     fn roster_signing_requires_original_historical_signatures_and_resolutions() {
-        let (facts, resolutions) = signed_add_facts();
-        assert_eq!(historical_attestor_ids(&facts).unwrap().len(), 1);
-        assert!(verify_historical_proofs(&facts, &resolutions));
+        let facts = signed_add_facts();
+        assert!(verify_historical_proofs(&facts));
         assert!(facts_match_preflight(
             &facts,
             &facts.authority_head_commit_event_ref,
-            &resolutions
         ));
-        assert!(!facts_match_preflight(&facts, &event(99), &resolutions));
-        assert!(!verify_historical_proofs(&facts, &HashMap::new()));
+        assert!(!facts_match_preflight(&facts, &event(99)));
+        let mut absent_resolution = facts.clone();
+        if let MlsRosterRecord::Add {
+            attestor_resolution,
+            ..
+        } = &mut absent_resolution.records[1]
+        {
+            attestor_resolution.service_kind = "other".to_owned();
+        }
+        assert!(!verify_historical_proofs(&absent_resolution));
         let mut altered_receipt = facts.clone();
         altered_receipt.historical_add_proofs[0]
             .claim_outcome
@@ -609,20 +672,16 @@ mod tests {
             .claim_receipt
             .signature
             .sig = Base64UrlString::new("AQ").unwrap();
-        assert!(!verify_historical_proofs(&altered_receipt, &resolutions));
+        assert!(!verify_historical_proofs(&altered_receipt));
         let mut altered_attestation = facts.clone();
         altered_attestation.historical_add_proofs[0]
             .attestation
             .signature
             .sig = Base64UrlString::new("AQ").unwrap();
-        assert!(!verify_historical_proofs(
-            &altered_attestation,
-            &resolutions
-        ));
+        assert!(!verify_historical_proofs(&altered_attestation));
         let mut missing = facts;
         missing.historical_add_proofs.clear();
-        assert!(historical_attestor_ids(&missing).is_none());
-        assert!(!verify_historical_proofs(&missing, &resolutions));
+        assert!(!verify_historical_proofs(&missing));
     }
 
     #[test]
@@ -708,6 +767,107 @@ mod tests {
         changed_head.authority_head_commit_event_ref = event(4);
         assert!(matches!(
             sign_page(&request, &issuer, &method, &key, now, changed_head).unwrap(),
+            MlsRosterAuthorityApplicationRead::RevisionUnavailable
+        ));
+    }
+
+    #[test]
+    fn signed_roster_pages_pack_complete_closures_under_two_mib() {
+        let mut facts = signed_add_facts();
+        let MlsRosterRecord::Add { attestation, .. } = &facts.records[1] else {
+            panic!("fixture has one Add")
+        };
+        let attestation = attestation.clone();
+        let issuer = attestation.attestor_station_id.clone();
+        let method = DidUrl::new(attestation.signature.kid.as_str().to_owned()).unwrap();
+        let mut request = MlsRosterAuthorityReadRequestBody {
+            realm_id: attestation.realm_id.clone(),
+            effective_scope: attestation.effective_scope.clone(),
+            mls_group_id: attestation.mls_group_id.clone(),
+            genesis_event_ref: attestation.genesis_event_ref.clone(),
+            target_commit_event_ref: attestation.commit_event_ref.clone(),
+            target_epoch: attestation.epoch,
+            caller_actor_id: attestation.actor_id.clone(),
+            cursor: None,
+        };
+        let padding = "x".repeat(1_100_000);
+        if let MlsRosterRecord::Add {
+            attestor_resolution,
+            ..
+        } = &mut facts.records[1]
+        {
+            attestor_resolution
+                .normalized_did_document
+                .raw_properties
+                .insert(
+                    "roster_padding".to_owned(),
+                    serde_json::Value::String(padding),
+                );
+        }
+        assert!(
+            arkret_canonical::canonical_json_bytes(&facts.records[1])
+                .unwrap()
+                .len()
+                > 1_000_000
+        );
+        let second_add = facts.records[1].clone();
+        facts.records.push(second_add);
+        let key = SigningKey::from_bytes(&[41; 32]);
+        let now = attestation.attested_at;
+        let first = page(sign_page(&request, &issuer, &method, &key, now, facts.clone()).unwrap());
+        assert_eq!((first.records.len(), first.manifest.page_count), (2, 2));
+        assert!(
+            arkret_canonical::canonical_json_bytes(&first)
+                .unwrap()
+                .len()
+                <= MAX_PAGE_BYTES
+        );
+        request.cursor = first.next_cursor.clone();
+        let second = page(sign_page(&request, &issuer, &method, &key, now, facts.clone()).unwrap());
+        assert_eq!((second.page_index, second.records.len()), (1, 1));
+        assert!(second.next_cursor.is_none());
+        assert_eq!(
+            arkret_canonical::canonical_json_bytes(&first.manifest).unwrap(),
+            arkret_canonical::canonical_json_bytes(&second.manifest).unwrap()
+        );
+
+        let mut changed = facts.clone();
+        if let MlsRosterRecord::Add {
+            attestor_resolution,
+            ..
+        } = &mut changed.records[2]
+        {
+            attestor_resolution
+                .normalized_did_document
+                .raw_properties
+                .insert(
+                    "roster_padding".to_owned(),
+                    serde_json::Value::String("y".repeat(1_100_000)),
+                );
+        }
+        assert!(matches!(
+            sign_page(&request, &issuer, &method, &key, now, changed).unwrap(),
+            MlsRosterAuthorityApplicationRead::RevisionUnavailable
+        ));
+
+        let mut oversized = facts;
+        oversized.records.truncate(2);
+        if let MlsRosterRecord::Add {
+            attestor_resolution,
+            ..
+        } = &mut oversized.records[1]
+        {
+            attestor_resolution
+                .normalized_did_document
+                .raw_properties
+                .insert(
+                    "roster_padding".to_owned(),
+                    serde_json::Value::String("z".repeat(MAX_PAGE_BYTES)),
+                );
+        }
+        request.cursor = None;
+        assert!(matches!(
+            sign_page(&request, &issuer, &method, &key, now, oversized).unwrap(),
             MlsRosterAuthorityApplicationRead::RevisionUnavailable
         ));
     }
