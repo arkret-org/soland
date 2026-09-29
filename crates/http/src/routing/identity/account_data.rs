@@ -314,11 +314,6 @@ async fn admit_caller_signed_account_data_set(
     submission.validate().map_err(|error| {
         AppError::schema_violation(format!("invalid account data submission: {error}"))
     })?;
-    if submission.approval_signatures.is_some() {
-        return Err(AppError::schema_violation(
-            "account data set does not accept approval signatures",
-        ));
-    }
     let set_event = submission.event;
     let event = &set_event;
     let session_actor = super::session_actor::session_actor_from_credential(state, session)?;
@@ -507,7 +502,7 @@ async fn put_account_data(
         state,
         &session,
         &account_data_key,
-        body.set_event.event,
+        body.set_event,
         false,
     )
     .await?;
@@ -662,7 +657,7 @@ async fn delete_account_data(
         state,
         &session,
         &account_data_key,
-        body.into_inner().set_event.event,
+        body.into_inner().set_event,
         true,
     )
     .await?;
