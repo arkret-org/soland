@@ -1,7 +1,7 @@
 use arkret_wire::{
     AcceptedDevicePossessionProof, AccountId, CommittedEventRef, DeviceId,
-    DeviceRevocationAdmissionAction, DeviceRevocationAdmissionDecision, EventId, Hash,
-    RealmCommitId,
+    DeviceRevocationAdmissionAction, DeviceRevocationAdmissionDecision,
+    DeviceRevocationAdmissionInput, EventId, Hash, RealmCommitId,
 };
 use chrono::{DateTime, Utc};
 use salvo::prelude::*;
@@ -80,7 +80,7 @@ fn accepted_device_proof_requires_verification(
     origin_current_selector.is_some()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CurrentDeviceCheckRequest {
     account_id: AccountId,
@@ -93,6 +93,21 @@ pub(super) struct CurrentDeviceCheckRequest {
     requested_at: DateTime<Utc>,
 }
 
+impl CurrentDeviceCheckRequest {
+    fn admission_input(&self) -> DeviceRevocationAdmissionInput {
+        DeviceRevocationAdmissionInput {
+            account_id: self.account_id.clone(),
+            device_id: self.device_id.clone(),
+            expected_device_authorize_event_id: self.expected_device_authorize_event_id.clone(),
+            expected_device_generation_ref: self.expected_device_generation_ref,
+            action_class: self.action_class,
+            intent_digest: self.intent_digest.clone(),
+            accepted_device_possession_proof: self.accepted_device_possession_proof.clone(),
+            requested_at: self.requested_at,
+        }
+    }
+}
+
 fn initial_issue_authorization_ref(
     request: &CurrentDeviceCheckRequest,
     current: Option<&soland_storage::DeviceRevocationGateSelector>,
@@ -100,8 +115,10 @@ fn initial_issue_authorization_ref(
     // Initial registration/recovery issues use the authority's terminal
     // ledger, not a previously issued grant binding. Freeze the independently
     // derived active authorization for the same durable gate comparison.
-    // Returning issues, refreshes and explicit expectations never adopt it.
-    if request.action_class == DeviceRevocationAdmissionAction::SessionGrantIssue
+    // Returning issues and refreshes carry an accepted-device proof and never
+    // adopt it; neither do explicit expectations.
+    if request.action_class == DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
+        && request.accepted_device_possession_proof.is_none()
         && request.expected_device_authorize_event_id.is_none()
         && request.expected_device_generation_ref.is_none()
     {
@@ -119,7 +136,11 @@ fn returning_issue_authorization_ref(
 ) -> Option<CommittedEventRef> {
     // A returning issue has no predecessor grant. Its independently verified
     // durable-device proof supplies the exact current binding for the gate.
-    if request.action_class != DeviceRevocationAdmissionAction::ReturningSessionGrantIssue
+    if request.action_class != DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
+        || !matches!(
+            request.accepted_device_possession_proof,
+            Some(AcceptedDevicePossessionProof::Issue(_))
+        )
         || request.expected_device_authorize_event_id.is_some()
         || request.expected_device_generation_ref.is_some()
     {
@@ -149,42 +170,25 @@ pub(super) struct CurrentDeviceCheckOutcome {
     accepted_commit_id: Option<RealmCommitId>,
 }
 
-fn private_current_device_action(
-    action: DeviceRevocationAdmissionAction,
-) -> Result<soland_storage::DeviceRevocationGateAction, AppError> {
-    use soland_storage::DeviceRevocationGateAction as Gate;
-    match action {
-        DeviceRevocationAdmissionAction::SessionGrantIssue
-        | DeviceRevocationAdmissionAction::ReturningSessionGrantIssue => {
-            Ok(Gate::SessionGrantIssue)
-        }
-        DeviceRevocationAdmissionAction::SessionGrantRefresh => Ok(Gate::SessionGrantRefresh),
-        DeviceRevocationAdmissionAction::SessionGrantRevoke => Ok(Gate::SessionGrantRevoke),
-        DeviceRevocationAdmissionAction::DevicePairingCodeClaim => Ok(Gate::DevicePairingCodeClaim),
+fn require_account_authority_request(request: &CurrentDeviceCheckRequest) -> Result<(), AppError> {
+    match request.action_class {
+        DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
+        | DeviceRevocationAdmissionAction::SessionGrantRevoke
+        | DeviceRevocationAdmissionAction::DevicePairingCodeClaim
         // The Account Authority checks the approver before admitting its exact
         // device-authorize Event. This is eligibility, not Event acceptance.
-        DeviceRevocationAdmissionAction::EventWrite => Ok(Gate::EventWrite),
-        _ => Err(schema_violation(
-            "private current-device check only admits account-authority device actions",
-        )),
+        | DeviceRevocationAdmissionAction::EventWrite => {}
+        DeviceRevocationAdmissionAction::KeypackageClaim
+        | DeviceRevocationAdmissionAction::ToDeviceWrite => {
+            return Err(schema_violation(
+                "private current-device check only admits account-authority device actions",
+            ));
+        }
     }
-}
-
-fn require_session_revoke_device_binding(
-    request: &CurrentDeviceCheckRequest,
-) -> Result<(), AppError> {
-    if request.action_class == DeviceRevocationAdmissionAction::SessionGrantRevoke
-        && (request.expected_device_authorize_event_id.is_none()
-            || !request
-                .expected_device_generation_ref
-                .is_some_and(|generation| generation > 0)
-            || request.accepted_device_possession_proof.is_some())
-    {
-        return Err(schema_violation(
-            "session_grant_revoke requires the issuer grant's exact positive device binding and no accepted-device possession proof",
-        ));
-    }
-    Ok(())
+    request
+        .admission_input()
+        .validate()
+        .map_err(|error| schema_violation(error.to_string()))
 }
 
 #[handler]
@@ -216,8 +220,7 @@ pub(super) async fn check_private_current_device(
         .parse_json::<CurrentDeviceCheckRequest>()
         .await
         .map_err(|_| AppError::json_invalid("invalid private current-device check request body"))?;
-    let action_class = private_current_device_action(request.action_class)?;
-    require_session_revoke_device_binding(&request)?;
+    require_account_authority_request(&request)?;
 
     // The target Station is the local fixed-route receiver, not an identity
     // repeated in channel headers.
@@ -359,7 +362,7 @@ pub(super) async fn check_private_current_device(
                 device_id: request.device_id.to_string(),
                 expected_authorization_ref,
                 origin_current_selector: origin_current_selector.clone(),
-                action_class,
+                action_class: request.action_class,
                 intent_digest: request.intent_digest.to_string(),
                 requested_at: request.requested_at,
             },
@@ -442,25 +445,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn private_account_authority_actions_keep_distinct_device_gate_classes() {
-        assert_eq!(
-            private_current_device_action(DeviceRevocationAdmissionAction::EventWrite).unwrap(),
-            soland_storage::DeviceRevocationGateAction::EventWrite,
-        );
-        assert_eq!(
-            private_current_device_action(DeviceRevocationAdmissionAction::SessionGrantRevoke)
-                .unwrap(),
-            soland_storage::DeviceRevocationGateAction::SessionGrantRevoke,
-        );
-        for action in [
-            DeviceRevocationAdmissionAction::KeypackageClaim,
-            DeviceRevocationAdmissionAction::ToDeviceWrite,
-        ] {
-            assert!(private_current_device_action(action).is_err());
-        }
-    }
-
     const PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
     const STATION: &str = "ak:did_core:web:soland.example";
     const DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000030";
@@ -490,24 +474,121 @@ mod tests {
         }
     }
 
-    #[test]
-    fn private_session_revoke_requires_complete_current_device_binding() {
+    fn bound_request(action_class: DeviceRevocationAdmissionAction) -> CurrentDeviceCheckRequest {
         let current = selector();
-        let mut request = CurrentDeviceCheckRequest {
+        CurrentDeviceCheckRequest {
             account_id: AccountId::new(current.principal_id, current.station_id),
             device_id: DeviceId::new(DEVICE).unwrap(),
             expected_device_authorize_event_id: Some(current.authorization_ref.event_id),
             expected_device_generation_ref: Some(1),
-            action_class: DeviceRevocationAdmissionAction::SessionGrantRevoke,
+            action_class,
             intent_digest: Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
             accepted_device_possession_proof: None,
             requested_at: Utc::now(),
-        };
-        assert!(require_session_revoke_device_binding(&request).is_ok());
+        }
+    }
+
+    fn issue_proof(request: &CurrentDeviceCheckRequest) -> AcceptedDevicePossessionProof {
+        AcceptedDevicePossessionProof::Issue(arkret_wire::AcceptedDeviceIssuePossessionProof {
+            context: arkret_wire::AcceptedDevicePossessionProofContext::V1,
+            purpose: arkret_wire::AcceptedDeviceIssuePossessionPurpose::SessionGrantIssue,
+            request_id: arkret_wire::RequestId::new(
+                "ak:request:01970000-0000-7000-8000-000000000021",
+            )
+            .unwrap(),
+            account_subject: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            account_handoff_grant_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            account_id: request.account_id.clone(),
+            device_id: request.device_id.clone(),
+            audience_id: arkret_wire::DidCoreId::new(STATION).unwrap(),
+            holder_jkt: "A".repeat(43),
+            session_intent_digest: request.intent_digest.clone(),
+            issued_at: request.requested_at,
+            expires_at: request.requested_at + chrono::Duration::seconds(300),
+            verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
+                .unwrap(),
+            signature: arkret_wire::Base64UrlString::new("A".repeat(86)).unwrap(),
+        })
+    }
+
+    fn refresh_proof(request: &CurrentDeviceCheckRequest) -> AcceptedDevicePossessionProof {
+        AcceptedDevicePossessionProof::Refresh(arkret_wire::AcceptedDeviceRefreshPossessionProof {
+            context: arkret_wire::AcceptedDevicePossessionProofContext::V1,
+            purpose: arkret_wire::AcceptedDeviceRefreshPossessionPurpose::SessionGrantRefresh,
+            predecessor_session_grant_id: arkret_wire::SessionGrantId::new(
+                "ak:session_grant:Af0GheZX08ev4L1fQoFdngIpe5c_9Lk7SQqfN4jztzDW",
+            )
+            .unwrap(),
+            account_id: request.account_id.clone(),
+            device_id: request.device_id.clone(),
+            audience_id: arkret_wire::DidCoreId::new(STATION).unwrap(),
+            holder_jkt: "A".repeat(43),
+            session_intent_digest: request.intent_digest.clone(),
+            issued_at: request.requested_at,
+            expires_at: request.requested_at + chrono::Duration::seconds(300),
+            verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
+                .unwrap(),
+            signature: arkret_wire::Base64UrlString::new("A".repeat(86)).unwrap(),
+        })
+    }
+
+    #[test]
+    fn private_check_admits_only_account_authority_device_actions() {
+        for action in [
+            DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
+            DeviceRevocationAdmissionAction::SessionGrantRevoke,
+            DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
+            DeviceRevocationAdmissionAction::EventWrite,
+        ] {
+            assert!(require_account_authority_request(&bound_request(action)).is_ok());
+        }
+        for action in [
+            DeviceRevocationAdmissionAction::KeypackageClaim,
+            DeviceRevocationAdmissionAction::ToDeviceWrite,
+        ] {
+            assert!(require_account_authority_request(&bound_request(action)).is_err());
+        }
+    }
+
+    #[test]
+    fn private_session_revoke_requires_complete_current_device_binding() {
+        let mut request = bound_request(DeviceRevocationAdmissionAction::SessionGrantRevoke);
+        assert!(require_account_authority_request(&request).is_ok());
+        request.accepted_device_possession_proof = Some(issue_proof(&request));
+        assert!(require_account_authority_request(&request).is_err());
+        request.accepted_device_possession_proof = None;
         request.expected_device_generation_ref = None;
-        assert!(require_session_revoke_device_binding(&request).is_err());
+        assert!(require_account_authority_request(&request).is_err());
         request.expected_device_generation_ref = Some(0);
-        assert!(require_session_revoke_device_binding(&request).is_err());
+        assert!(require_account_authority_request(&request).is_err());
+    }
+
+    #[test]
+    fn session_grant_issue_or_refresh_is_told_apart_by_its_proof() {
+        let mut registration =
+            bound_request(DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh);
+        registration.expected_device_authorize_event_id = None;
+        registration.expected_device_generation_ref = None;
+        assert!(require_account_authority_request(&registration).is_ok());
+
+        let mut returning = registration.clone();
+        returning.accepted_device_possession_proof = Some(issue_proof(&returning));
+        assert!(require_account_authority_request(&returning).is_ok());
+
+        let mut refresh = registration;
+        refresh.accepted_device_possession_proof = Some(refresh_proof(&refresh));
+        assert!(
+            require_account_authority_request(&refresh).is_err(),
+            "a refresh must carry its predecessor grant's exact device binding"
+        );
+        let bound = bound_request(DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh);
+        refresh.expected_device_authorize_event_id = bound.expected_device_authorize_event_id;
+        refresh.expected_device_generation_ref = bound.expected_device_generation_ref;
+        assert!(require_account_authority_request(&refresh).is_ok());
+
+        let mut code_claim = bound_request(DeviceRevocationAdmissionAction::DevicePairingCodeClaim);
+        code_claim.accepted_device_possession_proof = Some(issue_proof(&code_claim));
+        assert!(require_account_authority_request(&code_claim).is_err());
     }
 
     #[test]
@@ -518,11 +599,12 @@ mod tests {
             device_id: DeviceId::new(DEVICE).unwrap(),
             expected_device_authorize_event_id: None,
             expected_device_generation_ref: None,
-            action_class: DeviceRevocationAdmissionAction::ReturningSessionGrantIssue,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
             accepted_device_possession_proof: None,
             requested_at: Utc::now(),
         };
+        request.accepted_device_possession_proof = Some(issue_proof(&request));
         let verified = crate::jws_verify::VerifiedPrincipalDeviceSignatureBinding {
             authorization_event_id: current.authorization_ref.event_id.clone(),
             generation_ref: 1,
@@ -541,7 +623,7 @@ mod tests {
             device_id: current.device_id.clone(),
             expected_authorization_ref: adopted,
             origin_current_selector: Some(current.clone()),
-            action_class: soland_storage::DeviceRevocationGateAction::SessionGrantIssue,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
             intent_digest: request.intent_digest.to_string(),
             requested_at: request.requested_at,
         };
@@ -569,13 +651,16 @@ mod tests {
         request.expected_device_authorize_event_id = Some(verified.authorization_event_id.clone());
         assert!(resolve(&request, Some(&verified)).is_none());
         request.expected_device_authorize_event_id = None;
-        for action in [
-            DeviceRevocationAdmissionAction::SessionGrantRefresh,
-            DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
-        ] {
-            request.action_class = action;
-            assert!(resolve(&request, Some(&verified)).is_none());
-        }
+        let issue = request.accepted_device_possession_proof.take();
+        assert!(
+            resolve(&request, Some(&verified)).is_none(),
+            "a proofless issue is a registration/recovery issue, never a returning one"
+        );
+        request.accepted_device_possession_proof = Some(refresh_proof(&request));
+        assert!(resolve(&request, Some(&verified)).is_none());
+        request.accepted_device_possession_proof = issue;
+        request.action_class = DeviceRevocationAdmissionAction::DevicePairingCodeClaim;
+        assert!(resolve(&request, Some(&verified)).is_none());
     }
 
     #[test]
@@ -586,7 +671,7 @@ mod tests {
             device_id: DeviceId::new(DEVICE).unwrap(),
             expected_device_authorize_event_id: None,
             expected_device_generation_ref: None,
-            action_class: DeviceRevocationAdmissionAction::SessionGrantIssue,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             accepted_device_possession_proof: None,
             requested_at: Utc::now(),
@@ -599,7 +684,7 @@ mod tests {
             device_id: current.device_id.clone(),
             expected_authorization_ref: adopted,
             origin_current_selector: Some(current.clone()),
-            action_class: soland_storage::DeviceRevocationGateAction::SessionGrantIssue,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
             intent_digest: request.intent_digest.to_string(),
             requested_at: request.requested_at,
         };
@@ -608,20 +693,20 @@ mod tests {
             None
         );
         assert!(initial_issue_authorization_ref(&request, None).is_none());
-        for action in [
-            DeviceRevocationAdmissionAction::ReturningSessionGrantIssue,
-            DeviceRevocationAdmissionAction::SessionGrantRefresh,
-            DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
-        ] {
-            request.action_class = action;
+        let mut returning = request.clone();
+        returning.accepted_device_possession_proof = Some(issue_proof(&returning));
+        let mut refresh = request.clone();
+        refresh.accepted_device_possession_proof = Some(refresh_proof(&refresh));
+        let mut code_claim = request.clone();
+        code_claim.action_class = DeviceRevocationAdmissionAction::DevicePairingCodeClaim;
+        for not_initial in [returning, refresh, code_claim] {
             gate.expected_authorization_ref =
-                initial_issue_authorization_ref(&request, Some(&current));
+                initial_issue_authorization_ref(&not_initial, Some(&current));
             assert_eq!(
                 soland_storage::selector_comparison_status(&gate, Some(&current)),
                 Some(DeviceRevocationGateStatus::GenerationMismatch)
             );
         }
-        request.action_class = DeviceRevocationAdmissionAction::SessionGrantIssue;
         request.expected_device_generation_ref = Some(999);
         assert!(initial_issue_authorization_ref(&request, Some(&current)).is_none());
         request.expected_device_generation_ref = None;
@@ -640,7 +725,7 @@ mod tests {
             device_id: arkret_wire::DeviceId::new(DEVICE).unwrap(),
             authorization_event_id: Some(arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap()),
             device_generation_ref: Some(1),
-            action_class: DeviceRevocationAdmissionAction::SessionGrantRefresh,
+            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             accepted_device_possession_proof_digest: Some(
                 Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),

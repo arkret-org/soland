@@ -12,33 +12,6 @@ pub struct DeviceRevocationGateSelector {
     pub authorization_ref: arkret_wire::CommittedEventRef,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeviceRevocationGateAction {
-    SessionGrantIssue,
-    SessionGrantRefresh,
-    SessionGrantRevoke,
-    DevicePairingCodeClaim,
-    KeyPackageClaim,
-    ToDeviceWrite,
-    EventWrite,
-}
-
-impl DeviceRevocationGateAction {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SessionGrantIssue => "session_grant_issue",
-            Self::SessionGrantRefresh => "session_grant_refresh",
-            Self::SessionGrantRevoke => "session_grant_revoke",
-            Self::DevicePairingCodeClaim => "device_pairing_code_claim",
-            Self::KeyPackageClaim => "keypackage_claim",
-            Self::ToDeviceWrite => "to_device_write",
-            Self::EventWrite => "event_write",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DeviceRevocationTransition {
     pub selector: DeviceRevocationGateSelector,
@@ -122,7 +95,7 @@ pub struct DeviceRevocationGateLinearizationRequest {
     pub expected_authorization_ref: Option<arkret_wire::CommittedEventRef>,
     /// Receiver-derived current binding; never populated from peer bytes.
     pub origin_current_selector: Option<DeviceRevocationGateSelector>,
-    pub action_class: DeviceRevocationGateAction,
+    pub action_class: arkret_wire::DeviceRevocationAdmissionAction,
     pub intent_digest: String,
     pub requested_at: DateTime<Utc>,
 }
@@ -273,25 +246,13 @@ mod tests {
             device_id: "device-a".to_owned(),
             expected_authorization_ref: None,
             origin_current_selector: None,
-            action_class: DeviceRevocationGateAction::EventWrite,
+            action_class: arkret_wire::DeviceRevocationAdmissionAction::EventWrite,
             intent_digest: "sha256:test".to_owned(),
             requested_at: Utc::now(),
         };
         assert_eq!(
             selector_comparison_status(&request, None),
             Some(DeviceRevocationGateStatus::AuthorityMismatch)
-        );
-    }
-
-    #[test]
-    fn device_pairing_code_claim_has_a_distinct_durable_action() {
-        assert_eq!(
-            DeviceRevocationGateAction::DevicePairingCodeClaim.as_str(),
-            "device_pairing_code_claim"
-        );
-        assert_ne!(
-            DeviceRevocationGateAction::DevicePairingCodeClaim,
-            DeviceRevocationGateAction::EventWrite
         );
     }
 }
