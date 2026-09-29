@@ -146,7 +146,9 @@ pub(crate) async fn read_in_connection(
     let target_ref = &request.target_commit_event_ref;
     let target_epoch = request.target_epoch;
     let ScopeRef::Realm { realm_id } = &request.effective_scope else {
-        // A Circle's current row does not persist the parent join generation.
+        // A Circle scope needs the effective-membership historical-cut
+        // continuity of history-visibility.md section 3.1 on both cuts; that
+        // read is not served here, so it stays closed.
         return Ok(Read::NotFound);
     };
     if realm_id != &request.realm_id {

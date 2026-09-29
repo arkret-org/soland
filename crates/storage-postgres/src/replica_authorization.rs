@@ -35,10 +35,7 @@ pub(crate) async fn save_row(
         source_stream_ref,
         revision,
         value,
-    } = entry
-    else {
-        return Err(invalid("a stored row must be a value"));
-    };
+    } = entry;
     if !keeps(selector) {
         return Ok(());
     }

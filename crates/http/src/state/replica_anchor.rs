@@ -399,7 +399,7 @@ async fn store_scanned(
             )
             .await
             .map_err(temporary)?;
-            commits
+            let outcome = commits
                 .install_committed_replica(&CommittedReplica {
                     local_service_id: state.service_core_id(),
                     authority: located.current_authority(),
@@ -414,6 +414,18 @@ async fn store_scanned(
                 })
                 .await
                 .map_err(temporary)?;
+            // The prefix up to the anchor snapshot is history that precedes
+            // this Station's hosted join; only a Commit after the anchor is
+            // a live source Event for its accounts' notifications.
+            if matches!(outcome, soland_storage::CommittedReplicaOutcome::Stored)
+                && commit.stream_position > anchored.stream_position
+            {
+                crate::routing::events::notify::dispatch_committed_event_notifications(
+                    state,
+                    &view.event,
+                )
+                .await;
+            }
         }
         CommittedEventView::Withheld(_) => {
             located

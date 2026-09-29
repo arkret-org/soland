@@ -254,6 +254,7 @@ pub(crate) async fn scope_member_in_connection(
             "SELECT EXISTS (SELECT 1 FROM circle_member_state_current_results m \
             JOIN circle_current_results c ON c.circle_id=m.circle_id AND c.realm_id=m.realm_id \
             WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
+            AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) \
             AND c.value->>'state'='active') AS present",
         )
         .bind::<Text, _>(realm.as_str())

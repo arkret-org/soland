@@ -1812,23 +1812,6 @@ impl SessionService {
             .revoke_actor_device_sessions(actor_id, device_id, revoked_at)
             .await
     }
-
-    pub async fn active_delegated_sessions_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<usize> {
-        Ok(self
-            .sessions
-            .sessions()
-            .await?
-            .into_iter()
-            .filter(|session| {
-                session.actor == actor_id
-                    && session.revoked_at.is_none()
-                    && session.agent_session().is_some()
-            })
-            .count())
-    }
 }
 
 impl KeyBackupService {

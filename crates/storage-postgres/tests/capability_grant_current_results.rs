@@ -217,7 +217,7 @@ fn transaction(
 }
 
 #[tokio::test]
-async fn authority_transaction_materializes_grant_and_rejects_unapproved_service_risk() {
+async fn authority_transaction_admits_grants_without_subject_kind_branches() {
     let pool = test_pool().await;
     let realm_seed = format!("capability-current:{}", uuid::Uuid::now_v7());
     let realm_event_id = arkret_wire::EventId::from_digest(
@@ -476,57 +476,71 @@ async fn authority_transaction_materializes_grant_and_rejects_unapproved_service
     );
     assert_eq!(revoked.value.revoked_by.as_ref(), Some(&revoke.actor_id));
 
-    // An exact service ActorId is the formal non-Human subject branch. Each
-    // refusal happens before the Event, Commit, and typed result can be
-    // written, even though the Realm controller is otherwise authorized.
-    let base = serde_json::json!({
-        "schema": "ak.schema.capability.v1",
-        "realm_id": realm_id,
-        "issuer_id": actor,
-        "subject": arkret_wire::ActorId::service(station_id.clone()),
-        "actions": ["ak.realm.admin"],
-        "resources": [{"kind":"realm", "realm_id":realm_id}],
-        "issuer_authority_refs": [{
-            "kind":"realm_root",
-            "realm_id":realm_id,
-            "authority_event_ref":realm_event_id,
-            "authority_generation":0
-        }],
-        "issued_at": "2026-09-21T00:00:00.000Z"
-    });
+    // capabilities.md section 8: grant admission never branches on the subject
+    // kind. Only registry `required_constraints` add constraints, for every
+    // subject alike. `ak.message.mention.broadcast` lists `expires_at`, so a
+    // grant without a finite global expiry is refused before the Event,
+    // Commit, and typed result can be written.
+    let grant_body = |subject: serde_json::Value, action: &str| {
+        serde_json::json!({
+            "schema": "ak.schema.capability.v1",
+            "realm_id": realm_id,
+            "issuer_id": actor,
+            "subject": subject,
+            "actions": [action],
+            "resources": [{"kind":"realm", "realm_id":realm_id}],
+            "issuer_authority_refs": [{
+                "kind":"realm_root",
+                "realm_id":realm_id,
+                "authority_event_ref":realm_event_id,
+                "authority_generation":0
+            }],
+            "issued_at": "2026-09-21T00:00:00.000Z"
+        })
+    };
+    let service_subject =
+        serde_json::to_value(arkret_wire::ActorId::service(station_id.clone())).unwrap();
+    let registry_expiry = grant_body(service_subject.clone(), "ak.message.mention.broadcast");
+    // `ak.applet.ghost.provision` is a profile non-event action: the Realm
+    // root cannot grant it without an accepted Applet registration binding.
+    let mut unbound_ghost_provision =
+        grant_body(service_subject.clone(), "ak.applet.ghost.provision");
+    unbound_ghost_provision["constraints"] = serde_json::json!([{
+        "constraint_kind":"authority_control",
+        "effect":"allow",
+        "evaluation_class":"grant_local",
+        "constraint_subkind":"applet_authority",
+        "applet_id":"ak:applet:0192b0a4-7c3e-7f00-8000-000000000001",
+        "executed_by":arkret_wire::ActorId::service(station_id.clone()),
+        "registration_epoch":format!("sha256:{}", "7".repeat(64))
+    }]);
     let cases = [
-        ("missing_expiry", base.clone()),
-        ("action_scoped_expiry", {
-            let mut body = base.clone();
-            body["constraints"] = serde_json::json!([{
-                "constraint_kind":"temporal",
-                "effect":"allow",
-                "applies_to_actions":["ak.realm.admin"],
-                "expires_at":"2026-09-22T00:00:00.000Z"
-            }]);
-            body
-        }),
-        ("wildcard_resource", {
-            let mut body = base.clone();
-            body["resources"] = serde_json::json!([{"kind":"*"}]);
-            body["constraints"] = serde_json::json!([{
-                "constraint_kind":"temporal",
-                "effect":"allow",
-                "expires_at":"2026-09-22T00:00:00.000Z"
-            }]);
-            body
-        }),
-        ("missing_approval", {
-            let mut body = base;
-            body["constraints"] = serde_json::json!([{
-                "constraint_kind":"temporal",
-                "effect":"allow",
-                "expires_at":"2026-09-22T00:00:00.000Z"
-            }]);
-            body
-        }),
+        (
+            "registry_expiry_missing",
+            registry_expiry.clone(),
+            "failed_precondition",
+        ),
+        (
+            "registry_expiry_action_scoped",
+            {
+                let mut body = registry_expiry;
+                body["constraints"] = serde_json::json!([{
+                    "constraint_kind":"temporal",
+                    "effect":"allow",
+                    "applies_to_actions":["ak.message.mention.broadcast"],
+                    "expires_at":"2026-09-22T00:00:00.000Z"
+                }]);
+                body
+            },
+            "failed_precondition",
+        ),
+        (
+            "non_event_action_without_registration",
+            unbound_ghost_provision,
+            "grant_exceeds_issuer_authority",
+        ),
     ];
-    for (name, grant) in cases {
+    for (name, grant, expected) in cases {
         let candidate = producer_event(
             arkret_wire::EventKind::CapabilityGrant,
             &realm_id,
@@ -547,7 +561,7 @@ async fn authority_transaction_materializes_grant_and_rejects_unapproved_service
             .await
             .expect_err(name);
         assert!(
-            matches!(&error, PersistenceError::Conflict(detail) if detail.starts_with("failed_precondition")),
+            matches!(&error, PersistenceError::Conflict(detail) if detail.starts_with(expected)),
             "{name}: {error:?}"
         );
         assert!(
@@ -579,5 +593,69 @@ async fn authority_transaction_materializes_grant_and_rejects_unapproved_service
             revoke_tx.commit.commit_id,
             "{name} advanced the Realm stream"
         );
+    }
+
+    // The same generic rules admit service and unclassified Account subjects
+    // at every risk tier with a Realm-wide selector and no expiry. Admission
+    // reads no Actor Profile, so no profile exists for either subject.
+    let unclassified_subject =
+        serde_json::to_value(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:grant-unclassified.example").unwrap(),
+            station_id.clone(),
+        )))
+        .unwrap();
+    let admitted = [
+        (
+            "service_low",
+            grant_body(service_subject.clone(), "ak.event.read"),
+        ),
+        (
+            "service_medium",
+            grant_body(service_subject.clone(), "ak.message.create"),
+        ),
+        (
+            "service_high",
+            grant_body(service_subject, "ak.realm.admin"),
+        ),
+        (
+            "account_high",
+            grant_body(unclassified_subject, "ak.realm.admin"),
+        ),
+    ];
+    let mut head = revoke_tx.commit.commit_id.clone();
+    for (offset, (name, grant)) in admitted.into_iter().enumerate() {
+        let position = 2 + offset as u64;
+        let at = now + chrono::TimeDelta::seconds(4 + offset as i64);
+        let candidate = producer_event(
+            arkret_wire::EventKind::CapabilityGrant,
+            &realm_id,
+            &actor_id,
+            &station_id,
+            serde_json::json!({"grant": grant}),
+            at,
+        );
+        let candidate_tx = transaction(&authority, &candidate, position, Some(head.clone()), at);
+        assert_eq!(
+            authority_store
+                .admit_event_transaction(&candidate_tx, now)
+                .await
+                .unwrap_or_else(|error| panic!("{name}: {error:?}")),
+            AuthorityCommitWriteOutcome::Committed,
+            "{name}"
+        );
+        let current = current_store
+            .get(
+                &realm_id,
+                &arkret_wire::GrantId::from_event_id(&candidate.event_id),
+            )
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("{name} has no grant current result"));
+        assert_eq!(
+            current.status,
+            CapabilityGrantCurrentStatus::Active,
+            "{name}"
+        );
+        head = candidate_tx.commit.commit_id.clone();
     }
 }

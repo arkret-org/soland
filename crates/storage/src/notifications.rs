@@ -1,7 +1,9 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use arkret_models_collaboration::objects::read_receipts::Notification;
 use arkret_models_collaboration::sync_frames::account_subscribe::NotificationDelta;
 use arkret_wire::events::EventKind;
-use arkret_wire::{ActorId, DidCoreId};
+use arkret_wire::{ActorId, CircleId, DidCoreId, RealmId, StrandId};
 
 use super::{AccountPk, PersistenceResult, async_trait};
 
@@ -27,6 +29,38 @@ pub struct StoredAccountNotificationDelta {
     pub projection_position: i64,
 }
 
+/// The accepted current facts an ordinary source-Event notification fanout
+/// is decided from (private-objects.md sections 3.3-3.6,
+/// push-notifications.md section 4.3.2).
+///
+/// Every field is read from the registered typed current results after the
+/// source Event's Commit, never from a process-local reducer projection.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NotificationFanoutBasis {
+    /// Effectively joined Realm members. An Agent member counts only while
+    /// its controller binding names the controller's current join.
+    pub joined_members: BTreeSet<ActorId>,
+    /// The Strand's current scope, absent when it has no current value.
+    pub strand: Option<NotificationStrandScope>,
+    /// Explicit watch levels on the Strand in this Realm; a cleared watch is
+    /// absent.
+    pub watch_levels: BTreeMap<ActorId, String>,
+    /// The `to_ref` actors of the Strand's active `assigned_to` Relations.
+    pub active_assignees: BTreeSet<ActorId>,
+}
+
+/// The current scope of the Strand a notification source Event names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotificationStrandScope {
+    pub realm_id: RealmId,
+    /// Whether the Strand's current lifecycle state is `active`.
+    pub active: bool,
+    pub scope_circle_id: Option<CircleId>,
+    /// Joined members of the scope Circle while that Circle is active; empty
+    /// for a Realm-scope Strand.
+    pub circle_members: BTreeSet<ActorId>,
+}
+
 /// AKP-0016 §9.4.5 — per-recipient notification projection (mention
 /// fanout output). Agents are gated by their effective
 /// accept_third_party_mention bit before a row is written here.
@@ -47,4 +81,11 @@ pub trait NotificationStore: Send + Sync {
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>>;
+    /// Read one consistent current cut of the facts a committed source
+    /// Event's notification fanout needs.
+    async fn fanout_basis(
+        &self,
+        realm_id: &RealmId,
+        strand_id: Option<&StrandId>,
+    ) -> PersistenceResult<NotificationFanoutBasis>;
 }

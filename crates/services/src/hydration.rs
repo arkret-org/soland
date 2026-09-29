@@ -890,7 +890,7 @@ pub async fn hydrate_projections_from_persistence(
     use soland_domain::reducer::{
         KeyPackageLifetimeProjection, MlsKeyPackageProjection, MorphProjection,
         ObjectLifecycleState, SpaceContainerLifecycleState, SpaceContainerProjection,
-        StrandProjection, StrandWatchProjection, object_stage_from_wire_value,
+        StrandProjection, object_stage_from_wire_value,
     };
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
@@ -1210,21 +1210,6 @@ pub async fn hydrate_projections_from_persistence(
             })
             .transpose()?;
     }
-    if let Ok(rows) = persistence.strand_watch_projections().snapshot_all().await {
-        for record in rows {
-            proj.strand_watches.insert(
-                (record.strand_id.clone(), record.actor_id.clone()),
-                StrandWatchProjection {
-                    strand_id: record.strand_id,
-                    actor_id: record.actor_id,
-                    level: record.level,
-                    level_public: record.level_public,
-                    updated_at: record.updated_at,
-                    committed_ref: Some(record.committed_ref),
-                },
-            );
-        }
-    }
     if let Ok(rows) = persistence.morph_projections().snapshot_all().await {
         for record in rows {
             let Some(state) = parse_object_state(&record.state) else {
@@ -1447,9 +1432,7 @@ pub async fn hydrate_projections_from_persistence(
                     "confirmed default Strand Event has no typed current result".to_owned(),
                 )
             })?;
-        let arkret_wire::TypedCurrentResult::Value { value, .. } = result else {
-            unreachable!();
-        };
+        let arkret_wire::TypedCurrentResult::Value { value, .. } = result;
         let object = value
             .as_object()
             .filter(|object| object.len() == 1)

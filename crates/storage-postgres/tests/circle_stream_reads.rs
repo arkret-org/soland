@@ -26,6 +26,7 @@ fn membership(
     actor: &ActorId,
     state: &str,
     expected: Option<&str>,
+    parent: Option<serde_json::Value>,
 ) -> soland_storage::EventCommitRequest {
     let scope = arkret_wire::ScopeRef::Circle {
         realm_id: previous.event.realm_id.clone(),
@@ -35,7 +36,13 @@ fn membership(
         EventKind::CircleMemberState,
         scope,
         actor.clone(),
-        serde_json::json!({"circle_id":circle,"member_id":actor,"membership":state,"expected_membership":expected}),
+        {
+            let mut payload = serde_json::json!({"circle_id":circle,"member_id":actor,"membership":state,"expected_membership":expected});
+            if let Some(parent) = parent {
+                payload["parent_membership_revision"] = parent;
+            }
+            payload
+        },
         previous.commit.committed_at,
     );
     let mut request =
@@ -134,7 +141,15 @@ async fn check_circle_reads(history: &str) {
             ..
         }
     )));
-    let join = membership(&create.authority_commit, &circle, &actor, "join", None);
+    let parent = ordinary_realm::parent_membership_revision(&database.pool(), &realm, &actor).await;
+    let join = membership(
+        &create.authority_commit,
+        &circle,
+        &actor,
+        "join",
+        None,
+        Some(parent.clone()),
+    );
     uow.commit_event(join.clone()).await.unwrap();
     let first = page(
         store
@@ -184,6 +199,7 @@ async fn check_circle_reads(history: &str) {
         &actor,
         "leave",
         Some("join"),
+        None,
     );
     uow.commit_event(leave.clone()).await.unwrap();
     assert!(matches!(
@@ -238,6 +254,7 @@ async fn check_circle_reads(history: &str) {
         &actor,
         "join",
         Some("leave"),
+        Some(parent),
     );
     uow.commit_event(rejoin.clone()).await.unwrap();
     let current = page(

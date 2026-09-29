@@ -2115,9 +2115,8 @@ CREATE TABLE public.device_revocation_gate_receipts (
     station_id text NOT NULL,
     device_id text NOT NULL,
     action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
-        'session_grant_issue_or_refresh', 'session_grant_revoke',
-        'device_pairing_code_claim', 'keypackage_claim',
-        'to_device_write', 'event_write'
+        'session_grant_issue_or_refresh', 'device_pairing_code_claim',
+        'keypackage_claim', 'to_device_write', 'event_write'
     ])),
     intent_digest text NOT NULL,
     request_json jsonb NOT NULL,
@@ -4485,12 +4484,27 @@ CREATE TABLE circle_member_state_current_results (
  PRIMARY KEY(circle_id,member_id),
  CHECK(jsonb_typeof(value)='object'),
  CHECK(source_stream_ref->>'kind'='circle'),
- CHECK(value->>'membership'=membership)
+ CHECK(value->>'membership'=membership),
+ CHECK((membership='join')=(value ? 'parent_membership_revision'))
 );
 CREATE INDEX circle_member_state_current_result_membership
  ON circle_member_state_current_results(circle_id,membership,member_id);
 CREATE INDEX circle_member_state_current_results_realm
  ON circle_member_state_current_results(realm_id,member_id,circle_id);
+-- Effective Circle membership (circle.md section 9.1): a canonical Circle join
+-- counts only while the parent Realm member_state current of the same actor
+-- is join at exactly the producer-signed parent_membership_revision. The
+-- comparison is the parent Realm Commit identity plus its Realm-stream
+-- position; no Circle-stream position is ever compared with it.
+CREATE FUNCTION circle_member_parent_join_current(
+    circle_realm_id TEXT, circle_member_id TEXT, circle_value JSONB
+) RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM member_state_current_results parent
+        WHERE parent.realm_id=circle_realm_id AND parent.member_id=circle_member_id
+          AND parent.membership='join' AND circle_value->>'membership'='join'
+          AND parent.current_commit_id=circle_value->'parent_membership_revision'->>'commit_id'
+          AND parent.current_stream_position::text=circle_value->'parent_membership_revision'->>'stream_position')
+$$;
 
 -- Native Sidecar genesis is a Realm-stream Event. This accepted current is
 -- separate from the service-local agent_sidecars projection and permanently
@@ -4929,6 +4943,25 @@ CREATE INDEX moderation_report_current_results_realm ON moderation_report_curren
 -- No element is ever removed; the active fold and the queue item status are
 -- read-side derivations.
 CREATE TABLE moderation_state_current_results (
+ realm_id TEXT NOT NULL,
+ target_ref TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,target_ref),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK((value - 'assertions')='{}'::jsonb),
+ CHECK(jsonb_typeof(value->'assertions')='array'),
+ CHECK(jsonb_array_length(value->'assertions')>0)
+);
+
+-- `message_reactions` typed current: the canonically sorted keyed set of
+-- committed `ak.reaction.add` / `ak.reaction.remove` assertions on one target
+-- Message, each tagged by its accepting Event's `<event_id>:0` dot with the
+-- complete payload. A remove is an asserted element; no element is ever
+-- removed. Membership, deduplication and counts are read-side folds.
+CREATE TABLE message_reactions_current_results (
  realm_id TEXT NOT NULL,
  target_ref TEXT NOT NULL,
  current_commit_id TEXT NOT NULL,

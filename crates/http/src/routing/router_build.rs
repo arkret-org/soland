@@ -563,13 +563,6 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "idempotency-key",
             "x-arkret-request-id",
             "x-arkret-wait-for",
-            "x-arkret-content-digest",
-            "x-arkret-realm-id",
-            "x-arkret-filename",
-            "x-arkret-blob-encrypted",
-            "x-arkret-blob-purpose",
-            "x-arkret-purpose",
-            "x-arkret-attachment-envelope",
             "range",
         ]);
 
@@ -632,7 +625,6 @@ mod tests {
     const SERVED_BY_ACCOUNT_AUTHORITY: &[arkret_wire::ServiceOperationId] = &[
         arkret_wire::ServiceOperationId::GateAccountCommandPairDeviceV1,
         arkret_wire::ServiceOperationId::GateAccountCommandRevokeSessionV1,
-        arkret_wire::ServiceOperationId::GateAccountReadAppletDelegatedSessionInventoryV1,
     ];
 
     /// `service-surface.md` §3: Describe advertises only bundles this

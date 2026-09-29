@@ -65,6 +65,7 @@ hex.workspace = true
 hmac.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus = { workspace = true, default-features = false }
+multra.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["form", "json", "rustls"] }

@@ -165,6 +165,14 @@ pub struct CurrentRealmAuthority {
     pub last_handoff_ref: Option<arkret_wire::RealmAuthorityHandoffId>,
 }
 
+/// The accepted lifecycle roster of one Realm held by this Station
+/// (`realm-read-operations.schema.json#/$defs/realm_lifecycle_view`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptedRealmRoster {
+    pub controller_actor_id: arkret_wire::ActorId,
+    pub joined_members: Vec<arkret_wire::ActorId>,
+}
+
 /// One durable-cut maximal Realm snapshot projection before identity and
 /// Station signature are attached by the serving layer.
 #[derive(Clone, Debug, PartialEq)]
@@ -1538,6 +1546,15 @@ pub trait AuthorityCommitStore: Send + Sync {
         member: &arkret_wire::ActorId,
     ) -> PersistenceResult<bool>;
 
+    /// The accepted lifecycle roster of `realm_id` held here: the current
+    /// `realm_authority_root` controller and every member that
+    /// [`Self::accepted_current_member_joined`] would report joined. `None`
+    /// when this Station holds no accepted root for the Realm.
+    async fn accepted_realm_roster(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<AcceptedRealmRoster>>;
+
     /// The Agent's joined member row and its controller's exact active join
     /// generation, both from accepted durable current state. A stale binding
     /// never becomes effective after the controller rejoins.
@@ -1784,6 +1801,16 @@ pub trait AuthorityCommitStore: Send + Sync {
             "durable object projection read is unavailable".to_owned(),
         ))
     }
+
+    /// The effective scope of a non-terminal Strand `actor` currently reads
+    /// from durable current rows (governed here or held as a verified
+    /// replica); `None` for every hidden, missing or terminal target.
+    async fn visible_strand_scope_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        strand_id: &arkret_wire::StrandId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<arkret_wire::ScopeRef>>;
 
     /// The bootstrap snapshot material a member Station anchors on
     /// (`federation.md` §4.1.1): `account`'s complete disclosure with the

@@ -200,19 +200,16 @@ pub async fn realm_lifecycle_response(
 ) -> Result<RealmLifecycleView, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
-    let members: Vec<arkret_wire::ActorId> = {
-        let projection = state.projections().snapshot();
-        projection
-            .members
-            .values()
-            .filter(|member| member.realm_id == realm_id && member.state == "join")
-            .map(|member| {
-                serde_json::from_str(&member.member).map_err(|error| {
-                    AppError::internal(format!("stored Realm member is invalid: {error}"))
-                })
-            })
-            .collect::<Result<_, _>>()?
-    };
+    // realm-read-operations.schema.json#/$defs/realm_lifecycle_view: the owner
+    // and the members are the accepted typed current rows held here, governed
+    // or a verified replica. The process-local reducer cache is not a source:
+    // cut-decided joins never advance it, and a member Station has none.
+    let roster = state
+        .authority_commits()
+        .accepted_realm_roster(&realm_id_value)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| AppError::not_found("not found"))?;
     let (archived, frozen, terminal_state, successor_realm_id) = {
         let projection = state.projections().snapshot();
         projection
@@ -231,20 +228,17 @@ pub async fn realm_lifecycle_response(
             })
             .unwrap_or((false, false, None, None))
     };
-    let record = state
+    let deleted = state
         .realms()
         .realm_metadata(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("not found"))?;
-    let owner_id = serde_json::from_str::<arkret_wire::ActorId>(&record.owner)
-        .map(|actor| actor.signing_principal_id().clone())
-        .map_err(|error| AppError::internal(format!("stored realm owner is invalid: {error}")))?;
+        .is_some_and(|record| record.deleted);
     Ok(RealmLifecycleView {
         realm_id: realm_id_value,
-        owner_id,
-        member_ids: members,
-        deleted: record.deleted,
+        owner_id: roster.controller_actor_id.signing_principal_id().clone(),
+        member_ids: roster.joined_members,
+        deleted,
         archived,
         frozen,
         terminal_state,

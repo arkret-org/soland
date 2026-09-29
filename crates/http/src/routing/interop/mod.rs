@@ -34,8 +34,7 @@ pub(crate) fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
 
 use super::admin::audit;
 use super::{
-    append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
-    is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
+    append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_hex, now, query_param,
     realm_has_member, render_error, sha256_hex, validate_device_id,
 };
 

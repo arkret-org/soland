@@ -341,7 +341,15 @@ fn federation_verification_error(
             | SignaturePolicyError::CreatedInFuture
             | SignaturePolicyError::CreatedTooOld
             | SignaturePolicyError::Expired,
-        ) => signature_error(format!("{label} signature window invalid: {error}")),
+        ) => {
+            // service-http-binding.md 8.3: every scenario shares
+            // `ak.http_signature.freshness.v1`, whose failure is
+            // `signature_window_invalid`.
+            signature_error_with_code(
+                format!("{label} signature window invalid: {error}"),
+                ErrorCode::SignatureWindowInvalid,
+            )
+        }
         _ => signature_error(format!(
             "{label} signature verification failed: {error}; key_rotation_hint=refresh_origin_service_id"
         )),
@@ -611,7 +619,8 @@ mod tests {
             "outer",
             true,
         );
-        assert_eq!(expired.code, ErrorCode::Unauthenticated);
+        assert_eq!(expired.code, ErrorCode::SignatureWindowInvalid);
+        assert_eq!(expired.http_status(), salvo::http::StatusCode::UNAUTHORIZED);
         assert_eq!(expired.message.as_ref(), FEDERATION_AUTH_FAILURE_MESSAGE);
     }
 

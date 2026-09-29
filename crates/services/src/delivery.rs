@@ -6,8 +6,9 @@ use chrono::{DateTime, Utc};
 use futures_util::stream::BoxStream;
 use serde_json::Value;
 pub use soland_storage::{
-    AccountNotificationDeltaWrite, RecipientDeliveryRecord, RecipientNotificationRecord,
-    RecipientQueueSelector, StoredAccountNotificationDelta,
+    AccountNotificationDeltaWrite, NotificationFanoutBasis, NotificationStrandScope,
+    RecipientDeliveryRecord, RecipientNotificationRecord, RecipientQueueSelector,
+    StoredAccountNotificationDelta,
 };
 use soland_storage::{AccountPk, SignalRelayRecord};
 
@@ -65,6 +66,11 @@ pub trait NotificationWritePort: Send + Sync {
         &self,
         recipient_id: &str,
     ) -> ServiceResult<Vec<RecipientNotificationRecord>>;
+    async fn fanout_basis(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        strand_id: Option<&arkret_wire::StrandId>,
+    ) -> ServiceResult<NotificationFanoutBasis>;
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -316,6 +322,14 @@ impl DeliveryService {
         self.notifications
             .list_for_recipient(&query.recipient_id)
             .await
+    }
+
+    pub async fn notification_fanout_basis(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        strand_id: Option<&arkret_wire::StrandId>,
+    ) -> ServiceResult<NotificationFanoutBasis> {
+        self.notifications.fanout_basis(realm_id, strand_id).await
     }
 
     pub async fn purge_device_delivery(
@@ -754,6 +768,14 @@ mod tests {
             _recipient_id: &str,
         ) -> ServiceResult<Vec<RecipientNotificationRecord>> {
             Ok(Vec::new())
+        }
+
+        async fn fanout_basis(
+            &self,
+            _realm_id: &arkret_wire::RealmId,
+            _strand_id: Option<&arkret_wire::StrandId>,
+        ) -> ServiceResult<NotificationFanoutBasis> {
+            Ok(NotificationFanoutBasis::default())
         }
     }
 

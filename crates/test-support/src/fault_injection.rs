@@ -523,9 +523,6 @@ impl soland_storage::EventProjectionStoreRegistry for FaultInjectingStore {
     fn object_current_snapshot(&self) -> &dyn soland_storage::ObjectCurrentSnapshotStore {
         self.inner.object_current_snapshot()
     }
-    fn strand_watch_projections(&self) -> &dyn soland_storage::StrandWatchProjectionStore {
-        self.inner.strand_watch_projections()
-    }
     fn morph_projections(&self) -> &dyn soland_storage::MorphProjectionStore {
         self.inner.morph_projections()
     }

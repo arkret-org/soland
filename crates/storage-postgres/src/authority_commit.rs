@@ -760,6 +760,10 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM object_redaction_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'message_reactions'::text AS selector_kind, to_jsonb(target_ref) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM message_reactions_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'invite_lifecycle'::text AS selector_kind, to_jsonb(invite_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM invite_lifecycle_current_results WHERE realm_id = $1 \
@@ -986,6 +990,22 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                                 "stored object_redaction target is invalid: {error}"
                             ))
                         })?,
+                    }
+                }
+                ("message_reactions", Some(target_ref)) => {
+                    let target_ref = target_ref.as_str().ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "stored message_reactions target is not a string".to_owned(),
+                        )
+                    })?;
+                    if !arkret_wire::is_object_ref(target_ref) {
+                        return Err(PersistenceError::Internal(
+                            "stored message_reactions target is not a formal object_ref"
+                                .to_owned(),
+                        ));
+                    }
+                    arkret_wire::CurrentSelector::MessageReactions {
+                        target_ref: target_ref.to_owned(),
                     }
                 }
                 ("invite_lifecycle", Some(invite_id)) => {
@@ -2090,6 +2110,122 @@ pub(crate) async fn accepted_current_member_joined_in_connection(
     Ok(row.present)
 }
 
+/// Whether this Station's accepted parent Realm `member_state` current of
+/// `member` is `join` at exactly `bound` (`circle.md` section 9.1), the
+/// revision a Circle join signed. A local Realm replica that has not reached
+/// `bound` on the Realm stream, or already holds another revision, answers
+/// `false`; the comparison never uses a Circle-stream position.
+pub(crate) async fn parent_join_at_revision_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    member: &arkret_wire::ActorId,
+    bound: &arkret_wire::CurrentRevision,
+) -> PersistenceResult<bool> {
+    let row = sql_query(
+        "SELECT EXISTS (\
+            SELECT 1 FROM member_state_current_results m \
+            WHERE m.realm_id = $1 AND m.member_id = $2 AND m.membership = 'join' \
+              AND m.current_commit_id = $4 AND m.current_stream_position = $5 \
+              AND (EXISTS (SELECT 1 FROM realm_commits c \
+                           WHERE c.commit_id = m.current_commit_id \
+                             AND c.realm_id = m.realm_id \
+                             AND c.stream_position = m.current_stream_position \
+                             AND c.stream_ref->>'kind' = 'realm' \
+                             AND c.stream_ref->>'realm_id' = m.realm_id) \
+                   OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
+                              WHERE a.realm_id = m.realm_id \
+                                AND a.stream_key=$3 \
+                                AND a.anchor_stream_position >= m.current_stream_position))\
+         ) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(member.to_string())
+    .bind::<Text, _>(stream_key(&arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    })?)
+    .bind::<Text, _>(bound.commit_id.as_str())
+    .bind::<BigInt, _>(i64::try_from(bound.stream_position).map_err(PersistenceError::database)?)
+    .get_result::<PresenceRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(row.present)
+}
+
+#[derive(QueryableByName)]
+struct RosterControllerRow {
+    #[diesel(sql_type = Jsonb)]
+    controller_actor_id: Value,
+}
+
+#[derive(QueryableByName)]
+struct RosterMemberRow {
+    #[diesel(sql_type = Text)]
+    member_id: String,
+}
+
+/// See [`AuthorityCommitStore::accepted_realm_roster`]. The governing Station
+/// (and a founding peer) holds the root as its own typed current row; a member
+/// Station holds the governing Station's verified root row.
+async fn accepted_realm_roster_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Option<soland_storage::AcceptedRealmRoster>> {
+    let Some(controller) = sql_query(
+        "SELECT controller_actor_id FROM realm_authority_root_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT value->'controller_actor_id' AS controller_actor_id FROM replica_authorization_rows \
+          WHERE realm_id = $1 AND selector->>'kind' = 'realm_authority_root' \
+         LIMIT 1",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<RosterControllerRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    else {
+        return Ok(None);
+    };
+    let controller_actor_id: arkret_wire::ActorId =
+        serde_json::from_value(controller.controller_actor_id).map_err(|error| {
+            PersistenceError::Internal(format!("stored Realm root controller is invalid: {error}"))
+        })?;
+    let rows = sql_query(
+        // The same backing rule as `accepted_current_member_joined_in_connection`.
+        "SELECT m.member_id FROM member_state_current_results m \
+          WHERE m.realm_id = $1 AND m.membership = 'join' \
+            AND (EXISTS (SELECT 1 FROM realm_commits c \
+                         WHERE c.commit_id = m.current_commit_id \
+                           AND c.realm_id = m.realm_id \
+                           AND c.stream_position = m.current_stream_position \
+                           AND c.stream_ref->>'kind' = 'realm' \
+                           AND c.stream_ref->>'realm_id' = m.realm_id) \
+                 OR EXISTS (SELECT 1 FROM replica_stream_anchors a \
+                            WHERE a.realm_id = m.realm_id \
+                              AND a.stream_key = $2 \
+                              AND a.anchor_stream_position >= m.current_stream_position)) \
+          ORDER BY m.member_id",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(stream_key(&arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    })?)
+    .load::<RosterMemberRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    let joined_members = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::from_str::<arkret_wire::ActorId>(&row.member_id).map_err(|error| {
+                PersistenceError::Internal(format!("stored Realm member is invalid: {error}"))
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    Ok(Some(soland_storage::AcceptedRealmRoster {
+        controller_actor_id,
+        joined_members,
+    }))
+}
+
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn mls_roster_authority_read(
@@ -2859,6 +2995,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         accepted_current_member_joined_in_connection(&mut conn, realm_id, member).await
     }
 
+    async fn accepted_realm_roster(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<soland_storage::AcceptedRealmRoster>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        accepted_realm_roster_in_connection(&mut conn, realm_id).await
+    }
+
     async fn accepted_effective_agent_member_joined(
         &self,
         realm_id: &arkret_wire::RealmId,
@@ -3410,6 +3554,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             realm_id,
             actor,
             include_terminal,
+        )
+        .await
+    }
+
+    async fn visible_strand_scope_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        strand_id: &arkret_wire::StrandId,
+        actor: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<arkret_wire::ScopeRef>> {
+        crate::object_projection_reads::visible_strand_scope_for_actor(
+            &self.pool, realm_id, strand_id, actor,
         )
         .await
     }

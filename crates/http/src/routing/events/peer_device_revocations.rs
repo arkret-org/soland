@@ -173,7 +173,6 @@ pub(super) struct CurrentDeviceCheckOutcome {
 fn require_account_authority_request(request: &CurrentDeviceCheckRequest) -> Result<(), AppError> {
     match request.action_class {
         DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
-        | DeviceRevocationAdmissionAction::SessionGrantRevoke
         | DeviceRevocationAdmissionAction::DevicePairingCodeClaim
         // The Account Authority checks the approver before admitting its exact
         // device-authorize Event. This is eligibility, not Event acceptance.
@@ -536,7 +535,6 @@ mod tests {
     fn private_check_admits_only_account_authority_device_actions() {
         for action in [
             DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
-            DeviceRevocationAdmissionAction::SessionGrantRevoke,
             DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
             DeviceRevocationAdmissionAction::EventWrite,
         ] {
@@ -551,8 +549,8 @@ mod tests {
     }
 
     #[test]
-    fn private_session_revoke_requires_complete_current_device_binding() {
-        let mut request = bound_request(DeviceRevocationAdmissionAction::SessionGrantRevoke);
+    fn private_code_claim_requires_complete_current_device_binding() {
+        let mut request = bound_request(DeviceRevocationAdmissionAction::DevicePairingCodeClaim);
         assert!(require_account_authority_request(&request).is_ok());
         request.accepted_device_possession_proof = Some(issue_proof(&request));
         assert!(require_account_authority_request(&request).is_err());

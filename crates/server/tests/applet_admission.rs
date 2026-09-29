@@ -73,6 +73,54 @@ async fn authority_snapshot(pool: &PgPool) -> Value {
         .get_result::<Snapshot>(&mut *connection).await.unwrap().value
 }
 
+fn install_namespace(install: &Installed) -> &str {
+    install
+        .package
+        .webhook_auth
+        .key_ref
+        .as_str()
+        .strip_prefix("did:webvh:")
+        .and_then(|rest| rest.split_once(':'))
+        .and_then(|(_, host)| host.split_once('#'))
+        .and_then(|(host, _)| host.strip_suffix(".applet.example"))
+        .expect("fixture Service DID is did:webvh:<scid>:<namespace>.applet.example")
+}
+
+/// `ak.profile.create` is principal-scoped: the managed actor's Profile is
+/// committed on, and projected for, its own PCR stream, never the portal.
+async fn assert_profile_in_principal_control_realm(
+    fixture: &Fixture,
+    bundle: &AppletManagedActorAuthoringBundle,
+) {
+    let pcr_realm_id = arkret_wire::RealmId::from_event_id(&bundle.pcr_genesis_event.event_id);
+    let accepted = fixture
+        .state
+        .test_persistence()
+        .authority_commits()
+        .committed_event(&bundle.profile_event.event_id)
+        .await
+        .unwrap()
+        .expect("accepted managed Profile");
+    assert_eq!(accepted.event.realm_id, pcr_realm_id);
+    assert_eq!(accepted.commit.stream_ref.realm_id(), &pcr_realm_id);
+    #[derive(diesel::QueryableByName)]
+    struct ProfileRealm {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        realm_id: String,
+    }
+    let mut conn = fixture.pool.get().await.unwrap();
+    let projected = diesel::sql_query(
+        "SELECT realm_id FROM actor_profile_current_results WHERE actor_profile_id=$1",
+    )
+    .bind::<diesel::sql_types::Text, _>(
+        arkret_wire::ActorProfileId::from_event_id(&bundle.profile_event.event_id).as_str(),
+    )
+    .get_result::<ProfileRealm>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(projected.realm_id, pcr_realm_id.as_str());
+}
+
 async fn assert_accepted_event(fixture: &Fixture, event: &Event) {
     let accepted = fixture
         .state
@@ -134,6 +182,7 @@ async fn signed_install_accepts_bot_unit_and_exact_retry_without_new_writes() {
             "all four actual covering Commits and completion share one canonical instant"
         );
     }
+    assert_profile_in_principal_control_realm(&fixture, &body.managed_actor_bundle).await;
     let authority = soland_http::routing::extensions::applet_bridge::managed_principal_authority(
         &fixture.state,
         install.outcome.bot_actor_id.signing_principal_id(),
@@ -158,50 +207,73 @@ async fn signed_install_accepts_bot_unit_and_exact_retry_without_new_writes() {
 }
 
 #[tokio::test]
-async fn high_risk_service_install_fails_before_authority_or_idempotency_writes() {
+async fn signed_ghost_unit_rejects_inner_bad_signature_without_partial_acceptance() {
+    use arkret_wire::PayloadSigner as _;
     let fixture = Fixture::new().await;
-    let (_, body) = fixture.prepare_install_at_endpoint(true, None).await;
-    let request: AppletInstallCreateRequestBody = serde_json::from_value(body.clone()).unwrap();
+    let install = fixture.install(true).await;
+    let body = fixture
+        .ghost_body(&install, install_namespace(&install), "remote-a")
+        .await;
+    let mut bad: GhostActorProvisionRequestBody = serde_json::from_value(body.clone()).unwrap();
+    let proof = bad
+        .managed_actor_bundle
+        .profile_event
+        .producer_proof
+        .as_mut()
+        .unwrap();
+    let header = proof.jws.split_once("..").unwrap().0;
+    proof.jws = format!(
+        "{header}..{}",
+        arkret_canonical::base64url_encode([0_u8; 64])
+    );
+    bad.managed_actor_bundle.proof.payload_digest =
+        bad.managed_actor_bundle.payload_digest().unwrap();
+    let signer = Ed25519PayloadSigner::new(
+        applet_service_signing_key(&install.package.webhook_auth.key_ref),
+        applet_service_did(&install.package),
+        install.package.webhook_auth.key_ref.clone(),
+    );
+    bad.managed_actor_bundle.proof.jws = signer
+        .sign_payload(&bad.managed_actor_bundle.proof_binding_bytes().unwrap())
+        .unwrap()
+        .jws;
     let before = authority_snapshot(&fixture.pool).await;
-    let key = format!("high-risk-install-{}", uuid::Uuid::now_v7());
-    for _ in 0..2 {
-        let (status, rejection) = fixture
-            .admin_post(
-                "/_arkret/self/applets/install",
-                arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL_V1,
-                &body,
-                Some(&key),
-            )
-            .await;
-        assert_eq!(
-            status,
-            StatusCode::CONFLICT,
-            "high-risk install: {rejection}"
-        );
-        assert_eq!(
-            authority_snapshot(&fixture.pool).await,
-            before,
-            "rejected high-risk install must not write Event, Commit, current, or idempotency state"
-        );
-    }
+    let (status, rejection) = fixture
+        .ghost_commit(
+            &install,
+            &serde_json::to_value(bad).unwrap(),
+            "bad-inner-signature",
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "bad inner producer signature: {rejection}"
+    );
+    assert_eq!(
+        rejection["type"],
+        "https://arkret.org/problems/signature_invalid"
+    );
+    assert_eq!(authority_snapshot(&fixture.pool).await, before);
+    let (status, outcome) = fixture.ghost_commit(&install, &body, "valid-ghost").await;
+    assert_eq!(status, StatusCode::CREATED, "valid Ghost: {outcome}");
+    let typed: GhostActorProvisionRequestBody = serde_json::from_value(body.clone()).unwrap();
     for event in [
-        &request.managed_actor_bundle.managed_actor_provision_event,
-        &request.managed_actor_bundle.pcr_genesis_event,
-        &request.managed_actor_bundle.accountability_grant_event,
-        &request.managed_actor_bundle.profile_event,
+        &typed.managed_actor_bundle.managed_actor_provision_event,
+        &typed.managed_actor_bundle.pcr_genesis_event,
+        &typed.managed_actor_bundle.accountability_grant_event,
+        &typed.managed_actor_bundle.profile_event,
     ] {
-        assert!(
-            fixture
-                .state
-                .test_persistence()
-                .authority_commits()
-                .committed_event(&event.event_id)
-                .await
-                .unwrap()
-                .is_none(),
-            "high-risk install Event must remain unaccepted"
-        );
+        assert_accepted_event(&fixture, event).await;
     }
+    // The Bot Profile already occupies its own PCR; the Ghost Profile must land
+    // in the Ghost's PCR instead of colliding in the shared portal Realm.
+    assert_profile_in_principal_control_realm(&fixture, &typed.managed_actor_bundle).await;
+    let before = authority_snapshot(&fixture.pool).await;
+    let (status, replay) = fixture.ghost_commit(&install, &body, "valid-ghost").await;
+    assert_eq!(status, StatusCode::OK, "Ghost exact retry: {replay}");
+    assert_eq!(replay, outcome);
+    assert_eq!(authority_snapshot(&fixture.pool).await, before);
 }
 
 #[tokio::test]
@@ -219,6 +291,30 @@ async fn real_install_without_ghost_scope_refuses_provision_preview() {
         rejection["type"],
         "https://arkret.org/problems/capability_denied"
     );
+    assert_eq!(authority_snapshot(&fixture.pool).await, before);
+}
+
+#[tokio::test]
+async fn valid_service_signed_ghost_outside_declared_namespace_is_rejected() {
+    let fixture = Fixture::new().await;
+    let install = fixture.install(true).await;
+    let body = fixture
+        .ghost_body(&install, "another-service", "remote-b")
+        .await;
+    let before = authority_snapshot(&fixture.pool).await;
+    let (status, rejection) = fixture
+        .ghost_commit(&install, &body, "outside-namespace")
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "namespace mismatch: {rejection}"
+    );
+    assert_eq!(
+        rejection["type"],
+        "https://arkret.org/problems/capability_denied"
+    );
+    assert_eq!(rejection["reason_code"], "applet_namespace_mismatch");
     assert_eq!(authority_snapshot(&fixture.pool).await, before);
 }
 
@@ -271,77 +367,96 @@ async fn accepted_applet_revoke_fences_original_bot_authority_from_durable_curre
 }
 
 #[tokio::test]
-async fn delegated_session_revoke_modes_fail_closed_without_account_authority_inventory() {
+async fn revoke_all_needs_no_account_authority_and_has_no_delegated_session_mode() {
     let fixture = Fixture::new().await;
     let install = fixture.install(false).await;
+    let preview_path = format!(
+        "/_arkret/self/applets/{}/revoke/preview",
+        install.package.applet_id
+    );
+    let mut unknown_mode = serde_json::to_value(AppletRevokePreviewRequestBody {
+        effective_scope: ScopeRef::Realm {
+            realm_id: fixture.realm.clone(),
+        },
+        reason_code: arkret_wire::ReasonCode::from_wire("applet_revoked"),
+        revoke_mode: arkret_wire::AppletRevokeMode::RevokeAll,
+    })
+    .unwrap();
+    unknown_mode["revoke_mode"] = json!("revoke_delegated_sessions");
     let before = authority_snapshot(&fixture.pool).await;
-    let scope = ScopeRef::Realm {
-        realm_id: fixture.realm.clone(),
-    };
-    for mode in [
-        arkret_wire::AppletRevokeMode::RevokeAll,
-        arkret_wire::AppletRevokeMode::RevokeDelegatedSessions,
-    ] {
-        let preview_body = serde_json::to_value(AppletRevokePreviewRequestBody {
-            effective_scope: scope.clone(),
-            reason_code: arkret_wire::ReasonCode::from_wire("applet_revoked"),
-            revoke_mode: mode,
-        })
-        .unwrap();
-        let preview_path = format!(
-            "/_arkret/self/applets/{}/revoke/preview",
-            install.package.applet_id
-        );
-        let (status, rejection) = fixture
-            .admin_post(
-                &preview_path,
-                arkret_wire::ServiceOperationId::SELF_APPLET_REVOKE_COMMAND_PREVIEW_V1,
-                &preview_body,
-                None,
-            )
-            .await;
-        assert_eq!(status, StatusCode::CONFLICT, "{mode:?}: {rejection}");
-        assert_eq!(
-            rejection["type"],
-            "https://arkret.org/problems/failed_precondition"
-        );
-        assert_eq!(
-            rejection["detail"],
-            "delegated-session revoke preview requires an Account Authority enumeration binding"
-        );
-        assert_eq!(authority_snapshot(&fixture.pool).await, before);
+    let (status, rejection) = fixture
+        .admin_post(
+            &preview_path,
+            arkret_wire::ServiceOperationId::SELF_APPLET_REVOKE_COMMAND_PREVIEW_V1,
+            &unknown_mode,
+            None,
+        )
+        .await;
+    assert!(
+        status.is_client_error(),
+        "revoke_delegated_sessions is not a v1 revoke mode: {status} {rejection}"
+    );
+    assert_eq!(authority_snapshot(&fixture.pool).await, before);
 
-        let commit_body = serde_json::to_value(AppletRevokeRequestBody {
-            revoke_plan_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
-                .unwrap(),
-            effective_scope: scope.clone(),
-            reason_code: arkret_wire::ReasonCode::from_wire("applet_revoked"),
-            revoke_mode: mode,
-            capability_revoke_events: Vec::new(),
-            membership_state_events: Vec::new(),
-            proof: None,
+    let outcome = fixture
+        .revoke_with_mode(&install, arkret_wire::AppletRevokeMode::RevokeAll)
+        .await;
+    let local_effects = outcome
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            AppletRevokeStep::LocalEffect(local) => Some(local.effect_kind),
+            _ => None,
         })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        local_effects,
+        vec![AppletRevokeLocalEffectKind::LocalAppletFence]
+    );
+    let grants = fixture
+        .state
+        .test_persistence()
+        .capability_grant_current_results()
+        .snapshot_for_realm(&fixture.realm)
+        .await
         .unwrap();
-        let commit_path = format!("/_arkret/self/applets/{}/revoke", install.package.applet_id);
-        let (status, rejection) = fixture
-            .admin_post(
-                &commit_path,
-                arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_REVOKE_V1,
-                &commit_body,
-                Some(&format!("revoke-inventory-{}", uuid::Uuid::now_v7())),
-            )
-            .await;
-        assert_eq!(status, StatusCode::CONFLICT, "{mode:?}: {rejection}");
+    for grant_id in &install.outcome.capability_grant_refs {
+        let current = grants
+            .iter()
+            .find(|row| &row.grant_id == grant_id)
+            .expect("installed Grant current");
         assert_eq!(
-            rejection["type"],
-            "https://arkret.org/problems/failed_precondition"
+            serde_json::to_value(current.value.status).unwrap(),
+            "revoked"
         );
-        assert_eq!(
-            rejection["detail"],
-            "delegated-session revoke preview requires an Account Authority enumeration binding"
-        );
-        assert_eq!(authority_snapshot(&fixture.pool).await, before);
     }
+}
+
+#[tokio::test]
+async fn revoke_rechecks_previously_signed_ghost_request_before_accepting_any_event() {
+    let fixture = Fixture::new().await;
+    let install = fixture.install(true).await;
+    let body = fixture
+        .ghost_body(&install, install_namespace(&install), "pending-remote")
+        .await;
+    fixture.revoke(&install).await;
+    let before = authority_snapshot(&fixture.pool).await;
+    let (status, rejection) = fixture
+        .ghost_commit(&install, &body, "signed-before-revoke")
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "stale Applet authority: {rejection}"
+    );
+    assert_eq!(authority_snapshot(&fixture.pool).await, before);
+    let (status, rejection) = fixture.ghost_preview(&install, "after-revoke").await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "new authoring after revoke: {rejection}"
+    );
+    assert_eq!(authority_snapshot(&fixture.pool).await, before);
 }
 
 #[tokio::test]
@@ -639,8 +754,11 @@ fn signed_applet_package(
     );
     let controller_did = Did::new(format!("did:key:{multibase}")).unwrap();
     let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+    // Registration epoch evidence admits only did:webvh / did:key; the Service
+    // keeps its own SCID, distinct from every managed actor it provisions.
     let service_did = Did::new(format!(
-        "did:web:{}.applet.example",
+        "did:webvh:zsvc{}:{}.applet.example",
+        namespace.replace(|ch: char| !ch.is_ascii_alphanumeric(), ""),
         safe_did_token(namespace)
     ))
     .unwrap();
@@ -678,10 +796,7 @@ fn signed_applet_package(
     let registration_epoch_evidence =
         arkret_models_integration::applet::AppletRegistrationEpochEvidence::from_did_document(
             &service_document,
-            arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
-                "did:web",
-            )
-            .unwrap(),
+            service_method_version_evidence(),
         )
         .unwrap();
     package.requested_scopes = vec![
@@ -773,10 +888,7 @@ async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPac
         did_document: serde_json::to_value(document).unwrap(),
         key_log_head: None,
         seq: 0,
-        method_evidence: serde_json::to_value(
-            AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
-        )
-        .unwrap(),
+        method_evidence: serde_json::to_value(service_method_version_evidence()).unwrap(),
         fetched_at: now,
         expires_at: now + chrono::Duration::minutes(15),
         updated_at: now,
@@ -801,12 +913,22 @@ async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPac
         .unwrap();
 }
 
+/// The pinned `did:webvh` method version of the fixture Service DID.
+fn service_method_version_evidence() -> AppletDidMethodVersionEvidence {
+    AppletDidMethodVersionEvidence::versioned(
+        "did:webvh",
+        Some("1-QmFixtureAppletServiceVersion".to_owned()),
+        None,
+    )
+    .unwrap()
+}
+
 fn applet_registration_epoch_evidence(
     package: &AppletPackage,
 ) -> arkret_models_integration::AppletRegistrationEpochEvidence {
     arkret_models_integration::AppletRegistrationEpochEvidence::from_did_document(
         &applet_service_id_document(package),
-        arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
+        service_method_version_evidence(),
     )
     .unwrap()
 }
@@ -890,13 +1012,22 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     async fn revoke(&self, install: &Installed) -> AppletRevokeOutcome {
+        self.revoke_with_mode(install, arkret_wire::AppletRevokeMode::RevokeRuntimeOnly)
+            .await
+    }
+
+    async fn revoke_with_mode(
+        &self,
+        install: &Installed,
+        revoke_mode: arkret_wire::AppletRevokeMode,
+    ) -> AppletRevokeOutcome {
         let reason = arkret_wire::ReasonCode::from_wire("applet_revoked");
         let preview_body = serde_json::to_value(AppletRevokePreviewRequestBody {
             effective_scope: ScopeRef::Realm {
                 realm_id: self.realm.clone(),
             },
             reason_code: reason.clone(),
-            revoke_mode: arkret_wire::AppletRevokeMode::RevokeRuntimeOnly,
+            revoke_mode,
         })
         .unwrap();
         let path = format!(
@@ -944,10 +1075,9 @@ impl Fixture {
             revoke_plan_digest,
             effective_scope: preview.revoke_plan.effective_scope,
             reason_code: reason,
-            revoke_mode: arkret_wire::AppletRevokeMode::RevokeRuntimeOnly,
+            revoke_mode,
             capability_revoke_events: events,
             membership_state_events: members,
-            proof: None,
         })
         .unwrap();
         let path = format!("/_arkret/self/applets/{}/revoke", install.package.applet_id);
@@ -980,6 +1110,14 @@ impl Fixture {
                 "{origin}/_coauth/internal/session-grants/introspect"
             )),
             account_authority_url: Some(origin),
+            // The fixture Applet Service is a did:webvh; registration epoch
+            // evidence admits no did:web Service.
+            did_resolver_allow_methods: vec![
+                "webvh".to_owned(),
+                "web".to_owned(),
+                "key".to_owned(),
+                "uuid".to_owned(),
+            ],
             ..soland_test_support::app_config()
         };
         config.register_test_internal_authority_channel("applet-http-standard-grant".to_owned());
@@ -1304,30 +1442,6 @@ impl Fixture {
         ghost: bool,
         endpoint: Option<&str>,
     ) -> Installed {
-        let (package, body) = self.prepare_install_at_endpoint(ghost, endpoint).await;
-        let key = format!("install-{}", uuid::Uuid::now_v7());
-        let (status, outcome) = self
-            .admin_post(
-                "/_arkret/self/applets/install",
-                arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL_V1,
-                &body,
-                Some(&key),
-            )
-            .await;
-        assert_eq!(status, StatusCode::CREATED, "install commit: {outcome}");
-        Installed {
-            package,
-            outcome: serde_json::from_value(outcome).unwrap(),
-            body,
-            key,
-        }
-    }
-
-    async fn prepare_install_at_endpoint(
-        &self,
-        ghost: bool,
-        endpoint: Option<&str>,
-    ) -> (AppletPackage, Value) {
         let namespace = format!("bridge.{}", uuid::Uuid::now_v7().simple());
         let id = format!("ak:applet:{}", uuid::Uuid::now_v7());
         let package =
@@ -1430,7 +1544,22 @@ impl Fixture {
             managed_actor_bundle: bundle,
         })
         .unwrap();
-        (package, body)
+        let key = format!("install-{}", uuid::Uuid::now_v7());
+        let (status, outcome) = self
+            .admin_post(
+                "/_arkret/self/applets/install",
+                arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL_V1,
+                &body,
+                Some(&key),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "install commit: {outcome}");
+        Installed {
+            package,
+            outcome: serde_json::from_value(outcome).unwrap(),
+            body,
+            key,
+        }
     }
 
     async fn ghost_preview(&self, install: &Installed, external: &str) -> (StatusCode, Value) {
@@ -1440,5 +1569,552 @@ impl Fixture {
         );
         self.service_post(&install.package,&path,arkret_wire::ServiceOperationId::SELF_APPLET_GHOST_COMMAND_PREVIEW_V1,
             &json!({"realm_id":self.realm,"external_ref":{"protocol":"slack","instance_id":"team","external_id":external},"display_name":"Remote user"}),&format!("preview-{external}-{}",uuid::Uuid::now_v7())).await
+    }
+    async fn ghost_body(&self, install: &Installed, namespace: &str, external: &str) -> Value {
+        let (status, preview) = self.ghost_preview(install, external).await;
+        assert_eq!(status, StatusCode::OK, "ghost preview: {preview}");
+        let request: AppletManagedActorAuthoringRequest =
+            serde_json::from_value(preview["authoring_request"].clone()).unwrap();
+        let actor = managed_actor_fixture(namespace, external, &install.package.service_id);
+        ingest_managed_actor_current_document(&self.state, &actor).await;
+        let bundle = self.managed_bundle(
+            &install.package,
+            &request,
+            &actor,
+            install.outcome.registration_event_ref.clone(),
+        );
+        serde_json::to_value(GhostActorProvisionRequestBody {
+            authoring_request: request,
+            managed_actor_bundle: bundle,
+        })
+        .unwrap()
+    }
+    async fn ghost_commit(
+        &self,
+        install: &Installed,
+        body: &Value,
+        key: &str,
+    ) -> (StatusCode, Value) {
+        self.service_post(
+            &install.package,
+            &format!(
+                "/_arkret/self/applets/{}/ghosts/provision",
+                install.package.applet_id
+            ),
+            arkret_wire::ServiceOperationId::SELF_APPLET_GHOST_COMMAND_PROVISION_V1,
+            body,
+            key,
+        )
+        .await
+    }
+}
+
+async fn accepted_admin_domain_event(fixture: &Fixture, event: Event) {
+    use soland_storage::EventCommitUnitOfWork as _;
+    let store = PgAuthorityCommitStore {
+        pool: fixture.pool.clone(),
+    };
+    let stream = arkret_wire::CommitStreamRef::Realm {
+        realm_id: fixture.realm.clone(),
+    };
+    let head = store.stream_head(&stream).await.unwrap().unwrap();
+    let accepted = store
+        .committed_event_by_commit_id(&head.commit_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let previous = soland_storage::AuthorityCommitTransaction {
+        expected_authority: store
+            .current_authority(&fixture.realm)
+            .await
+            .unwrap()
+            .unwrap(),
+        event: accepted.event,
+        commit: accepted.commit,
+        mls_state: None,
+        welcomes: vec![],
+        recipient_queue_capacity: 0,
+    };
+    let request = ordinary_realm::request_for_event(
+        &previous,
+        event.clone(),
+        arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+    );
+    soland_storage_postgres::PgEventCommitUnitOfWork::new(fixture.pool.clone())
+        .commit_event(request)
+        .await
+        .unwrap();
+    assert_accepted_event(fixture, &event).await;
+}
+
+async fn managed_actor_action_grant(
+    fixture: &Fixture,
+    install: &Installed,
+    actor: &ActorId,
+    actions: Vec<String>,
+) -> arkret_wire::GrantId {
+    let mut temporal =
+        GrantConstraint::new(GrantConstraintKind::Temporal, GrantConstraintEffect::Allow);
+    temporal.expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+    let event = fixture.admin_event(
+        EventKind::CapabilityGrant,
+        ScopeRef::Realm {
+            realm_id: fixture.realm.clone(),
+        },
+        serde_json::to_value(CapabilityGrantPayload {
+            grant: CapabilityGrantCreateBody {
+                schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
+                realm_id: Some(fixture.realm.clone()),
+                issuer_id: ActorId::account(fixture.pcr.history.account.clone()),
+                subject: CapabilitySubject::Actor(actor.clone()),
+                actions,
+                resources: vec![arkret_wire::WireResourceSelector::realm(
+                    fixture.realm.clone(),
+                )],
+                constraints: vec![
+                    GrantConstraint::applet_authority(
+                        install.package.applet_id.clone(),
+                        ActorId::service(install.package.service_id.clone()),
+                        install.package.registration_epoch.clone(),
+                    ),
+                    temporal,
+                ],
+                issuer_authority_refs: vec![IssuerAuthorityRef::RealmRoot {
+                    realm_id: fixture.realm.clone(),
+                    authority_event_ref: fixture
+                        .authority_event_ref
+                        .as_ref()
+                        .expect("accepted Realm genesis authority")
+                        .clone(),
+                    authority_generation: 0,
+                }],
+                issued_at: chrono::Utc::now(),
+            },
+        })
+        .unwrap(),
+    );
+    let id = arkret_wire::GrantId::from_event_id(&event.event_id);
+    accepted_admin_domain_event(fixture, event).await;
+    id
+}
+
+fn managed_service_event(
+    fixture: &Fixture,
+    install: &Installed,
+    actor: &ActorId,
+    grant: &arkret_wire::GrantId,
+    kind: EventKind,
+    payload: Value,
+) -> Event {
+    let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+        kind.as_str(),
+        ScopeRef::Realm {
+            realm_id: fixture.realm.clone(),
+        },
+        actor.clone(),
+        payload,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    event.producer_proof = None;
+    event.executed_by = Some(ActorId::service(install.package.service_id.clone()));
+    event.applet_id = Some(install.package.applet_id.clone());
+    event.authorization_ref = Some(grant.clone().into());
+    let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let signer = Ed25519PayloadSigner::new(
+        applet_service_signing_key(&install.package.webhook_auth.key_ref),
+        applet_service_did(&install.package),
+        install.package.webhook_auth.key_ref.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut authored,
+        &signer,
+        arkret_signatures::SignEventOptions::new(),
+    )
+    .unwrap();
+    authored.into_event()
+}
+
+async fn managed_http_event(
+    fixture: &Fixture,
+    install: &Installed,
+    event: &Event,
+) -> (StatusCode, Value) {
+    let body = serde_json::to_value(AppletEventTransactionRequestBody {
+        applet_id: install.package.applet_id.clone(),
+        source_id: install.package.service_id.clone(),
+        events: vec![event.clone()],
+        committed_events: vec![],
+        signals: vec![],
+    })
+    .unwrap();
+    fixture
+        .service_post(
+            &install.package,
+            "/_arkret/edge/applet/transactions",
+            arkret_wire::ServiceOperationId::EDGE_APPLET_COMMAND_TRANSACTION_V1,
+            &body,
+            &format!("managed-{}", uuid::Uuid::now_v7()),
+        )
+        .await
+}
+
+async fn assert_managed_accepted(fixture: &Fixture, install: &Installed, event: &Event) {
+    let (status, value) = managed_http_event(fixture, install, event).await;
+    assert_eq!(status, StatusCode::OK, "managed transaction: {value}");
+    let outcome: AppletTransactionOutcome = serde_json::from_value(value).unwrap();
+    assert_eq!(outcome.status, AppletTransactionStatus::Accepted);
+    assert_eq!(outcome.committed_event_refs[0].event_id, event.event_id);
+    assert_accepted_event(fixture, event).await;
+}
+
+async fn managed_rejected_event(fixture: &Fixture, install: &Installed, event: &Event) -> Value {
+    let (status, value) = managed_http_event(fixture, install, event).await;
+    assert_eq!(status, StatusCode::OK, "authenticated delivery: {value}");
+    let outcome: AppletTransactionOutcome = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(outcome.status, AppletTransactionStatus::Rejected);
+    assert!(outcome.committed_event_refs.is_empty());
+    assert_eq!(outcome.rejections.len(), 1);
+    assert_eq!(
+        outcome.rejections[0].event_id.as_ref(),
+        Some(&event.event_id)
+    );
+    value
+}
+
+async fn managed_domain_snapshot(pool: &PgPool) -> Value {
+    // Transport delivery replays persist rejected outcomes independently of
+    // the Event unit. Compare the authority facts and domain current writes.
+    let mut value = authority_snapshot(pool).await;
+    value.as_object_mut().unwrap().remove("transactions");
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type=diesel::sql_types::Jsonb)]
+        value: Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let current = diesel::sql_query("SELECT jsonb_build_object( \
+        'members',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM member_state_current_results r), \
+        'messages',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM message_revision_current_results r), \
+        'strands',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM strand_current_results r)) AS value")
+        .get_result::<Row>(&mut *conn).await.unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("domain_current".to_owned(), current.value);
+    value
+}
+
+#[tokio::test]
+async fn managed_bot_and_ghost_join_message_leave_require_actual_identity_and_exact_action() {
+    let fixture = Fixture::new().await;
+    let install = fixture.install(true).await;
+    let ghost_body = fixture
+        .ghost_body(&install, install_namespace(&install), "member-ghost")
+        .await;
+    let (status, ghost) = fixture
+        .ghost_commit(&install, &ghost_body, "member-ghost-provision")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "managed Ghost: {ghost}");
+    let ghost: GhostActorProvisionOutcome = serde_json::from_value(ghost).unwrap();
+    let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let strand_event = fixture.admin_event(
+        EventKind::StrandCreate,
+        ScopeRef::Realm {
+            realm_id: fixture.realm.clone(),
+        },
+        json!({"object":{"schema":"ak.schema.strand.v1","realm_id":fixture.realm,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Managed actual message"},"state":"active",
+            "created_by":ActorId::account(fixture.pcr.history.account.clone()),"created_at":at}}),
+    );
+    let strand = arkret_wire::StrandId::from_event_id(&strand_event.event_id);
+    accepted_admin_domain_event(&fixture, strand_event).await;
+    for actor in [
+        install.outcome.bot_actor_id.clone(),
+        ghost.ghost_actor_id.clone(),
+    ] {
+        let message_grant = managed_actor_action_grant(
+            &fixture,
+            &install,
+            &actor,
+            vec!["ak.message.create".to_owned()],
+        )
+        .await;
+        let content = json!({"strand_id":strand,"track_name":"discussion",
+            "content":{"kind":"ak.content.text","format":"plain","body":"actual managed message"}});
+        let not_joined = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &message_grant,
+            EventKind::MessageCreate,
+            content.clone(),
+        );
+        let before = managed_domain_snapshot(&fixture.pool).await;
+        let rejection = managed_rejected_event(&fixture, &install, &not_joined).await;
+        assert!(
+            fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .committed_event(&not_joined.event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "unjoined: {rejection}"
+        );
+        assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
+        let wrong_action = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &message_grant,
+            EventKind::MemberState,
+            json!({"realm_id":fixture.realm,"member_id":actor,"membership":"join"}),
+        );
+        let rejection = managed_rejected_event(&fixture, &install, &wrong_action).await;
+        assert!(
+            fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .committed_event(&wrong_action.event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "wrong action: {rejection}"
+        );
+        assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
+        let member_grant = managed_actor_action_grant(
+            &fixture,
+            &install,
+            &actor,
+            vec!["ak.realm.admin".to_owned()],
+        )
+        .await;
+        let other = if actor == install.outcome.bot_actor_id {
+            ghost.ghost_actor_id.clone()
+        } else {
+            install.outcome.bot_actor_id.clone()
+        };
+        let forced_join = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &member_grant,
+            EventKind::MemberState,
+            json!({"realm_id":fixture.realm,"member_id":other,"membership":"join"}),
+        );
+        let before = managed_domain_snapshot(&fixture.pool).await;
+        let rejection = managed_rejected_event(&fixture, &install, &forced_join).await;
+        assert!(
+            fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .committed_event(&forced_join.event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "admin cannot force leave to join: {rejection}"
+        );
+        assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
+        let join = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &member_grant,
+            EventKind::MemberState,
+            json!({"realm_id":fixture.realm,"member_id":actor,"membership":"join"}),
+        );
+        assert_managed_accepted(&fixture, &install, &join).await;
+        assert!(
+            fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .local_current_member_joined(
+                    &fixture.realm,
+                    &actor,
+                    &fixture.state.service_core_id()
+                )
+                .await
+                .unwrap()
+        );
+        let message = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &message_grant,
+            EventKind::MessageCreate,
+            content.clone(),
+        );
+        assert_managed_accepted(&fixture, &install, &message).await;
+        let leave = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &member_grant,
+            EventKind::MemberState,
+            json!({"realm_id":fixture.realm,"member_id":actor,"membership":"leave"}),
+        );
+        assert_managed_accepted(&fixture, &install, &leave).await;
+        assert!(
+            !fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .local_current_member_joined(
+                    &fixture.realm,
+                    &actor,
+                    &fixture.state.service_core_id()
+                )
+                .await
+                .unwrap()
+        );
+        let after_leave = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &message_grant,
+            EventKind::MessageCreate,
+            content,
+        );
+        let before = managed_domain_snapshot(&fixture.pool).await;
+        let rejection = managed_rejected_event(&fixture, &install, &after_leave).await;
+        assert!(
+            fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .committed_event(&after_leave.event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "after leave: {rejection}"
+        );
+        assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
+    }
+}
+
+/// `common-fields.md` §4.5: `leave -> join` is written by the target itself or
+/// by the exact target's Invite acceptance. A managed Bot or Ghost accepts an
+/// Invite addressed to it through its Applet Service; the acceptance is
+/// `subject_only`, and the cited grant of the actor only binds the exact
+/// install (`applet-integration.md` §8, §9.1).
+#[tokio::test]
+async fn managed_bot_and_ghost_enter_by_their_exact_invite_acceptance() {
+    let fixture = Fixture::new().await;
+    let install = fixture.install(true).await;
+    let ghost_body = fixture
+        .ghost_body(&install, install_namespace(&install), "invited-ghost")
+        .await;
+    let (status, ghost) = fixture
+        .ghost_commit(&install, &ghost_body, "invited-ghost-provision")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "managed Ghost: {ghost}");
+    let ghost: GhostActorProvisionOutcome = serde_json::from_value(ghost).unwrap();
+    let realm_scope = ScopeRef::Realm {
+        realm_id: fixture.realm.clone(),
+    };
+    for (actor, other) in [
+        (
+            install.outcome.bot_actor_id.clone(),
+            ghost.ghost_actor_id.clone(),
+        ),
+        (
+            ghost.ghost_actor_id.clone(),
+            install.outcome.bot_actor_id.clone(),
+        ),
+    ] {
+        let invitee = actor.as_account_id().unwrap().clone();
+        let invite = fixture.admin_event(
+            EventKind::InviteCreate,
+            realm_scope.clone(),
+            json!({
+                "invitee_account_id": invitee,
+                "introduction_evidence_digest": format!("sha256:{}", "4".repeat(64)),
+                "expires_at": arkret_canonical::format_timestamp_canonical(
+                    chrono::Utc::now() + chrono::Duration::days(1)
+                ),
+            }),
+        );
+        let invite_id = arkret_wire::InviteId::from_event_id(&invite.event_id);
+        accepted_admin_domain_event(&fixture, invite).await;
+        let grant = managed_actor_action_grant(
+            &fixture,
+            &install,
+            &actor,
+            vec!["ak.message.create".to_owned()],
+        )
+        .await;
+        let other_grant = managed_actor_action_grant(
+            &fixture,
+            &install,
+            &other,
+            vec!["ak.message.create".to_owned()],
+        )
+        .await;
+
+        // Only the directed invitee may accept, even through the same Service.
+        let foreign = managed_service_event(
+            &fixture,
+            &install,
+            &other,
+            &other_grant,
+            EventKind::InviteAccept,
+            json!({"invite_id": invite_id, "previous_state": "pending", "invitee_account_id": invitee}),
+        );
+        let before = managed_domain_snapshot(&fixture.pool).await;
+        let rejection = managed_rejected_event(&fixture, &install, &foreign).await;
+        assert_eq!(
+            managed_domain_snapshot(&fixture.pool).await,
+            before,
+            "foreign acceptance: {rejection}"
+        );
+
+        // The acceptance must cite an install-bound grant of the actor itself.
+        let borrowed_grant = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &other_grant,
+            EventKind::InviteAccept,
+            json!({"invite_id": invite_id, "previous_state": "pending", "invitee_account_id": invitee}),
+        );
+        let rejection = managed_rejected_event(&fixture, &install, &borrowed_grant).await;
+        assert_eq!(
+            managed_domain_snapshot(&fixture.pool).await,
+            before,
+            "borrowed grant: {rejection}"
+        );
+
+        let accept = managed_service_event(
+            &fixture,
+            &install,
+            &actor,
+            &grant,
+            EventKind::InviteAccept,
+            json!({"invite_id": invite_id, "previous_state": "pending", "invitee_account_id": invitee}),
+        );
+        assert_managed_accepted(&fixture, &install, &accept).await;
+        assert!(
+            fixture
+                .state
+                .test_persistence()
+                .authority_commits()
+                .local_current_member_joined(
+                    &fixture.realm,
+                    &actor,
+                    &fixture.state.service_core_id()
+                )
+                .await
+                .unwrap()
+        );
     }
 }

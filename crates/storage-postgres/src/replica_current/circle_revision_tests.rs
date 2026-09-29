@@ -93,6 +93,10 @@ async fn circle_snapshot_replacement_keeps_selector_revision_monotonic() {
     });
     let member_value = json!({
         "membership": "join",
+        "parent_membership_revision": {
+            "commit_id": RealmCommitId::from_digest([1; 32]),
+            "stream_position": 1
+        },
         "effective_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
     });
     let baseline = [
@@ -128,6 +132,10 @@ async fn circle_snapshot_replacement_keeps_selector_revision_monotonic() {
     changed_circle["state"] = json!("archived");
     let mut changed_member = member_value.clone();
     changed_member["membership"] = json!("leave");
+    changed_member
+        .as_object_mut()
+        .unwrap()
+        .remove("parent_membership_revision");
     let refusals = [
         [
             entry(
@@ -290,12 +298,21 @@ async fn circle_member_event_writer_rejects_stale_and_forked_current() {
                 circle_id: circle.clone(),
             },
             actor.clone(),
-            json!({
-                "circle_id":circle,
-                "member_id":actor,
-                "membership":membership,
-                "effective_at":arkret_canonical::format_timestamp_canonical(at)
-            }),
+            {
+                let mut payload = json!({
+                    "circle_id":circle,
+                    "member_id":actor,
+                    "membership":membership,
+                    "effective_at":arkret_canonical::format_timestamp_canonical(at)
+                });
+                if membership == "join" {
+                    payload["parent_membership_revision"] = json!({
+                        "commit_id": RealmCommitId::from_digest([2; 32]),
+                        "stream_position": 2
+                    });
+                }
+                payload
+            },
             at,
         )
         .unwrap();

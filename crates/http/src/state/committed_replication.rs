@@ -338,7 +338,7 @@ async fn replicate_one(
             .realm_digest_suite(event.realm_id.as_str()),
     )
     .await?;
-    state
+    let outcome = state
         .authority_commits()
         .install_committed_replica(&CommittedReplica {
             local_service_id: state.service_core_id(),
@@ -350,7 +350,13 @@ async fn replicate_one(
             received_at: crate::wire::now(),
             welcomes,
         })
-        .await
+        .await?;
+    if matches!(outcome, CommittedReplicaOutcome::Stored) {
+        // A member Station materializes its own accounts' notification rows
+        // from the replica it just stored (private-objects.md section 3.3).
+        crate::routing::events::notify::dispatch_committed_event_notifications(state, event).await;
+    }
+    Ok(outcome)
 }
 
 /// Judge every item of one `committed_replication` request in order.

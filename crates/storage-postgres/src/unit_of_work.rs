@@ -768,14 +768,28 @@ fn relation_current_value_for_create(
     }
 }
 
-async fn commit_relation_current_result_in_connection(
+/// Write the `relation` typed current of one accepted `ak.relation.*`.
+///
+/// `authorize` is the governing Station's admission: the same-cut capability
+/// verdict, source stream, Circle author and the scope/endpoint rules of
+/// `relation.md` sections 3.2 and 4.4. A verified replica fold passes `false`
+/// and only replays the primary-domain CAS the authority already decided.
+pub(crate) async fn commit_relation_current_result_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
+    authorize: bool,
 ) -> PersistenceResult<()> {
     let Some(mutation) = relation_current_result_mutation(event)? else {
         return Ok(());
     };
+    if authorize {
+        crate::relation_current_results::authorize_relation_write_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+    }
+    let created = matches!(mutation, RelationCurrentResultMutation::Create(_));
     let lifecycle_time = std::cmp::max(event.created_at, commit.committed_at);
     let (domain, expected_revision) = match &mutation {
         RelationCurrentResultMutation::Create(payload) => (
@@ -958,6 +972,29 @@ async fn commit_relation_current_result_in_connection(
             ));
         }
     };
+    if authorize {
+        let before = match current.as_ref() {
+            Some(row) if !created => Some(
+                serde_json::from_value::<arkret_models_collaboration::objects::relation::Relation>(
+                    row.value.clone(),
+                )
+                .map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "stored Relation current value is invalid: {error}"
+                    ))
+                })?,
+            ),
+            _ => None,
+        };
+        crate::relation_current_results::require_relation_value_scope_in_connection(
+            conn,
+            event,
+            before.as_ref(),
+            &value,
+            created,
+        )
+        .await?;
+    }
     let relation_id = value.id.clone().ok_or_else(|| {
         PersistenceError::Internal("Relation current value has no derived id".to_owned())
     })?;
@@ -2479,7 +2516,7 @@ async fn commit_one_in_connection(
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
         crate::strand_watch_current_results::commit_in_connection(conn, event, commit).await?;
         crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
-        commit_relation_current_result_in_connection(conn, event, commit).await?;
+        commit_relation_current_result_in_connection(conn, event, commit, true).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
         // An accepted Invite decides its accepting actor's `leave -> join`
         // edge against the member row before that row is written.
@@ -2509,6 +2546,10 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::strand_current_results::commit_strand_tracks_update_authority_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
         crate::strand_current_results::commit_strand_transition_in_connection(
             conn, event, commit, true,
         )
@@ -2519,6 +2560,10 @@ async fn commit_one_in_connection(
         .await?;
         crate::space_current_results::commit_space_create_current_results_in_connection(
             conn, event, commit,
+        )
+        .await?;
+        crate::space_current_results::commit_space_transition_in_connection(
+            conn, event, commit, true,
         )
         .await?;
         crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit)
@@ -2539,6 +2584,10 @@ async fn commit_one_in_connection(
         .await?;
         crate::object_redaction_current_results::commit_message_redact_current_result_in_connection(
             conn, event, commit,
+        )
+        .await?;
+        crate::message_reactions_current_results::commit_reaction_current_result_in_connection(
+            conn, event, commit, true,
         )
         .await?;
         crate::moderation_report_current_results::commit_moderation_report_current_result_in_connection(

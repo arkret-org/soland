@@ -1,12 +1,20 @@
-//! Notification fanout for message mentions, assignment targets, and schedule
-//! changes.
+//! Ordinary source-Event notification fanout (private-objects.md sections
+//! 3.3-3.6, push-notifications.md section 4.3.2).
 //!
-//! Message mention fanout keeps the AKP-0016 third-party agent gate: a native
-//! Agent is only notified of a third-party mention (author != its
-//! controller) when its effective `accept_third_party_mention` bit (selection
-//! ∩ ceiling) is true for the message scope; otherwise the mention is dropped
-//! for that agent. Assignment and schedule fanout use the same per-recipient
-//! notification projection store and access gates.
+//! A recipient's own Station materializes its ordinary notification rows
+//! once the source Event's Commit is durable: the governing Station right
+//! after its accepting unit, a member Station right after it stores the
+//! committed replica. Every recipient fact -- membership, Strand scope,
+//! Circle membership, watch level and active assignment -- is read from the
+//! typed current results at that cut ([`NotificationFanoutBasis`]); the
+//! in-process reducer projection is not a notification source. The rows are
+//! a rebuildable derived projection, so a fanout failure is logged and never
+//! changes the Commit outcome.
+//!
+//! Direct mentions keep the AKP-0016 third-party agent gate: a native Agent
+//! is notified of a third-party mention (author != its controller) only when
+//! its effective `accept_third_party_mention` bit (selection intersected
+//! with ceiling) is true for the message scope.
 
 use std::collections::BTreeSet;
 
@@ -16,499 +24,276 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
-    EventId, NotificationKind, NotificationPriority, NotificationState, RealmId, StrandId,
+    AccountId, ActorId, DidCoreId, EventId, NotificationKind, NotificationPriority,
+    NotificationState, RealmId, StrandId,
 };
 use serde_json::Value;
+use soland_services::delivery::NotificationFanoutBasis;
 
 use crate::routing::agent_participation::{
-    resolve_agent_participation_for_scope_keys, scope_keys_for_message,
+    circle_scope_key, realm_scope_key, resolve_agent_participation_for_scope_keys, strand_scope_key,
 };
 use crate::state::AppState;
 
-/// A field of the Relation an `ak.relation.create` carries.
+/// The explicit watch level that subscribes to every ordinary message.
+const WATCH_ALL: &str = "all";
+/// The explicit watch level whose dispatch gate suppresses every wakeup.
+const WATCH_MUTED: &str = "muted";
+
+/// The committed source Event facts a fanout reads.
+struct CommittedSource<'a> {
+    realm_id: &'a RealmId,
+    event_id: &'a EventId,
+    sender: &'a ActorId,
+    kind: &'a EventKind,
+    payload: &'a Value,
+}
+
+/// One notification row the fanout decided to materialize.
+#[derive(Debug)]
+struct PlannedNotification {
+    recipient: ActorId,
+    notification_kind: NotificationKind,
+    source_ref: String,
+    strand_id: StrandId,
+    track_name: Option<String>,
+    preview: Option<Value>,
+}
+
+/// Materialize the ordinary notifications a freshly committed source Event
+/// derives for this Station's own accounts.
 ///
-/// `event-payload.schema.json#/$defs/relation_create_payload` is
-/// `additionalProperties:false` over `{relation, rank}`, so the whole Relation
-/// snapshot lives under `payload.relation` and there is exactly one place to
-/// read `kind` / `from_ref` / `to_ref` from. The flat root spellings
-/// (`relation_kind` / `from` / `to`) are not spec payload members.
-fn relation_field<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
-    payload
-        .get("relation")
-        .and_then(|relation| relation.get(key))
-        .and_then(Value::as_str)
-}
-
-fn operation_source_event_id(operation: &arkret_event_draft::ProjectedEventOperation) -> String {
-    operation.context.event_id.to_string()
-}
-
-fn operation_source_actor_id(
-    operation: &arkret_event_draft::ProjectedEventOperation,
-) -> Option<String> {
-    Some(operation.context.sender.to_string())
-}
-
-fn explicit_watch_level(state: &AppState, strand_id: &str, actor_id: &str) -> Option<String> {
-    state
-        .projections()
-        .snapshot()
-        .strand_watches
-        .get(&(strand_id.to_owned(), actor_id.to_owned()))
-        .and_then(|watch| watch.level.clone())
-}
-
-fn all_watch_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
-    state
-        .projections()
-        .snapshot()
-        .strand_watches
-        .values()
-        .filter(|watch| watch.strand_id == strand_id && watch.level.as_deref() == Some("all"))
-        .map(|watch| watch.actor_id.clone())
-        .collect()
-}
-
-fn actor_has_realm_access(state: &AppState, realm_id: &str, actor_id: &str) -> bool {
-    realm_joined_members(state, realm_id).contains(actor_id)
-}
-
-fn actor_can_see_strand(state: &AppState, realm_id: &str, strand_id: &str, actor_id: &str) -> bool {
-    if !actor_has_realm_access(state, realm_id, actor_id) {
-        return false;
-    }
-    let projection = state.projections().snapshot();
-    let Some(strand) = projection.strands.get(strand_id) else {
-        return false;
-    };
-    if strand.realm_id != realm_id {
-        return false;
-    }
-    if let Some(circle_id) = strand.scope_circle_id.as_deref() {
-        return projection.circle_scope_visible_to_actor(circle_id, actor_id);
-    }
-    true
-}
-
-fn actor_can_receive_watched_message(
+/// Call only after the Event's Commit is durable and only for a Commit this
+/// call site stored itself, never for an exact replay.
+pub(crate) async fn dispatch_committed_event_notifications(
     state: &AppState,
-    realm_id: &str,
-    strand_id: &str,
-    actor_id: &str,
-) -> bool {
-    if !actor_has_realm_access(state, realm_id, actor_id) {
-        return false;
+    event: &arkret_wire::Event,
+) {
+    if !matches!(
+        event.kind,
+        EventKind::MessageCreate | EventKind::RelationCreate | EventKind::StrandUpdate
+    ) {
+        return;
     }
-    let projection = state.projections().snapshot();
-    let Some(strand) = projection.strands.get(strand_id) else {
-        return true;
+    let payload = match serde_json::to_value(&event.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(%error, event_id = %event.event_id, "notification source payload is invalid");
+            return;
+        }
     };
-    if strand.realm_id != realm_id {
-        return false;
-    }
-    if let Some(circle_id) = strand.scope_circle_id.as_deref() {
-        return projection.circle_scope_visible_to_actor(circle_id, actor_id);
-    }
-    true
+    let source = CommittedSource {
+        realm_id: &event.realm_id,
+        event_id: &event.event_id,
+        sender: &event.actor_id,
+        kind: &event.kind,
+        payload: &payload,
+    };
+    let Some(strand_id) = source_strand_id(&source) else {
+        return;
+    };
+    let basis = match state
+        .deliveries()
+        .notification_fanout_basis(source.realm_id, Some(&strand_id))
+        .await
+    {
+        Ok(basis) => basis,
+        Err(error) => {
+            tracing::warn!(%error, event_id = %event.event_id, "notification fanout current is unavailable");
+            return;
+        }
+    };
+    fan_out(state, &source, &basis).await;
 }
 
-/// Complete direct-mention subject accounts of a message payload's Content
-/// Block.
-///
-/// Only the canonical `mention_node.subject_account_id` is authoritative for
-/// routing (strand-and-message.md §9.4.2); a payload that fails canonical
-/// mention admission routes to nobody.
-fn mention_subject_accounts(payload: &Value) -> BTreeSet<arkret_wire::AccountId> {
-    payload
+async fn fan_out(state: &AppState, source: &CommittedSource<'_>, basis: &NotificationFanoutBasis) {
+    for planned in plan(source, basis, &state.service_core_id()) {
+        if planned.notification_kind == NotificationKind::Mention
+            && !mention_passes_agent_gate(state, source, basis, &planned).await
+        {
+            continue;
+        }
+        put_notification(state, source, planned).await;
+    }
+}
+
+/// The Strand a source Event's notification is routed through.
+fn source_strand_id(source: &CommittedSource<'_>) -> Option<StrandId> {
+    let value = match source.kind {
+        EventKind::MessageCreate => source.payload.get("strand_id"),
+        EventKind::RelationCreate => source.payload.pointer("/relation/from_ref"),
+        EventKind::StrandUpdate => source.payload.get("target_ref"),
+        _ => None,
+    }?;
+    StrandId::new(value.as_str()?.to_owned()).ok()
+}
+
+fn plan(
+    source: &CommittedSource<'_>,
+    basis: &NotificationFanoutBasis,
+    local_station: &DidCoreId,
+) -> Vec<PlannedNotification> {
+    let Some(strand_id) = source_strand_id(source) else {
+        return Vec::new();
+    };
+    let gate = RecipientGate {
+        source,
+        basis,
+        local_station,
+    };
+    match source.kind {
+        EventKind::MessageCreate => plan_message(&gate, strand_id),
+        EventKind::RelationCreate => plan_assignment(&gate, strand_id).into_iter().collect(),
+        EventKind::StrandUpdate => plan_schedule(&gate, strand_id),
+        _ => Vec::new(),
+    }
+}
+
+/// The access, locality and mute gates applied before any row exists
+/// (private-objects.md section 3.4: no stub for an actor without access or
+/// with `level=muted`).
+struct RecipientGate<'a> {
+    source: &'a CommittedSource<'a>,
+    basis: &'a NotificationFanoutBasis,
+    local_station: &'a DidCoreId,
+}
+
+impl RecipientGate<'_> {
+    fn admits(&self, actor: &ActorId) -> bool {
+        // Only the recipient's own Station materializes its row
+        // (private-objects.md section 3.3). Matching compares both account
+        // components, so the same principal at another Station is a
+        // different recipient.
+        let local = actor
+            .as_account_id()
+            .is_some_and(|account| account.station_id == *self.local_station);
+        local
+            && actor != self.source.sender
+            && self.basis.joined_members.contains(actor)
+            && self.basis.strand.as_ref().is_some_and(|strand| {
+                strand.realm_id == *self.source.realm_id
+                    && (strand.scope_circle_id.is_none() || strand.circle_members.contains(actor))
+            })
+            && self.basis.watch_levels.get(actor).map(String::as_str) != Some(WATCH_MUTED)
+    }
+
+    fn watches_all(&self, actor: &ActorId) -> bool {
+        self.basis.watch_levels.get(actor).map(String::as_str) == Some(WATCH_ALL)
+    }
+}
+
+/// `ak.message.create`: one `mention` per addressed account and one
+/// `message` per other `watch=all` watcher (private-objects.md sections 3.3
+/// and 3.4). A mentioned watcher receives only the more specific `mention`.
+fn plan_message(gate: &RecipientGate<'_>, strand_id: StrandId) -> Vec<PlannedNotification> {
+    let payload = gate.source.payload;
+    let mentioned = payload
         .get("content")
-        .or_else(|| payload.get("payload").and_then(|p| p.get("content")))
         .and_then(|content| {
             crate::routing::events::operations::mention_subject_account_ids(content).ok()
         })
         .unwrap_or_default()
         .into_iter()
-        .collect()
-}
-
-fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
-    let mut members = BTreeSet::new();
-    {
-        let projection = state.projections().snapshot();
-        members.extend(
-            projection
-                .members_of_realm(realm_id)
-                .into_iter()
-                .map(|member| member.member.clone()),
-        );
-        members.retain(|member| {
-            let Ok(_) = serde_json::from_str::<arkret_wire::ActorId>(member) else {
-                return false;
-            };
-            projection
-                .agent_membership_binding(realm_id, member)
-                .is_none()
-                || projection.effective_agent_membership_base(realm_id, member)
-        });
-    }
-    members
-}
-
-/// Effective `accept_third_party_mention` for an agent in the message
-/// scope = most-specific selection (strand over circle over realm) intersected with ceiling.
-async fn agent_accepts_third_party_mention(
-    state: &AppState,
-    agent: &str,
-    realm_id: &str,
-    strand_id: Option<&str>,
-) -> bool {
-    let Some(scope_keys) = scope_keys_for_message(state, realm_id, strand_id) else {
-        return false;
-    };
-    resolve_agent_participation_for_scope_keys(state, agent, &scope_keys)
-        .await
-        .is_some_and(|resolved| resolved.effective.accept_third_party_mention)
-}
-
-async fn put_notification(
-    state: &AppState,
-    recipient_id: &str,
-    realm_id: &str,
-    source_event_id: &str,
-    notification_kind: NotificationKind,
-    event_kind: EventKind,
-    source_ref: Option<&str>,
-    strand_id: Option<&str>,
-    track_name: Option<&str>,
-    source_actor_id: Option<&str>,
-    preview: Option<Value>,
-) {
-    let created_at = crate::routing::events::now();
-    let record = (|| {
-        let preview = preview
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|error| format!("notification preview is invalid: {error}"))?;
-        let actor_id: arkret_wire::ActorId = serde_json::from_str(recipient_id)
-            .map_err(|error| format!("notification recipient ActorId is invalid: {error}"))?;
-        let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
-        let source_event =
-            EventId::new(source_event_id.to_owned()).map_err(|error| error.to_string())?;
-        let ordinary_kind = arkret_wire::OrdinaryNotificationKind::try_from(&notification_kind)
-            .map_err(|error| error.to_string())?;
-        let id =
-            arkret_models_collaboration::objects::read_receipts::derive_notification_projection_id(
-                actor_id
-                    .as_account_id()
-                    .ok_or("notification recipient must be an account")?,
-                &realm,
-                &source_event,
-                ordinary_kind,
-            )
-            .map_err(|error| error.to_string())?;
-        let notification = Notification {
-            id: id.into(),
-            schema: NotificationSchema::V1,
-            actor_id,
-            source: NotificationSource::Event(NotificationEventSource {
-                source_event_id: EventId::new(source_event_id.to_owned())
-                    .map_err(|error| format!("notification source Event is invalid: {error}"))?,
-                realm_id: Some(
-                    RealmId::new(realm_id.to_owned())
-                        .map_err(|error| format!("notification Realm is invalid: {error}"))?,
-                ),
-                source_ref: source_ref
-                    .map(|value| NotificationSourceRef::new(value.to_owned()))
-                    .transpose()
-                    .map_err(|error| {
-                        format!("notification source reference is invalid: {error}")
-                    })?,
-                strand_id: strand_id
-                    .map(|value| StrandId::new(value.to_owned()))
-                    .transpose()
-                    .map_err(|error| format!("notification Strand is invalid: {error}"))?,
-                track_name: track_name.map(ToOwned::to_owned),
-            }),
-            notification_kind,
-            priority: NotificationPriority::Normal,
-            state: NotificationState::Unread,
-            preview,
-            created_at,
-            updated_at: Some(created_at),
-        };
-        notification
-            .validate()
-            .map_err(|error| format!("notification is invalid: {error}"))?;
-        let source_actor_id = source_actor_id
-            .map(serde_json::from_str::<arkret_wire::ActorId>)
-            .transpose()
-            .map_err(|error| format!("notification source actor is invalid: {error}"))?;
-        Ok::<_, String>(soland_services::delivery::RecipientNotificationRecord {
-            notification,
-            event_kind,
-            source_actor_id,
-        })
-    })();
-    let record = match record {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::warn!(%error, "failed to materialize typed notification");
-            return;
-        }
-    };
-    if let Err(error) = state
-        .deliveries()
-        .store_notification(soland_services::delivery::StoreNotificationCommand { record })
-        .await
-    {
-        tracing::warn!(%error, "failed to persist notification");
-    }
-}
-
-async fn put_message_notification(
-    state: &AppState,
-    recipient_id: &str,
-    realm_id: &str,
-    source_event_id: &str,
-    notification_kind: NotificationKind,
-    strand_id: Option<&str>,
-    source_actor_id: Option<&str>,
-    source_ref: Option<&str>,
-    track_name: Option<&str>,
-    preview: Option<Value>,
-) {
-    put_notification(
-        state,
-        recipient_id,
-        realm_id,
-        source_event_id,
-        notification_kind,
-        EventKind::MessageCreate,
-        source_ref,
-        strand_id,
-        track_name,
-        source_actor_id,
-        preview,
-    )
-    .await;
-}
-
-/// Fan out message notifications for an accepted `ak.message.create`.
-pub(crate) async fn dispatch_message_notifications(
-    state: &AppState,
-    operation: &arkret_event_draft::ProjectedEventOperation,
-) {
-    let payload = &operation.payload;
-    let sender = operation.context.sender.to_string();
-    let realm_id = operation.realm_id.as_str().to_owned();
-    let source_event_id = operation_source_event_id(operation);
-    let strand_id = payload
-        .get("strand_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let source_ref = payload
-        .get("message_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+        .collect::<BTreeSet<AccountId>>();
+    let source_ref = arkret_identifiers::MessageId::from_event_id(gate.source.event_id).to_string();
     let track_name = payload
         .get("track_name")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    // Only a plaintext Content Block has a body; E2EE content never yields a
+    // server-generated preview.
     let preview = payload
         .pointer("/content/body")
         .and_then(Value::as_str)
         .map(|body| serde_json::json!({ "body": body }));
-    // SOL-SEC-06 — if the message is scoped to a Circle, a mention notification
-    // MUST NOT be delivered to a subject who cannot see that Circle; otherwise
-    // the notification leaks the metadata "a message in this Circle mentions
-    // you" to a non-member.
-    let scope_circle_id = payload
-        .get("scope_circle_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    // A mention names one complete account. Matching MUST compare both
-    // components: the same principal joined from another Station is a
-    // different member and MUST NOT receive this notification
-    // (identity-handles.md §3.8, strand-and-message.md §9.4.2). Service
-    // actors carry no account and can never be a mention subject.
-    let mentioned_accounts = mention_subject_accounts(payload);
-    let mentioned_subjects = realm_joined_members(state, &realm_id)
-        .into_iter()
-        .filter(|member| {
-            serde_json::from_str::<arkret_wire::ActorId>(member).is_ok_and(|actor| {
-                actor
-                    .as_account_id()
-                    .is_some_and(|account_id| mentioned_accounts.contains(account_id))
+    let row = |recipient: ActorId, notification_kind| PlannedNotification {
+        recipient,
+        notification_kind,
+        source_ref: source_ref.clone(),
+        strand_id: strand_id.clone(),
+        track_name: track_name.clone(),
+        preview: preview.clone(),
+    };
+    let mut planned = mentioned
+        .iter()
+        .map(|account| ActorId::account(account.clone()))
+        .filter(|actor| gate.admits(actor))
+        .map(|actor| row(actor, NotificationKind::Mention))
+        .collect::<Vec<_>>();
+    planned.extend(
+        gate.basis
+            .watch_levels
+            .keys()
+            .filter(|actor| {
+                gate.watches_all(actor)
+                    && !actor
+                        .as_account_id()
+                        .is_some_and(|account| mentioned.contains(account))
+                    && gate.admits(actor)
             })
-        })
-        .collect::<BTreeSet<_>>();
-    if let Some(strand_id) = strand_id.as_deref() {
-        for recipient in all_watch_recipients(state, strand_id) {
-            if recipient == sender || mentioned_subjects.contains(&recipient) {
-                continue;
-            }
-            if !actor_can_receive_watched_message(state, &realm_id, strand_id, &recipient) {
-                continue;
-            }
-            put_message_notification(
-                state,
-                &recipient,
-                &realm_id,
-                &source_event_id,
-                NotificationKind::Message,
-                Some(strand_id),
-                Some(&sender),
-                source_ref.as_deref(),
-                track_name.as_deref(),
-                preview.clone(),
-            )
-            .await;
-        }
-    }
-    for subject in mentioned_subjects {
-        if subject == sender {
-            continue;
-        }
-        if let Some(circle_id) = scope_circle_id.as_deref() {
-            let visible = state
-                .projections()
-                .snapshot()
-                .circle_scope_visible_to_actor(circle_id, &subject);
-            if !visible {
-                continue;
-            }
-        }
-        let Ok(subject_actor) = serde_json::from_str::<arkret_wire::ActorId>(&subject) else {
-            continue;
-        };
-        // AKP-0016 §9.4.5 — agent third-party mention gate.
-        if matches!(&subject_actor, arkret_wire::ActorId::Account { account_id: arkret_wire::AccountId { station_id, .. } } if *station_id == state.service_core_id())
-            && let Ok(Some(agent_record)) = state
-                .agent_pairings()
-                .agent(subject_actor.signing_principal_id().as_str())
-                .await
-        {
-            let Ok(controller) =
-                crate::routing::identity::agent_pcr::agent_controller_account(state, &agent_record)
-                    .await
-            else {
-                continue;
-            };
-            if operation.context.sender != arkret_wire::ActorId::account(controller)
-                && !agent_accepts_third_party_mention(
-                    state,
-                    subject_actor.signing_principal_id().as_str(),
-                    &realm_id,
-                    strand_id.as_deref(),
-                )
-                .await
-            {
-                continue;
-            }
-        }
-        put_message_notification(
-            state,
-            &subject,
-            &realm_id,
-            &source_event_id,
-            NotificationKind::Mention,
-            strand_id.as_deref(),
-            Some(&sender),
-            source_ref.as_deref(),
-            track_name.as_deref(),
-            preview.clone(),
-        )
-        .await;
-    }
+            .map(|actor| row(actor.clone(), NotificationKind::Message)),
+    );
+    planned
 }
 
-/// Fan out assignment notifications for an accepted `ak.relation.create`.
-pub(crate) async fn dispatch_assignment_notifications(
-    state: &AppState,
-    operation: &arkret_event_draft::ProjectedEventOperation,
-) {
-    let payload = &operation.payload;
-    if relation_field(payload, "relation_kind") != Some("assigned_to") {
-        return;
+/// `ak.relation.create` of an `assigned_to` Relation from an active Strand
+/// notifies its `to_ref` actor (private-objects.md section 3.5).
+fn plan_assignment(gate: &RecipientGate<'_>, strand_id: StrandId) -> Option<PlannedNotification> {
+    let relation = gate.source.payload.get("relation")?;
+    if relation.get("relation_kind").and_then(Value::as_str) != Some("assigned_to") {
+        return None;
     }
-    let Some(strand_id) =
-        relation_field(payload, "from_ref").filter(|value| value.starts_with("ak:strand:"))
-    else {
-        return;
-    };
-    let Some(assignee) = payload
-        .pointer("/relation/to_ref")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
-        .map(|actor| actor.to_string())
-    else {
-        return;
-    };
-    let source_actor_id = operation_source_actor_id(operation);
-    let assignee = assignee.as_str();
-    if source_actor_id.as_deref() == Some(assignee) {
-        return;
+    let assignee = serde_json::from_value::<ActorId>(relation.get("to_ref")?.clone()).ok()?;
+    if !gate
+        .basis
+        .strand
+        .as_ref()
+        .is_some_and(|strand| strand.active)
+        || !gate.admits(&assignee)
+    {
+        return None;
     }
-    let realm_id = operation.realm_id.as_str();
-    if explicit_watch_level(state, strand_id, assignee).as_deref() == Some("muted") {
-        return;
-    }
-    if !actor_can_see_strand(state, realm_id, strand_id, assignee) {
-        return;
-    }
-    let source_event_id = operation_source_event_id(operation);
-    // `relation_create_object` bans `id`, so the Relation id is never on the
-    // wire: it is `retype(event_id)`, exactly as the reducer derives it.
-    let relation_id =
-        arkret_identifiers::RelationId::from_event_id(&operation.context.event_id).to_string();
-    let relation_id = Some(relation_id.as_str());
-    put_notification(
-        state,
-        assignee,
-        realm_id,
-        &source_event_id,
-        NotificationKind::Assignment,
-        EventKind::RelationCreate,
-        relation_id,
-        Some(strand_id),
-        None,
-        source_actor_id.as_deref(),
-        None,
-    )
-    .await;
-}
-
-fn patch_touches_calendar(payload: &Value) -> bool {
-    let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
-        return false;
-    };
-    patch.iter().any(|(path, value)| {
-        if path == "metadata.fields.calendar"
-            || path.starts_with("metadata.fields.calendar.")
-        {
-            return true;
-        }
-        if path == "metadata.fields" {
-            return canonical_patch_set_value(value)
-                .and_then(Value::as_object)
-                .is_some_and(|fields| {
-                    fields.contains_key(
-                        arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE,
-                    )
-                });
-        }
-        if path == "metadata" {
-            return canonical_patch_set_value(value)
-                .and_then(|metadata| metadata.get("fields"))
-                .and_then(Value::as_object)
-                .is_some_and(|fields| {
-                    fields.contains_key(
-                        arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE,
-                    )
-                });
-        }
-        false
+    // `relation_create_object` bans `id`: the Relation id is the retyped
+    // creating Event id.
+    let source_ref =
+        arkret_identifiers::RelationId::from_event_id(gate.source.event_id).to_string();
+    Some(PlannedNotification {
+        recipient: assignee,
+        notification_kind: NotificationKind::Assignment,
+        source_ref,
+        strand_id,
+        track_name: None,
+        preview: None,
     })
+}
+
+/// `ak.strand.update` of `metadata.fields.due_at` notifies the Strand's
+/// active assignees and `watch=all` watchers (private-objects.md section
+/// 3.6). Extension schedule fields belong to their own server profile.
+fn plan_schedule(gate: &RecipientGate<'_>, strand_id: StrandId) -> Vec<PlannedNotification> {
+    if !patch_touches_due_schedule(gate.source.payload) {
+        return Vec::new();
+    }
+    let mut recipients = gate.basis.active_assignees.clone();
+    recipients.extend(
+        gate.basis
+            .watch_levels
+            .keys()
+            .filter(|actor| gate.watches_all(actor))
+            .cloned(),
+    );
+    recipients
+        .into_iter()
+        .filter(|actor| gate.admits(actor))
+        .map(|recipient| PlannedNotification {
+            recipient,
+            notification_kind: NotificationKind::Schedule,
+            source_ref: strand_id.to_string(),
+            strand_id: strand_id.clone(),
+            track_name: None,
+            preview: None,
+        })
+        .collect()
 }
 
 fn patch_touches_due_schedule(payload: &Value) -> bool {
@@ -537,7 +322,7 @@ fn patch_touches_due_schedule(payload: &Value) -> bool {
 /// Resolve the two shapes admitted by `patch.schema.json`: a direct value or
 /// an explicit `{ "$op": "set" | "add", "value": ... }` operation.
 /// Unset/remove operations carry no replacement value and cannot introduce a
-/// calendar or due-date field.
+/// due-date field.
 fn canonical_patch_set_value(value: &Value) -> Option<&Value> {
     let Some(object) = value.as_object() else {
         return Some(value);
@@ -550,96 +335,137 @@ fn canonical_patch_set_value(value: &Value) -> Option<&Value> {
         .flatten()
 }
 
-fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
-    let projection = state.projections().snapshot();
-    let mut recipients = projection
-        .relations
-        .values()
-        .filter(|relation| {
-            relation.relation_kind == "assigned_to"
-                && relation.state == "active"
-                && relation.from_object_ref() == Some(strand_id)
-        })
-        .filter_map(|relation| {
-            relation
-                .to_ref
-                .as_ref()
-                .and_then(|endpoint| endpoint.as_actor_id())
-        })
-        .map(ToString::to_string)
-        .collect::<BTreeSet<_>>();
-    recipients.extend(
-        projection
-            .strand_watches
-            .values()
-            .filter(|watch| watch.strand_id == strand_id && watch.level.as_deref() == Some("all"))
-            .map(|watch| watch.actor_id.clone()),
-    );
-    recipients
+/// AKP-0016 section 9.4.5: a native Agent receives a third-party mention only
+/// when its effective `accept_third_party_mention` bit for the message scope
+/// is true. A mention by its controller always passes.
+async fn mention_passes_agent_gate(
+    state: &AppState,
+    source: &CommittedSource<'_>,
+    basis: &NotificationFanoutBasis,
+    planned: &PlannedNotification,
+) -> bool {
+    let agent = planned.recipient.signing_principal_id().as_str();
+    let agent_record = match state.agent_pairings().agent(agent).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return true,
+        Err(error) => {
+            tracing::warn!(%error, "notification Agent lookup failed");
+            return false;
+        }
+    };
+    let Ok(controller) =
+        crate::routing::identity::agent_pcr::agent_controller_account(state, &agent_record).await
+    else {
+        return false;
+    };
+    if *source.sender == ActorId::account(controller) {
+        return true;
+    }
+    let realm_id = source.realm_id.as_str();
+    let mut scope_keys = vec![realm_scope_key(realm_id)];
+    if let Some(circle_id) = basis
+        .strand
+        .as_ref()
+        .and_then(|strand| strand.scope_circle_id.as_ref())
+    {
+        scope_keys.push(circle_scope_key(realm_id, circle_id.as_str()));
+    }
+    scope_keys.push(strand_scope_key(realm_id, planned.strand_id.as_str()));
+    resolve_agent_participation_for_scope_keys(state, agent, &scope_keys)
+        .await
+        .is_some_and(|resolved| resolved.effective.accept_third_party_mention)
 }
 
-/// Fan out due-date notifications for an accepted `ak.strand.update`.
-/// Calendar updates are recognized separately; their notification fanout is
-/// not implemented by this path.
-pub(crate) async fn dispatch_schedule_notifications(
+async fn put_notification(
     state: &AppState,
-    operation: &arkret_event_draft::ProjectedEventOperation,
+    source: &CommittedSource<'_>,
+    planned: PlannedNotification,
 ) {
-    let due_schedule = patch_touches_due_schedule(&operation.payload);
-    let calendar_schedule = patch_touches_calendar(&operation.payload);
-    if !due_schedule && !calendar_schedule {
-        return;
-    }
-    let Some(strand_id) = operation
-        .payload
-        .get("target_ref")
-        .or_else(|| operation.payload.get("strand_id"))
-        .and_then(Value::as_str)
-    else {
-        return;
-    };
-    let realm_id = operation.realm_id.as_str();
-    let source_actor_id = operation_source_actor_id(operation);
-    let source_event_id = operation_source_event_id(operation);
-    if due_schedule {
-        for recipient in relation_schedule_recipients(state, strand_id) {
-            if source_actor_id.as_deref() == Some(recipient.as_str()) {
-                continue;
-            }
-            if explicit_watch_level(state, strand_id, &recipient).as_deref() == Some("muted") {
-                continue;
-            }
-            if !actor_can_see_strand(state, realm_id, strand_id, &recipient) {
-                continue;
-            }
-            put_notification(
-                state,
-                &recipient,
-                realm_id,
-                &source_event_id,
-                NotificationKind::Schedule,
-                EventKind::StrandUpdate,
-                Some(strand_id),
-                Some(strand_id),
-                None,
-                source_actor_id.as_deref(),
-                None,
+    let created_at = crate::routing::events::now();
+    let record = (|| {
+        let preview = planned
+            .preview
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| format!("notification preview is invalid: {error}"))?;
+        let ordinary_kind =
+            arkret_wire::OrdinaryNotificationKind::try_from(&planned.notification_kind)
+                .map_err(|error| error.to_string())?;
+        let id =
+            arkret_models_collaboration::objects::read_receipts::derive_notification_projection_id(
+                planned
+                    .recipient
+                    .as_account_id()
+                    .ok_or("notification recipient must be an account")?,
+                source.realm_id,
+                source.event_id,
+                ordinary_kind,
             )
-            .await;
+            .map_err(|error| error.to_string())?;
+        let notification = Notification {
+            id: id.into(),
+            schema: NotificationSchema::V1,
+            actor_id: planned.recipient,
+            source: NotificationSource::Event(NotificationEventSource {
+                source_event_id: source.event_id.clone(),
+                realm_id: Some(source.realm_id.clone()),
+                source_ref: Some(NotificationSourceRef::new(planned.source_ref).map_err(
+                    |error| format!("notification source reference is invalid: {error}"),
+                )?),
+                strand_id: Some(planned.strand_id),
+                track_name: planned.track_name,
+            }),
+            notification_kind: planned.notification_kind,
+            priority: NotificationPriority::Normal,
+            state: NotificationState::Unread,
+            preview,
+            created_at,
+            updated_at: Some(created_at),
+        };
+        notification
+            .validate()
+            .map_err(|error| format!("notification is invalid: {error}"))?;
+        Ok::<_, String>(soland_services::delivery::RecipientNotificationRecord {
+            notification,
+            event_kind: source.kind.clone(),
+            source_actor_id: Some(source.sender.clone()),
+        })
+    })();
+    let record = match record {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(%error, "failed to materialize typed notification");
+            return;
         }
+    };
+    if let Err(error) = state
+        .deliveries()
+        .store_notification(soland_services::delivery::StoreNotificationCommand { record })
+        .await
+    {
+        tracing::warn!(%error, "failed to persist notification");
     }
-    // Calendar notification fanout is a separate implementation gap.
-    // Personal blocklist filtering belongs to the key-holding client; it
-    // must not be used to reject a blind wakeup at this service boundary.
 }
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::RealmId;
+    use std::collections::{BTreeMap, BTreeSet};
+
     use serde_json::{Value, json};
+    use soland_services::delivery::NotificationStrandScope;
     use soland_storage_postgres::Db;
 
     use super::*;
+
+    const REALM: &str = "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh";
+    const STRAND: &str = "ak:strand:AYzqeQ1hbLexQxBuFmhDzV2R1jsnUEvB0ELJR10hOgtK";
+    const CIRCLE: &str = "ak:circle:Aecu1rM_o2niy2h_rtK9KBChw8L-QoAsngbVoP1bpNrl";
+    const ALICE: &str = "ak:did_core:web:alice.example";
+    const BOB: &str = "ak:did_core:web:bob.example";
+    const CAROL: &str = "ak:did_core:web:carol.example";
+    const DAVE: &str = "ak:did_core:web:dave.example";
+    const AGENT: &str = "ak:did_core:webvh:z6mkalicesummary";
+    const OTHER_STATION: &str = "ak:did_core:web:other-station.example";
 
     fn test_config() -> crate::config::AppConfig {
         crate::config::AppConfig {
@@ -655,60 +481,346 @@ mod tests {
         }
     }
 
+    /// A fixture state whose persistence is a leased PostgreSQL database.
     fn test_state() -> AppState {
         AppState::new(test_config(), Db { pool: None })
     }
 
+    fn local_station() -> DidCoreId {
+        crate::test_event::station_id()
+    }
+
+    fn actor(principal: &str) -> ActorId {
+        ActorId::account(AccountId::new(
+            DidCoreId::new(principal).unwrap(),
+            local_station(),
+        ))
+    }
+
+    fn actor_at(principal: &str, station: &str) -> ActorId {
+        ActorId::account(AccountId::new(
+            DidCoreId::new(principal).unwrap(),
+            DidCoreId::new(station).unwrap(),
+        ))
+    }
+
+    fn realm_id() -> RealmId {
+        RealmId::new(REALM.to_owned()).unwrap()
+    }
+
+    fn fixture_event_id(seed: &str) -> EventId {
+        let digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(seed))
+            .expect("fixture digest is typed");
+        EventId::from_event_digest(&digest).expect("SHA-256 is a registered Event digest suite")
+    }
+
+    /// One committed source Event as the fanout reads it.
+    struct Fixture {
+        realm_id: RealmId,
+        event_id: EventId,
+        sender: ActorId,
+        kind: EventKind,
+        payload: Value,
+    }
+
+    impl Fixture {
+        fn new(seed: &str, sender: ActorId, kind: EventKind, payload: Value) -> Self {
+            Self {
+                realm_id: realm_id(),
+                event_id: fixture_event_id(seed),
+                sender,
+                kind,
+                payload,
+            }
+        }
+
+        fn source(&self) -> CommittedSource<'_> {
+            CommittedSource {
+                realm_id: &self.realm_id,
+                event_id: &self.event_id,
+                sender: &self.sender,
+                kind: &self.kind,
+                payload: &self.payload,
+            }
+        }
+
+        fn plan(&self, basis: &NotificationFanoutBasis) -> Vec<(ActorId, NotificationKind)> {
+            plan(&self.source(), basis, &local_station())
+                .into_iter()
+                .map(|planned| (planned.recipient, planned.notification_kind))
+                .collect()
+        }
+    }
+
+    fn message(seed: &str, sender: ActorId, mentions: &[&ActorId]) -> Fixture {
+        let mut content = json!({"kind": "ak.content.text", "body": "hello", "format": "plain"});
+        if !mentions.is_empty() {
+            content["mentions"] = mentions
+                .iter()
+                .map(|subject| {
+                    json!({
+                        "kind": "mention",
+                        "subject_account_id": subject.as_account_id().unwrap(),
+                        "mention_text_original": "@subject",
+                    })
+                })
+                .collect();
+        }
+        Fixture::new(
+            seed,
+            sender,
+            EventKind::MessageCreate,
+            json!({"strand_id": STRAND, "track_name": "discussion", "content": content}),
+        )
+    }
+
+    fn assignment(seed: &str, sender: ActorId, assignee: &ActorId) -> Fixture {
+        Fixture::new(
+            seed,
+            sender,
+            EventKind::RelationCreate,
+            json!({
+                "primary_conflict_domain": {
+                    "domain_kind": "tuple",
+                    "relation_kind": "assigned_to",
+                    "from_ref": STRAND,
+                    "to_ref": assignee,
+                },
+                "expected_revision": null,
+                "relation": {"relation_kind": "assigned_to", "from_ref": STRAND, "to_ref": assignee},
+            }),
+        )
+    }
+
+    fn strand_update(seed: &str, sender: ActorId, patch: Value) -> Fixture {
+        Fixture::new(
+            seed,
+            sender,
+            EventKind::StrandUpdate,
+            json!({"target_ref": STRAND, "patch": patch}),
+        )
+    }
+
+    /// A Realm-scope active Strand with `members` joined.
+    fn basis(members: &[&ActorId]) -> NotificationFanoutBasis {
+        NotificationFanoutBasis {
+            joined_members: members.iter().map(|member| (*member).clone()).collect(),
+            strand: Some(NotificationStrandScope {
+                realm_id: realm_id(),
+                active: true,
+                scope_circle_id: None,
+                circle_members: BTreeSet::new(),
+            }),
+            watch_levels: BTreeMap::new(),
+            active_assignees: BTreeSet::new(),
+        }
+    }
+
+    fn watching(
+        mut basis: NotificationFanoutBasis,
+        watches: &[(&ActorId, &str)],
+    ) -> NotificationFanoutBasis {
+        for (watcher, level) in watches {
+            basis
+                .watch_levels
+                .insert((*watcher).clone(), (*level).to_owned());
+        }
+        basis
+    }
+
     #[test]
-    fn schedule_patch_detection_accepts_only_canonical_patch_values() {
-        assert!(patch_touches_calendar(&json!({
-            "patch": {"metadata": {"fields": {"calendar": {"start": "now"}}}}
-        })));
+    fn plain_message_does_not_notify_unwatched_members() {
+        let (alice, bob, carol) = (actor(ALICE), actor(BOB), actor(CAROL));
+        let basis = watching(basis(&[&alice, &bob, &carol]), &[(&carol, "participating")]);
+        assert!(
+            message("000000009971", alice.clone(), &[])
+                .plan(&basis)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn plain_message_notifies_only_joined_local_all_watchers() {
+        let (alice, bob, carol, dave) = (actor(ALICE), actor(BOB), actor(CAROL), actor(DAVE));
+        let bob_elsewhere = actor_at(BOB, OTHER_STATION);
+        let basis = watching(
+            basis(&[&alice, &bob, &carol, &bob_elsewhere]),
+            &[
+                (&alice, "all"),
+                (&bob, "all"),
+                (&carol, "participating"),
+                (&dave, "all"),
+                (&bob_elsewhere, "all"),
+            ],
+        );
+        assert_eq!(
+            message("000000009953", alice.clone(), &[]).plan(&basis),
+            vec![(bob, NotificationKind::Message)],
+            "the sender, a non-watcher, a non-member and another Station's account get no row"
+        );
+    }
+
+    #[test]
+    fn message_without_a_current_strand_fails_closed() {
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let mut basis = watching(basis(&[&alice, &bob]), &[(&bob, "all")]);
+        basis.strand = None;
+        assert!(
+            message("000000009956", alice.clone(), &[&bob])
+                .plan(&basis)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn mention_is_the_only_row_for_a_mentioned_watcher() {
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let basis = watching(basis(&[&alice, &bob]), &[(&bob, "all")]);
+        assert_eq!(
+            message("000000009973", alice.clone(), &[&bob]).plan(&basis),
+            vec![(bob, NotificationKind::Mention)]
+        );
+    }
+
+    #[test]
+    fn muted_watch_suppresses_a_direct_mention() {
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let basis = watching(basis(&[&alice, &bob]), &[(&bob, "muted")]);
+        assert!(
+            message("000000009975", alice.clone(), &[&bob])
+                .plan(&basis)
+                .is_empty()
+        );
+    }
+
+    /// `strand-and-message.md` section 9.4.2: the mention target is one
+    /// complete account. The same principal joined from another Station is a
+    /// different subject and is never mentioned by it.
+    #[test]
+    fn mention_does_not_reach_the_same_principal_at_another_station() {
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let bob_elsewhere = actor_at(BOB, OTHER_STATION);
+        let basis = basis(&[&alice, &bob, &bob_elsewhere]);
+        assert_eq!(
+            message("000000009974", alice.clone(), &[&bob]).plan(&basis),
+            vec![(bob, NotificationKind::Mention)]
+        );
+    }
+
+    #[test]
+    fn circle_scoped_strand_reaches_only_circle_members() {
+        let (alice, bob, carol) = (actor(ALICE), actor(BOB), actor(CAROL));
+        let mut basis = watching(basis(&[&alice, &bob, &carol]), &[(&carol, "all")]);
+        basis.strand = Some(NotificationStrandScope {
+            realm_id: realm_id(),
+            active: true,
+            scope_circle_id: Some(arkret_wire::CircleId::new(CIRCLE).unwrap()),
+            circle_members: [alice.clone(), bob.clone()].into_iter().collect(),
+        });
+        assert_eq!(
+            message("000000009976", alice.clone(), &[&bob, &carol]).plan(&basis),
+            vec![(bob, NotificationKind::Mention)],
+            "a mentioned or watching Realm member outside the Circle gets no row"
+        );
+    }
+
+    #[test]
+    fn assignment_notifies_a_visible_unmuted_assignee_of_an_active_strand() {
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let members = basis(&[&alice, &bob]);
+        assert_eq!(
+            assignment("000000009994", alice.clone(), &bob).plan(&members),
+            vec![(bob.clone(), NotificationKind::Assignment)]
+        );
+        assert!(
+            assignment("000000009995", bob.clone(), &bob)
+                .plan(&members)
+                .is_empty(),
+            "self-assignment does not notify"
+        );
+        let muted = watching(members.clone(), &[(&bob, "muted")]);
+        assert!(
+            assignment("000000009996", alice.clone(), &bob)
+                .plan(&muted)
+                .is_empty()
+        );
+        let mut archived = members;
+        archived.strand.as_mut().unwrap().active = false;
+        assert!(
+            assignment("000000009993", alice.clone(), &bob)
+                .plan(&archived)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn due_date_update_notifies_assignees_and_all_watchers() {
+        let (alice, bob, carol, dave) = (actor(ALICE), actor(BOB), actor(CAROL), actor(DAVE));
+        let mut basis = watching(
+            basis(&[&alice, &bob, &carol, &dave]),
+            &[(&carol, "all"), (&dave, "participating")],
+        );
+        basis.active_assignees = [alice.clone(), bob.clone()].into_iter().collect();
+        let update = strand_update(
+            "000000009998",
+            alice.clone(),
+            json!({"metadata.fields.due_at": {"$op": "set", "value": "2026-07-06T00:00:00.000Z"}}),
+        );
+        let mut planned = update.plan(&basis);
+        planned.sort_by_key(|(recipient, _)| recipient.to_string());
+        let mut expected = vec![
+            (bob, NotificationKind::Schedule),
+            (carol, NotificationKind::Schedule),
+        ];
+        expected.sort_by_key(|(recipient, _)| recipient.to_string());
+        assert_eq!(planned, expected);
+    }
+
+    #[test]
+    fn non_due_date_changes_never_emit_a_schedule_notification() {
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let mut basis = basis(&[&alice, &bob]);
+        basis.active_assignees = [bob.clone()].into_iter().collect();
+        let calendar = strand_update(
+            "000000009933",
+            alice.clone(),
+            json!({"metadata.fields.calendar": {"$op": "set", "value": {"start": "2026-07-06T09:00:00"}}}),
+        );
+        assert!(calendar.plan(&basis).is_empty());
+        let rsvp = Fixture::new(
+            "000000009948",
+            alice.clone(),
+            EventKind::RsvpSet,
+            json!({"event_ref": STRAND}),
+        );
+        assert!(rsvp.plan(&basis).is_empty());
+    }
+
+    #[test]
+    fn due_date_patch_detection_accepts_only_canonical_patch_values() {
         assert!(patch_touches_due_schedule(&json!({
             "patch": {"metadata.fields": {
                 "$op": "set",
                 "value": {"due_at": "2026-09-01T00:00:00.000Z"}
             }}
         })));
-        assert!(!patch_touches_calendar(&json!({
-            "patch": {"metadata": {"$value": {"fields": {"calendar": {}}}}}
+        assert!(patch_touches_due_schedule(&json!({
+            "patch": {"metadata": {"fields": {"due_at": "2026-09-01T00:00:00.000Z"}}}
+        })));
+        assert!(!patch_touches_due_schedule(&json!({
+            "patch": {"metadata.fields": {"$op": "unset", "value": {"due_at": null}}}
         })));
         assert!(!patch_touches_due_schedule(&json!({
             "patch": {"metadata.fields": {"fields": {"due_at": "unstructured"}}}
         })));
     }
 
-    fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
-        let principal = arkret_wire::DidCoreId::new(principal).unwrap();
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            principal,
-            crate::test_event::station_id(),
-        ))
-    }
-
-    fn fixture_operation(
-        operation_id: arkret_identifiers::OperationId,
-        realm_id: RealmId,
-        event_kind: &str,
-        payload: Value,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
-            operation_id,
-            realm_id,
-            event_kind,
-            payload,
-        );
-        operation.context.sender =
-            fixture_actor(operation.context.sender.signing_principal_id().as_str());
-        operation
-    }
-
-    async fn notifications_for(state: &AppState, recipient_id: &str) -> Vec<Value> {
+    async fn notifications_for(state: &AppState, recipient: &ActorId) -> Vec<Value> {
         state
             .deliveries()
             .list_recipient_notifications(
                 soland_services::delivery::ListRecipientNotificationsQuery {
-                    recipient_id: fixture_actor(recipient_id).to_string(),
+                    recipient_id: recipient.to_string(),
                 },
             )
             .await
@@ -720,85 +832,31 @@ mod tests {
             .collect()
     }
 
-    fn seed_realm_members(state: &AppState, realm_id: &str, members: &[&str]) {
-        let realm_id_typed = RealmId::new(realm_id.to_owned()).expect("valid realm id");
-        let mut entry = crate::state::RealmDirectoryEntry::new(
-            realm_id_typed,
-            "Notify test",
-            soland_services::events::DirectoryProvenance::LocalOnly,
-        );
-        for member in members {
-            entry.members.insert(
-                arkret_identifiers::DidCoreId::new((*member).to_owned()).expect("valid member id"),
-            );
-            let actor = fixture_actor(member).to_string();
-            state.test_projection().lock().members.insert(
-                (realm_id.to_owned(), actor.clone()),
-                soland_domain::reducer::SolandMembershipState {
-                    member: actor,
-                    realm_id: realm_id.to_owned(),
-                    state: "join".to_owned(),
-                    role: "member".to_owned(),
-                    membership_event_ref: None,
-                    invited_at: None,
-                    joined_at: chrono::Utc::now(),
-                    updated_at: chrono::Utc::now(),
-                    reason: None,
-                },
-            );
-        }
-        state.realm_directory().upsert(entry);
-    }
+    #[tokio::test]
+    async fn watch_all_message_row_is_persisted_with_its_source_identity() {
+        let state = test_state();
+        let (alice, bob) = (actor(ALICE), actor(BOB));
+        let basis = watching(basis(&[&alice, &bob]), &[(&bob, "all")]);
+        let delivered = message("000000009952", alice.clone(), &[]);
+        fan_out(&state, &delivered.source(), &basis).await;
 
-    /// Join one member under an explicit Station so a test can hold two
-    /// distinct accounts that share a principal component.
-    fn seed_realm_member_at_station(
-        state: &AppState,
-        realm_id: &str,
-        principal: &str,
-        station: &str,
-    ) -> arkret_wire::ActorId {
-        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(principal).expect("valid principal id"),
-            arkret_wire::DidCoreId::new(station).expect("valid station id"),
-        ));
-        let member = actor.to_string();
-        state.test_projection().lock().members.insert(
-            (realm_id.to_owned(), member.clone()),
-            soland_domain::reducer::SolandMembershipState {
-                member,
-                realm_id: realm_id.to_owned(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                membership_event_ref: None,
-                invited_at: None,
-                joined_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                reason: None,
-            },
+        let rows = notifications_for(&state, &bob).await;
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row["notification_kind"], "message");
+        assert_eq!(row["strand_id"], STRAND);
+        assert_eq!(row["track_name"], "discussion");
+        assert_eq!(row["source_event_id"], delivered.event_id.as_str());
+        assert_eq!(
+            row["source_ref"],
+            arkret_identifiers::MessageId::from_event_id(&delivered.event_id).as_str()
         );
-        actor
-    }
-
-    async fn notifications_for_actor(state: &AppState, actor: &arkret_wire::ActorId) -> Vec<Value> {
-        state
-            .deliveries()
-            .list_recipient_notifications(
-                soland_services::delivery::ListRecipientNotificationsQuery {
-                    recipient_id: actor.to_string(),
-                },
-            )
-            .await
-            .expect("notification query")
-            .into_iter()
-            .map(|record| {
-                serde_json::to_value(record.notification).expect("encode typed notification")
-            })
-            .collect()
+        assert_eq!(row["preview"]["body"], "hello");
+        assert!(notifications_for(&state, &alice).await.is_empty());
     }
 
     async fn put_agent(state: &AppState, agent: &str, controller: &str, verification_method: &str) {
-        let controller_account = fixture_actor(controller).as_account_id().unwrap().clone();
+        let controller_account = actor(controller).as_account_id().unwrap().clone();
         state
             .identities()
             .save_account(soland_services::identity::AccountProfileState {
@@ -817,7 +875,7 @@ mod tests {
         let mut record = soland_services::identity::AgentPairingState::new(
             agent.to_owned(),
             controller.to_owned(),
-            "ak:realm:ATWQEEyC8UZTZ3u0Vp5MrgAI7TdaZ7A8gEomiO5_Q9Vy".to_owned(),
+            REALM.to_owned(),
             arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
             arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
             chrono::Utc::now(),
@@ -840,10 +898,11 @@ mod tests {
             .expect("agent record");
     }
 
-    async fn set_realm_selection(
+    async fn set_selection(
         state: &AppState,
-        realm_id: &str,
-        agent: &str,
+        scope: Value,
+        scope_kind: &str,
+        scope_key: String,
         accept_third_party_mention: bool,
         expected_version: u64,
     ) {
@@ -852,11 +911,11 @@ mod tests {
                 .agent_participations()
                 .compare_and_swap_selection(
                     json!({
-                        "agent_id": agent,
-                        "scope_kind": "realm",
-                        "scope_key": crate::routing::agent_participation::realm_scope_key(realm_id),
-                        "realm_id": realm_id,
-                        "scope": { "kind": "realm", "realm_id": realm_id },
+                        "agent_id": AGENT,
+                        "scope_kind": scope_kind,
+                        "scope_key": scope_key,
+                        "realm_id": REALM,
+                        "scope": scope,
                         "version": expected_version + 1,
                         "reply_message": true,
                         "reaction_add": false,
@@ -871,684 +930,132 @@ mod tests {
         );
     }
 
-    async fn set_circle_selection(
-        state: &AppState,
-        realm_id: &str,
-        circle_id: &str,
-        agent: &str,
-        accept_third_party_mention: bool,
-    ) {
-        assert!(
-            state
-                .agent_participations()
-                .compare_and_swap_selection(
-                    json!({
-                        "agent_id": agent,
-                        "scope_kind": "circle",
-                        "scope_key": crate::routing::agent_participation::circle_scope_key(
-                            realm_id,
-                            circle_id,
-                        ),
-                        "realm_id": realm_id,
-                        "scope": { "kind": "circle", "realm_id": realm_id, "circle_id": circle_id },
-                        "version": 1,
-                        "reply_message": true,
-                        "reaction_add": false,
-                        "reaction_remove": false,
-                        "accept_third_party_mention": accept_third_party_mention,
-                        "act_on_behalf": false,
-                    }),
-                    0
-                )
-                .await
-                .expect("agent participation circle selection")
-        );
-    }
-
-    async fn put_circle_ceiling(
-        state: &AppState,
-        realm_id: &str,
-        circle_id: &str,
-        accept_third_party_mention: bool,
-    ) {
-        state
-            .agent_participations()
-            .store_ceiling(json!({
-                "scope_kind": "circle",
-                "scope_key": crate::routing::agent_participation::circle_scope_key(
-                    realm_id,
-                    circle_id,
-                ),
-                "realm_id": realm_id,
-                "reply_message": true,
-                "reaction_add": false,
-                "reaction_remove": false,
-                "accept_third_party_mention": accept_third_party_mention,
-                "act_on_behalf": false,
-            }))
-            .await
-            .expect("agent participation circle ceiling");
-    }
-
-    fn plain_message(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        plain_message_with_strand(realm_id, seed, sender, None)
-    }
-
-    fn fixture_event_id(seed: &str) -> arkret_identifiers::EventId {
-        let digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(seed))
-            .expect("fixture digest is typed");
-        arkret_identifiers::EventId::from_event_digest(&digest)
-            .expect("SHA-256 is a registered Event digest suite")
-    }
-
-    fn plain_message_with_strand(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-        strand_id: Option<&str>,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let event_id = fixture_event_id(seed);
-        let mut payload = json!({
-            "sender": sender,
-            "event_id": event_id,
-            "content": {
-                "body": "hello"
-            }
-        });
-        if let Some(strand_id) = strand_id {
-            payload
-                .as_object_mut()
-                .expect("message payload object")
-                .insert("strand_id".to_owned(), json!(strand_id));
-        }
-        fixture_operation(
-            arkret_identifiers::OperationId::new(format!(
-                "ak:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MessageCreate.as_str(),
-            payload,
+    async fn set_realm_selection(state: &AppState, accept: bool, expected_version: u64) {
+        set_selection(
+            state,
+            json!({"kind": "realm", "realm_id": REALM}),
+            "realm",
+            realm_scope_key(REALM),
+            accept,
+            expected_version,
         )
-    }
-
-    fn seed_strand_watch(state: &AppState, strand_id: &str, actor_id: &str, level: &str) {
-        let actor_id = fixture_actor(actor_id).to_string();
-        state.test_projection().lock().strand_watches.insert(
-            (strand_id.to_owned(), actor_id.to_owned()),
-            soland_domain::reducer::StrandWatchProjection {
-                strand_id: strand_id.to_owned(),
-                actor_id: actor_id.to_owned(),
-                level: Some(level.to_owned()),
-                level_public: false,
-                updated_at: chrono::Utc::now(),
-                committed_ref: None,
-            },
-        );
-    }
-
-    fn seed_strand_scope(state: &AppState, realm_id: &str, strand_id: &str, circle_id: &str) {
-        state.test_projection().lock().strands.insert(
-            strand_id.to_owned(),
-            soland_domain::reducer::StrandProjection {
-                strand_id: strand_id.to_owned(),
-                realm_id: realm_id.to_owned(),
-                tracks: Default::default(),
-                title: "Scoped".to_owned(),
-                summary: None,
-                content: None,
-                encrypted_content: None,
-                fields: Default::default(),
-                state: soland_domain::reducer::ObjectLifecycleState::Active,
-                state_changed_at: None,
-                stage: None,
-                stage_changed_at: None,
-                created_by: "ak:did_core:web:alice.example".to_owned(),
-                created_at: chrono::Utc::now(),
-                updated_by: None,
-                updated_at: None,
-                schema_refs: Vec::new(),
-                schedule_revision_source: None,
-                scope_circle_id: Some(circle_id.to_owned()),
-            },
-        );
-    }
-
-    fn seed_strand(state: &AppState, realm_id: &str, strand_id: &str) {
-        state.test_projection().lock().strands.insert(
-            strand_id.to_owned(),
-            soland_domain::reducer::StrandProjection {
-                strand_id: strand_id.to_owned(),
-                realm_id: realm_id.to_owned(),
-                tracks: Default::default(),
-                title: "Task".to_owned(),
-                summary: None,
-                content: None,
-                encrypted_content: None,
-                fields: Default::default(),
-                state: soland_domain::reducer::ObjectLifecycleState::Active,
-                state_changed_at: None,
-                stage: None,
-                stage_changed_at: None,
-                created_by: "ak:did_core:web:alice.example".to_owned(),
-                created_at: chrono::Utc::now(),
-                updated_by: None,
-                updated_at: None,
-                schema_refs: Vec::new(),
-                schedule_revision_source: None,
-                scope_circle_id: None,
-            },
-        );
-    }
-
-    fn relation_create(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-        strand_id: &str,
-        assignee: &str,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let event_id = fixture_event_id(seed);
-        fixture_operation(
-            arkret_identifiers::OperationId::new(format!(
-                "ak:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::RelationCreate.as_str(),
-            // `relation_create_payload` requires the tuple conflict domain and
-            // an absent-row `expected_revision`; `relation_create_object` bans
-            // `id`, so the Relation id is `retype(event_id)`.
-            json!({
-                "sender": sender,
-                "event_id": event_id,
-                "primary_conflict_domain": {
-                    "domain_kind": "tuple",
-                    "relation_kind": "assigned_to",
-                    "from_ref": strand_id,
-                    "to_ref": fixture_actor(assignee),
-                },
-                "expected_revision": null,
-                "relation": {
-                    "relation_kind": "assigned_to",
-                    "from_ref": strand_id,
-                    "to_ref": fixture_actor(assignee),
-                }
-            }),
-        )
-    }
-
-    fn schedule_update(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-        strand_id: &str,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let event_id = fixture_event_id(seed);
-        fixture_operation(
-            arkret_identifiers::OperationId::new(format!(
-                "ak:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::StrandUpdate.as_str(),
-            json!({
-                "sender": sender,
-                "event_id": event_id,
-                "target_ref": strand_id,
-                "patch": {
-                    "metadata.fields.due_at": {
-                        "$op": "set",
-                        "value": "2026-07-06T00:00:00.000Z"
-                    }
-                }
-            }),
-        )
-    }
-
-    fn rsvp_update(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-        strand_id: &str,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let event_id = fixture_event_id(seed);
-        fixture_operation(
-            arkret_identifiers::OperationId::new(format!(
-                "ak:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::RsvpSet.as_str(),
-            json!({
-                "sender": sender,
-                "event_id": event_id,
-                "event_ref": strand_id,
-                "occurrence": null,
-                "entry": {
-                    "schedule_basis_refs": [
-                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-                    ],
-                    "response": {"status": "accepted"}
-                }
-            }),
-        )
-    }
-
-    fn mention_message(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-        agent: &str,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        mention_message_with_strand(realm_id, seed, sender, agent, None)
-    }
-
-    fn mention_message_with_strand(
-        realm_id: &str,
-        seed: &str,
-        sender: &str,
-        agent: &str,
-        strand_id: Option<&str>,
-    ) -> arkret_event_draft::ProjectedEventOperation {
-        let event_id = fixture_event_id(seed);
-        let subject_account_id = fixture_actor(agent)
-            .as_account_id()
-            .cloned()
-            .expect("mention subject is an account actor");
-        let mut payload = json!({
-            "sender": sender,
-            "event_id": event_id,
-            "content": {
-                "body": "ping",
-                "mentions": [{
-                    "kind": "mention",
-                    "subject_account_id": subject_account_id,
-                    "mention_text_original": "@agent"
-                }]
-            }
-        });
-        if let Some(strand_id) = strand_id {
-            payload
-                .as_object_mut()
-                .expect("message payload object")
-                .insert("strand_id".to_owned(), json!(strand_id));
-        }
-        fixture_operation(
-            arkret_identifiers::OperationId::new(format!(
-                "ak:operation:01904100-0000-7000-8000-{seed}"
-            ))
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::MessageCreate.as_str(),
-            payload,
-        )
-    }
-
-    #[tokio::test]
-    async fn plain_message_does_not_notify_unmentioned_members_by_default() {
-        let state = test_state();
-        let realm_id = "ak:realm:AauAoPMR2z4BNQITCfoc7MFdCoZUkuRA2F1Ar8_Y5wGi";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        let carol = "ak:did_core:web:carol.example";
-        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
-
-        let delivered = plain_message(realm_id, "000000009971", alice);
-        dispatch_message_notifications(&state, &delivered).await;
-
-        assert!(notifications_for(&state, alice).await.is_empty());
-        for recipient in [bob, carol] {
-            assert!(notifications_for(&state, recipient).await.is_empty());
-        }
-    }
-
-    #[tokio::test]
-    async fn plain_message_notifies_all_watchers_only() {
-        let state = test_state();
-        let realm_id = "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh";
-        let strand_id = "ak:strand:AYzqeQ1hbLexQxBuFmhDzV2R1jsnUEvB0ELJR10hOgtK";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        let carol = "ak:did_core:web:carol.example";
-        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
-        seed_strand(&state, realm_id, strand_id);
-        seed_strand_watch(&state, strand_id, bob, "all");
-        seed_strand_watch(&state, strand_id, carol, "participating");
-
-        let delivered = plain_message_with_strand(realm_id, "000000009953", alice, Some(strand_id));
-        dispatch_message_notifications(&state, &delivered).await;
-
-        let bob_notifications = notifications_for(&state, bob).await;
-        assert_eq!(bob_notifications.len(), 1);
-        assert_eq!(
-            bob_notifications[0]
-                .get("notification_kind")
-                .and_then(Value::as_str),
-            Some("message")
-        );
-        assert_eq!(
-            bob_notifications[0]
-                .get("strand_id")
-                .and_then(Value::as_str),
-            Some(strand_id)
-        );
-        assert!(notifications_for(&state, carol).await.is_empty());
-        assert!(notifications_for(&state, alice).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn plain_message_all_watcher_falls_back_to_realm_access_when_strand_missing() {
-        let state = test_state();
-        let realm_id = "ak:realm:Adyav4arFL7WanivBY0R2rPKamnwP3Ufm3id4lK6RvLC";
-        let strand_id = "ak:strand:ATzedkQcDEQSoizsKm0tLBqVS7MdSmwECSr83UPmfDCv";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        let mallory = "ak:did_core:web:mallory.example";
-        seed_realm_members(&state, realm_id, &[alice, bob]);
-        seed_strand_watch(&state, strand_id, bob, "all");
-        seed_strand_watch(&state, strand_id, mallory, "all");
-
-        let delivered = plain_message_with_strand(realm_id, "000000009956", alice, Some(strand_id));
-        dispatch_message_notifications(&state, &delivered).await;
-
-        assert_eq!(notifications_for(&state, bob).await.len(), 1);
-        assert!(notifications_for(&state, mallory).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn member_mention_is_single_mention_notification() {
-        let state = test_state();
-        let realm_id = "ak:realm:AQXbZyLQDsJ3HgYeoGi2pg7v2-EAb87QmzHIKinXcPx7";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        seed_realm_members(&state, realm_id, &[alice, bob]);
-
-        let delivered = mention_message(realm_id, "000000009973", alice, bob);
-        dispatch_message_notifications(&state, &delivered).await;
-
-        let notifications = notifications_for(&state, bob).await;
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(
-            notifications[0]
-                .get("notification_kind")
-                .and_then(Value::as_str),
-            Some("mention")
-        );
-    }
-
-    /// `strand-and-message.md` §9.4.2 and `conformance-vectors.md` §11.1.1
-    /// step 6 — the mention target is one complete account. A member that
-    /// joined the same Realm with the same principal but another Station is a
-    /// different subject: it MUST NOT receive the mention notification, and
-    /// the addressed account still MUST.
-    #[tokio::test]
-    async fn mention_does_not_notify_the_same_principal_at_another_station() {
-        let state = test_state();
-        let realm_id = "ak:realm:AQXbZyLXDsJ3IQYeoGi2pg7v2-EAb87QmzHIKinXcPx7";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        seed_realm_members(&state, realm_id, &[alice, bob]);
-        let bob_elsewhere = seed_realm_member_at_station(
-            &state,
-            realm_id,
-            bob,
-            "ak:did_core:web:other-station.example",
-        );
-
-        let delivered = mention_message(realm_id, "000000009974", alice, bob);
-        dispatch_message_notifications(&state, &delivered).await;
-
-        assert_eq!(notifications_for(&state, bob).await.len(), 1);
-        assert!(
-            notifications_for_actor(&state, &bob_elsewhere)
-                .await
-                .is_empty(),
-            "a same-principal account at another Station must not be mentioned"
-        );
-    }
-
-    #[tokio::test]
-    async fn assignment_relation_create_notifies_new_assignee() {
-        let state = test_state();
-        let realm_id = "ak:realm:AfiUdT1FiCuG9vrwdBoVapciBl_9lj1WXVvcQiqjwjL1";
-        let strand_id = "ak:strand:ATOuTJ1jIr62GMxyz9DvXbMreJu0R34jc4VIYM4ArDuj";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        seed_realm_members(&state, realm_id, &[alice, bob]);
-        seed_strand(&state, realm_id, strand_id);
-
-        let operation = relation_create(realm_id, "000000009994", alice, strand_id, bob);
-        state.projections().apply(&operation, state.hlc());
-        dispatch_assignment_notifications(&state, &operation).await;
-
-        let notifications = notifications_for(&state, bob).await;
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(
-            notifications[0]
-                .get("notification_kind")
-                .and_then(Value::as_str),
-            Some("assignment")
-        );
-        assert_eq!(
-            notifications[0].get("strand_id").and_then(Value::as_str),
-            Some(strand_id)
-        );
-    }
-
-    #[tokio::test]
-    async fn schedule_update_notifies_assignees_and_all_watchers() {
-        let state = test_state();
-        let realm_id = "ak:realm:Ae_gn71jX8JjmWkvGzHGOxtSJGQ6O5zlLx95wejUyP2q";
-        let strand_id = "ak:strand:AYXsQsNFlX2cPilpTg9wFxq8ZR7FMXe2x3oUUPW1lKze";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        let carol = "ak:did_core:web:carol.example";
-        seed_realm_members(&state, realm_id, &[alice, bob, carol]);
-        seed_strand(&state, realm_id, strand_id);
-        let assignment = relation_create(realm_id, "000000009997", alice, strand_id, bob);
-        state.projections().apply(&assignment, state.hlc());
-        seed_strand_watch(&state, strand_id, carol, "all");
-
-        let operation = schedule_update(realm_id, "000000009998", alice, strand_id);
-        dispatch_schedule_notifications(&state, &operation).await;
-
-        for recipient in [bob, carol] {
-            let notifications = notifications_for(&state, recipient).await;
-            assert_eq!(
-                notifications.len(),
-                1,
-                "{recipient} should receive schedule"
-            );
-            assert_eq!(
-                notifications[0]
-                    .get("notification_kind")
-                    .and_then(Value::as_str),
-                Some("schedule")
-            );
-        }
-        assert!(notifications_for(&state, alice).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn calendar_schedule_fanout_fails_closed_without_private_policy_projection() {
-        let state = test_state();
-        let realm_id = "ak:realm:ARj7PZkho4xcjXfMvde5k0hNB7YBVc6TGbS_IQvAuKxh";
-        let strand_id = "ak:strand:AVYkqAhEtUpBukcTx8idL_KiAIF0h1LWipAY-VigqJZZ";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        seed_realm_members(&state, realm_id, &[alice, bob]);
-        seed_strand(&state, realm_id, strand_id);
-        let assignment = relation_create(realm_id, "000000009932", alice, strand_id, bob);
-        state.projections().apply(&assignment, state.hlc());
-        let operation = fixture_operation(
-            arkret_identifiers::OperationId::new(
-                "ak:operation:01904100-0000-7000-8000-000000009933".to_owned(),
-            )
-            .unwrap(),
-            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::EventKind::StrandUpdate.as_str(),
-            json!({
-                "sender": alice,
-                "event_id": "ak:event:Aa_qcpHgRDcZFoRX6jMUFjWIJktoe_GppP1Pl1zg0pGs",
-                "target_ref": strand_id,
-                "patch": {
-                    "metadata.fields.calendar": {
-                        "$op": "set",
-                        "value": {
-                            "start": "2026-07-06T09:00:00",
-                            "end": "2026-07-06T10:00:00",
-                            "timezone": "Etc/UTC",
-                            "tzdb_version": "2025b",
-                            "all_day": false,
-                            "status": "confirmed"
-                        }
-                    }
-                }
-            }),
-        );
-
-        dispatch_schedule_notifications(&state, &operation).await;
-
-        assert!(notifications_for(&state, bob).await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn rsvp_change_never_emits_a_schedule_notification() {
-        let state = test_state();
-        let realm_id = "ak:realm:AaQmWDnuj2L95eyMHnDSAuVVh6dlrGqPknIPvBibhOmJ";
-        let strand_id = "ak:strand:AWpZLCspUVLBed5WbRkPgTNizbqjIiZrgmHKrcZ1dLGp";
-        let alice = "ak:did_core:web:alice.example";
-        let bob = "ak:did_core:web:bob.example";
-        seed_realm_members(&state, realm_id, &[alice, bob]);
-        seed_strand(&state, realm_id, strand_id);
-        let operation = rsvp_update(realm_id, "000000009948", alice, strand_id);
-
-        dispatch_schedule_notifications(&state, &operation).await;
-
-        assert!(notifications_for(&state, bob).await.is_empty());
+        .await;
     }
 
     #[tokio::test]
     async fn agent_third_party_mention_gate_is_non_retroactive() {
         let state = test_state();
-        let realm_id = "ak:realm:Ae34nQKc2ovP6XDJ1VP9lVATdzZ-6obodata7oQp4ucY";
-        let controller = "ak:did_core:web:alice.example";
-        let third_party = "ak:did_core:web:bob.example";
-        let agent = "ak:did_core:webvh:z6mkalicesummary";
-        seed_realm_members(&state, realm_id, &[controller, third_party, agent]);
+        let (controller, third_party, agent) = (actor(ALICE), actor(BOB), actor(AGENT));
+        let basis = basis(&[&controller, &third_party, &agent]);
         put_agent(
             &state,
-            agent,
-            controller,
+            AGENT,
+            ALICE,
             "did:webvh:z6mkalicesummary:agents.example#managed-controller",
         )
         .await;
-        set_realm_selection(&state, realm_id, agent, false, 0).await;
+        set_realm_selection(&state, false, 0).await;
 
-        let suppressed_event_id = fixture_event_id("000000009982").to_string();
-        let suppressed = mention_message(realm_id, "000000009982", third_party, agent);
-        dispatch_message_notifications(&state, &suppressed).await;
-        assert!(notifications_for(&state, agent).await.is_empty());
+        let suppressed = message("000000009982", third_party.clone(), &[&agent]);
+        fan_out(&state, &suppressed.source(), &basis).await;
+        assert!(notifications_for(&state, &agent).await.is_empty());
 
-        let controller_event_id = fixture_event_id("000000009983").to_string();
-        let controller_mention = mention_message(realm_id, "000000009983", controller, agent);
-        dispatch_message_notifications(&state, &controller_mention).await;
-        assert_eq!(notifications_for(&state, agent).await.len(), 1);
+        let by_controller = message("000000009983", controller.clone(), &[&agent]);
+        fan_out(&state, &by_controller.source(), &basis).await;
+        assert_eq!(notifications_for(&state, &agent).await.len(), 1);
 
-        let mut foreign_controller_mention =
-            mention_message(realm_id, "000000009986", controller, agent);
-        foreign_controller_mention.context.sender =
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_wire::DidCoreId::new(controller).unwrap(),
-                arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-            ));
-        dispatch_message_notifications(&state, &foreign_controller_mention).await;
+        let foreign_controller = message("000000009986", actor_at(ALICE, OTHER_STATION), &[&agent]);
+        fan_out(&state, &foreign_controller.source(), &basis).await;
         assert_eq!(
-            notifications_for(&state, agent).await.len(),
+            notifications_for(&state, &agent).await.len(),
             1,
             "the same principal at another Station does not bypass the third-party mention gate"
         );
 
-        set_realm_selection(&state, realm_id, agent, true, 1).await;
-        let after_flip = notifications_for(&state, agent).await;
-        assert_eq!(after_flip.len(), 1);
-        assert!(after_flip.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str) == Some(controller_event_id.as_str())
-        }));
-
-        let unknown_strand = mention_message_with_strand(
-            realm_id,
-            "000000009985",
-            third_party,
-            agent,
-            Some("ak:strand:AYw7orP7RhgsjMax3dy_Y7I4L3nP34aEH-nMPH-flI1k"),
+        set_realm_selection(&state, true, 1).await;
+        let after_flip = notifications_for(&state, &agent).await;
+        assert_eq!(
+            after_flip.len(),
+            1,
+            "a flipped selection is not retroactive"
         );
-        dispatch_message_notifications(&state, &unknown_strand).await;
-        assert_eq!(notifications_for(&state, agent).await.len(), 1);
+        assert_eq!(
+            after_flip[0]["source_event_id"],
+            by_controller.event_id.as_str()
+        );
 
-        let delivered_event_id = fixture_event_id("000000009984").to_string();
-        let delivered = mention_message(realm_id, "000000009984", third_party, agent);
-        dispatch_message_notifications(&state, &delivered).await;
-        let notifications = notifications_for(&state, agent).await;
-        assert_eq!(notifications.len(), 2);
-        assert!(notifications.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str) == Some(delivered_event_id.as_str())
-        }));
-        assert!(!notifications.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str) == Some(suppressed_event_id.as_str())
-        }));
+        let delivered = message("000000009984", third_party.clone(), &[&agent]);
+        fan_out(&state, &delivered.source(), &basis).await;
+        let rows = notifications_for(&state, &agent).await;
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .any(|row| row["source_event_id"] == delivered.event_id.as_str())
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row["source_event_id"] == suppressed.event_id.as_str())
+        );
     }
 
     #[tokio::test]
     async fn strand_mention_uses_circle_effective_participation() {
         let state = test_state();
-        let realm_id = "ak:realm:AakPvoRAhodng9IHc5ZdoFQD-VzTa8ev2gXDgp_ivtfK";
-        let circle_id = "ak:circle:Aecu1rM_o2niy2h_rtK9KBChw8L-QoAsngbVoP1bpNrl";
-        let strand_id = "ak:strand:AWfDaIWeo-OwLmokFm6boWYM7iYeSPeyw_TUiOku1wdZ";
-        let controller = "ak:did_core:web:alice.example";
-        let third_party = "ak:did_core:web:bob.example";
-        let agent = "ak:did_core:webvh:z6mkalicesummary";
-        seed_realm_members(&state, realm_id, &[controller, third_party, agent]);
+        let (controller, third_party, agent) = (actor(ALICE), actor(BOB), actor(AGENT));
+        let mut basis = basis(&[&controller, &third_party, &agent]);
+        basis.strand = Some(NotificationStrandScope {
+            realm_id: realm_id(),
+            active: true,
+            scope_circle_id: Some(arkret_wire::CircleId::new(CIRCLE).unwrap()),
+            circle_members: [controller.clone(), third_party.clone(), agent.clone()]
+                .into_iter()
+                .collect(),
+        });
         put_agent(
             &state,
-            agent,
-            controller,
+            AGENT,
+            ALICE,
             "did:webvh:z6mkalicesummary:agents.example#managed-controller",
         )
         .await;
-        seed_strand_scope(&state, realm_id, strand_id, circle_id);
-        set_realm_selection(&state, realm_id, agent, false, 0).await;
-        set_circle_selection(&state, realm_id, circle_id, agent, true).await;
+        set_realm_selection(&state, false, 0).await;
+        set_selection(
+            &state,
+            json!({"kind": "circle", "realm_id": REALM, "circle_id": CIRCLE}),
+            "circle",
+            circle_scope_key(REALM, CIRCLE),
+            true,
+            0,
+        )
+        .await;
 
-        let delivered = mention_message_with_strand(
-            realm_id,
-            "000000009990",
-            third_party,
-            agent,
-            Some(strand_id),
-        );
-        dispatch_message_notifications(&state, &delivered).await;
-        assert_eq!(notifications_for(&state, agent).await.len(), 1);
+        let delivered = message("000000009990", third_party.clone(), &[&agent]);
+        fan_out(&state, &delivered.source(), &basis).await;
+        assert_eq!(notifications_for(&state, &agent).await.len(), 1);
 
-        put_circle_ceiling(&state, realm_id, circle_id, false).await;
-        let capped = mention_message_with_strand(
-            realm_id,
-            "000000009991",
-            third_party,
-            agent,
-            Some(strand_id),
+        state
+            .agent_participations()
+            .store_ceiling(json!({
+                "scope_kind": "circle",
+                "scope_key": circle_scope_key(REALM, CIRCLE),
+                "realm_id": REALM,
+                "reply_message": true,
+                "reaction_add": false,
+                "reaction_remove": false,
+                "accept_third_party_mention": false,
+                "act_on_behalf": false,
+            }))
+            .await
+            .expect("agent participation circle ceiling");
+        let capped = message("000000009991", third_party.clone(), &[&agent]);
+        fan_out(&state, &capped.source(), &basis).await;
+        let rows = notifications_for(&state, &agent).await;
+        assert_eq!(rows.len(), 1);
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row["source_event_id"] == capped.event_id.as_str())
         );
-        dispatch_message_notifications(&state, &capped).await;
-        let notifications = notifications_for(&state, agent).await;
-        assert_eq!(notifications.len(), 1);
-        assert!(!notifications.iter().any(|row| {
-            row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:ARB0T1mvrpz_J_FsI1hgDyYCX14jycSPEv8_lITFehi_")
-        }));
     }
 }

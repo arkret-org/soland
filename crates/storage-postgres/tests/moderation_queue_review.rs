@@ -175,7 +175,9 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
         arkret_wire::EventKind::CircleMemberState,
         actor.clone(),
         &circle,
-        serde_json::json!({"circle_id":circle,"member_id":actor,"membership":"join","expected_membership":null}),
+        serde_json::json!({"circle_id":circle,"member_id":actor,"membership":"join",
+            "parent_membership_revision":ordinary_realm::parent_membership_revision(&pool,&realm,&actor).await,
+            "expected_membership":null}),
     );
     uow.commit_event(join.clone()).await.unwrap();
     let report_payload = serde_json::json!({"realm_id":realm,"effective_scope":scope,

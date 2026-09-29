@@ -49,6 +49,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::CapabilityRelinquish,
     EventKind::StrandCreate,
     EventKind::StrandUpdate,
+    EventKind::StrandTracksUpdate,
     EventKind::RsvpSet,
     EventKind::StrandArchive,
     EventKind::StrandRestore,
@@ -56,10 +57,14 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::StrandMove,
     EventKind::StrandReorder,
     EventKind::SpaceCreate,
+    EventKind::SpaceArchive,
+    EventKind::SpaceRestore,
     EventKind::RealmSetDefaultStrand,
     EventKind::MessageCreate,
     EventKind::MessageRevise,
     EventKind::MessageRedact,
+    EventKind::ReactionAdd,
+    EventKind::ReactionRemove,
     EventKind::MlsGenesis,
     EventKind::MlsCommit,
     EventKind::CircleCreate,
@@ -77,6 +82,8 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
 /// Snapshot is signed again.
 const AUDITED_FAMILIES: &[&str] = &[
     "relation_current_results",
+    // A reaction set is state disclosed with its target Message's exact scope.
+    "message_reactions_current_results",
     "realm_authority_root_current_results",
     "capability_grant_current_results",
     "realm_policy_bundle_current_results",
@@ -312,6 +319,7 @@ pub async fn member_station_bootstrap_material(
              WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3 \
              UNION ALL SELECT current_stream_position,current_commit_id FROM circle_member_state_current_results \
              WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3 \
+             AND circle_member_parent_join_current(realm_id,member_id,value) \
              ) membership JOIN realm_commits covering ON covering.realm_id=$1 \
              AND covering.commit_id=membership.current_commit_id \
              AND covering.stream_position=membership.current_stream_position",
@@ -480,6 +488,24 @@ async fn disclosure_facts_in_connection(
             message_creation_stream(conn, realm_id, message_id).await?,
         );
     }
+    // A reaction set shares its target Message's exact scope
+    // (`models/strand-and-message.md` section 9.8.2), so its disclosure
+    // follows that Message's accepted creation stream.
+    for entry in &material.current_state_entries {
+        let TypedCurrentResult::Value {
+            selector: CurrentSelector::MessageReactions { target_ref },
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let message_id = arkret_wire::MessageId::new(target_ref.as_str())
+            .map_err(|_| rejected("a non-Message reaction target has no disclosure rule"))?;
+        if !message_streams.contains_key(&message_id) {
+            let stream = message_creation_stream(conn, realm_id, &message_id).await?;
+            message_streams.insert(message_id, stream);
+        }
+    }
     let mut call_creations = std::collections::BTreeMap::new();
     for entry in &material.current_state_entries {
         if let TypedCurrentResult::Value {
@@ -494,6 +520,27 @@ async fn disclosure_facts_in_connection(
         }
     }
     let caller = ActorId::account(account.clone());
+    // circle.md section 9.1: effective Circle membership compares the two
+    // typed currents of this one cut -- the caller's parent Realm
+    // member_state and each Circle join's bound parent revision.
+    let parent = material
+        .current_state_entries
+        .iter()
+        .find_map(|entry| match entry {
+            TypedCurrentResult::Value {
+                selector: CurrentSelector::MemberState { actor_id },
+                source_stream_ref,
+                revision,
+                value,
+            } if actor_id == &caller => Some((source_stream_ref, revision, value)),
+            _ => None,
+        })
+        .map(|(source, revision, value)| {
+            serde_json::from_value::<arkret_wire::MemberStateCurrent>(value.clone())
+                .map(|current| (source, revision, current.membership))
+        })
+        .transpose()
+        .map_err(PersistenceError::database)?;
     let mut circle_floors = std::collections::BTreeMap::new();
     for entry in &material.current_state_entries {
         let TypedCurrentResult::Value {
@@ -514,7 +561,14 @@ async fn disclosure_facts_in_connection(
         }
         let membership: arkret_wire::CircleMemberStateCurrent =
             serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
-        if membership.membership != arkret_wire::MembershipState::Join {
+        if !parent.is_some_and(|(parent_source, parent_revision, parent_membership)| {
+            membership.is_effective_under_parent(
+                realm_id,
+                parent_source,
+                parent_revision,
+                parent_membership,
+            )
+        }) {
             continue;
         }
         let stream = CommitStreamRef::Circle {
@@ -849,10 +903,7 @@ pub(crate) fn disclose_to_account(
             source_stream_ref,
             value,
             ..
-        } = row
-        else {
-            continue;
-        };
+        } = row;
         let scope_stream = |circle: Option<CircleId>| match circle {
             Some(circle_id) => CommitStreamRef::Circle {
                 realm_id: material.realm_id.clone(),
@@ -892,6 +943,13 @@ pub(crate) fn disclose_to_account(
                     .message_streams
                     .get(message_id)
                     .ok_or_else(|| rejected("Message current has no accepted creation scope"))?
+                    .clone(),
+            ),
+            CurrentSelector::MessageReactions { target_ref } => Some(
+                arkret_wire::MessageId::new(target_ref.as_str())
+                    .ok()
+                    .and_then(|message_id| facts.message_streams.get(&message_id))
+                    .ok_or_else(|| rejected("reaction target has no accepted creation scope"))?
                     .clone(),
             ),
             CurrentSelector::CallState { call_id } => Some(
@@ -948,7 +1006,6 @@ pub(crate) fn disclose_to_account(
                     _ => true,
                 }
         }
-        _ => true,
     });
     let mut genesis = false;
     let mut root = false;
@@ -964,10 +1021,7 @@ pub(crate) fn disclose_to_account(
             source_stream_ref,
             revision,
             value,
-        } = row
-        else {
-            return Err(rejected("a current row is not a closed typed value"));
-        };
+        } = row;
         let source_head = material
             .visible_stream_heads
             .iter()
@@ -1216,6 +1270,18 @@ pub(crate) fn disclose_to_account(
                 };
                 if revision.stream_position < source_floor.oldest_position {
                     below_floor.insert(message_id.clone());
+                }
+            }
+            // State family: disclosed with its scope, never floored or
+            // trimmed by a redaction (`realm-state-snapshot-schema.md` §3).
+            CurrentSelector::MessageReactions { target_ref } => {
+                let set: arkret_models_collaboration::events_payloads::reaction::MessageReactionsCurrentValue =
+                    serde_json::from_value(value.clone())
+                        .map_err(|_| rejected("reaction current value is not a closed dot set"))?;
+                set.validate_for_target(target_ref)
+                    .map_err(|_| rejected("reaction assertion differs from its target"))?;
+                if set.assertions().is_empty() {
+                    return Err(rejected("reaction current holds no assertion"));
                 }
             }
             CurrentSelector::RealmProfile
@@ -1722,6 +1788,99 @@ mod tests {
         assert!(disclose_to_account(material, &account("carol"), &facts).is_err());
     }
 
+    fn reaction_set(target: &MessageId, byte: u8) -> Value {
+        json!({"assertions": [{
+            "tag_id": format!("{}:0", event_id(byte).as_str()),
+            "value": {"target_ref": target, "key": "+1"}
+        }]})
+    }
+
+    #[test]
+    fn reaction_sets_are_state_disclosed_with_their_target_scope() {
+        let (bob, mut material, mut facts) = joined_fixture();
+        let floored = MessageId::from_event_id(&event_id(0x33));
+        let reactions = row(
+            CurrentSelector::MessageReactions {
+                target_ref: floored.to_string(),
+            },
+            12,
+            reaction_set(&floored, 0x55),
+        );
+        // A Circle Message's reactions stay in that Circle's stream.
+        let circle_id = CircleId::from_event_id(&event_id(0x56));
+        let circle_stream = CommitStreamRef::Circle {
+            realm_id: realm_id(),
+            circle_id,
+        };
+        let hidden = MessageId::from_event_id(&event_id(0x57));
+        facts
+            .message_streams
+            .insert(hidden.clone(), circle_stream.clone());
+        let TypedCurrentResult::Value {
+            selector,
+            revision,
+            value,
+            ..
+        } = row(
+            CurrentSelector::MessageReactions {
+                target_ref: hidden.to_string(),
+            },
+            2,
+            reaction_set(&hidden, 0x58),
+        );
+        material.current_state_entries.push(reactions.clone());
+        material
+            .current_state_entries
+            .push(TypedCurrentResult::Value {
+                selector,
+                source_stream_ref: circle_stream,
+                revision,
+                value,
+            });
+        let disclosed = disclose_to_account(material.clone(), &bob, &facts).unwrap();
+        // The target Message sits below Bob's floor, but the reaction set is
+        // state: it is disclosed whole, while the hidden Circle's is omitted.
+        let reaction_rows = disclosed
+            .current_state_entries
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row,
+                    TypedCurrentResult::Value {
+                        selector: CurrentSelector::MessageReactions { .. },
+                        ..
+                    }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reaction_rows, vec![&reactions]);
+
+        for drift in [
+            reaction_set(&MessageId::from_event_id(&event_id(0x46)), 0x55),
+            json!({"assertions": []}),
+            json!({"reactions": [{"actor_id": ActorId::account(bob.clone()), "key": "+1"}]}),
+        ] {
+            let mut drifted = material.clone();
+            let TypedCurrentResult::Value { value, .. } = drifted
+                .current_state_entries
+                .iter_mut()
+                .find(|row| **row == reactions)
+                .unwrap();
+            *value = drift;
+            assert!(disclose_to_account(drifted, &bob, &facts).is_err());
+        }
+
+        let mut foreign_scope = facts;
+        foreign_scope.message_streams.insert(
+            floored,
+            CommitStreamRef::Circle {
+                realm_id: realm_id(),
+                circle_id: CircleId::from_event_id(&event_id(0x56)),
+            },
+        );
+        assert!(disclose_to_account(material, &bob, &foreign_scope).is_err());
+    }
+
     #[test]
     fn sole_founder_receives_every_row_with_the_genesis_floor() {
         let (founder, material, facts) = fixture();
@@ -1834,9 +1993,8 @@ mod tests {
             assert!(disclose_to_account(incomplete, &founder, &facts).is_err());
         }
         let mut foreign = material;
-        if let TypedCurrentResult::Value { value, .. } = &mut foreign.current_state_entries[8] {
-            value["realm_id"] = json!(RealmId::from_event_id(&event_id(0x68)));
-        }
+        let TypedCurrentResult::Value { value, .. } = &mut foreign.current_state_entries[8];
+        value["realm_id"] = json!(RealmId::from_event_id(&event_id(0x68)));
         assert!(disclose_to_account(foreign, &founder, &facts).is_err());
     }
 
@@ -1965,9 +2123,8 @@ mod tests {
         facts.caller_floor = None;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, mut material, facts) = fixture();
-        if let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[7] {
-            *value = json!({"membership":"leave"});
-        }
+        let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[7];
+        *value = json!({"membership":"leave"});
         assert!(disclose_to_account(material, &founder, &facts).is_err());
     }
 
@@ -2051,11 +2208,10 @@ mod tests {
         let error = disclose_to_account(joined_outsider, &carol, &facts).unwrap_err();
         assert!(error.to_string().contains("exact participant"));
         let binding = material.current_state_entries.last_mut().unwrap();
-        if let TypedCurrentResult::Value { selector, .. } = binding {
-            *selector = CurrentSelector::DirectConversationBinding {
-                pair_key: arkret_wire::Hash::new(format!("sha256:{}", "78".repeat(32))).unwrap(),
-            };
-        }
+        let TypedCurrentResult::Value { selector, .. } = binding;
+        *selector = CurrentSelector::DirectConversationBinding {
+            pair_key: arkret_wire::Hash::new(format!("sha256:{}", "78".repeat(32))).unwrap(),
+        };
         assert!(disclose_to_account(material, &alice, &facts).is_err());
     }
 
@@ -2075,18 +2231,14 @@ mod tests {
         assert_eq!(disclosed.visible_stream_heads.len(), 1);
         assert_eq!(disclosed.retention_and_history_floor.stream_floors.len(), 1);
         let (founder, mut material, facts) = fixture();
-        if let TypedCurrentResult::Value {
+        let TypedCurrentResult::Value {
             source_stream_ref, ..
-        } = &mut material.current_state_entries[10]
-        {
-            *source_stream_ref = circle;
-        }
+        } = &mut material.current_state_entries[10];
+        *source_stream_ref = circle;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, mut material, facts) = fixture();
-        if let TypedCurrentResult::Value { revision, .. } = &mut material.current_state_entries[10]
-        {
-            revision.stream_position = 10;
-        }
+        let TypedCurrentResult::Value { revision, .. } = &mut material.current_state_entries[10];
+        revision.stream_position = 10;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, mut material, facts) = fixture();
         material.governance_generation = 1;
@@ -2096,9 +2248,8 @@ mod tests {
     #[test]
     fn circle_strands_and_missing_anchor_rows_are_refused() {
         let (founder, mut material, facts) = fixture();
-        if let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[8] {
-            value["scope_circle_id"] = json!("ak:circle:x");
-        }
+        let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[8];
+        value["scope_circle_id"] = json!("ak:circle:x");
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         for missing in [0, 1, 5, 7] {
             let (founder, mut material, facts) = fixture();
@@ -2129,12 +2280,10 @@ mod tests {
                 "state":"active","created_by":ActorId::account(caller.clone()),"created_at":"2026-09-28T00:00:00.000Z"})));
         let mut circle_row = |selector, position, value| {
             let mut result = row(selector, position, value);
-            if let TypedCurrentResult::Value {
+            let TypedCurrentResult::Value {
                 source_stream_ref, ..
-            } = &mut result
-            {
-                *source_stream_ref = stream.clone();
-            }
+            } = &mut result;
+            *source_stream_ref = stream.clone();
             material.current_state_entries.push(result);
         };
         circle_row(
@@ -2143,7 +2292,9 @@ mod tests {
                 member_actor_id: ActorId::account(caller.clone()),
             },
             2,
-            json!({"membership":"join","effective_at":"2026-09-28T00:00:00.000Z"}),
+            json!({"membership":"join",
+                "parent_membership_revision":{"commit_id":RealmCommitId::from_digest([1; 32]),"stream_position":1},
+                "effective_at":"2026-09-28T00:00:00.000Z"}),
         );
         circle_row(
             CurrentSelector::Strand {

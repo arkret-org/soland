@@ -141,11 +141,13 @@ fn verify_exact_contact_event_producer(
     proof
         .validate_production()
         .map_err(|error| super::super::events::peer::schema_violation(error.to_string()))?;
-    if proof.created_at != event.created_at
-        || &proof.verification_method != signer.verification_method()
-    {
+    // The descriptor binds the exact producer method; the proof's own signing
+    // time is covered by the JWS and is not required to equal the Event's
+    // declared `created_at` (contact-and-direct-conversation.md, Contact
+    // producer projection).
+    if &proof.verification_method != signer.verification_method() {
         return Err(super::super::events::peer::schema_violation(
-            "Contact producer method or time differs from source descriptor",
+            "Contact producer method differs from source descriptor",
         ));
     }
     let producer = event.executed_by.as_ref().unwrap_or(&event.actor_id);

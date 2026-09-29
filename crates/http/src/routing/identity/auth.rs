@@ -51,8 +51,7 @@ pub(super) use login::account_existing_session_error;
 use login::dev_login;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
-    active_delegated_sessions_for_actor, revoke_devices_for_actor, revoke_sessions_for_actor,
-    session_credential_hash, token_for,
+    revoke_devices_for_actor, revoke_sessions_for_actor, session_credential_hash, token_for,
 };
 pub(super) use sessions::request_requires_fresh_introspection;
 pub(crate) use sessions::revalidate_stream_session;

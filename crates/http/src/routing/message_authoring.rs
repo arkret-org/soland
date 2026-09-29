@@ -58,48 +58,22 @@ async fn device_active(
 
 /// Resolve a target only after proving current read visibility for the exact
 /// authenticated actor. Keep every target denial opaque before MLS or retry
-/// state can disclose the Strand's scope or existence.
+/// state can disclose the Strand's scope or existence. Visibility is the
+/// durable current held here -- governed or a verified member-Station
+/// replica -- so an author whose Station only replicates the Realm prepares
+/// against the same accepted state it forwards to the governing Station.
 async fn visible_target_scope(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     strand_id: &arkret_wire::StrandId,
     actor: &ActorId,
 ) -> Result<ScopeRef, AppError> {
-    let hidden = || AppError::not_found("message target not found");
-    if !crate::routing::spaces::space::realm_has_member_by_id(
-        state,
-        realm_id.as_str(),
-        &actor.to_string(),
-    )
-    .await
-    {
-        return Err(hidden());
-    }
-    let projection = state.projections().snapshot();
-    let strand = projection
-        .strands
-        .get(strand_id.as_str())
-        .filter(|strand| strand.realm_id == realm_id.as_str() && !strand.state.is_terminal())
-        .ok_or_else(hidden)?;
-    match strand.scope_circle_id.as_deref() {
-        Some(circle_id) => {
-            let circle = projection.circles.get(circle_id).filter(|circle| {
-                circle.realm_id == realm_id.as_str()
-                    && projection.circle_scope_visible_to_actor(circle_id, &actor.to_string())
-            });
-            if circle.is_none() {
-                return Err(hidden());
-            }
-            Ok(ScopeRef::Circle {
-                realm_id: realm_id.clone(),
-                circle_id: arkret_wire::CircleId::new(circle_id.to_owned())
-                    .map_err(|_| hidden())?,
-            })
-        }
-        None => Ok(ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        }),
-    }
+    state
+        .authority_commits()
+        .visible_strand_scope_for_actor(realm_id, strand_id, actor)
+        .await
+        .map_err(|error| AppError::internal(format!("message target read: {error}")))?
+        .ok_or_else(|| AppError::not_found("message target not found"))
 }
 
 /// Why the current MLS send gate refuses one application body; the gate is
@@ -409,7 +383,7 @@ mod tests {
     use arkret_models_crypto::{
         EncryptedEnvelope, EncryptedEnvelopeEncryptionContext, EncryptedEnvelopeRoutingContext,
     };
-    use arkret_wire::{AccountId, DidCoreId, EventId, RealmId, StrandId};
+    use arkret_wire::{AccountId, DidCoreId, EventId, RealmId};
 
     use super::*;
 
@@ -418,7 +392,6 @@ mod tests {
     const DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000006";
     const LEADER: &str = "ak:did_core:web:alice.example";
     const STRAND: &str = "ak:strand:Ab1XwDyGoarexWM5f2N9k9zOpOIkgMjf0Ky-ngz87YjD";
-    const CIRCLE: &str = "ak:circle:AaUAN_rEJJKU7XaSLZMiAC3dbFtb6rKXV-89cGay4X9e";
 
     fn test_state() -> AppState {
         AppState::new(
@@ -441,152 +414,6 @@ mod tests {
             DidCoreId::new(LEADER).unwrap(),
             state.service_core_id(),
         ))
-    }
-
-    fn seed_target(state: &AppState, actor: &ActorId, circle: bool) {
-        let now = chrono::Utc::now();
-        let mut projection = state.test_projection().lock();
-        projection.members.insert(
-            (REALM.to_owned(), actor.to_string()),
-            soland_domain::reducer::SolandMembershipState {
-                member: actor.to_string(),
-                realm_id: REALM.to_owned(),
-                state: "join".to_owned(),
-                role: "member".to_owned(),
-                membership_event_ref: None,
-                invited_at: None,
-                joined_at: now,
-                updated_at: now,
-                reason: None,
-            },
-        );
-        projection.strands.insert(
-            STRAND.to_owned(),
-            soland_domain::reducer::StrandProjection {
-                strand_id: STRAND.to_owned(),
-                realm_id: REALM.to_owned(),
-                tracks: Default::default(),
-                title: "Target".to_owned(),
-                summary: None,
-                content: None,
-                encrypted_content: None,
-                fields: Default::default(),
-                state: soland_domain::reducer::ObjectLifecycleState::Active,
-                state_changed_at: None,
-                stage: None,
-                stage_changed_at: None,
-                created_by: actor.to_string(),
-                created_at: now,
-                updated_by: None,
-                updated_at: None,
-                scope_circle_id: circle.then(|| CIRCLE.to_owned()),
-                schema_refs: Vec::new(),
-                schedule_revision_source: None,
-            },
-        );
-        if circle {
-            projection.circles.insert(
-                CIRCLE.to_owned(),
-                soland_domain::reducer::CircleProjection {
-                    circle_id: CIRCLE.to_owned(),
-                    realm_id: REALM.to_owned(),
-                    profile_ref: None,
-                    title: "Private".to_owned(),
-                    summary: None,
-                    display: serde_json::json!({}),
-                    directory_visibility: "members".to_owned(),
-                    join_rule: "invite".to_owned(),
-                    history_access: "since_join".to_owned(),
-                    mls_group_ref: None,
-                    state: soland_domain::reducer::CircleLifecycleState::Active,
-                    state_changed_at: None,
-                    created_by: actor.to_string(),
-                    created_at: now,
-                    updated_by: None,
-                    updated_at: None,
-                    members: Default::default(),
-                },
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn message_authoring_hidden_targets_share_not_found() {
-        let state = test_state();
-        let actor = test_actor(&state);
-        let strand = StrandId::new(STRAND).unwrap();
-        let realm = RealmId::new(REALM).unwrap();
-        assert_problem(
-            visible_target_scope(&state, &realm, &strand, &actor)
-                .await
-                .map(|_| ()),
-            StatusCode::NOT_FOUND,
-            "not_found",
-            None,
-        )
-        .await;
-        seed_target(&state, &actor, true);
-        assert_problem(
-            visible_target_scope(&state, &realm, &strand, &actor)
-                .await
-                .map(|_| ()),
-            StatusCode::NOT_FOUND,
-            "not_found",
-            None,
-        )
-        .await;
-        state
-            .test_projection()
-            .lock()
-            .circles
-            .get_mut(CIRCLE)
-            .unwrap()
-            .members
-            .insert(actor.to_string());
-        assert_eq!(
-            visible_target_scope(&state, &realm, &strand, &actor)
-                .await
-                .unwrap(),
-            ScopeRef::Circle {
-                realm_id: realm.clone(),
-                circle_id: arkret_wire::CircleId::new(CIRCLE).unwrap(),
-            }
-        );
-        state
-            .test_projection()
-            .lock()
-            .members
-            .get_mut(&(REALM.to_owned(), actor.to_string()))
-            .unwrap()
-            .state = "leave".to_owned();
-        assert_problem(
-            visible_target_scope(&state, &realm, &strand, &actor)
-                .await
-                .map(|_| ()),
-            StatusCode::NOT_FOUND,
-            "not_found",
-            None,
-        )
-        .await;
-        {
-            let mut projection = state.test_projection().lock();
-            projection
-                .members
-                .get_mut(&(REALM.to_owned(), actor.to_string()))
-                .unwrap()
-                .state = "join".to_owned();
-            projection.strands.get_mut(STRAND).unwrap().state =
-                soland_domain::reducer::ObjectLifecycleState::Redacted;
-        }
-        assert_problem(
-            visible_target_scope(&state, &realm, &strand, &actor)
-                .await
-                .map(|_| ()),
-            StatusCode::NOT_FOUND,
-            "not_found",
-            None,
-        )
-        .await;
     }
 
     fn event_ref(seed: u8) -> EventId {

@@ -850,19 +850,16 @@ fn peer_requested_retry_at(
 
 /// Whether a received response asks the sender to re-evaluate and resubmit
 /// rather than replay the same transport identity.
+///
+/// A peer answers with an RFC 9457 Problem Details envelope whose `type`
+/// names the registered error code.
 fn causal_dependencies_pending(body: &str) -> bool {
-    matches!(
-        serde_json::from_str::<serde_json::Value>(body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .pointer("/error/code")
-                    .and_then(|code| code.as_str())
-                    .map(str::to_owned)
-            })
-            .as_deref(),
-        Some("dependency_missing" | "direct_binding_dependencies_pending")
-    )
+    serde_json::from_str::<arkret_wire::problem_details::Problem>(body).is_ok_and(|problem| {
+        matches!(
+            problem.code(),
+            "dependency_missing" | "direct_binding_dependencies_pending"
+        )
+    })
 }
 
 /// Background outbound federation dispatcher.
@@ -2033,6 +2030,7 @@ impl FederationDispatcher {
             endpoint = %row.delivery.endpoint,
             status,
             attempts,
+            response = %response_excerpt,
             "federation outbox permanent failure (no retry, dead-lettered)"
         );
         self.dead_letter(
@@ -2356,14 +2354,17 @@ mod tests {
 
     #[test]
     fn causal_dependency_responses_are_classified_for_prompt_retry() {
-        assert!(causal_dependencies_pending(
-            r#"{"ok":false,"error":{"code":"dependency_missing"}}"#
-        ));
-        assert!(causal_dependencies_pending(
-            r#"{"ok":false,"error":{"code":"direct_binding_dependencies_pending"}}"#
-        ));
+        let problem = |code: &str| {
+            serde_json::to_string(&arkret_wire::problem_details::Problem::new(code, 409, "x"))
+                .unwrap()
+        };
+        assert!(causal_dependencies_pending(&problem("dependency_missing")));
+        assert!(causal_dependencies_pending(&problem(
+            "direct_binding_dependencies_pending"
+        )));
+        assert!(!causal_dependencies_pending(&problem("service_unavailable")));
         assert!(!causal_dependencies_pending(
-            r#"{"ok":false,"error":{"code":"service_unavailable"}}"#
+            r#"{"ok":false,"error":{"code":"dependency_missing"}}"#
         ));
         assert!(!causal_dependencies_pending("not json"));
     }

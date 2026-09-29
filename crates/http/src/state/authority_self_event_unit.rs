@@ -105,7 +105,6 @@ pub(super) struct SelfEventUnitEffects {
 /// Kinds whose authorization and domain pre-state are decided only at the
 /// accepting transaction's cut, by the same-cut evaluator and their typed
 /// current writers. The in-process projection is not consulted for admission.
-/// Watch notification caches advance afterward from the accepting Commit.
 fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
@@ -119,6 +118,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::StrandCreate
             | arkret_wire::EventKind::RealmProfile
             | arkret_wire::EventKind::StrandUpdate
+            | arkret_wire::EventKind::StrandTracksUpdate
             | arkret_wire::EventKind::RsvpSet
             | arkret_wire::EventKind::StrandArchive
             | arkret_wire::EventKind::StrandRestore
@@ -142,6 +142,13 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::MessageRedact
             | arkret_wire::EventKind::MlsGenesis
             | arkret_wire::EventKind::MlsCommit
+            | arkret_wire::EventKind::RelationCreate
+            | arkret_wire::EventKind::RelationUpdate
+            | arkret_wire::EventKind::RelationTombstone
+            | arkret_wire::EventKind::SpaceArchive
+            | arkret_wire::EventKind::SpaceRestore
+            | arkret_wire::EventKind::ReactionAdd
+            | arkret_wire::EventKind::ReactionRemove
     )
 }
 
@@ -385,13 +392,10 @@ pub(super) async fn commit_event_unit(
         }
         return super::authority_direct_conversation::relay_direct_conversation_refusal(error);
     }
-    if decided_at_cut
-        && !poll_at_cut
-        && !matches!(
-            event.kind,
-            arkret_wire::EventKind::StrandCreate | arkret_wire::EventKind::StrandWatchSet
-        )
-    {
+    // The Commit is durable. This Station's recipients' ordinary notification
+    // rows are a derived projection; their failure never changes the outcome.
+    crate::routing::events::notify::dispatch_committed_event_notifications(state, event).await;
+    if decided_at_cut && !poll_at_cut && event.kind != arkret_wire::EventKind::StrandCreate {
         return Ok(AuthoritySubmitOutcome::Accepted {
             status: AuthorityCommitStatus::Committed,
             commit: transaction.commit,
@@ -410,7 +414,6 @@ pub(super) async fn commit_event_unit(
         effect,
         soland_services::projection::ProjectionEffectView::Rejected { .. }
     ) || (!poll_at_cut
-        && event.kind != arkret_wire::EventKind::StrandWatchSet
         && matches!(
             effect,
             soland_services::projection::ProjectionEffectView::Ignored
@@ -517,6 +520,7 @@ pub(crate) async fn submit_applet_event(
         submission.event.kind,
         arkret_wire::EventKind::MessageCreate
             | arkret_wire::EventKind::MemberState
+            | arkret_wire::EventKind::InviteAccept
             | arkret_wire::EventKind::CapabilityRelinquish
     ) {
         return Err(ServiceError::SchemaViolation(

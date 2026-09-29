@@ -139,7 +139,9 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
         &create.authority_commit,
         &circle,
         EventKind::CircleMemberState,
-        json!({"circle_id":circle,"member_id":actor,"membership":"join","expected_membership":null}),
+        json!({"circle_id":circle,"member_id":actor,"membership":"join",
+            "parent_membership_revision":ordinary_realm::parent_membership_revision(&pool,&realm,&actor).await,
+            "expected_membership":null}),
     );
     uow.commit_event(join.clone()).await.unwrap();
     // Realm-signed source cannot create an object that declares Circle scope.
@@ -264,7 +266,9 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
         &second_create.authority_commit,
         &second_circle,
         EventKind::CircleMemberState,
-        json!({"circle_id":second_circle,"member_id":actor,"membership":"join","expected_membership":null}),
+        json!({"circle_id":second_circle,"member_id":actor,"membership":"join",
+            "parent_membership_revision":ordinary_realm::parent_membership_revision(&pool,&realm,&actor).await,
+            "expected_membership":null}),
     );
     uow.commit_event(second_join.clone()).await.unwrap();
     let second_strand = circle_request(

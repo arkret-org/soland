@@ -53,17 +53,28 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
         .admit_applet_authoring_unit(input, author, attester, finalize)
         .await
         .map_err(|error| {
-            let code = match error.kind() {
-                soland_services::ServiceErrorKind::NotFound => "not_found",
-                soland_services::ServiceErrorKind::SchemaViolation => "schema_violation",
-                soland_services::ServiceErrorKind::UnsupportedEventKind => "unsupported_event_kind",
-                soland_services::ServiceErrorKind::Conflict => error
-                    .conflict_code()
-                    .map_or("failed_precondition", |code| code.as_str()),
+            // The status is the semantic class a reducer reason code keeps when
+            // it is not itself a registered top-level error code.
+            let (status, code) = match error.kind() {
+                soland_services::ServiceErrorKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+                soland_services::ServiceErrorKind::SchemaViolation => {
+                    (StatusCode::UNPROCESSABLE_ENTITY, "schema_violation")
+                }
+                soland_services::ServiceErrorKind::UnsupportedEventKind => {
+                    (StatusCode::UNPROCESSABLE_ENTITY, "unsupported_event_kind")
+                }
+                soland_services::ServiceErrorKind::Conflict => (
+                    StatusCode::CONFLICT,
+                    error
+                        .conflict_code()
+                        .map_or("failed_precondition", |code| code.as_str()),
+                ),
                 soland_services::ServiceErrorKind::Database
-                | soland_services::ServiceErrorKind::Internal => "internal_error",
+                | soland_services::ServiceErrorKind::Internal => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+                }
             };
-            SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, code, error.to_string())
+            SubmitOneError::new(status, code, error.to_string())
         })
 }
 

@@ -481,7 +481,7 @@ async fn remote_targets(
                 circle_id,
             } = &effective_scope
             {
-                let Some(basis) = sql_query("SELECT e.envelope->>'event_id' AS event_id FROM circle_member_state_current_results m JOIN circle_current_results circle ON circle.circle_id=m.circle_id AND circle.realm_id=m.realm_id JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref JOIN canonical_events e ON e.pk=c.event_pk WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' AND circle.value->>'state'='active' AND e.state='committed'")
+                let Some(basis) = sql_query("SELECT e.envelope->>'event_id' AS event_id FROM circle_member_state_current_results m JOIN circle_current_results circle ON circle.circle_id=m.circle_id AND circle.realm_id=m.realm_id JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref JOIN canonical_events e ON e.pk=c.event_pk WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) AND circle.value->>'state'='active' AND e.state='committed'")
                 .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).bind::<Text, _>(member.to_string())
                 .get_result::<MembershipEventRow>(&mut *conn).await.optional().map_err(PersistenceError::database)? else { continue; };
                 Some(arkret_wire::EventId::new(basis.event_id).map_err(internal)?)

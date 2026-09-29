@@ -849,6 +849,11 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     if code == arkret_wire::ReasonCode::SNAPSHOT_CAPACITY_EXCEEDED {
         return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
     }
+    // AK-NC grant authority clause: a first-issued grant outside its issuer's
+    // authority is `failed_precondition` with this registered reason.
+    if code == arkret_wire::ReasonCode::GRANT_EXCEEDS_ISSUER_AUTHORITY {
+        return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
+    }
     if let Some(mapped) = ErrorCode::from_wire(&code) {
         return AppError::from_rejection(mapped, message);
     }

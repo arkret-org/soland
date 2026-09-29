@@ -84,11 +84,6 @@ pub trait CircleProjectionStore: Send + Sync {
     ) -> PersistenceResult<()>;
     async fn snapshot_all_members(&self) -> PersistenceResult<Vec<CircleMemberProjectionRecord>>;
 }
-/// Read the accepted per-(Strand, Actor) watch current for cache hydration.
-#[async_trait]
-pub trait StrandWatchProjectionStore: Send + Sync {
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandWatchProjectionRecord>>;
-}
 /// Durable Morph projection store (mirror of `projection_morphs` table).
 #[async_trait]
 pub trait MorphProjectionStore: Send + Sync {
@@ -789,15 +784,6 @@ pub struct CircleMemberProjectionRecord {
     pub invited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub joined_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StrandWatchProjectionRecord {
-    pub strand_id: String,
-    pub actor_id: String,
-    pub level: Option<String>,
-    pub level_public: bool,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    pub committed_ref: arkret_wire::CommittedEventRef,
 }
 /// Projection-side event log (append-only, index/debug surfaces).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

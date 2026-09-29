@@ -20,6 +20,7 @@ fn membership(
     actor: &ActorId,
     state: &str,
     expected: Option<&str>,
+    parent: Option<serde_json::Value>,
 ) -> soland_storage::EventCommitRequest {
     let scope = arkret_wire::ScopeRef::Circle {
         realm_id: previous.event.realm_id.clone(),
@@ -29,7 +30,13 @@ fn membership(
         EventKind::CircleMemberState,
         scope,
         actor.clone(),
-        serde_json::json!({"circle_id":circle,"member_id":actor,"membership":state,"expected_membership":expected}),
+        {
+            let mut payload = serde_json::json!({"circle_id":circle,"member_id":actor,"membership":state,"expected_membership":expected});
+            if let Some(parent) = parent {
+                payload["parent_membership_revision"] = parent;
+            }
+            payload
+        },
         previous.commit.committed_at,
     );
     let mut request =
@@ -136,7 +143,15 @@ async fn check_circle_convenience(visibility: &str) {
         assert!(before_read.is_none());
         assert!(before_list.is_empty());
     }
-    let join = membership(&create.authority_commit, &id, &actor, "join", None);
+    let parent = ordinary_realm::parent_membership_revision(&database.pool(), &realm, &actor).await;
+    let join = membership(
+        &create.authority_commit,
+        &id,
+        &actor,
+        "join",
+        None,
+        Some(parent),
+    );
     uow.commit_event(join.clone()).await.unwrap();
     let joined = store
         .circle_view_for_actor(&id, &actor)
@@ -158,7 +173,14 @@ async fn check_circle_convenience(visibility: &str) {
         1,
         "a joined member can list the full CircleView ({visibility})"
     );
-    let leave = membership(&join.authority_commit, &id, &actor, "leave", Some("join"));
+    let leave = membership(
+        &join.authority_commit,
+        &id,
+        &actor,
+        "leave",
+        Some("join"),
+        None,
+    );
     uow.commit_event(leave).await.unwrap();
     let ended = store.circle_view_for_actor(&id, &actor).await.unwrap();
     assert!(

@@ -381,18 +381,27 @@ pub(crate) fn validate_input(
         EventKind::IdentityAccountabilityGrant,
         EventKind::ProfileCreate,
     ];
+    // Provision and accountability are portal-scoped; the Profile is
+    // principal-scoped state in the managed actor's own PCR founded by index 1.
+    let principal_control_realm = RealmId::from_event_id(&b.pcr_genesis_event.event_id);
     for (index, e) in four.iter().enumerate() {
         service_event(e, input)?;
+        let expected_realm = match index {
+            1 => None,
+            3 => Some(&principal_control_realm),
+            _ => Some(&portal),
+        };
         if e.kind != kinds[index]
             || e.applet_id.as_ref() != Some(&provision.applet_id)
             || e.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
             || e.created_at != req.issued_at
-            || (index != 1
-                && (e.realm_id != portal
+            || expected_realm.is_some_and(|realm| {
+                &e.realm_id != realm
                     || e.scope_ref
                         != (ScopeRef::Realm {
-                            realm_id: portal.clone(),
-                        })))
+                            realm_id: realm.clone(),
+                        })
+            })
             || (index == 0 || index == 2) && (e.actor_id != service || e.executed_by.is_some())
             || (index == 1 || index == 3)
                 && (e.actor_id != provision.actor_id || e.executed_by.as_ref() != Some(&service))
@@ -1117,8 +1126,8 @@ fn validate_finalized_refs(
                 .iter()
                 .map(|e| arkret_wire::GrantId::from_event_id(&e.event_id))
                 .collect::<Vec<_>>();
-            if refs.first() != Some(&outcome.registration_event_ref)
-                || &outcome.bot_actor_provision_ref != provision_ref
+            if refs.first().map(|reference| &reference.event_id) != Some(&outcome.registration_event_ref)
+                || outcome.bot_actor_provision_ref != provision_ref.event_id
                 || &outcome.bot_principal_control_realm_id != pcr.stream_ref.realm_id()
                 || outcome.bot_actor_id != provision.actor_id
                 || outcome.applet_id != input.package.applet_id
@@ -1136,10 +1145,10 @@ fn validate_finalized_refs(
             let outcome: arkret_models_integration::GhostActorProvisionOutcome =
                 decode(response.clone())?;
             if refs.len() != 4
-                || outcome.managed_actor_provision_ref != refs[0]
+                || outcome.managed_actor_provision_ref != refs[0].event_id
                 || &outcome.principal_control_realm_id != refs[1].stream_ref.realm_id()
-                || outcome.accountability_grant_ref != refs[2]
-                || outcome.profile_event_ref != refs[3]
+                || outcome.accountability_grant_ref != refs[2].event_id
+                || outcome.profile_event_ref != refs[3].event_id
                 || outcome.ghost_actor_id != provision.actor_id
                 || outcome.authorization_ref != provision.applet_authority_ref
             {

@@ -12,8 +12,8 @@
 //! The member Station keeps the families its recipient re-verification and
 //! local reads consume: the Realm singletons (history access, plaintext
 //! services, profile), the policy bundle, `member_state`, `strand`, the three
-//! Space families, the default Strand pointer, `message_revision` and
-//! `object_redaction`. The
+//! Space families, the default Strand pointer, `message_revision`,
+//! `object_redaction` and `message_reactions`. The
 //! authority root, capability grants, Invite registers and MLS group state
 //! are governing admission inputs whose rows hold Station-private material a
 //! snapshot row does not carry (the authority Event ref, the accepting
@@ -42,6 +42,7 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "realm_set_default_strand_current_results",
     "message_revision_current_results",
     "object_redaction_current_results",
+    "message_reactions_current_results",
     "circle_member_state_current_results",
     "circle_current_results",
     "call_state_current_results",
@@ -164,10 +165,7 @@ async fn guard_snapshot_revisions(
             source_stream_ref,
             revision,
             value,
-        } = entry
-        else {
-            return Err(malformed("a row is not a closed typed value"));
-        };
+        } = entry;
         let source = serde_json::to_value(source_stream_ref).map_err(malformed)?;
         let incoming_position = position(revision.stream_position)?;
         match selector {
@@ -508,9 +506,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
 ) -> PersistenceResult<()> {
     let mut selectors = std::collections::BTreeSet::new();
     for entry in entries {
-        let arkret_wire::TypedCurrentResult::Value { selector, .. } = entry else {
-            return Err(malformed("a row is not a closed typed value"));
-        };
+        let arkret_wire::TypedCurrentResult::Value { selector, .. } = entry;
         let key = arkret_canonical::canonical_json_bytes(selector).map_err(malformed)?;
         if !selectors.insert(key) {
             return Err(malformed("a snapshot repeats a current selector"));
@@ -549,10 +545,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             source_stream_ref,
             revision,
             value,
-        } = entry
-        else {
-            return Err(malformed("a row is not a closed typed value"));
-        };
+        } = entry;
         let source_head = visible_heads
             .iter()
             .find(|candidate| &candidate.stream_ref == source_stream_ref)
@@ -776,6 +769,21 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
                 )
                 .await?;
             }
+            S::MessageReactions { target_ref } => {
+                let set: arkret_models_collaboration::events_payloads::reaction::MessageReactionsCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(malformed)?;
+                set.validate_for_target(target_ref).map_err(malformed)?;
+                arkret_wire::MessageId::new(target_ref.as_str()).map_err(malformed)?;
+                upsert_keyed(
+                    conn,
+                    realm_id,
+                    "message_reactions_current_results",
+                    Some(("target_ref", target_ref.as_str())),
+                    &row,
+                    value,
+                )
+                .await?;
+            }
             // Governing admission inputs a member Station never keeps.
             S::RealmAuthorityRoot
             | S::CapabilityGrant { .. }
@@ -990,6 +998,12 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::StrandTracksUpdate => {
+            crate::strand_current_results::commit_strand_tracks_update_current_result_in_connection(
+                conn, event, commit,
+            )
+            .await?;
+        }
         arkret_wire::EventKind::RsvpSet => {
             crate::rsvp_current_results::project_verified_rsvp_in_connection(conn, event, commit)
                 .await?;
@@ -1005,6 +1019,26 @@ pub(crate) async fn advance_in_connection(
         arkret_wire::EventKind::StrandMove | arkret_wire::EventKind::StrandReorder => {
             crate::strand_position_current_results::project_verified_event_in_connection(
                 conn, event, commit,
+            )
+            .await?;
+        }
+        arkret_wire::EventKind::SpaceArchive | arkret_wire::EventKind::SpaceRestore => {
+            crate::space_current_results::commit_space_transition_in_connection(
+                conn, event, commit, false,
+            )
+            .await?;
+        }
+        arkret_wire::EventKind::RelationCreate
+        | arkret_wire::EventKind::RelationUpdate
+        | arkret_wire::EventKind::RelationTombstone => {
+            crate::unit_of_work::commit_relation_current_result_in_connection(
+                conn, event, commit, false,
+            )
+            .await?;
+        }
+        arkret_wire::EventKind::ReactionAdd | arkret_wire::EventKind::ReactionRemove => {
+            crate::message_reactions_current_results::commit_reaction_current_result_in_connection(
+                conn, event, commit, false,
             )
             .await?;
         }
@@ -1779,6 +1813,190 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn strand_tracks_update_replica_moves_primary_and_rejects_invalid_track_sets() {
+        use arkret_models_collaboration::objects::strand::Strand;
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let realm_id =
+            arkret_wire::RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let active_id =
+            arkret_wire::StrandId::new("ak:strand:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let archived_id =
+            arkret_wire::StrandId::new("ak:strand:AQ0TR0sBDqKm829Sb5QBpmH0XLw6VOIDfnYcIBxXFQMg")
+                .unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:replica-station.example").unwrap(),
+        ));
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        };
+        let entries = [
+            (&active_id, arkret_wire::ObjectState::Active),
+            (&archived_id, arkret_wire::ObjectState::Archived),
+        ]
+        .map(|(strand_id, state)| {
+            let mut strand =
+                Strand::new(strand_id.clone(), realm_id.clone(), "Tracks", actor.clone());
+            strand.created_at = at;
+            strand.state = Some(state);
+            arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::Strand {
+                    strand_id: strand_id.clone(),
+                },
+                source_stream_ref: stream.clone(),
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: head.commit_id.clone(),
+                    stream_position: 7,
+                },
+                value: serde_json::to_value(strand).unwrap(),
+            }
+        });
+        install_snapshot_in_connection(&mut conn, &realm_id, &head, &entries, at)
+            .await
+            .unwrap();
+        let cases = [
+            // The primary moves to a newly enabled discussion track atomically.
+            (
+                8,
+                &active_id,
+                json!({
+                    "tracks.discussion.enabled": {"$op":"set","value":true},
+                    "tracks.discussion.is_primary": {"$op":"set","value":true},
+                    "tracks.synthesis.is_primary": {"$op":"set","value":false}
+                }),
+                None,
+            ),
+            // Disabling the current primary leaves no primary track.
+            (
+                9,
+                &active_id,
+                json!({"tracks.discussion.enabled": {"$op":"set","value":false}}),
+                Some("track_disabled"),
+            ),
+            // Every track key must be a registered track name.
+            (
+                9,
+                &active_id,
+                json!({"tracks.review.enabled": {"$op":"set","value":true}}),
+                Some("unregistered Strand track name"),
+            ),
+            // The tracks writer owns only the tracks map.
+            (
+                9,
+                &active_id,
+                json!({"metadata.title": {"$op":"set","value":"Other"}}),
+                Some("patch path is forbidden"),
+            ),
+            // A track mutation is an update of a non-active Strand.
+            (
+                9,
+                &archived_id,
+                json!({"tracks.discussion.enabled": {"$op":"set","value":true}}),
+                Some("strand_not_active"),
+            ),
+        ];
+        for (position, strand_id, patch, refusal) in cases {
+            let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+                arkret_wire::EventKind::StrandTracksUpdate.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                actor.clone(),
+                json!({"target_ref": strand_id, "patch": patch}),
+                at,
+            )
+            .unwrap();
+            let digest = arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
+            // This fold is tested after the replica verifier boundary. The
+            // SDK structural proof fixture is not accepted as a live signer.
+            event.producer_proof = Some(arkret_wire::ProducerEventProof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:web:replica-author.example#key")
+                    .unwrap(),
+                event_digest: digest.clone(),
+                created_at: at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: arkret_wire::test_support::structural_only_detached_jws(&digest),
+            });
+            let commit = arkret_wire::RealmCommit {
+                commit_id: arkret_wire::RealmCommitId::from_digest([position as u8; 32]),
+                realm_id: realm_id.clone(),
+                stream_ref: stream.clone(),
+                stream_position: position,
+                previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest(
+                    [(position - 1) as u8; 32],
+                )),
+                event_ref: event.event_id.clone(),
+                governance_generation: 0,
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    event.event_id.clone(),
+                ),
+                committed_at: at,
+                signature: arkret_wire::DetachedObjectSignature {
+                    context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                    signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                    verification_method: arkret_wire::DidUrl::new(
+                        "did:web:replica-station.example#authority",
+                    )
+                    .unwrap(),
+                    signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                        .unwrap(),
+                    created_at: at,
+                    sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+                },
+            };
+            diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+            let result = advance_in_connection(&mut conn, &event, &commit).await;
+            match refusal {
+                None => assert!(result.is_ok(), "{result:?}"),
+                Some(expected) => {
+                    let error = result.expect_err("invalid tracks update must be refused");
+                    assert!(error.to_string().contains(expected), "{error}");
+                }
+            }
+            diesel::sql_query(if refusal.is_none() {
+                "COMMIT"
+            } else {
+                "ROLLBACK"
+            })
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        let row: ValueRow =
+            diesel::sql_query("SELECT value FROM strand_current_results WHERE strand_id=$1")
+                .bind::<Text, _>(active_id.as_str())
+                .get_result(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(row.value["tracks"]["discussion"]["enabled"], true);
+        assert_eq!(row.value["tracks"]["discussion"]["is_primary"], true);
+        assert_eq!(row.value["tracks"]["synthesis"]["is_primary"], false);
+        assert_eq!(row.value["metadata"]["title"], "Tracks");
+        assert_eq!(
+            row.value["updated_by"],
+            serde_json::to_value(&actor).unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn strand_transition_replica_follows_snapshot_baseline_without_local_covering_commits() {
         use arkret_models_collaboration::objects::strand::Strand;
         let database = TestDatabase::lease().await;
@@ -2108,9 +2326,8 @@ mod tests {
             .await
             .unwrap();
         let mut malformed = entries.to_vec();
-        if let TypedCurrentResult::Value { value, .. } = &mut malformed[1] {
-            *value = json!({"rank":"partial"});
-        }
+        let TypedCurrentResult::Value { value, .. } = &mut malformed[1];
+        *value = json!({"rank":"partial"});
         diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
         assert!(
             install_snapshot_in_connection(&mut conn, &realm, &head, &malformed, at)

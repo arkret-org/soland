@@ -1,9 +1,12 @@
-//! The three registered `ak.space.create` results at one RealmCommit cut.
+//! The three registered `ak.space.create` results at one RealmCommit cut,
+//! and the `ak.space.archive` / `ak.space.restore` lifecycle successor of the
+//! `space` family.
 //!
 //! `space` is metadata only. The structural parent and child scope policy have
 //! their own current families; an absent signed member becomes an explicit
-//! genesis `null` in those families. This writer runs inside the Event/Commit
-//! transaction, while the caller holds the Realm authority row lock.
+//! genesis `null` in those families. These writers run inside the
+//! Event/Commit transaction, while the caller holds the Realm authority row
+//! lock.
 
 use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
@@ -15,8 +18,6 @@ use soland_storage::{PersistenceError, PersistenceResult};
 struct ParentCurrentRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
-    #[diesel(sql_type = Text)]
-    space_commit_id: String,
     #[diesel(sql_type = BigInt)]
     space_position: i64,
     #[diesel(sql_type = Jsonb)]
@@ -41,6 +42,16 @@ struct PresentRow {
     present: bool,
 }
 
+#[derive(diesel::QueryableByName)]
+struct SpaceCurrentRow {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
 pub(crate) struct SpaceCreateValues {
     pub(crate) space_id: arkret_wire::SpaceId,
     pub(crate) space: Value,
@@ -50,6 +61,10 @@ pub(crate) struct SpaceCreateValues {
 
 fn reject(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {}", detail.into()))
+}
+
+fn reject_lifecycle(code: soland_storage::ConflictCode, detail: &str) -> PersistenceError {
+    PersistenceError::Conflict(format!("{}: {detail}", code.as_str()))
 }
 
 /// Derive the three registry results from the signed Event, without trusting
@@ -140,8 +155,7 @@ async fn require_parent_in_connection(
         return Ok(());
     };
     let parent = diesel::sql_query(
-        "SELECT s.realm_id,s.current_commit_id AS space_commit_id,\
-                s.current_stream_position AS space_position,s.value AS space,\
+        "SELECT s.realm_id,s.current_stream_position AS space_position,s.value AS space,\
                 p.current_commit_id AS parent_commit_id,\
                 p.current_stream_position AS parent_position,p.value AS parent,\
                 c.current_commit_id AS policy_commit_id,\
@@ -166,28 +180,32 @@ async fn require_parent_in_connection(
     .map_err(PersistenceError::database)?
     .ok_or_else(|| reject("space_parent_unreadable"))?;
     debug_assert_eq!(parent.realm_id, event.realm_id.as_str());
-    // Until lifecycle, reparent and policy successors have their own same-cut
-    // writers, all three results must still be the common genesis cut.
-    if parent.space_commit_id != parent.parent_commit_id
-        || parent.space_commit_id != parent.policy_commit_id
-        || parent.space_position != parent.parent_position
-        || parent.space_position != parent.policy_position
+    // Until reparent and policy successors have their own same-cut writers,
+    // both of those results must still be the common genesis cut. The
+    // lifecycle writer below advances only the `space` family, so the metadata
+    // row may be at a later cut than that genesis, never an earlier one.
+    if parent.parent_commit_id != parent.policy_commit_id
+        || parent.parent_position != parent.policy_position
+        || parent.space_position < parent.parent_position
     {
         return Err(reject("space_parent_unreadable"));
     }
-    // A separately accepted Space successor cannot be ignored as though
-    // genesis were the complete parent basis. This is fail-closed until the
-    // corresponding lifecycle, reparent and policy writers exist.
+    // A separately accepted Space successor without a same-cut writer cannot
+    // be ignored as though genesis were the complete parent basis. This stays
+    // fail-closed until the corresponding reparent, policy, update and
+    // tombstone writers exist; archive and restore are written by
+    // `commit_space_transition_in_connection`.
     let successor = diesel::sql_query(
         "SELECT EXISTS ( \
            SELECT 1 FROM canonical_events e JOIN realm_commits rc ON rc.event_pk=e.pk \
            WHERE e.realm_id=$1 AND e.state='committed' \
              AND rc.stream_position>$2 AND rc.stream_position<$3 \
-             AND e.kind LIKE 'ak.space.%' AND e.kind<>'ak.space.create' \
+             AND e.kind LIKE 'ak.space.%' \
+             AND e.kind NOT IN ('ak.space.create','ak.space.archive','ak.space.restore') \
          ) AS present",
     )
     .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<BigInt, _>(parent.space_position)
+    .bind::<BigInt, _>(parent.parent_position)
     .bind::<BigInt, _>(position)
     .get_result::<PresentRow>(&mut *conn)
     .await
@@ -272,6 +290,138 @@ pub(crate) async fn commit_space_create_current_results_in_connection(
         if inserted != 1 {
             return Err(reject("Space current result already exists"));
         }
+    }
+    Ok(())
+}
+
+/// `ak.space.archive` / `ak.space.restore`: advance the `space` family's
+/// lifecycle at the accepting cut (event-kind-registry `result_writes`,
+/// `realm-and-space.md` section 3.4).
+///
+/// Only the four derived members `state`, `state_changed_at`, `updated_by`
+/// and `updated_at` move; every other member is retained verbatim, and no
+/// child Space or contained Strand is touched. Archive starts only from
+/// `active` (`space_not_active`), restore only from `archived`
+/// (`space_not_archived`), and a tombstoned Space refuses both
+/// (`space_already_terminal`); a refusal writes nothing. `authorize` is the
+/// governing Station's same-cut capability verdict; a verified replica fold
+/// passes `false` and replays only the value transition.
+pub(crate) async fn commit_space_transition_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    authorize: bool,
+) -> PersistenceResult<()> {
+    use arkret_wire::{EventKind, SpaceState};
+    if !matches!(
+        event.kind,
+        EventKind::SpaceArchive | EventKind::SpaceRestore
+    ) {
+        return Ok(());
+    }
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let realm_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: event.realm_id.clone(),
+    };
+    let realm_stream = arkret_wire::CommitStreamRef::Realm {
+        realm_id: event.realm_id.clone(),
+    };
+    if event.scope_ref != realm_scope
+        || commit.stream_ref != realm_stream
+        || commit.event_ref != event.event_id
+    {
+        return Err(reject(
+            "Space lifecycle requires a Realm-scope authority cut",
+        ));
+    }
+    let payload: arkret_models_collaboration::object_lifecycle::SpaceStateTransitionPayload =
+        serde_json::from_value(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if authorize {
+        crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
+    let row = diesel::sql_query(
+        "SELECT current_commit_id,current_stream_position,value FROM space_current_results \
+         WHERE realm_id=$1 AND space_id=$2 FOR UPDATE",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(payload.space_id.as_str())
+    .get_result::<SpaceCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| reject("Space lifecycle target has no confirmed current value"))?;
+    let position = i64::try_from(commit.stream_position)
+        .map_err(|_| reject("invalid Space stream position"))?;
+    if row.current_stream_position >= position || row.current_commit_id == commit.commit_id.as_str()
+    {
+        return Err(reject("Space current revision does not precede transition"));
+    }
+    let current: arkret_models_collaboration::objects::space::Space =
+        serde_json::from_value(row.value.clone()).map_err(PersistenceError::database)?;
+    if current.id.as_ref() != Some(&payload.space_id) || current.realm_id != event.realm_id {
+        return Err(reject("Space lifecycle target identity differs"));
+    }
+    if current.scope_circle_id.is_some() {
+        return Err(reject("Circle-scoped Space needs a Circle authority cut"));
+    }
+    let next = match (&event.kind, current.state.unwrap_or(SpaceState::Active)) {
+        (_, SpaceState::Tombstoned) => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::SpaceAlreadyTerminal,
+                "Space lifecycle target is tombstoned",
+            ));
+        }
+        (EventKind::SpaceArchive, SpaceState::Active) => "archived",
+        (EventKind::SpaceArchive, SpaceState::Archived) => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::SpaceNotActive,
+                "Space archive target is not active",
+            ));
+        }
+        (_, SpaceState::Archived) => "active",
+        (_, SpaceState::Active) => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::SpaceNotArchived,
+                "Space restore target is not archived",
+            ));
+        }
+    };
+    let lifecycle_time = Value::String(arkret_canonical::format_timestamp_canonical(
+        event.created_at.max(commit.committed_at),
+    ));
+    let mut post = row.value.clone();
+    post["state"] = Value::String(next.to_owned());
+    post["state_changed_at"] = lifecycle_time.clone();
+    post["updated_by"] =
+        serde_json::to_value(&event.actor_id).map_err(PersistenceError::database)?;
+    post["updated_at"] = lifecycle_time;
+    let _: arkret_models_collaboration::objects::space::Space =
+        serde_json::from_value(post.clone()).map_err(PersistenceError::database)?;
+    let changed = diesel::sql_query(
+        "UPDATE space_current_results SET current_commit_id=$3,current_stream_position=$4,\
+         value=$5,updated_at=$6 WHERE realm_id=$1 AND space_id=$2 AND current_commit_id=$7",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(payload.space_id.as_str())
+    .bind::<Text, _>(commit.commit_id.as_str())
+    .bind::<BigInt, _>(position)
+    .bind::<Jsonb, _>(&post)
+    .bind::<Timestamptz, _>(commit.committed_at)
+    .bind::<Text, _>(&row.current_commit_id)
+    .execute(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if changed != 1 {
+        return Err(reject("Space current changed before transition"));
     }
     Ok(())
 }

@@ -402,6 +402,7 @@ async fn current_circle_join(
         FROM circle_member_state_current_results m \
         WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
         AND m.value->>'membership'='join' AND m.source_stream_ref=$5 \
+        AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) \
         AND (EXISTS (SELECT 1 FROM realm_commits c WHERE c.realm_id=m.realm_id \
              AND c.commit_id=m.current_commit_id AND c.stream_position=m.current_stream_position \
              AND c.stream_key=$4 AND c.stream_ref=m.source_stream_ref) \
@@ -773,7 +774,10 @@ async fn peer_circle_intervals(
            ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id \
            AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref \
          WHERE m.realm_id=$1 AND m.circle_id=$2 AND c.stream_key=$3 \
-           AND m.value->>'membership'=m.membership ORDER BY m.member_id",
+           AND m.value->>'membership'=m.membership \
+           AND (m.membership<>'join' \
+             OR circle_member_parent_join_current(m.realm_id,m.member_id,m.value)) \
+         ORDER BY m.member_id",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(circle_id.as_str())

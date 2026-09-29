@@ -242,6 +242,15 @@ pub enum ConflictCode {
     StrandNotArchived,
     /// A Strand write targets terminal redacted state.
     StrandAlreadyTerminal,
+    /// A Space archive targets one that is not active.
+    SpaceNotActive,
+    /// A Space restore targets one that is not archived.
+    SpaceNotArchived,
+    /// A Space lifecycle write targets a tombstoned Space.
+    SpaceAlreadyTerminal,
+    /// A structural Relation endpoint is not an object of the Relation's own
+    /// Realm (`relation.md` section 4.4).
+    CrossRealmStructuralRelation,
     /// A Realm entry was refused by its join rule or join policy; the
     /// applicant sees one non-enumerating result (`join-policy.md` §4).
     GateCheckFailed,
@@ -357,7 +366,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 72] = [
+    pub const ALL: [Self; 76] = [
         Self::ApprovalNonceReused,
         Self::ApprovalRequired,
         Self::AppletRevoked,
@@ -381,6 +390,10 @@ impl ConflictCode {
         Self::StrandNotActive,
         Self::StrandNotArchived,
         Self::StrandAlreadyTerminal,
+        Self::SpaceNotActive,
+        Self::SpaceNotArchived,
+        Self::SpaceAlreadyTerminal,
+        Self::CrossRealmStructuralRelation,
         Self::GateCheckFailed,
         Self::SnapshotCapacityExceeded,
         Self::MlsActivationRequired,
@@ -462,6 +475,12 @@ impl ConflictCode {
             Self::StrandNotActive => arkret_wire::ReasonCode::STRAND_NOT_ACTIVE,
             Self::StrandNotArchived => arkret_wire::ReasonCode::STRAND_NOT_ARCHIVED,
             Self::StrandAlreadyTerminal => arkret_wire::ReasonCode::STRAND_ALREADY_TERMINAL,
+            Self::SpaceNotActive => arkret_wire::ReasonCode::SPACE_NOT_ACTIVE,
+            Self::SpaceNotArchived => arkret_wire::ReasonCode::SPACE_NOT_ARCHIVED,
+            Self::SpaceAlreadyTerminal => arkret_wire::ReasonCode::SPACE_ALREADY_TERMINAL,
+            Self::CrossRealmStructuralRelation => {
+                arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION
+            }
             Self::GateCheckFailed => arkret_wire::ReasonCode::GATE_CHECK_FAILED,
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
@@ -651,7 +670,6 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
     fn circle_projections(&self) -> &dyn CircleProjectionStore;
     fn strand_projections(&self) -> &dyn StrandProjectionStore;
     fn object_current_snapshot(&self) -> &dyn ObjectCurrentSnapshotStore;
-    fn strand_watch_projections(&self) -> &dyn StrandWatchProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
     fn relation_current_results(&self) -> &dyn RelationCurrentResultStore;
     fn capability_grant_current_results(&self) -> &dyn CapabilityGrantCurrentResultStore;

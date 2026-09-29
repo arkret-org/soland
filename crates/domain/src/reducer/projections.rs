@@ -26,16 +26,6 @@ pub struct PendingReplayEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StrandWatchProjection {
-    pub strand_id: String,
-    pub actor_id: String,
-    pub level: Option<String>,
-    pub level_public: bool,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    pub committed_ref: Option<arkret_wire::CommittedEventRef>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InviteProjection {
     pub invite_id: String,
     pub realm_id: String,

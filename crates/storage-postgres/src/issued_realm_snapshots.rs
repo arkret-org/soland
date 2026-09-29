@@ -434,12 +434,7 @@ async fn recheck_disclosure_in_connection(
             source_stream_ref,
             revision,
             value,
-        } = row
-        else {
-            return Err(undisclosable(
-                "a row family is outside the re-provable subset",
-            ));
-        };
+        } = row;
         if !current_material.current_state_entries.contains(row) {
             return Err(undisclosable("a signed row is no longer disclosed"));
         }

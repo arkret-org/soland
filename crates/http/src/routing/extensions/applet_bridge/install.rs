@@ -422,7 +422,11 @@ fn validate_bot_managed_actor_unit(
             != Some(provision.applet_authority_ref.as_str())
         || profile.kind.as_str() != "ak.profile.create"
         || profile.actor_id != bot_actor_id
-        || &profile.realm_id != basis.effective_scope.realm_id()
+        || profile.realm_id != expected_realm_id
+        || profile.scope_ref
+            != (ScopeRef::Realm {
+                realm_id: expected_realm_id.clone(),
+            })
         || profile.executed_by.as_ref() != Some(&service_actor_id)
         || profile.applet_id.as_ref() != Some(&expected_applet_id)
         || profile.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
@@ -884,11 +888,13 @@ pub(super) async fn register_package_install(
         let registration_event_ref = crate::routing::events::event_log::applet_committed_ref(
             references,
             &registration_event,
-        )?;
+        )?
+        .event_id;
         let bot_actor_provision_ref = crate::routing::events::event_log::applet_committed_ref(
             references,
             &identity.bot_actor_provision_event,
-        )?;
+        )?
+        .event_id;
         let response = AppletInstallOutcome {
             install_id: install_id.clone(),
             applet_id: package.applet_id.clone(),
@@ -1053,7 +1059,7 @@ fn install_produced_event_refs(
         5 + response.capability_grant_refs.len()
             + usize::from(response.widget_policy_ref.is_some()),
     );
-    refs.push(response.registration_event_ref.event_id.to_string());
+    refs.push(response.registration_event_ref.to_string());
     refs.extend(
         record
             .capability_grant_events
@@ -1067,7 +1073,7 @@ fn install_produced_event_refs(
         refs.push(record.bot_profile_event.event_id.to_string());
     }
     if let Some(widget_policy_ref) = &response.widget_policy_ref {
-        refs.push(widget_policy_ref.event_id.to_string());
+        refs.push(widget_policy_ref.to_string());
     }
     refs
 }
@@ -1485,10 +1491,10 @@ pub(super) fn registration_payload_from_package(
 pub(super) fn registration_epoch_evidence_from_event(
     event: &Event,
 ) -> Result<AppletRegistrationEpochEvidence, AppError> {
-    super::registration_epoch_evidence_from_event(event).map_err(|error| {
-        AppError::param_invalid(error)
-            .with_internal_reason("applet_registration_epoch_evidence_mismatch")
-    })
+    // An absent or malformed carrier violates the closed
+    // `applet-registration-epoch-evidence.schema.json` shape; a schema-valid
+    // carrier that disagrees with the resolved DID state is rejected later.
+    super::registration_epoch_evidence_from_event(event).map_err(AppError::schema_violation)
 }
 
 pub(super) fn capability_constraints_for_scope(scope: &ScopeRef) -> Vec<CapabilityConstraint> {
@@ -1520,7 +1526,7 @@ fn package_requests_mls_join(package: &AppletPackage) -> bool {
 fn e2ee_authorization_refs_for_install(
     package: &AppletPackage,
     _e2ee_policy: Option<&E2eePolicy>,
-) -> Result<Vec<arkret_wire::CommittedEventRef>, AppError> {
+) -> Result<Vec<arkret_wire::EventId>, AppError> {
     if !package_requests_mls_join(package) {
         return Ok(Vec::new());
     }
@@ -1710,6 +1716,25 @@ mod tests {
 
     use super::*;
 
+    /// Applet registration epoch evidence accepts only versioned
+    /// `did:webvh` / `did:key` service DIDs
+    /// (`applet-registration-epoch-evidence.schema.json`).
+    const TEST_APPLET_SERVICE_DID: &str = "did:webvh:z6mktestapplet:test-applet.example";
+
+    fn test_applet_service_did() -> Did {
+        Did::new(TEST_APPLET_SERVICE_DID.to_owned()).unwrap()
+    }
+
+    fn pinned_service_method_version() -> arkret_models_integration::AppletDidMethodVersionEvidence
+    {
+        arkret_models_integration::AppletDidMethodVersionEvidence::versioned(
+            "did:webvh",
+            Some("1-QmTestAppletServiceVersion".to_owned()),
+            None,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn bot_install_rejects_the_same_principal_at_another_station() {
         let principal_id = DidCoreId::new("ak:did_core:web:bot.example").unwrap();
@@ -1786,7 +1811,7 @@ mod tests {
     ) -> AppletPackage {
         let (controller_did, _) = did_key_for_seed(controller_seed);
         let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
-        let service_did = Did::new("did:web:test-applet.example".to_owned()).unwrap();
+        let service_did = test_applet_service_did();
         let service_id = arkret_wire::project_did_to_core_id(&service_did).unwrap();
         let mut package = AppletPackage::new(
             "package:ak:applet:test".to_owned(),
@@ -1817,10 +1842,7 @@ mod tests {
         let evidence = arkret_models_integration::applet::AppletRegistrationEpochEvidence::new(
             service_did,
             Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap(),
-            arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
-                "did:web",
-            )
-            .unwrap(),
+            pinned_service_method_version(),
             vec![
                 arkret_models_integration::applet::AppletAcceptedSigningKeyEvidence {
                     key_ref: package.webhook_auth.key_ref.to_string(),
@@ -1935,7 +1957,7 @@ mod tests {
     }
 
     fn sample_package() -> AppletPackage {
-        let service_did = Did::new("did:web:test-applet.example".to_owned()).unwrap();
+        let service_did = test_applet_service_did();
         AppletPackage::new(
             "package:ak:applet:test".to_owned(),
             arkret_identifiers::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
@@ -1946,10 +1968,7 @@ mod tests {
             "https://test-applet.example".to_owned(),
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
-                arkret_wire::project_did_to_core_id(
-                    &Did::new("did:web:test-applet.example".to_owned()).unwrap(),
-                )
-                .unwrap(),
+                arkret_wire::project_did_to_core_id(&test_applet_service_did()).unwrap(),
             )),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
@@ -2003,14 +2022,13 @@ mod tests {
         .to_string();
         for material in [multibase, jwk] {
             let document = DidDocument::new(
-                Did::new("did:web:test-applet.example").unwrap(),
+                test_applet_service_did(),
                 package.webhook_auth.key_ref.to_string(),
                 material,
             );
             let evidence = AppletRegistrationEpochEvidence::from_did_document(
                 &document,
-                arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                    .unwrap(),
+                pinned_service_method_version(),
             )
             .unwrap();
             assert_eq!(
@@ -2046,14 +2064,13 @@ mod tests {
     fn registration_epoch_signing_key_rejects_non_ed25519_material() {
         let package = sample_package();
         let document = DidDocument::new(
-            Did::new("did:web:test-applet.example").unwrap(),
+            test_applet_service_did(),
             package.webhook_auth.key_ref.to_string(),
             json!({"kty": "OKP", "crv": "X25519", "x": arkret_canonical::base64url_encode(&[31; 32])}).to_string(),
         );
         let evidence = AppletRegistrationEpochEvidence::from_did_document(
             &document,
-            arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                .unwrap(),
+            pinned_service_method_version(),
         )
         .unwrap();
         let error = registration_epoch_signing_key_from_document(&package, &evidence, &document)
@@ -2066,43 +2083,65 @@ mod tests {
     }
 
     #[test]
-    fn registration_epoch_validation_refetches_unversioned_web_document() {
+    fn registration_epoch_validation_accepts_pinned_webvh_and_refuses_web_snapshot() {
         let package = sample_package();
         let document = DidDocument::new(
-            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            test_applet_service_did(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
         let evidence =
             arkret_models_integration::AppletRegistrationEpochEvidence::from_did_document(
                 &document,
-                arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                    .unwrap(),
+                pinned_service_method_version(),
             )
             .unwrap();
         validate_registration_epoch_evidence_for_document(&package, &evidence, &document).unwrap();
-        assert!(evidence.method_version_evidence.unversioned_refetch);
+
+        // A `did:web` current snapshot has no version selector that historical
+        // producer verification could pin.
+        let web_document = DidDocument::new(
+            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            "did:web:test-applet.example#controller".to_owned(),
+            r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
+        );
+        assert!(
+            arkret_models_integration::AppletRegistrationEpochEvidence::from_did_document(
+                &web_document,
+                pinned_service_method_version(),
+            )
+            .is_err()
+        );
+        let mut web_evidence = serde_json::to_value(&evidence).unwrap();
+        web_evidence["did"] = json!("did:web:test-applet.example");
+        web_evidence["method_version_evidence"] =
+            json!({"method": "did:web", "unversioned_refetch": true});
+        assert!(
+            serde_json::from_value::<arkret_models_integration::AppletRegistrationEpochEvidence>(
+                web_evidence
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn registration_epoch_validation_rejects_rotation_until_new_snapshot_is_used() {
         let package = sample_package();
         let old_document = DidDocument::new(
-            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            test_applet_service_did(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"old"}"#,
         );
         let old_evidence = AppletRegistrationEpochEvidence::from_did_document(
             &old_document,
-            arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                .unwrap(),
+            pinned_service_method_version(),
         )
         .unwrap();
         validate_registration_epoch_evidence_for_document(&package, &old_evidence, &old_document)
             .unwrap();
 
         let rotated_document = DidDocument::new(
-            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            test_applet_service_did(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"rotated"}"#,
         );
@@ -2117,8 +2156,7 @@ mod tests {
 
         let rotated_evidence = AppletRegistrationEpochEvidence::from_did_document(
             &rotated_document,
-            arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                .unwrap(),
+            pinned_service_method_version(),
         )
         .unwrap();
         validate_registration_epoch_evidence_for_document(
@@ -2137,14 +2175,13 @@ mod tests {
     fn registration_epoch_validation_rejects_deactivated_and_empty_key_documents() {
         let package = sample_package();
         let mut deactivated_document = DidDocument::new(
-            Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+            test_applet_service_did(),
             package.webhook_auth.key_ref.to_string(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
         let active_evidence = AppletRegistrationEpochEvidence::from_did_document(
             &deactivated_document,
-            arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                .unwrap(),
+            pinned_service_method_version(),
         )
         .unwrap();
         deactivated_document
@@ -2161,8 +2198,7 @@ mod tests {
         assert!(
             AppletRegistrationEpochEvidence::from_did_document(
                 &deactivated_document,
-                arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web",)
-                    .unwrap(),
+                pinned_service_method_version(),
             )
             .is_err()
         );
@@ -2173,8 +2209,7 @@ mod tests {
         assert!(
             AppletRegistrationEpochEvidence::from_did_document(
                 &keyless_document,
-                arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web",)
-                    .unwrap(),
+                pinned_service_method_version(),
             )
             .is_err()
         );
@@ -2194,14 +2229,13 @@ mod tests {
     fn registration_epoch_validation_rejects_swapped_service_document() {
         let package = sample_package();
         let swapped_document = DidDocument::new(
-            Did::new("did:web:other-applet.example".to_owned()).unwrap(),
-            "did:web:other-applet.example#controller".to_owned(),
+            Did::new("did:webvh:z6mkotherapplet:other-applet.example".to_owned()).unwrap(),
+            "did:webvh:z6mkotherapplet:other-applet.example#controller".to_owned(),
             r#"{"crv":"Ed25519","kty":"OKP","x":"fixture"}"#,
         );
         let swapped_evidence = AppletRegistrationEpochEvidence::from_did_document(
             &swapped_document,
-            arkret_models_integration::AppletDidMethodVersionEvidence::unversioned("did:web")
-                .unwrap(),
+            pinned_service_method_version(),
         )
         .unwrap();
         assert!(

@@ -423,8 +423,11 @@ fn validate_managed_actor_unit(
         || &profile_event.actor_id != actor_id
         || profile_event.executed_by.as_ref() != Some(&service_actor_id)
         || profile_event.actor_id.route_service_id() != station_id
-        || &profile_event.realm_id != authority_realm_id
-        || &profile_event.scope_ref != authority_scope
+        || profile_event.realm_id != pcr_realm_id
+        || profile_event.scope_ref
+            != (ScopeRef::Realm {
+                realm_id: pcr_realm_id.clone(),
+            })
         || profile_event.applet_id.as_ref() != Some(&record.applet_id)
         || profile_event.authorization_ref.as_deref()
             != Some(provision.applet_authority_ref.as_str())
@@ -468,7 +471,7 @@ impl AppletRecord {
             || self.bot_actor_id != self.package.bot_actor_id
             || self.bot_actor_id != self.install_response.bot_actor_id
             || self.bot_actor_provision_ref
-                != self.install_response.bot_actor_provision_ref.event_id
+                != self.install_response.bot_actor_provision_ref
             || self.bot_principal_control_realm_id
                 != self.install_response.bot_principal_control_realm_id
             || &self.portal_realm_id != self.effective_scope.realm_id()
@@ -539,7 +542,7 @@ impl AppletRecord {
             || self.registration_event.realm_id != self.portal_realm_id
             || self.registration_event.scope_ref != self.effective_scope
             || registration != expected_registration
-            || self.install_response.registration_event_ref.event_id
+            || self.install_response.registration_event_ref
                 != self.registration_event.event_id
         {
             return Err(

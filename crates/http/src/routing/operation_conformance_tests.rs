@@ -453,14 +453,15 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "delegation_policy": {"enabled": false},
                     "e2ee_policy": {"enabled": false},
                     "registration_epoch_evidence": {
-                        "did": "did:web:applet.example",
+                        "did": "did:webvh:zQ3shExampleScid:applet.example",
                         "document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "method_version_evidence": {
-                            "method": "did:web",
-                            "unversioned_refetch": true
+                            "method": "did:webvh",
+                            "version_id": "1-QmExampleServiceVersion",
+                            "unversioned_refetch": false
                         },
                         "accepted_signing_keys": [{
-                            "key_ref": "did:web:applet.example#server-key-1",
+                            "key_ref": "did:webvh:zQ3shExampleScid:applet.example#server-key-1",
                             "public_key_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                         }]
                     }
@@ -513,14 +514,15 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "delegation_policy": {"enabled": false},
                     "e2ee_policy": {"enabled": false},
                     "registration_epoch_evidence": {
-                        "did": "did:web:applet.example",
+                        "did": "did:webvh:zQ3shExampleScid:applet.example",
                         "document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "method_version_evidence": {
-                            "method": "did:web",
-                            "unversioned_refetch": true
+                            "method": "did:webvh",
+                            "version_id": "1-QmExampleServiceVersion",
+                            "unversioned_refetch": false
                         },
                         "accepted_signing_keys": [{
-                            "key_ref": "did:web:applet.example#server-key-1",
+                            "key_ref": "did:webvh:zQ3shExampleScid:applet.example#server-key-1",
                             "public_key_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                         }]
                     }

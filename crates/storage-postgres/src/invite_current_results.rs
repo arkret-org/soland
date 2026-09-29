@@ -84,8 +84,13 @@ fn typed_payload<T: serde::de::DeserializeOwned>(
     .map_err(schema_violation)
 }
 
-/// Invite Events are Realm-scope, carried on the Realm stream and directly
-/// authored: no delegated executor and no Applet may stand in for the actor.
+/// Invite Events are Realm-scope and carried on the Realm stream. They are
+/// directly authored, with one exception: an Applet-managed Bot or Ghost has
+/// no runtime credential of its own, so its exact acceptance of an Invite
+/// addressed to it is executed by its Applet Service (`common-fields.md` §4.5,
+/// `extensions/applet-integration.md` §8, §9.1, §11). That acceptance carries
+/// both `executed_by` and `applet_id`; its managed identity is closed in
+/// [`commit_invite_accept`]. No other Invite Event admits an executor.
 fn require_realm_stream_carrier(
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
@@ -102,7 +107,10 @@ fn require_realm_stream_carrier(
             "Invite typed current writers require the Realm source stream".to_owned(),
         ));
     }
-    if event.executed_by.is_some() || event.applet_id.is_some() {
+    let applet_managed_acceptance = event.kind == EventKind::InviteAccept
+        && event.executed_by.is_some()
+        && event.applet_id.is_some();
+    if (event.executed_by.is_some() || event.applet_id.is_some()) && !applet_managed_acceptance {
         return Err(coded(
             ConflictCode::CapabilityDenied,
             "an Invite Event must be directly authored by its actor",
@@ -658,6 +666,20 @@ async fn commit_invite_accept(
     let payload: InviteAcceptPayload = typed_payload(event)?;
     payload.validate().map_err(schema_violation)?;
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    if event.applet_id.is_some() {
+        // The Applet producer guard has already bound the Service proof,
+        // active exact install, revoke fence and the actor's own
+        // install-bound grant. The actor must additionally be a Bot or Ghost
+        // this Applet provisioned; the Invite binding below stays the only
+        // authority for the acceptance itself (`ak.invite.accept` is
+        // `subject_only`).
+        crate::managed_message_actor::require_managed_actor_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
     let realm_id = event.realm_id.as_str();
     let stored = locked_lifecycle(conn, realm_id, &payload.invite_id)
         .await?

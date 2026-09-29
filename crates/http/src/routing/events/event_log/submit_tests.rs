@@ -120,6 +120,30 @@ mod relation_error_mapping_tests {
     }
 }
 
+mod grant_error_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn grant_beyond_issuer_authority_is_failed_precondition_with_registered_reason() {
+        let error = submit_one_error_to_app_error(
+            "Applet admission",
+            StatusCode::CONFLICT,
+            arkret_wire::ReasonCode::GRANT_EXCEEDS_ISSUER_AUTHORITY.to_owned(),
+            "conflict: grant_exceeds_issuer_authority",
+        );
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(
+            error.http_status(),
+            soland_http::error::error_http_status(error.code)
+        );
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::GRANT_EXCEEDS_ISSUER_AUTHORITY)
+        );
+    }
+}
+
 mod applet_formal_admission_tests {
     use super::*;
 

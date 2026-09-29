@@ -48,8 +48,6 @@ pub struct ProjectionState {
     /// Relation values loaded from durable storage. This is query metadata;
     /// the PostgreSQL authority row remains the only CAS source of truth.
     pub relation_current_metadata: BTreeMap<(String, String), RelationCurrentResultProjection>,
-    /// Per-(Strand, Actor) notification watch preferences.
-    pub strand_watches: BTreeMap<(String, String), StrandWatchProjection>,
     /// Poll projections keyed by poll_id. Poll create is a message content
     /// block; current votes are derived from the complete response causal set.
     pub polls: BTreeMap<arkret_wire::MessageId, PollState>,

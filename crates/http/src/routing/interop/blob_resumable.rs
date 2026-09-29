@@ -23,12 +23,12 @@
 //! - `POST    /{id}/finalize` — complete an upload whose offset reached `Upload-Length`
 //! - `DELETE  /{id}`          — terminate an in-progress upload
 //!
-//! Upload-Metadata keys understood at completion time: `purpose`, `encrypted`
-//! (`"true"`/`"false"`), `realm_id`, `content_digest` (`sha256:<hex>`
-//! pre-declaration). Per spec §2.1 privacy rules, plaintext filenames and
-//! MIME types of private/E2EE blobs MUST NOT appear in `Upload-Metadata`;
-//! the completion path stores encrypted blobs as `application/octet-stream`
-//! with no filename, exactly like the canonical upload path.
+//! Upload-Metadata keys understood at completion time are the
+//! `blob_upload_request_body` members `purpose`, `realm_id` and
+//! `content_digest`, validated exactly as on the canonical upload. Per spec
+//! §2.1 privacy rules, plaintext filenames and MIME types of private/E2EE
+//! blobs MUST NOT appear in `Upload-Metadata`, so the completion path stores
+//! every resumable blob as `application/octet-stream` with no filename.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,20 +40,16 @@ use parking_lot::Mutex;
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use soland_services::delivery::BlobState as BlobRecord;
 use tokio::io::AsyncReadExt as _;
 
 use super::blob::{
-    MAX_BLOB_UPLOAD_BYTES, blob_purpose_requires_encryption, blob_session_has_realm_membership,
-    blob_upload_outcome, encrypted_blob_encryption_metadata_for_purpose, enforce_blob_quota,
-    is_valid_blob_purpose, plaintext_blob_data_class,
+    MAX_BLOB_UPLOAD_BYTES, blob_content_digest_matches, blob_session_has_realm_membership,
+    blob_upload_outcome, enforce_blob_quota, is_valid_blob_upload_content_digest,
+    is_valid_blob_upload_purpose,
 };
-use super::{
-    auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service_for_data_class,
-    render_error,
-};
+use super::{auth_or_render, now, render_error};
 use crate::state::AppState;
 
 pub const TUS_VERSION: &str = "1.0.0";
@@ -704,38 +700,24 @@ async fn complete_resumable_upload(
     };
     let purpose = meta_value("purpose");
     if let Some(purpose) = purpose.as_deref()
-        && !is_valid_blob_purpose(purpose)
+        && !is_valid_blob_upload_purpose(purpose)
     {
         render_error(
             res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "invalid blob upload purpose",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            "purpose must match ^[a-z][a-z0-9_]{0,63}$",
         );
         return;
     }
-    let encrypted = match meta_value("encrypted").as_deref() {
-        None => false,
-        Some("true") | Some("1") | Some("yes") => true,
-        Some("false") | Some("0") | Some("no") => false,
-        Some(_) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "param_invalid",
-                "Upload-Metadata encrypted must be true or false",
-            );
-            return;
-        }
-    };
     let realm_id = match meta_value("realm_id") {
         Some(realm_id) => {
             if arkret_identifiers::RealmId::new(realm_id.clone()).is_err() {
                 render_error(
                     res,
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    "invalid blob realm_id",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
+                    "realm_id is not a Realm id",
                 );
                 return;
             }
@@ -762,12 +744,12 @@ async fn complete_resumable_upload(
     };
     let expected_digest = match meta_value("content_digest") {
         Some(digest) => {
-            if !is_valid_sha256_digest(&digest) {
+            if !is_valid_blob_upload_content_digest(&digest) {
                 render_error(
                     res,
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    "content_digest must be sha256:<64 lowercase hex>",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
+                    "content_digest must be <sha256|blake3>:<64 lowercase hex>",
                 );
                 return;
             }
@@ -775,53 +757,6 @@ async fn complete_resumable_upload(
         }
         None => None,
     };
-    if blob_purpose_requires_encryption(purpose.as_deref()) && !encrypted {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "search index shard uploads must be encrypted",
-        );
-        return;
-    }
-    // Encrypted blobs never take filename/MIME from metadata (spec §2.1
-    // privacy rule); plaintext blobs land as octet-stream.
-    let encryption: Option<Value> = if encrypted {
-        let Some(encryption) = encrypted_blob_encryption_metadata_for_purpose(purpose.as_deref())
-        else {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "param_invalid",
-                "encrypted resumable uploads require a supported encrypted Upload-Metadata purpose",
-            );
-            return;
-        };
-        Some(encryption)
-    } else {
-        None
-    };
-    let plaintext_denied = if encrypted {
-        false
-    } else if let Some(realm_id) = realm_id.as_deref() {
-        !realm_allows_plaintext_service_for_data_class(
-            state,
-            realm_id,
-            plaintext_blob_data_class(purpose.as_deref()),
-        )
-        .await
-    } else {
-        false
-    };
-    if plaintext_denied {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "policy_denied",
-            "private plaintext blob uploads require this service in plaintext_visible_services",
-        );
-        return;
-    }
 
     let dir = &state.config().resumable_upload_dir;
     let staged_data_path = data_path(dir, id);
@@ -886,9 +821,24 @@ async fn complete_resumable_upload(
         }
     };
     let content_digest = format!("sha256:{sha256}");
-    if let Some(expected) = expected_digest
-        && expected != content_digest
-    {
+    let digest_matches = match expected_digest.as_deref() {
+        None => true,
+        Some(expected) if expected.starts_with("sha256:") => expected == content_digest,
+        Some(expected) => match tokio::fs::read(&staged_data_path).await {
+            Ok(bytes) => blob_content_digest_matches(expected, &bytes),
+            Err(error) => {
+                tracing::error!(%error, upload_id = %id, "resumable upload data file unreadable");
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "resumable upload data unavailable",
+                );
+                return;
+            }
+        },
+    };
+    if !digest_matches {
         crate::metrics::record_digest_mismatch("blob_resumable_patch");
         render_error(
             res,
@@ -928,7 +878,9 @@ async fn complete_resumable_upload(
         media_type: media_type.clone(),
         filename: None,
         realm_id: realm_id.clone(),
-        encryption: encryption.clone(),
+        // Same as the canonical upload: the request carries no encryption
+        // member, so the Station records none.
+        encryption: None,
         legal_hold: false,
         redacted: false,
         visibility: if realm_id.is_some() {
@@ -1061,15 +1013,14 @@ mod tests {
 
     #[test]
     fn upload_metadata_parses_tus_pairs() {
-        let parsed = parse_upload_metadata(
-            "purpose ZmlsZV90cmFuc2Zlcg==,encrypted dHJ1ZQ==,is_confidential",
-        )
-        .expect("valid metadata");
+        let parsed =
+            parse_upload_metadata("purpose ZmlsZV90cmFuc2Zlcg==,filename dHJ1ZQ==,is_confidential")
+                .expect("valid metadata");
         assert_eq!(
             parsed.get("purpose"),
             Some(&Some("file_transfer".to_owned()))
         );
-        assert_eq!(parsed.get("encrypted"), Some(&Some("true".to_owned())));
+        assert_eq!(parsed.get("filename"), Some(&Some("true".to_owned())));
         assert_eq!(parsed.get("is_confidential"), Some(&None));
     }
 

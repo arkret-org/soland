@@ -468,24 +468,25 @@ pub(super) async fn mimi_consent_update(
     body.validate_consent_event().map_err(|error| {
         AppError::schema_violation(format!("MIMI consent Event binding is invalid: {error}"))
     })?;
+    // mimi-interop.md section 5: a carried Event id that is not the
+    // re-derived content address is refused before any holder state is read.
+    body.consent_event
+        .event
+        .verify_event_id_matches_content_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| {
+            AppError::schema_violation(format!("MIMI consent Event identity: {error}"))
+                .with_reason_code(arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH)
+        })?;
     let (session, source_id) = verify_mimi_consent_update_authority(state, req, aa, &body).await?;
     verify_mimi_consent_correlation(state, &body, source_id.as_deref()).await?;
     let event_ref = body.consent_event.event.event_id.clone();
     let updated_at = body.consent_event.event.created_at;
-    crate::routing::events::event_log::submit_initial_event_submission(
-        state,
-        &session,
-        body.consent_event.clone(),
-    )
-    .await
-    .map_err(|error| {
-        crate::routing::events::event_log::submit_one_error_to_app_error(
-            "MIMI consent Event submit failed",
-            error.status(),
-            error.code(),
-            &error.message(),
-        )
-    })?;
+    // mimi-interop.md section 10: the facade hands the exact submission to
+    // the same holder-private Consent admission as the self Consent routes;
+    // it never re-signs, rebuilds or synthesizes the Event.
+    crate::state::authority_consent::submit(state, &session, &body.consent_event)
+        .await
+        .map_err(crate::routing::identity::consent::consent_error)?;
     json_ok(MimiUpdateConsentOutcome {
         consent_id: body.consent_id,
         decision: body.decision,

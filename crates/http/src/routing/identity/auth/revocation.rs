@@ -9,17 +9,6 @@ pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<
         .map_err(|error| error.to_string())
 }
 
-pub async fn active_delegated_sessions_for_actor(
-    state: &AppState,
-    actor: &str,
-) -> Result<usize, String> {
-    state
-        .sessions()
-        .active_delegated_sessions_for_actor(actor)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Revoke every active device record for an actor.
 pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     state

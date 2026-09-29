@@ -153,7 +153,7 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
     let expected_authorization_ref = ghost_provision_authorization_ref(record)?;
     if package.service_id != basis.service_id
         || record.applet_id != basis.applet_id
-        || record.install_response.registration_event_ref.event_id != basis.registration_event_ref
+        || record.install_response.registration_event_ref != basis.registration_event_ref
         || package.package_digest.as_ref() != Some(&basis.package_digest)
         || expected_evidence != basis.registration_epoch_evidence
         || expected_authorization_ref != basis.authorization_ref.as_str()
@@ -249,8 +249,17 @@ pub(super) async fn validate_signed_ghost_provision_events(
             "accountability_grant_event envelope does not match the Applet provision binding",
         ));
     }
+    // Profile state is principal-scoped: it lives in the Ghost's own principal
+    // control Realm, founded by the unit's PCR genesis, never in the portal.
+    let principal_control_realm_id = arkret_wire::RealmId::from_event_id(
+        &provision.managed_actor_bundle.pcr_genesis_event.event_id,
+    );
     if profile.kind != arkret_wire::EventKind::ProfileCreate
-        || profile.realm_id != basis.realm_id
+        || profile.realm_id != principal_control_realm_id
+        || profile.scope_ref
+            != (arkret_wire::ScopeRef::Realm {
+                realm_id: principal_control_realm_id.clone(),
+            })
         || profile.actor_id != ghost_actor_id
         || profile.executed_by.as_ref() != Some(&service_actor_id)
         || !applet_matches(profile)
@@ -420,7 +429,7 @@ async fn validate_ghost_managed_actor_unit(
         || payload.actor_id.signing_principal_id() == &record.package.controller_principal_id
         || payload.actor_id == record.package.bot_actor_id
         || payload.actor_id.route_service_id().as_str() != state.service_id()
-        || record.install_response.registration_event_ref.event_id != payload.registration_ref
+        || record.install_response.registration_event_ref != payload.registration_ref
         || payload.applet_authority_ref.as_str() != authorization_ref
         || payload.external_ref.as_ref() != Some(&basis.external_ref)
     {

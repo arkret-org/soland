@@ -51,6 +51,18 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
             .list_for_recipient(recipient_id)
             .await?)
     }
+
+    async fn fanout_basis(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        strand_id: Option<&arkret_wire::StrandId>,
+    ) -> crate::ServiceResult<NotificationFanoutBasis> {
+        Ok(self
+            .0
+            .notifications()
+            .fanout_basis(realm_id, strand_id)
+            .await?)
+    }
 }
 
 #[async_trait::async_trait]

@@ -1,7 +1,5 @@
 //! PostgreSQL-backed implementation of [`PersistenceStore`].
 
-use soland_storage::*;
-
 use crate::*;
 
 /// PostgreSQL-backed persistence store for durable projections with shipped Pg
@@ -58,7 +56,6 @@ pub struct PgPersistenceStore {
     principal_resolutions: PgPrincipalResolutionStore,
     service_routes: PgServiceRouteStore,
     circle_projections: PgCircleProjectionStore,
-    strand_watch_projections: PgStrandWatchProjectionStore,
     key_backups: PgKeyBackupStore,
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
@@ -145,7 +142,6 @@ impl PgPersistenceStore {
             principal_resolutions: PgPrincipalResolutionStore { pool: pool.clone() },
             service_routes: PgServiceRouteStore { pool: pool.clone() },
             circle_projections: PgCircleProjectionStore { pool: pool.clone() },
-            strand_watch_projections: PgStrandWatchProjectionStore { pool: pool.clone() },
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
@@ -417,10 +413,6 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 
     fn circle_projections(&self) -> &dyn CircleProjectionStore {
         &self.circle_projections
-    }
-
-    fn strand_watch_projections(&self) -> &dyn StrandWatchProjectionStore {
-        &self.strand_watch_projections
     }
 
     fn strand_projections(&self) -> &dyn StrandProjectionStore {

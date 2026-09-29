@@ -448,10 +448,7 @@ pub(super) async fn accepted_agent_key_authorization_snapshot(
     for entry in &material.current_state_entries {
         let arkret_wire::TypedCurrentResult::Value {
             selector, value, ..
-        } = entry
-        else {
-            continue;
-        };
+        } = entry;
         match selector {
             arkret_wire::CurrentSelector::AgentStatus { agent_id }
                 if agent_id.as_str() == agent.id =>

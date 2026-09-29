@@ -89,11 +89,10 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
     let expected_digest = format!("sha256:{}", hex::encode(Sha256::digest(&payload)));
     let (head, tail) = payload.split_at(16);
 
-    // Create the upload resource with file-transfer metadata.
+    // Create the upload resource with `blob_upload_request_body` metadata.
     let metadata = format!(
-        "purpose {},encrypted {},content_digest {}",
+        "purpose {},content_digest {}",
         b64("file_transfer"),
-        b64("true"),
         b64(&expected_digest)
     );
     let create = TestClient::post("http://server/_arkret/self/blob/resumable")
@@ -218,14 +217,9 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
         .await
         .unwrap()
         .expect("finalized resumable blob metadata is stored");
-    let encrypted_attachment = stored_resumable_blob
-        .encryption
-        .as_ref()
-        .expect("resumable encrypted metadata is persisted");
-    assert_eq!(
-        encrypted_attachment["scheme"],
-        arkret_wire::BLOB_SCHEME_WHOLE_FILE_AEAD_V1
-    );
+    // The upload binding carries no encryption member, so none is invented.
+    assert!(stored_resumable_blob.encryption.is_none());
+    assert!(stored_resumable_blob.filename.is_none());
 
     // Content-addressing invariant (spec §2.1): the resumable path MUST
     // produce the same blob_ref the canonical single-shot upload yields
@@ -235,8 +229,6 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
     let canonical: Value = TestClient::post("http://server/_arkret/self/blob/upload")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", canonical_content_type, true)
-        .add_header("x-arkret-blob-encrypted", "true", true)
-        .add_header("x-arkret-blob-purpose", "file_transfer", true)
         .body(canonical_body)
         .send(&app_from_state(state.clone()))
         .await

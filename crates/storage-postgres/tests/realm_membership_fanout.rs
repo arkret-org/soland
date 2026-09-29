@@ -2609,7 +2609,6 @@ fn row_selectors(entries: &[arkret_wire::TypedCurrentResult]) -> Vec<arkret_wire
         .iter()
         .map(|entry| match entry {
             arkret_wire::TypedCurrentResult::Value { selector, .. } => selector.clone(),
-            other => panic!("unexpected row shape {other:?}"),
         })
         .collect()
 }
@@ -4253,7 +4252,16 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
             arkret_wire::EventKind::CircleMemberState,
             scope.clone(),
             remote.clone(),
-            serde_json::json!({"circle_id":circle,"member_id":remote,"membership":state,"expected_membership":expected}),
+            {
+                let mut payload = serde_json::json!({"circle_id":circle,"member_id":remote,"membership":state,"expected_membership":expected});
+                if state == "join" {
+                    payload["parent_membership_revision"] = serde_json::json!({
+                        "commit_id": join.authority_commit.commit.commit_id,
+                        "stream_position": join.authority_commit.commit.stream_position,
+                    });
+                }
+                payload
+            },
             at,
         );
         let mut request = ordinary_realm::request_for_event(previous, event, at);
@@ -4391,11 +4399,12 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         request.authority_commit.commit.stream_ref = stream.clone();
         sourced(request)
     };
+    let creator_parent = ordinary_realm::parent_membership_revision(&pool, &realm, &creator).await;
     let creator_join = circle_event(
         &circle_join.authority_commit,
         arkret_wire::EventKind::CircleMemberState,
         serde_json::json!({"circle_id":circle,"member_id":creator,"membership":"join",
-            "expected_membership":null}),
+            "parent_membership_revision":creator_parent,"expected_membership":null}),
     );
     uow.commit_event(creator_join.clone()).await.unwrap();
     assert_eq!(

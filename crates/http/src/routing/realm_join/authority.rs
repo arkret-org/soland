@@ -357,8 +357,17 @@ pub(in crate::routing) async fn resolve_verified_authority(
         .iter()
         .map(|located| located.authority.clone())
         .collect();
+    // No locator led to a verified current governance Station, or the verified
+    // ones disagree. Either way the Realm's current authority cannot be reached
+    // now: a retryable upstream failure, never an internal error and never a
+    // substituted source (`invite-addressing.md` section 7.1).
     let converged = converge_verified_realm_authorities(&authorities)
-        .map_err(unavailable)?
+        .map_err(|error| {
+            AppError::from_rejection(
+                crate::error::ErrorCode::TemporarilyUnavailable,
+                format!("Realm authority evidence unavailable: {error}"),
+            )
+        })?
         .clone();
     verified
         .into_iter()

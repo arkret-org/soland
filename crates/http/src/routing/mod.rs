@@ -44,8 +44,8 @@ use identity::auth::{auth_or_render, authenticated_session};
 use identity::device_messages::device_message_envelopes_after;
 use soland_http::util::{
     bearer_token, dpop_token, handle_for_did, is_valid_discoverability, is_valid_hash_digest,
-    is_valid_sha256_digest, is_valid_sha256_hex, normalize_localpart, query_param, query_param_all,
-    render_error, sha256_hex, validate_device_id, validate_did, validate_space_id,
+    is_valid_sha256_hex, normalize_localpart, query_param, query_param_all, render_error,
+    sha256_hex, validate_device_id, validate_did, validate_space_id,
 };
 use spaces::space::{
     is_realm_deleted, realm_allows_plaintext_service_for_data_class, realm_discoverability,

@@ -30,7 +30,6 @@ pub(crate) struct AccountLifecycleChange {
     pub changed_at: chrono::DateTime<chrono::Utc>,
     pub sessions_revoked: usize,
     pub devices_revoked: usize,
-    pub applet_delegated_sessions_revoked: usize,
     pub keypackages_retired: usize,
     pub push_routes_revoked: usize,
     pub to_device_messages_dropped: usize,
@@ -87,7 +86,6 @@ pub(crate) async fn set_account_lifecycle_state(
     let changed_at = now();
     let mut sessions_revoked = 0;
     let mut devices_revoked = 0;
-    let mut applet_delegated_sessions_revoked = 0;
     let mut keypackages_retired = 0;
     let mut push_routes_revoked = 0;
     let mut to_device_messages_dropped = 0;
@@ -108,7 +106,6 @@ pub(crate) async fn set_account_lifecycle_state(
                 run_account_deactivation_fanout(state, principal_id_value, account.pk).await?;
             sessions_revoked = fanout.sessions_revoked;
             devices_revoked = fanout.devices_revoked;
-            applet_delegated_sessions_revoked = fanout.applet_delegated_sessions_revoked;
             keypackages_retired = fanout.keypackages_retired;
             push_routes_revoked = fanout.push_routes_revoked;
             to_device_messages_dropped = fanout.to_device_messages_dropped;
@@ -131,7 +128,6 @@ pub(crate) async fn set_account_lifecycle_state(
             changed_at,
             sessions_revoked,
             devices_revoked,
-            applet_delegated_sessions_revoked,
             keypackages_retired,
             push_routes_revoked,
             to_device_messages_dropped,
@@ -149,7 +145,6 @@ pub(crate) async fn set_account_lifecycle_state(
         changed_at,
         sessions_revoked,
         devices_revoked,
-        applet_delegated_sessions_revoked,
         keypackages_retired,
         push_routes_revoked,
         to_device_messages_dropped,
@@ -175,7 +170,6 @@ fn parse_account_lifecycle_target_state(next_state: &str) -> Result<AccountStatu
 struct AccountDeactivationFanout {
     sessions_revoked: usize,
     devices_revoked: usize,
-    applet_delegated_sessions_revoked: usize,
     keypackages_retired: usize,
     push_routes_revoked: usize,
     to_device_messages_dropped: usize,
@@ -187,10 +181,6 @@ async fn run_account_deactivation_fanout(
     principal_id: &str,
     owner_account_pk: soland_storage::AccountPk,
 ) -> Result<AccountDeactivationFanout, AppError> {
-    let applet_delegated_sessions_revoked =
-        active_delegated_sessions_for_actor(state, principal_id)
-            .await
-            .map_err(AppError::internal)?;
     let sessions_revoked = revoke_sessions_for_actor(state, principal_id)
         .await
         .map_err(AppError::internal)?;
@@ -223,7 +213,6 @@ async fn run_account_deactivation_fanout(
     Ok(AccountDeactivationFanout {
         sessions_revoked,
         devices_revoked,
-        applet_delegated_sessions_revoked,
         keypackages_retired,
         push_routes_revoked,
         to_device_messages_dropped,
@@ -272,7 +261,6 @@ async fn append_account_state_change_audit(
     changed_at: chrono::DateTime<chrono::Utc>,
     sessions_revoked: usize,
     devices_revoked: usize,
-    applet_delegated_sessions_revoked: usize,
     keypackages_retired: usize,
     push_routes_revoked: usize,
     to_device_messages_dropped: usize,
@@ -290,14 +278,12 @@ async fn append_account_state_change_audit(
         "timestamp": arkret_canonical::format_timestamp_canonical(changed_at),
         "sessions_revoked": sessions_revoked,
         "devices_revoked": devices_revoked,
-        "applet_delegated_sessions_revoked": applet_delegated_sessions_revoked,
         "keypackages_retired": keypackages_retired,
         "push_routes_revoked": push_routes_revoked,
         "to_device_messages_dropped": to_device_messages_dropped,
         "identity_link_cache_invalidated": identity_link_cache_invalidated,
         "fanout_domains": [
             "bearer_sessions",
-            "applet_delegated_sessions",
             "device_records",
             "keypackages",
             "push_routes",

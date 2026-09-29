@@ -217,7 +217,7 @@ async fn request_consent(
     json_ok(ConsentRequestOutcome::accepted())
 }
 
-fn consent_error(error: soland_services::ServiceError) -> AppError {
+pub(crate) fn consent_error(error: soland_services::ServiceError) -> AppError {
     use arkret_wire::ErrorCode;
     use soland_services::ServiceError;
     let code = match &error {

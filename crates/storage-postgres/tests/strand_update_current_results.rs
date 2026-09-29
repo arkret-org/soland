@@ -122,6 +122,32 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
             .unwrap()
             .is_none()
     );
+    // Message target visibility and the Realm lifecycle roster read the same
+    // accepted joined cut as the lists.
+    assert_eq!(
+        store
+            .visible_strand_scope_for_actor(&realm_id, &discussion.strand_id, &actor)
+            .await
+            .unwrap(),
+        Some(arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone()
+        })
+    );
+    assert_eq!(
+        store
+            .visible_strand_scope_for_actor(&realm_id, &discussion.strand_id, &outsider)
+            .await
+            .unwrap(),
+        None
+    );
+    let roster = store
+        .accepted_realm_roster(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(roster.controller_actor_id, actor);
+    assert!(roster.joined_members.contains(&actor));
+    assert!(!roster.joined_members.contains(&outsider));
     assert_eq!(
         after.current_commit_id,
         accepted.authority_commit.commit.commit_id.as_str()

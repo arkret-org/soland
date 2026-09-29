@@ -6,8 +6,8 @@ use arkret_models_collaboration::governance::grant_constraint::{
     GrantConstraintEffect, GrantConstraintKind, IssuerAuthorityRef,
 };
 use arkret_wire::{
-    ActorId, ActorKind, CommitStreamRef, CommittedEventRef, CurrentRevision, EventId, GrantId,
-    RealmCommitId, RealmId, ResourceSelectorKind, WireResourceSelector,
+    ActorId, CommitStreamRef, CommittedEventRef, CurrentRevision, EventId, GrantId, RealmCommitId,
+    RealmId, WireResourceSelector,
 };
 use soland_storage::{ActorRealmAuthorization, resource_selector_covers};
 
@@ -576,53 +576,6 @@ fn revision_matches(
     current.revision == *expected
 }
 
-#[derive(QueryableByName)]
-struct SubjectProfileRow {
-    #[diesel(sql_type = Jsonb)]
-    value: serde_json::Value,
-}
-
-/// Actor kind is create-locked in an accepted profile current result. A
-/// missing or conflicting profile cannot establish that an Account subject is
-/// Human, so a high-risk grant must fail closed at this authority cut.
-async fn accountable_grant_subject(
-    conn: &mut AsyncPgConnection,
-    subject: &CapabilitySubject,
-) -> PersistenceResult<bool> {
-    let CapabilitySubject::Actor(actor) = subject else {
-        return Err(conflict(
-            "high-risk condition subject has no exact actor kind",
-        ));
-    };
-    let ActorId::Account { account_id } = actor else {
-        return Ok(true);
-    };
-    let profiles = sql_query(
-        "SELECT value FROM actor_profile_current_results \
-         WHERE value->>'principal_id'=$1 ORDER BY realm_id FOR SHARE",
-    )
-    .bind::<Text, _>(account_id.principal_id.as_str())
-    .load::<SubjectProfileRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?;
-    let mut kind = None;
-    for row in profiles {
-        let profile: arkret_models_identity::ActorProfile =
-            serde_json::from_value(row.value).map_err(PersistenceError::database)?;
-        if profile.principal_id != account_id.principal_id
-            || kind.is_some_and(|known| known != profile.actor_kind)
-        {
-            return Err(conflict("grant subject actor kind is inconsistent"));
-        }
-        kind = Some(profile.actor_kind);
-    }
-    let kind = kind.ok_or_else(|| conflict("grant subject actor kind is unavailable"))?;
-    Ok(matches!(
-        kind,
-        ActorKind::Agent | ActorKind::Service | ActorKind::Bot | ActorKind::Integration
-    ))
-}
-
 fn finite_global_expiry(
     constraints: &[arkret_models_collaboration::governance::grant_constraint::GrantConstraint],
 ) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -638,14 +591,113 @@ fn finite_global_expiry(
         .min()
 }
 
-fn resource_selectors_narrowed(resources: &[WireResourceSelector], realm_id: &RealmId) -> bool {
-    !resources.is_empty()
-        && resources.iter().all(|resource| {
-            resource.kind != ResourceSelectorKind::All
-                && (resource.realm_id.as_ref() == Some(realm_id)
-                    || (resource.kind == ResourceSelectorKind::Actor
-                        && resource.actor_id.is_some()))
+/// The one `non_event_grant_authority_rules[]` row across compiled profiles
+/// whose `grantable_action` is `action`.
+fn non_event_grant_authority_rule(
+    action: &str,
+) -> PersistenceResult<Option<&'static arkret_wire::NonEventGrantAuthorityRule>> {
+    let mut rules = arkret_wire::PROFILE_REQUIREMENTS
+        .values()
+        .flat_map(|profile| profile.non_event_grant_authority_rules.iter())
+        .filter(|rule| rule.grantable_action == action);
+    let rule = rules.next();
+    if rules.next().is_some() {
+        return Err(corrupt(format!(
+            "non-event grant authority for {action} is registered more than once"
+        )));
+    }
+    Ok(rule)
+}
+
+#[derive(QueryableByName)]
+struct RegistrationCurrentRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+/// Enforce the registration-side bindings of a non-event grant authority rule
+/// against the accepted Applet registration current result of this Realm.
+async fn require_non_event_registration_binding(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    body: &arkret_models_collaboration::events_payloads::CapabilityGrantCreateBody,
+    rule: &arkret_wire::NonEventGrantAuthorityRule,
+) -> PersistenceResult<()> {
+    let exceeds = || conflict("grant_exceeds_issuer_authority");
+    if rule.required_registration_event_kind != arkret_wire::event_kind_str::APPLET_REGISTRATION
+        || rule.subject_binding != "registration.service_id"
+        || rule.scope_binding != "grant.resource_exact_registration_scope"
+        || rule.epoch_binding != "constraint.registration_epoch_exact_registration"
+        || rule.requested_action_binding != "grant.action_in_registration.requested_scopes"
+    {
+        return Err(corrupt(format!(
+            "non-event grant authority rule for {} has an unimplemented binding",
+            rule.grantable_action
+        )));
+    }
+    let wire_name = |value: serde_json::Result<serde_json::Value>| {
+        value
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+    };
+    let bindings = body
+        .constraints
+        .iter()
+        .filter(|constraint| {
+            wire_name(serde_json::to_value(&constraint.constraint_kind)).as_deref()
+                == Some(rule.required_constraint_kind)
+                && constraint
+                    .constraint_subkind
+                    .as_ref()
+                    .is_some_and(|subkind| {
+                        wire_name(serde_json::to_value(subkind)).as_deref()
+                            == Some(rule.required_constraint_subkind)
+                    })
         })
+        .collect::<Vec<_>>();
+    let [binding] = bindings.as_slice() else {
+        return Err(exceeds());
+    };
+    let Some(applet_id) = binding.applet_id.as_ref() else {
+        return Err(exceeds());
+    };
+    let registration = sql_query(
+        "SELECT value FROM applet_registration_current_results          WHERE realm_id=$1 AND applet_id=$2 FOR SHARE",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(applet_id.as_str())
+    .get_result::<RegistrationCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(exceeds)?;
+    let registration: arkret_models_integration::AppletRegistrationPayload =
+        serde_json::from_value(registration.value).map_err(PersistenceError::database)?;
+    let service = ActorId::service(registration.service_id.clone());
+    let subject_bound = matches!(
+        &body.subject,
+        CapabilitySubject::Actor(actor) if actor.signing_principal_id() == &registration.service_id
+    );
+    if !subject_bound
+        || !registration
+            .claimed_profiles
+            .iter()
+            .any(|profile| profile == rule.required_claimed_profile)
+        || !registration
+            .requested_scopes
+            .iter()
+            .any(|scope| scope == rule.grantable_action)
+        || binding.registration_epoch.as_ref() != Some(&registration.registration_epoch)
+        || binding.executed_by.as_ref() != Some(&service)
+        || body.resources.is_empty()
+        || body.resources.iter().any(|resource| {
+            resource.kind == arkret_wire::ResourceSelectorKind::All
+                || resource.realm_id.as_ref() != Some(&event.realm_id)
+        })
+    {
+        return Err(exceeds());
+    }
+    Ok(())
 }
 
 async fn materialize_capability_grant(
@@ -664,29 +716,17 @@ async fn materialize_capability_grant(
     if child_expiry.is_some_and(|expires_at| expires_at <= commit.committed_at) {
         return Err(conflict("grant_exceeds_issuer_authority"));
     }
-    let mut high_risk = false;
+    // capabilities.md section 8: grant admission never branches on the subject
+    // kind. Only registry `required_constraints` add an expiry requirement, and
+    // they apply to every subject alike.
     let mut registry_expiry_required = false;
     for action in &body.actions {
         let descriptor = arkret_schema::capability_action(action)
             .ok_or_else(|| schema_violation(format!("unregistered grant action {action}")))?;
-        high_risk |= descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High;
         registry_expiry_required |= descriptor.required_constraints.contains(&"expires_at");
     }
-    let accountable_subject = if high_risk {
-        accountable_grant_subject(conn, &body.subject).await?
-    } else {
-        false
-    };
-    if (registry_expiry_required || (accountable_subject && high_risk)) && child_expiry.is_none() {
+    if registry_expiry_required && child_expiry.is_none() {
         return Err(conflict("grant requires a finite global expiry"));
-    }
-    if accountable_subject
-        && high_risk
-        && !resource_selectors_narrowed(&body.resources, &event.realm_id)
-    {
-        return Err(conflict(
-            "high-risk grant requires narrowed resource selectors",
-        ));
     }
 
     // The Realm authority row already serializes commits, while this ordered
@@ -798,26 +838,37 @@ async fn materialize_capability_grant(
         return Err(conflict("grant_exceeds_issuer_authority"));
     }
 
-    // The registered approval signatures live on EventAdmissionSubmission,
-    // but the guarded Event route currently refuses that carrier and the
-    // commit transaction cannot persist it. Do not claim that the issuer ref
-    // and signed Event alone satisfy the accountable approval/audit evidence.
-    if accountable_subject && high_risk {
-        return Err(conflict("high-risk grant approval evidence is unavailable"));
+    // A profile-registered non-event action is grantable only through its
+    // `non_event_grant_authority_rules[]` row: the issuer must hold the rule's
+    // issuer action and the grant must bind the accepted registration.
+    let mut non_event_rules = BTreeMap::new();
+    for action in &body.actions {
+        if let Some(rule) = non_event_grant_authority_rule(action)? {
+            require_non_event_registration_binding(conn, event, &body, rule).await?;
+            non_event_rules.insert(action.as_str(), rule);
+        }
     }
 
     let mut ref_contributed = vec![false; body.issuer_authority_refs.len()];
     for action in &body.actions {
+        let rule = non_event_rules.get(action.as_str()).copied();
         for resource in &body.resources {
             let mut covered = false;
             for (index, authority_ref) in body.issuer_authority_refs.iter().enumerate() {
-                let ref_covers = match authority_ref {
-                    IssuerAuthorityRef::RealmRoot { .. } => {
+                let ref_covers = match (authority_ref, rule) {
+                    (IssuerAuthorityRef::RealmRoot { .. }, None) => {
                         arkret_policy::owner_may_grant(action).unwrap_or(false)
                     }
-                    IssuerAuthorityRef::Grant { grant_id } => rows
+                    (IssuerAuthorityRef::RealmRoot { .. }, Some(rule)) => {
+                        rule.issuer_owner_authority_allowed
+                            && arkret_policy::owner_may_grant(rule.issuer_action).unwrap_or(false)
+                    }
+                    (IssuerAuthorityRef::Grant { grant_id }, None) => rows
                         .get(grant_id)
                         .is_some_and(|parent| parent_covers(parent, action, resource)),
+                    (IssuerAuthorityRef::Grant { grant_id }, Some(rule)) => rows
+                        .get(grant_id)
+                        .is_some_and(|parent| parent_covers(parent, rule.issuer_action, resource)),
                 };
                 if ref_covers {
                     covered = true;

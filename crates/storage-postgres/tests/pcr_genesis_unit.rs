@@ -4183,10 +4183,7 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
         source_stream_ref,
         value,
         ..
-    } = current
-    else {
-        unreachable!()
-    };
+    } = current;
     assert_eq!(revision.commit_id, commit_v2.commit_id);
     assert_eq!(revision.stream_position, commit_v2.stream_position);
     assert_eq!(source_stream_ref, &commit_v2.stream_ref);

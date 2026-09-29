@@ -346,12 +346,13 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
         ("applet_registration_current_results", "applet_id", format!("'applet-' || {key}"), "'{}'::jsonb".to_owned()),
         ("member_identity_updates_current_results", "member_id,segment", "jsonb_build_object('member',m)::text,'member_identity'".to_owned(), "jsonb_build_object('assertions','[]'::jsonb)".to_owned()),
         ("circle_current_results", "circle_id,create_event_id,source_stream_ref,short_name_folded", format!("'circle-' || {key},'circle-event-' || {key},jsonb_build_object('kind','realm','realm_id',{realm}),'circle-' || m"), format!("jsonb_build_object('id','circle-' || {key},'realm_id',{realm})")),
-        ("circle_member_state_current_results", "circle_id,member_id,membership,source_stream_ref", format!("'circle-' || {key},jsonb_build_object('member',m)::text,'join',jsonb_build_object('kind','circle','realm_id',{realm},'circle_id','circle-' || {key})"), "jsonb_build_object('membership','join')".to_owned()),
+        ("circle_member_state_current_results", "circle_id,member_id,membership,source_stream_ref", format!("'circle-' || {key},jsonb_build_object('member',m)::text,'join',jsonb_build_object('kind','circle','realm_id',{realm},'circle_id','circle-' || {key})"), format!("jsonb_build_object('membership','join','parent_membership_revision',jsonb_build_object('commit_id',{commit},'stream_position',0))")),
         ("call_state_current_results", "call_id,create_event_id,source_stream_ref", format!("'call-' || {key},'call-event-' || {key},jsonb_build_object('kind','realm','realm_id',{realm})"), "jsonb_build_object('from',NULL,'to','ringing')".to_owned()),
         ("moderation_franking_proof_current_results", "target_event_id,source_stream_ref", format!("'franking-target-' || {key},jsonb_build_object('kind','realm','realm_id',{realm})"), "'{}'::jsonb".to_owned()),
         ("realm_organization_current_results", "organization_id,relationship,organization_public_key", format!("'organization-' || {key},'owner',decode(repeat('00',32),'hex')"), format!("jsonb_build_object('realm_id',{realm},'organization_id','organization-' || {key},'relationship','owner')")),
         ("policy_current_results", "policy_id,current_event_id", format!("'policy-' || {key}, 'event-' || {key}"), "'{}'::jsonb".to_owned()),
         ("strand_current_results", "strand_id", format!("'strand-' || {key}"), format!("jsonb_build_object('id','strand-' || {key},'realm_id',{realm})")),
+        ("rsvp_current_results", "event_ref,occurrence,responder_actor_id,source_stream_ref", format!("'strand-' || {key},'null'::jsonb,jsonb_build_object('actor',m),jsonb_build_object('kind','realm','realm_id',{realm})"), "jsonb_build_object('response','accepted')".to_owned()),
         ("strand_watch_current_results", "strand_id,watcher_actor_id", format!("'strand-' || {key},jsonb_build_object('watcher','actor-' || {key})::text"), "jsonb_build_object('level','all')".to_owned()),
         ("strand_position_current_results", "board_space_id,strand_id", format!("'board-' || {key},'strand-' || {key}"), "jsonb_build_object('list_space_id','list','rank','a')".to_owned()),
         ("space_current_results", "space_id", format!("'space-' || {key}"), format!("jsonb_build_object('id','space-' || {key},'realm_id',{realm})")),
@@ -361,6 +362,7 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
         // Reports have distinct covering Commits. They cannot all share position 0.
         ("moderation_report_current_results", "report_event_id", format!("'report-' || {key}"), format!("jsonb_build_object('realm_id',{realm},'target_ref','target-' || m,'reporter_id','reporter')")),
         ("object_redaction_current_results", "target_ref", "'target-' || m".to_owned(), "jsonb_build_object('assertions',jsonb_build_array(jsonb_build_object('tag_id','dot')))".to_owned()),
+        ("message_reactions_current_results", "target_ref", "'target-' || m".to_owned(), "jsonb_build_object('assertions',jsonb_build_array(jsonb_build_object('tag_id','dot')))".to_owned()),
         ("invite_lifecycle_current_results", "invite_id", format!("'invite-' || {key}"), "'\"pending\"'::jsonb".to_owned()),
         ("invite_live_target_current_results", "invitee_account_id", "jsonb_build_object('account',m)::text".to_owned(), format!("jsonb_build_object('create_event_id','create-' || {key})")),
         ("invite_directed_invitee_current_results", "invite_id", format!("'invite-' || {key}"), "jsonb_build_object('invitee_account_id',jsonb_build_object('account',m))".to_owned()),
@@ -386,7 +388,9 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
          INSERT INTO realm_policy_bundle_current_results(realm_id,current_commit_id,current_stream_position,value,updated_at)
          SELECT {realm},{commit},0,'{{}}'::jsonb,now() FROM generate_series({first},{last}) r;
          INSERT INTO realm_set_default_strand_current_results(realm_id,current_commit_id,current_stream_position,value,updated_at)
-         SELECT {realm},{commit},0,jsonb_build_object('default_strand_id','strand'),now() FROM generate_series({first},{last}) r;"
+         SELECT {realm},{commit},0,jsonb_build_object('default_strand_id','strand'),now() FROM generate_series({first},{last}) r;
+         INSERT INTO direct_conversation_binding_current_results(realm_id,pair_key,binding_digest,current_commit_id,current_stream_position,value,updated_at)
+         SELECT {realm},'pair-' || r,'digest-' || r,{commit},0,jsonb_build_object('endorsements',jsonb_build_array(jsonb_build_object('tag_id','dot'))),now() FROM generate_series({first},{last}) r;"
     )).await.unwrap();
 }
 
@@ -443,7 +447,8 @@ fn assert_each_snapshot_family_bounded(
             "realm_bootstrap_current_results" => 7.0,
             "realm_authority_root_current_results"
             | "realm_policy_bundle_current_results"
-            | "realm_set_default_strand_current_results" => 1.0,
+            | "realm_set_default_strand_current_results"
+            | "direct_conversation_binding_current_results" => 1.0,
             _ => width,
         };
         let visited = [
@@ -520,15 +525,15 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                 .map(str::to_owned)
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(observed, expected);
-            // The union has 27 width-sized families: member, message and
-            // moderation plus the 24 seed_snapshot_families loop entries.
+            // The union has 29 width-sized families: member, message and
+            // moderation plus the 26 seed_snapshot_families loop entries.
             // Relation is seeded for the exact self-read matrix only and is
             // absent from this union. StrandWatch contributes one family,
             // not another row for each accepted replacement in its history.
-            // The other four tables emit seven bootstrap facets and three
+            // The other five tables emit seven bootstrap facets and four
             // singleton rows per Realm.
-            assert_eq!(observed.len(), 31);
-            let output = 27.0 * width + 10.0;
+            assert_eq!(observed.len(), 34);
+            let output = 29.0 * width + 11.0;
             assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan

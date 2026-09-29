@@ -1,15 +1,18 @@
 //! Blob upload + download handlers.
 //!
 //! Surfaces:
-//! - `POST /_arkret/self/blob/upload`         — multipart upload, normalises MIME / filename,
-//!   enforces per-actor / per-Realm / per-upload quotas, rejects plaintext blobs in private Realms
-//!   unless this service is in `plaintext_visible_services`.
+//! - `POST /_arkret/self/blob/upload`         — `ak.self.blob.upload.create.v1`: the closed
+//!   `blob-operations.schema.json#/$defs/blob_upload_request_body` carried as `multipart/form-data`
+//!   parts (and nowhere else), normalises MIME / filename, enforces per-actor / per-Realm /
+//!   per-upload quotas.
 //! - `HEAD /_arkret/self/blob/get`            — metadata + size for range planning
 //! - `GET  /_arkret/self/blob/get`            — content (supports `Range` and the `?purpose=`
 //!   discriminator)
 //!
-//! Blob metadata carries the spec `realm_id` association; plaintext-visibility
-//! is enforced at write time but not at GC.
+//! Blob metadata carries the spec `realm_id` association. Storing bytes on the
+//! uploader's own Station forwards nothing to a third-party service, so the
+//! upload is not a `plaintext_visible_services` decision (`sync/service-surface.md`
+//! §5.4, `conformance/conformance-profiles.md`).
 
 use arkret_canonical as canonical;
 use arkret_identifiers::{BlobRef, DidCoreId, RealmId};
@@ -18,7 +21,6 @@ use arkret_models_collaboration::objects::blob::{
     BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,
     UploadReceipt,
 };
-use arkret_wire::{BLOB_SCHEME_STREAM_AEAD_V1, BLOB_SCHEME_WHOLE_FILE_AEAD_V1};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer;
@@ -33,8 +35,7 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 use subtle::ConstantTimeEq as _;
 
 use super::{
-    append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_digest,
-    is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
+    append_audit_log, auth_or_render, authenticated_session, is_valid_sha256_hex, now, query_param,
     render_error, sha256_hex,
 };
 use crate::state::AppState;
@@ -110,39 +111,36 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let Some(session) = auth_or_render(state, req, res).await else {
         return;
     };
-    req.set_secure_max_size(MAX_BLOB_UPLOAD_FORM_BYTES);
-    let upload_body = match blob_upload_body(req).await {
-        Ok(body) => body,
+    let upload = match read_blob_upload_request(req).await {
+        Ok(upload) => upload,
         Err(error) => {
             render_error(res, error.status, error.code, error.message.as_str());
             return;
         }
     };
-    let bytes = upload_body.bytes;
-    let requested_media_type = upload_body.media_type;
-    let requested_filename = match sanitized_blob_filename(req) {
-        Ok(filename) => filename.or(upload_body.filename),
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
-            return;
-        }
-    };
-    let realm_id = match req
-        .headers()
-        .get("x-arkret-realm-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-    {
+    let bytes = upload.content;
+    let size = bytes.len();
+    if u64::try_from(size).ok() != Some(upload.size_bytes) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "param_invalid",
+            "size_bytes must match the content part length",
+        );
+        return;
+    }
+    if size > MAX_BLOB_UPLOAD_BYTES {
+        render_error(
+            res,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "blob exceeds maximum size",
+        );
+        return;
+    }
+    let realm_id = match upload.realm_id {
         Some(realm_id) => {
-            if RealmId::new(realm_id.clone()).is_err() {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    "invalid blob realm_id",
-                );
-                return;
-            }
+            let realm_id = realm_id.as_str().to_owned();
             let is_member =
                 match blob_session_has_realm_membership(state, &realm_id, &session).await {
                     Ok(is_member) => is_member,
@@ -164,149 +162,35 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
         None => None,
     };
-    let size = bytes.len();
-    if size != upload_body.declared_size {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "multipart size_bytes must match content length",
-        );
-        return;
-    }
-    if size > MAX_BLOB_UPLOAD_BYTES {
-        render_error(
-            res,
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "payload_too_large",
-            "blob exceeds maximum size",
-        );
-        return;
-    }
     if let Err(message) = enforce_blob_quota(state, &session.actor, realm_id.as_deref(), size).await
     {
         render_error(res, StatusCode::FORBIDDEN, "blob_quota_exceeded", message);
         return;
     }
-    let upload_purpose = match blob_upload_purpose(req) {
-        Ok(purpose) => purpose,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
-            return;
-        }
-    };
-    let mut encryption = match encrypted_attachment_metadata(req) {
-        Ok(encryption) => encryption,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
-            return;
-        }
-    };
-    let encrypted_flag = match blob_encrypted_flag(req) {
-        Ok(flag) => flag,
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
-            return;
-        }
-    };
-    if encrypted_flag == Some(true)
-        && encryption.is_none()
-        && let Some(metadata) =
-            encrypted_blob_encryption_metadata_for_purpose(upload_purpose.as_deref())
+    if let Some(declared) = upload.content_digest.as_deref()
+        && !blob_content_digest_matches(declared, &bytes)
     {
-        encryption = Some(metadata);
-    }
-    let encrypted = encryption.is_some() || encrypted_flag.unwrap_or(false);
-    if encrypted_flag == Some(true) && encryption.is_none() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "encrypted blob uploads require x-arkret-attachment-envelope or a supported encrypted x-arkret-blob-purpose",
-        );
-        return;
-    }
-    if encrypted_flag == Some(false) && encryption.is_some() {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "x-arkret-blob-encrypted=false conflicts with encrypted attachment metadata",
-        );
-        return;
-    }
-    if blob_purpose_requires_encryption(upload_purpose.as_deref()) && !encrypted {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "search index shard uploads must be encrypted",
-        );
-        return;
-    }
-    let media_type = if encrypted {
-        "application/octet-stream".to_owned()
-    } else {
-        requested_media_type
-    };
-    let filename = if encrypted { None } else { requested_filename };
-    let plaintext_denied = if encrypted {
-        false
-    } else if let Some(realm_id) = realm_id.as_deref() {
-        !realm_allows_plaintext_service_for_data_class(
-            state,
-            realm_id,
-            plaintext_blob_data_class(upload_purpose.as_deref()),
-        )
-        .await
-    } else {
-        false
-    };
-    if plaintext_denied {
-        render_error(
-            res,
-            StatusCode::FORBIDDEN,
-            "policy_denied",
-            "private plaintext blob uploads require this service in plaintext_visible_services",
-        );
-        return;
-    }
-    let sha256 = sha256_hex(&bytes);
-    let content_digest = format!("sha256:{sha256}");
-    match expected_blob_content_digest(req) {
-        Ok(Some(expected_sha256)) if expected_sha256 != sha256 => {
-            crate::metrics::record_digest_mismatch("blob_upload_header");
-            render_error(
-                res,
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "blob_digest_mismatch",
-                "provided content_digest does not match blob content",
-            );
-            return;
-        }
-        Ok(_) => {}
-        Err(message) => {
-            render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
-            return;
-        }
-    }
-    // `models/content-types.md`: the attachment's content-addressed `blob_ref`
-    // is the sole wire commitment to the stored ciphertext, so the envelope
-    // carries no sibling `ciphertext_digest`. When the caller states a
-    // `blob_ref`, the digest embedded in it is what must match the bytes.
-    if let Some(encryption) = encryption.as_ref()
-        && let Some(stated_ref) = encryption.get("blob_ref").and_then(Value::as_str)
-        && stated_ref != format!("ak:blob:{content_digest}")
-    {
-        crate::metrics::record_digest_mismatch("blob_upload_attachment_blob_ref");
+        crate::metrics::record_digest_mismatch("blob_upload_content_digest");
         render_error(
             res,
             StatusCode::UNPROCESSABLE_ENTITY,
             "blob_digest_mismatch",
-            "attachment blob_ref does not address the uploaded blob content",
+            "provided content_digest does not match blob content",
         );
         return;
     }
+    // `crypto-media/media-and-blob.md` §2: the declared MIME and filename are
+    // untrusted metadata. The `media_type` field wins over the content part's
+    // own `Content-Type`, whose default is `application/octet-stream`.
+    let media_type = upload
+        .media_type
+        .or(upload.content_part_media_type)
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
+    let filename = upload
+        .filename
+        .as_deref()
+        .and_then(|filename| sanitize_blob_filename_value(filename).ok());
+    let sha256 = sha256_hex(&bytes);
     let blob_ref = format!("ak:blob:sha256:{sha256}");
     let storage_key = state.deliveries().object_key_for_sha256(&sha256);
     if let Err(error) = state.deliveries().put_object(&storage_key, bytes).await {
@@ -327,7 +211,11 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         media_type: media_type.clone(),
         filename: filename.clone(),
         realm_id: realm_id.clone(),
-        encryption: encryption.clone(),
+        // `blob_upload_request_body` has no encryption member: encrypted
+        // attachment metadata travels only in the signed Event or encrypted
+        // descriptor that references the `blob_ref` (`media-and-blob.md` §3),
+        // so the Station stores the bytes it received and learns nothing more.
+        encryption: None,
         legal_hold: false,
         redacted: false,
         visibility: if realm_id.is_some() {
@@ -963,38 +851,20 @@ fn blob_content_disposition(blob: &BlobRecord, purpose: &str) -> Option<String> 
     }
 }
 
-fn expected_blob_content_digest(req: &Request) -> Result<Option<String>, &'static str> {
-    if let Some(value) = req
-        .headers()
-        .get("x-arkret-content-digest")
-        .and_then(|value| value.to_str().ok())
-    {
-        let digest = value.trim();
-        if !is_valid_sha256_digest(digest) {
-            return Err("x-arkret-content-digest must be sha256:<64 lowercase hex>");
-        }
-        return Ok(Some(digest.trim_start_matches("sha256:").to_owned()));
-    }
-    if let Some(value) = req
-        .headers()
-        .get(salvo::http::header::HeaderName::from_static("digest"))
-        .and_then(|value| value.to_str().ok())
-    {
-        let Some(digest) = value.trim().strip_prefix("sha-256=") else {
-            return Err("digest must be sha-256=<64 lowercase hex>");
-        };
-        if !is_valid_sha256_hex(digest) {
-            return Err("digest must be sha-256=<64 lowercase hex>");
-        }
-        return Ok(Some(digest.to_owned()));
-    }
-    Ok(None)
-}
-
-struct BlobUploadBody {
-    bytes: Vec<u8>,
-    declared_size: usize,
-    media_type: String,
+/// The parsed `blob-operations.schema.json#/$defs/blob_upload_request_body`.
+///
+/// Every member arrives as a `multipart/form-data` part named after it;
+/// no header, query parameter or `Content-Disposition` filename stands in
+/// for any of them.
+struct BlobUploadRequest {
+    content: Vec<u8>,
+    /// The content part's own `Content-Type`, the multipart default for
+    /// `media_type` (`media-and-blob.md` §2).
+    content_part_media_type: Option<String>,
+    size_bytes: u64,
+    realm_id: Option<RealmId>,
+    content_digest: Option<String>,
+    media_type: Option<String>,
     filename: Option<String>,
 }
 
@@ -1005,10 +875,12 @@ struct BlobUploadBodyError {
 }
 
 impl BlobUploadBodyError {
-    fn invalid(message: impl Into<String>) -> Self {
+    /// `service-http-binding.md` §6: a closed schema or canonical encoding
+    /// failure is `schema_violation`.
+    fn schema_violation(message: impl Into<String>) -> Self {
         Self {
-            status: StatusCode::BAD_REQUEST,
-            code: "param_invalid",
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code: "schema_violation",
             message: message.into(),
         }
     }
@@ -1020,293 +892,207 @@ impl BlobUploadBodyError {
             message: message.into(),
         }
     }
-
-    fn internal(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal_error",
-            message: message.into(),
-        }
-    }
 }
 
-async fn blob_upload_body(req: &mut Request) -> Result<BlobUploadBody, BlobUploadBodyError> {
-    if !request_is_multipart_form_data(req) {
-        return Err(BlobUploadBodyError::invalid(
-            "blob uploads require multipart/form-data",
-        ));
-    }
+/// The text members of `blob_upload_request_body`; `content` is the only
+/// binary part.
+const BLOB_UPLOAD_TEXT_FIELDS: [&str; 6] = [
+    "size_bytes",
+    "realm_id",
+    "content_digest",
+    "media_type",
+    "filename",
+    "purpose",
+];
 
-    let form_data = req
-        .form_data_max_size(MAX_BLOB_UPLOAD_FORM_BYTES)
-        .await
-        .map_err(blob_form_parse_error)?;
-
-    let (path, part_size, declared_size, media_type, filename) =
-        {
-            let content_parts = form_data.files.get_vec("content").ok_or_else(|| {
-                BlobUploadBodyError::invalid("multipart content part is required")
+async fn read_blob_upload_request(
+    req: &mut Request,
+) -> Result<BlobUploadRequest, BlobUploadBodyError> {
+    let boundary =
+        req.headers()
+            .get(salvo::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| {
+                value.split(';').next().is_some_and(|essence| {
+                    essence.trim().eq_ignore_ascii_case("multipart/form-data")
+                })
+            })
+            .and_then(|value| multra::parse_boundary(value).ok())
+            .ok_or_else(|| {
+                BlobUploadBodyError::schema_violation("blob uploads require multipart/form-data")
             })?;
-            if content_parts.len() != 1 {
-                return Err(BlobUploadBodyError::invalid(
+    let payload = req
+        .payload_with_max_size(MAX_BLOB_UPLOAD_FORM_BYTES)
+        .await
+        .map_err(|error| match error {
+            ParseError::PayloadTooLarge => {
+                BlobUploadBodyError::too_large("blob exceeds maximum size")
+            }
+            _ => BlobUploadBodyError::schema_violation("unreadable multipart blob upload body"),
+        })?
+        .clone();
+    let stream =
+        futures_util::stream::once(
+            async move { Ok::<bytes::Bytes, std::convert::Infallible>(payload) },
+        );
+    let mut multipart = multra::Multipart::new(stream, boundary);
+
+    let malformed =
+        |_| BlobUploadBodyError::schema_violation("malformed multipart blob upload body");
+    let mut content: Option<(Vec<u8>, Option<String>)> = None;
+    let mut text = std::collections::BTreeMap::<&'static str, String>::new();
+    while let Some(field) = multipart.next_field().await.map_err(malformed)? {
+        let Some(name) = field.name().map(str::to_owned) else {
+            return Err(BlobUploadBodyError::schema_violation(
+                "multipart part carries no field name",
+            ));
+        };
+        if name == "content" {
+            if content.is_some() {
+                return Err(BlobUploadBodyError::schema_violation(
                     "multipart content part must appear exactly once",
                 ));
             }
-
-            let size_values = form_data.fields.get_vec("size_bytes").ok_or_else(|| {
-                BlobUploadBodyError::invalid("multipart size_bytes field is required")
-            })?;
-            if size_values.len() != 1 {
-                return Err(BlobUploadBodyError::invalid(
-                    "multipart size_bytes field must appear exactly once",
-                ));
-            }
-            let declared_size = size_values[0].trim().parse::<usize>().map_err(|_| {
-                BlobUploadBodyError::invalid("multipart size_bytes must be an integer")
-            })?;
-
-            let content_part = &content_parts[0];
-            let part_size = usize::try_from(content_part.size())
-                .map_err(|_| BlobUploadBodyError::too_large("blob exceeds maximum size"))?;
-            if declared_size != part_size {
-                return Err(BlobUploadBodyError::invalid(
-                    "multipart size_bytes must match content part size",
-                ));
-            }
-
-            let media_type = content_part
+            let part_media_type = field
                 .headers()
                 .get(salvo::http::header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
-                .and_then(sanitize_media_type)
-                .unwrap_or_else(|| "application/octet-stream".to_owned());
-            let filename = content_part
-                .name()
-                .map(sanitize_blob_filename_value)
-                .transpose()
-                .map_err(BlobUploadBodyError::invalid)?;
-
-            (
-                content_part.path().clone(),
-                part_size,
-                declared_size,
-                media_type,
-                filename,
-            )
+                .and_then(sanitize_media_type);
+            let bytes = field.bytes().await.map_err(malformed)?;
+            content = Some((bytes.to_vec(), part_media_type));
+            continue;
+        }
+        let Some(key) = BLOB_UPLOAD_TEXT_FIELDS
+            .iter()
+            .copied()
+            .find(|key| *key == name)
+        else {
+            return Err(BlobUploadBodyError::schema_violation(format!(
+                "multipart field `{name}` is not a blob_upload_request_body member"
+            )));
         };
+        if text.contains_key(key) {
+            return Err(BlobUploadBodyError::schema_violation(format!(
+                "multipart field `{key}` must appear at most once"
+            )));
+        }
+        let bytes = field.bytes().await.map_err(malformed)?;
+        let value = String::from_utf8(bytes.to_vec()).map_err(|_| {
+            BlobUploadBodyError::schema_violation(format!("multipart field `{key}` must be UTF-8"))
+        })?;
+        text.insert(key, value);
+    }
 
-    let bytes = tokio::fs::read(&path).await.map_err(|error| {
-        BlobUploadBodyError::internal(format!("failed to read blob upload: {error}"))
+    let (content, content_part_media_type) = content.ok_or_else(|| {
+        BlobUploadBodyError::schema_violation("multipart content part is required")
     })?;
-    if bytes.len() != part_size {
-        return Err(BlobUploadBodyError::invalid(
-            "multipart content length does not match parsed file size",
+    let size_bytes = text
+        .remove("size_bytes")
+        .ok_or_else(|| BlobUploadBodyError::schema_violation("multipart size_bytes is required"))?;
+    let size_bytes = (!size_bytes.is_empty()
+        && size_bytes.bytes().all(|byte| byte.is_ascii_digit()))
+    .then(|| size_bytes.parse::<u64>().ok())
+    .flatten()
+    .ok_or_else(|| {
+        BlobUploadBodyError::schema_violation("size_bytes must be a non-negative integer")
+    })?;
+    let realm_id = text
+        .remove("realm_id")
+        .map(|value| {
+            RealmId::new(value)
+                .map_err(|_| BlobUploadBodyError::schema_violation("realm_id is not a Realm id"))
+        })
+        .transpose()?;
+    let content_digest = text
+        .remove("content_digest")
+        .map(|value| {
+            if is_valid_blob_upload_content_digest(&value) {
+                Ok(value)
+            } else {
+                Err(BlobUploadBodyError::schema_violation(
+                    "content_digest must be <sha256|blake3>:<64 lowercase hex>",
+                ))
+            }
+        })
+        .transpose()?;
+    let media_type = text
+        .remove("media_type")
+        .map(|value| {
+            if is_valid_blob_upload_media_type(&value) {
+                Ok(value)
+            } else {
+                Err(BlobUploadBodyError::schema_violation(
+                    "media_type must be <type>/<subtype>",
+                ))
+            }
+        })
+        .transpose()?;
+    let filename = text
+        .remove("filename")
+        .map(|value| {
+            if (1..=255).contains(&value.chars().count()) {
+                Ok(value)
+            } else {
+                Err(BlobUploadBodyError::schema_violation(
+                    "filename must be 1 to 255 characters",
+                ))
+            }
+        })
+        .transpose()?;
+    if let Some(purpose) = text.remove("purpose")
+        && !is_valid_blob_upload_purpose(&purpose)
+    {
+        return Err(BlobUploadBodyError::schema_violation(
+            "purpose must match ^[a-z][a-z0-9_]{0,63}$",
         ));
     }
-    Ok(BlobUploadBody {
-        bytes,
-        declared_size,
+    Ok(BlobUploadRequest {
+        content,
+        content_part_media_type,
+        size_bytes,
+        realm_id,
+        content_digest,
         media_type,
         filename,
     })
 }
 
-fn request_is_multipart_form_data(req: &Request) -> bool {
-    req.headers()
-        .get(salvo::http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("multipart/form-data"))
+/// `blob_upload_request_body.purpose`: `^[a-z][a-z0-9_]{0,63}$`.
+pub(super) fn is_valid_blob_upload_purpose(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 64
+        && bytes.next().is_some_and(|first| first.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
-fn blob_form_parse_error(error: ParseError) -> BlobUploadBodyError {
-    match error {
-        ParseError::PayloadTooLarge => BlobUploadBodyError::too_large("blob exceeds maximum size"),
-        ParseError::InvalidContentType | ParseError::NotMultipart | ParseError::NotFormData => {
-            BlobUploadBodyError::invalid("blob uploads require multipart/form-data")
-        }
-        _ => BlobUploadBodyError::invalid("invalid multipart blob upload body"),
-    }
-}
-
-fn encrypted_attachment_metadata(req: &Request) -> Result<Option<serde_json::Value>, &'static str> {
-    let Some(value) = req
-        .headers()
-        .get(salvo::http::header::HeaderName::from_static(
-            "x-arkret-attachment-envelope",
-        ))
-        .and_then(|value| value.to_str().ok())
-    else {
-        return Ok(None);
+/// `blob_upload_request_body.media_type`: `^[a-z0-9.+-]+/[a-z0-9.+-]+$`.
+fn is_valid_blob_upload_media_type(value: &str) -> bool {
+    let token = |part: &str| {
+        !part.is_empty()
+            && part.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'+' | b'-')
+            })
     };
-    let metadata: serde_json::Value =
-        serde_json::from_str(value).map_err(|_| "attachment envelope must be JSON")?;
-    validate_encrypted_attachment_metadata(&metadata)?;
-    Ok(Some(metadata))
+    value
+        .split_once('/')
+        .is_some_and(|(top, sub)| token(top) && token(sub))
 }
 
-fn blob_upload_purpose(req: &Request) -> Result<Option<String>, &'static str> {
-    for header in ["x-arkret-blob-purpose", "x-arkret-purpose"] {
-        let Some(value) = req
-            .headers()
-            .get(header)
-            .and_then(|value| value.to_str().ok())
-        else {
-            continue;
-        };
-        let purpose = value.trim();
-        if purpose.is_empty() {
-            return Ok(None);
-        }
-        if !is_valid_blob_purpose(purpose) {
-            return Err("invalid blob upload purpose");
-        }
-        return Ok(Some(purpose.to_owned()));
-    }
-    Ok(None)
+/// `blob_upload_request_body.content_digest`: the SDK `Hash` digest form,
+/// `^(sha256|blake3):[0-9a-f]{64}$`.
+pub(super) fn is_valid_blob_upload_content_digest(value: &str) -> bool {
+    arkret_identifiers::Hash::new(value.to_owned()).is_ok()
 }
 
-pub(super) const BLOB_PURPOSE_FILE_TRANSFER: &str = "file_transfer";
-pub(super) const BLOB_PURPOSE_SEARCH_INDEX_SHARD: &str = "search_index_shard";
-
-pub(super) fn encrypted_blob_encryption_metadata_for_purpose(
-    purpose: Option<&str>,
-) -> Option<Value> {
-    match purpose {
-        Some(BLOB_PURPOSE_FILE_TRANSFER) => Some(json!({
-            "scheme": BLOB_SCHEME_WHOLE_FILE_AEAD_V1,
-            "purpose": BLOB_PURPOSE_FILE_TRANSFER,
-        })),
-        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => Some(json!({
-            "scheme": BLOB_SCHEME_WHOLE_FILE_AEAD_V1,
-            "purpose": BLOB_PURPOSE_SEARCH_INDEX_SHARD,
-            "profile_id": arkret_wire::ProfileId::SEARCH_CLIENT_INDEX_V1,
-            "data_class": "encrypted_index",
-        })),
-        _ => None,
-    }
-}
-
-pub(super) fn blob_purpose_requires_encryption(purpose: Option<&str>) -> bool {
-    matches!(purpose, Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD))
-}
-
-pub(super) fn plaintext_blob_data_class(
-    purpose: Option<&str>,
-) -> arkret_wire::PlaintextDataClassKind {
-    match purpose {
-        Some("attachment_preview" | "blob_preview" | "preview") => {
-            arkret_wire::PlaintextDataClassKind::AttachmentPreview
-        }
-        Some("thumbnail") => arkret_wire::PlaintextDataClassKind::Thumbnail,
-        Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD) => arkret_wire::PlaintextDataClassKind::FullTextIndex,
-        _ => arkret_wire::PlaintextDataClassKind::AttachmentPlaintext,
-    }
-}
-
-/// Spec `blob.schema.json#/$defs/encrypted_attachment` carries a `scheme`
-/// discriminator. The server stores the envelope as opaque JSON and never
-/// decrypts, so this is a light-touch shape check (which fields are required),
-/// not any cryptographic interpretation.
-/// `ak:blob:<suite>:<64 lowercase hex>` — the content-addressed form only.
-fn is_valid_content_addressed_blob_ref(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("ak:blob:") else {
-        return false;
-    };
-    let Some((suite, hex)) = rest.split_once(':') else {
-        return false;
-    };
-    matches!(suite, "sha256" | "blake3")
-        && hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn validate_encrypted_attachment_metadata(
-    metadata: &serde_json::Value,
-) -> Result<(), &'static str> {
-    let Some(envelope) = metadata.as_object() else {
-        return Err("attachment envelope must be a JSON object");
-    };
-
-    let has_encryption_algorithm = envelope
-        .get("encryption_algorithm")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.trim().is_empty());
-    if !has_encryption_algorithm {
-        return Err("attachment envelope requires encryption_algorithm");
-    }
-
-    if !envelope
-        .get("key_ref")
-        .is_some_and(|value| value.is_object() || value.as_str().is_some())
-    {
-        return Err("attachment envelope requires key_ref");
-    }
-
-    // The content commitment is the content-addressed `blob_ref` itself
-    // (`models/content-types.md`: "attachment 不携 sibling `ciphertext_digest`").
-    // It covers whole-file and stream form alike, because the ref addresses the
-    // concatenated stored ciphertext including every segment's AEAD tag, and the
-    // upload path already compares it against the SHA-256 of the received bytes.
-    if !envelope
-        .get("blob_ref")
-        .and_then(|value| value.as_str())
-        .is_some_and(is_valid_content_addressed_blob_ref)
-    {
-        return Err("attachment envelope requires a content-addressed blob_ref");
-    }
-    if envelope.contains_key("ciphertext_digest") {
-        return Err("attachment envelope must not mirror blob_ref as ciphertext_digest");
-    }
-
-    // `scheme` is optional; per spec a missing scheme is treated as
-    // `ak.blob.whole_file_aead.v1`. Validate the per-scheme shape only for the
-    // two known schemes. Unknown schemes are accepted as opaque JSON (the
-    // server does not interpret the envelope) and are NOT subjected to the
-    // whole-file `nonce` requirement, so an unknown value is never
-    // mis-validated as whole-file.
-    match envelope.get("scheme").and_then(|value| value.as_str()) {
-        Some(BLOB_SCHEME_STREAM_AEAD_V1) => {
-            // Streaming chunked AEAD: per-object random `nonce_prefix`, no
-            // single `nonce`. Require the stream descriptor fields exist and
-            // have the right JSON types; do NOT validate segment structure,
-            // nonces, or per-segment tags — that needs the key the server
-            // does not hold.
-            if envelope
-                .get("nonce_prefix")
-                .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err("stream attachment envelope requires nonce_prefix");
-            }
-            if !envelope
-                .get("segment_bytes")
-                .is_some_and(serde_json::Value::is_u64)
-            {
-                return Err("stream attachment envelope requires integer segment_bytes");
-            }
-        }
-        None | Some(BLOB_SCHEME_WHOLE_FILE_AEAD_V1) => {
-            // Whole-file AEAD (explicit or, per spec, the default when scheme
-            // is absent): a single `nonce` is required.
-            if envelope
-                .get("nonce")
-                .and_then(|value| value.as_str())
-                .is_none_or(|value| value.trim().is_empty())
-            {
-                return Err("attachment envelope requires nonce");
-            }
-        }
-        Some(_) => {
-            // Unknown scheme: forward-compatible passthrough. The server does
-            // not interpret the envelope, so store it as-is without imposing
-            // either scheme's field requirements.
-        }
-    }
-
-    Ok(())
+/// Whether a declared `content_digest` commits to `bytes` under its own
+/// suite; the stored `blob_ref` stays on this Station's suite either way.
+pub(super) fn blob_content_digest_matches(declared: &str, bytes: &[u8]) -> bool {
+    declared
+        .split_once(':')
+        .and_then(|(suite, _)| canonical::digest_with_suite(suite, bytes).ok())
+        .is_some_and(|computed| computed == declared)
 }
 
 fn parse_range(req: &Request, total_len: usize) -> Option<Result<(usize, usize), &'static str>> {
@@ -1375,30 +1161,6 @@ fn is_valid_mime_token(value: &str) -> bool {
         })
 }
 
-fn sanitized_blob_filename(req: &Request) -> Result<Option<String>, &'static str> {
-    let raw = req
-        .headers()
-        .get("x-arkret-filename")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-        .or_else(|| {
-            req.headers()
-                .get(salvo::http::header::CONTENT_DISPOSITION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(content_disposition_filename)
-        });
-    raw.map(|value| sanitize_blob_filename_value(&value))
-        .transpose()
-}
-
-fn content_disposition_filename(value: &str) -> Option<String> {
-    value.split(';').find_map(|part| {
-        let part = part.trim();
-        part.strip_prefix("filename=")
-            .map(|filename| filename.trim_matches('"').to_owned())
-    })
-}
-
 fn sanitize_blob_filename_value(value: &str) -> Result<String, &'static str> {
     let basename = value
         .rsplit(['/', '\\'])
@@ -1424,21 +1186,6 @@ fn sanitize_blob_filename_value(value: &str) -> Result<String, &'static str> {
         return Err("filename must contain at least one safe character");
     }
     Ok(sanitized)
-}
-
-fn blob_encrypted_flag(req: &Request) -> Result<Option<bool>, &'static str> {
-    let Some(raw) = req
-        .headers()
-        .get("x-arkret-blob-encrypted")
-        .and_then(|value| value.to_str().ok())
-    else {
-        return Ok(None);
-    };
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(Some(true)),
-        "false" | "0" | "no" => Ok(Some(false)),
-        _ => Err("x-arkret-blob-encrypted must be true or false"),
-    }
 }
 
 pub(super) async fn enforce_blob_quota(
@@ -1798,108 +1545,53 @@ mod tests {
     }
 
     #[test]
-    fn attachment_envelope_whole_file_default_scheme_requires_nonce() {
-        let blob_ref = format!("ak:blob:sha256:{}", "0".repeat(64));
-        // No scheme → treated as whole_file; nonce present → valid.
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
-                "key_ref": "ak:mls:exporter",
-                "nonce": "AAAAAAAAAAAAAAAA",
-                "blob_ref": blob_ref.as_str(),
-            }))
-            .is_ok()
-        );
-        // No scheme, no nonce → rejected.
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
-                "key_ref": "ak:mls:exporter",
-                "blob_ref": blob_ref.as_str(),
-            }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn attachment_envelope_stream_scheme_requires_stream_descriptor() {
-        let blob_ref = format!("ak:blob:sha256:{}", "0".repeat(64));
-        // Valid stream envelope: nonce_prefix + segment_bytes/count, no nonce.
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ak.blob.stream_aead.v1",
-                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305_stream",
-                "key_ref": "ak:mls:exporter",
-                "nonce_prefix": "AAAAAAAA",
-                "segment_bytes": 65536,
-                "segment_count": 4,
-                "blob_ref": blob_ref.as_str(),
-            }))
-            .is_ok()
-        );
-        // Stream scheme but missing nonce_prefix → rejected.
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ak.blob.stream_aead.v1",
-                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305_stream",
-                "key_ref": "ak:mls:exporter",
-                "segment_bytes": 65536,
-                "segment_count": 4,
-                "blob_ref": blob_ref.as_str(),
-            }))
-            .is_err()
-        );
-        // Stream scheme but segment_bytes not an integer → rejected.
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ak.blob.stream_aead.v1",
-                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305_stream",
-                "key_ref": "ak:mls:exporter",
-                "nonce_prefix": "AAAAAAAA",
-                "segment_bytes": "65536",
-                "segment_count": 4,
-                "blob_ref": blob_ref.as_str(),
-            }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn attachment_envelope_unknown_scheme_passes_through_without_nonce() {
-        let blob_ref = format!("ak:blob:sha256:{}", "0".repeat(64));
-        // An unregistered scheme is accepted opaquely and is NOT forced to
-        // carry a whole-file `nonce`.
-        assert!(
-            validate_encrypted_attachment_metadata(&json!({
-                "scheme": "ak.blob.unregistered_scheme.v1",
-                "encryption_algorithm": "something-new",
-                "key_ref": "ak:mls:exporter",
-                "blob_ref": blob_ref.as_str(),
-            }))
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn search_index_shard_purpose_uses_opaque_encrypted_blob_metadata() {
-        let metadata =
-            encrypted_blob_encryption_metadata_for_purpose(Some(BLOB_PURPOSE_SEARCH_INDEX_SHARD))
-                .expect("search shard purpose supported");
-        assert_eq!(
-            metadata,
-            json!({
-                "scheme": BLOB_SCHEME_WHOLE_FILE_AEAD_V1,
-                "purpose": "search_index_shard",
-                "profile_id": "ak.profile.search.client_index.v1",
-                "data_class": "encrypted_index",
-            })
-        );
-        assert!(blob_purpose_requires_encryption(Some(
-            BLOB_PURPOSE_SEARCH_INDEX_SHARD
+    fn upload_purpose_follows_the_request_body_pattern() {
+        assert!(is_valid_blob_upload_purpose("file_transfer"));
+        assert!(is_valid_blob_upload_purpose("long_text"));
+        assert!(is_valid_blob_upload_purpose(&format!(
+            "a{}",
+            "b".repeat(63)
         )));
-        assert!(metadata.get("term").is_none());
-        assert!(metadata.get("message_id").is_none());
-        assert!(metadata.get("snippet").is_none());
+        assert!(!is_valid_blob_upload_purpose(&format!(
+            "a{}",
+            "b".repeat(64)
+        )));
+        assert!(!is_valid_blob_upload_purpose(""));
+        assert!(!is_valid_blob_upload_purpose("1purpose"));
+        assert!(!is_valid_blob_upload_purpose("message.attachment"));
+        assert!(!is_valid_blob_upload_purpose("Attachment"));
+    }
+
+    #[test]
+    fn upload_media_type_follows_the_request_body_pattern() {
+        assert!(is_valid_blob_upload_media_type("application/octet-stream"));
+        assert!(is_valid_blob_upload_media_type("image/svg+xml"));
+        assert!(!is_valid_blob_upload_media_type(
+            "text/plain; charset=utf-8"
+        ));
+        assert!(!is_valid_blob_upload_media_type("Text/Plain"));
+        assert!(!is_valid_blob_upload_media_type("text/"));
+        assert!(!is_valid_blob_upload_media_type("text"));
+    }
+
+    #[test]
+    fn declared_content_digest_is_checked_under_its_own_suite() {
+        let bytes = b"public group info";
+        let sha256 = canonical::digest_with_suite("sha256", bytes).unwrap();
+        let blake3 = canonical::digest_with_suite("blake3", bytes).unwrap();
+        assert!(is_valid_blob_upload_content_digest(&sha256));
+        assert!(is_valid_blob_upload_content_digest(&blake3));
+        assert!(blob_content_digest_matches(&sha256, bytes));
+        assert!(blob_content_digest_matches(&blake3, bytes));
+        assert!(!blob_content_digest_matches(&sha256, b"other bytes"));
+        assert!(!is_valid_blob_upload_content_digest(&format!(
+            "sha512:{}",
+            "0".repeat(64)
+        )));
+        assert!(!is_valid_blob_upload_content_digest(&format!(
+            "sha256:{}",
+            "A".repeat(64)
+        )));
     }
 
     #[test]

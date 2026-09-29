@@ -4,9 +4,8 @@ use super::{
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
     RealmMetaRecord, RealmMetaStore, RunQueryDsl, SpaceContainerProjectionRecord,
-    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore,
-    StrandWatchProjectionRecord, StrandWatchProjectionStore, Text, Timestamptz, Uuid, Value,
-    async_trait, ids, pg_conn, sql_query, sql_types,
+    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore, Text,
+    Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query, sql_types,
 };
 
 #[cfg(test)]
@@ -1214,66 +1213,6 @@ impl CircleProjectionStore for PgCircleProjectionStore {
                 .collect()
         })
         .map_err(PersistenceError::database)
-    }
-}
-
-pub struct PgStrandWatchProjectionStore {
-    pub pool: PgPool,
-}
-
-#[derive(QueryableByName)]
-struct StrandWatchProjectionRow {
-    #[diesel(sql_type = Text)]
-    strand_id: String,
-    #[diesel(sql_type = Text)]
-    actor_id: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    level: Option<String>,
-    #[diesel(sql_type = Bool)]
-    level_public: bool,
-    #[diesel(sql_type = Timestamptz)]
-    updated_at: chrono::DateTime<chrono::Utc>,
-    #[diesel(sql_type = Jsonb)]
-    committed_ref: Value,
-}
-
-impl TryFrom<StrandWatchProjectionRow> for StrandWatchProjectionRecord {
-    type Error = PersistenceError;
-    fn try_from(row: StrandWatchProjectionRow) -> PersistenceResult<Self> {
-        Ok(Self {
-            strand_id: row.strand_id,
-            actor_id: row.actor_id.to_string(),
-            level: row.level,
-            level_public: row.level_public,
-            updated_at: row.updated_at,
-            committed_ref: serde_json::from_value(row.committed_ref)
-                .map_err(PersistenceError::database)?,
-        })
-    }
-}
-
-#[async_trait]
-impl StrandWatchProjectionStore for PgStrandWatchProjectionStore {
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<StrandWatchProjectionRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT w.strand_id,w.watcher_actor_id AS actor_id,w.value->>'level' AS level, \
-                    COALESCE((w.value->>'level_public')::boolean,false) AS level_public,w.updated_at, \
-                    jsonb_build_object('event_id',e.envelope->>'event_id','commit_id',c.commit_id,'stream_ref',c.stream_ref,'stream_position',c.stream_position) AS committed_ref \
-             FROM strand_watch_current_results w JOIN realm_commits c ON c.commit_id=w.current_commit_id \
-             JOIN canonical_events e ON e.pk=c.event_pk \
-             WHERE c.realm_id=w.realm_id AND c.stream_position=w.current_stream_position \
-               AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=w.realm_id AND e.state='committed' \
-             ORDER BY w.strand_id,w.watcher_actor_id",
-        )
-        .load::<StrandWatchProjectionRow>(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?
-        .into_iter()
-        .map(StrandWatchProjectionRecord::try_from)
-        .collect()
     }
 }
 

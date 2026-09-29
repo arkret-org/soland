@@ -191,10 +191,7 @@ async fn current_agent_key(
             value,
             revision,
             ..
-        } = entry
-        else {
-            continue;
-        };
+        } = entry;
         match current {
             CurrentSelector::AgentStatus { agent_id: subject } if subject == agent_id => {
                 if status

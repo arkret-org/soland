@@ -459,6 +459,15 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// The accepted Realm root controller and current joined members held
+    /// here, governed or replicated.
+    pub async fn accepted_realm_roster(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<Option<soland_storage::AcceptedRealmRoster>> {
+        Ok(self.store().accepted_realm_roster(realm_id).await?)
+    }
+
     /// The accepted Agent join and its controller's exact current generation.
     pub async fn accepted_effective_agent_member_joined(
         &self,
@@ -1478,6 +1487,20 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// The effective scope of a Strand `actor` currently reads from durable
+    /// current, governed here or held as a verified replica.
+    pub async fn visible_strand_scope_for_actor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        strand_id: &arkret_wire::StrandId,
+        actor: &arkret_wire::ActorId,
+    ) -> ServiceResult<Option<arkret_wire::ScopeRef>> {
+        Ok(self
+            .store()
+            .visible_strand_scope_for_actor(realm_id, strand_id, actor)
+            .await?)
+    }
+
     /// Materialize, tenure-check, sign, capacity-check and issue one complete
     /// Snapshot to `account` in a single durable cut held by the store. The
     /// signature is made with the Station's current service method only while
@@ -1813,6 +1836,11 @@ impl AuthorityCommitApplication {
         Ok(self.store().latest_snapshot(realm_id).await?)
     }
 
+    /// Build the bundle at one consistent authority cut. A concurrent Commit
+    /// that moves the Realm stream head, or a handoff, while the bundle is
+    /// assembled only means that cut is gone: the bundle is rebuilt at the
+    /// newer cut. Persistent churn is a retryable `temporarily_unavailable`,
+    /// never a conflict the caller could not resolve.
     pub async fn authority_bundle(
         &self,
         request: &AuthorityBundleRequest,
@@ -1825,6 +1853,37 @@ impl AuthorityCommitApplication {
         request
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        for _ in 0..AUTHORITY_BUNDLE_CUT_ATTEMPTS {
+            if let Some(bundle) = self
+                .authority_bundle_at_current_cut(
+                    request,
+                    local_service_id,
+                    current_route_record.clone(),
+                    verification_method.clone(),
+                    signing_key,
+                    issued_at,
+                )
+                .await?
+            {
+                return Ok(bundle);
+            }
+        }
+        Err(ServiceError::Conflict(format!(
+            "{}: Realm authority kept changing while building the bundle",
+            soland_storage::ConflictCode::TemporarilyUnavailable
+        )))
+    }
+
+    /// One bundle attempt; `None` when the authority cut moved underneath it.
+    async fn authority_bundle_at_current_cut(
+        &self,
+        request: &AuthorityBundleRequest,
+        local_service_id: &DidCoreId,
+        current_route_record: serde_json::Value,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        issued_at: DateTime<Utc>,
+    ) -> ServiceResult<Option<RealmAuthorityBundle>> {
         let authority = self
             .store()
             .current_authority(&request.realm_id)
@@ -1929,13 +1988,15 @@ impl AuthorityCommitApplication {
             || self.store().stream_head(&stream_ref).await?
                 != Some(bundle.realm_stream_head.clone())
         {
-            return Err(ServiceError::Conflict(
-                "Realm authority changed while building the bundle".to_owned(),
-            ));
+            return Ok(None);
         }
-        Ok(bundle)
+        Ok(Some(bundle))
     }
 }
+
+/// Bundle builds attempted before a moving authority cut is reported as
+/// `temporarily_unavailable`.
+const AUTHORITY_BUNDLE_CUT_ATTEMPTS: usize = 4;
 
 /// Wrap one `authority_forward` admission result in its closed branch.
 fn authority_forward_outcome(

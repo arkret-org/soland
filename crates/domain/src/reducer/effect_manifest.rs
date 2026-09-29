@@ -909,7 +909,7 @@ const EFFECT_MANIFEST: &[EffectRegistration] = &[
         owner: EventEffectOwnership::TypedResultWriter,
         scope: EventWireScope::DurableEvent,
         reducer_input: true,
-        slot: CacheSlot::Shared(apply_strand_watch_set_dispatch),
+        slot: CacheSlot::Shared(apply_durable_fact_dispatch),
     },
     EffectRegistration {
         kind: "ak.view.create",

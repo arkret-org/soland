@@ -432,7 +432,7 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
                 | "encrypted_content"
         ) || arkret_wire::patch::reducer_managed_patch_reason("strand", path).is_some()
             || arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject(
-                "strand_update_payload",
+                "strand_patch_payload",
                 path,
             )
         {
@@ -441,73 +441,7 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
             )));
         }
     }
-    let row = diesel::sql_query(
-        "SELECT realm_id,current_commit_id,current_stream_position,value \
-         FROM strand_current_results WHERE strand_id=$1 FOR UPDATE",
-    )
-    .bind::<Text, _>(payload.target_ref.as_str())
-    .get_result::<StrandCurrentRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .ok_or_else(|| reject("Strand update target is absent"))?;
-    if row.realm_id != event.realm_id.as_str() {
-        return Err(reject("Strand update target belongs to another Realm"));
-    }
-    let position = i64::try_from(commit.stream_position)
-        .map_err(|_| reject("Strand stream position exceeds BIGINT"))?;
-    if row.current_stream_position >= position || row.current_commit_id == commit.commit_id.as_str()
-    {
-        return Err(reject("Strand current revision does not precede Event"));
-    }
-    let current: arkret_models_collaboration::objects::strand::Strand =
-        serde_json::from_value(row.value.clone()).map_err(|error| {
-            PersistenceError::Internal(format!("stored Strand current value is invalid: {error}"))
-        })?;
-    if current.id.as_ref() != Some(&payload.target_ref) || current.realm_id != event.realm_id {
-        return Err(reject("Strand update target identity or Realm differs"));
-    }
-    match current.state {
-        Some(arkret_wire::ObjectState::Active) => {}
-        Some(arkret_wire::ObjectState::Redacted) => {
-            return Err(reject_lifecycle(
-                soland_storage::ConflictCode::StrandAlreadyTerminal,
-                "Strand update target is redacted",
-            ));
-        }
-        _ => {
-            return Err(reject_lifecycle(
-                soland_storage::ConflictCode::StrandNotActive,
-                "Strand update target is not active",
-            ));
-        }
-    }
-    let expected_scope = match current.scope_circle_id.as_ref() {
-        Some(circle_id) => arkret_wire::ScopeRef::Circle {
-            realm_id: event.realm_id.clone(),
-            circle_id: circle_id.clone(),
-        },
-        None => arkret_wire::ScopeRef::Realm {
-            realm_id: event.realm_id.clone(),
-        },
-    };
-    if event.scope_ref != expected_scope {
-        return Err(reject(
-            "Strand update Event scope differs from target scope",
-        ));
-    }
-    if let Some(expected) = payload.expected_state_digest.as_ref() {
-        let actual = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-            arkret_canonical::canonical_json_bytes(&row.value)
-                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-        ))
-        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-        if expected != &actual {
-            return Err(reject(
-                "Strand expected_state_digest does not match current value",
-            ));
-        }
-    }
+    let (row, current, position) = lock_active_patch_target(conn, event, commit, &payload).await?;
     let mut post = payload
         .patch
         .apply_for_typed_target(&row.value, payload.target_ref.as_str())
@@ -562,6 +496,100 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
     next.validate_content_surfaces()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     validate_calendar_profile(&next)?;
+    store_patched_strand(conn, event, commit, &payload, &row, position, &post).await
+}
+
+/// Lock the Strand a patch targets at the accepting cut and require it to be
+/// the Active, same-Realm, same-scope object the signed payload names, with
+/// the optional `expected_state_digest` over its exact current value.
+async fn lock_active_patch_target(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    payload: &arkret_models_collaboration::events_payloads::strand::StrandPatchPayload,
+) -> PersistenceResult<(
+    StrandCurrentRow,
+    arkret_models_collaboration::objects::strand::Strand,
+    i64,
+)> {
+    let row = diesel::sql_query(
+        "SELECT realm_id,current_commit_id,current_stream_position,value \
+         FROM strand_current_results WHERE strand_id=$1 FOR UPDATE",
+    )
+    .bind::<Text, _>(payload.target_ref.as_str())
+    .get_result::<StrandCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| reject("Strand patch target is absent"))?;
+    if row.realm_id != event.realm_id.as_str() {
+        return Err(reject("Strand patch target belongs to another Realm"));
+    }
+    let position = i64::try_from(commit.stream_position)
+        .map_err(|_| reject("Strand stream position exceeds BIGINT"))?;
+    if row.current_stream_position >= position || row.current_commit_id == commit.commit_id.as_str()
+    {
+        return Err(reject("Strand current revision does not precede Event"));
+    }
+    let current: arkret_models_collaboration::objects::strand::Strand =
+        serde_json::from_value(row.value.clone()).map_err(|error| {
+            PersistenceError::Internal(format!("stored Strand current value is invalid: {error}"))
+        })?;
+    if current.id.as_ref() != Some(&payload.target_ref) || current.realm_id != event.realm_id {
+        return Err(reject("Strand patch target identity or Realm differs"));
+    }
+    match current.state {
+        Some(arkret_wire::ObjectState::Active) => {}
+        Some(arkret_wire::ObjectState::Redacted) => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::StrandAlreadyTerminal,
+                "Strand patch target is redacted",
+            ));
+        }
+        _ => {
+            return Err(reject_lifecycle(
+                soland_storage::ConflictCode::StrandNotActive,
+                "Strand patch target is not active",
+            ));
+        }
+    }
+    let expected_scope = match current.scope_circle_id.as_ref() {
+        Some(circle_id) => arkret_wire::ScopeRef::Circle {
+            realm_id: event.realm_id.clone(),
+            circle_id: circle_id.clone(),
+        },
+        None => arkret_wire::ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        },
+    };
+    if event.scope_ref != expected_scope {
+        return Err(reject("Strand patch Event scope differs from target scope"));
+    }
+    if let Some(expected) = payload.expected_state_digest.as_ref() {
+        let actual = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            arkret_canonical::canonical_json_bytes(&row.value)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+        ))
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+        if expected != &actual {
+            return Err(reject(
+                "Strand expected_state_digest does not match current value",
+            ));
+        }
+    }
+    Ok((row, current, position))
+}
+
+/// Replace the target's current value with the validated post-patch value.
+async fn store_patched_strand(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    payload: &arkret_models_collaboration::events_payloads::strand::StrandPatchPayload,
+    row: &StrandCurrentRow,
+    position: i64,
+    post: &Value,
+) -> PersistenceResult<()> {
     let updated = diesel::sql_query(
         "UPDATE strand_current_results SET current_commit_id=$3,current_stream_position=$4,\
          value=$5,updated_at=$6 WHERE realm_id=$1 AND strand_id=$2 AND current_commit_id=$7",
@@ -570,16 +598,166 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
     .bind::<Text, _>(payload.target_ref.as_str())
     .bind::<Text, _>(commit.commit_id.as_str())
     .bind::<BigInt, _>(position)
-    .bind::<Jsonb, _>(&post)
+    .bind::<Jsonb, _>(post)
     .bind::<Timestamptz, _>(commit.committed_at)
     .bind::<Text, _>(&row.current_commit_id)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
     if updated != 1 {
-        return Err(reject("Strand current changed before update"));
+        return Err(reject("Strand current changed before patch"));
     }
     Ok(())
+}
+
+/// Admit an `ak.strand.tracks.update` with the authorization facts and target
+/// value frozen in the accepting transaction.
+pub(crate) async fn commit_strand_tracks_update_authority_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::StrandTracksUpdate {
+        return Ok(());
+    }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
+    commit_strand_tracks_update_current_result_in_connection(conn, event, commit).await
+}
+
+/// Advance the registered Strand value for `ak.strand.tracks.update`.
+///
+/// event-kind-registry.json projects the patch with `allowed_paths:
+/// ["tracks"]` and retains every other member; strand-and-message.md section
+/// 4.8 requires registered track names and an uninterrupted primary track, and
+/// section 4.7 keeps track content on the content-carrying Events.
+pub(crate) async fn commit_strand_tracks_update_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::StrandTracksUpdate {
+        return Ok(());
+    }
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if commit.stream_ref
+        != (arkret_wire::CommitStreamRef::Realm {
+            realm_id: event.realm_id.clone(),
+        })
+    {
+        return Err(reject(
+            "Strand tracks update requires the Realm commit stream",
+        ));
+    }
+    let payload: arkret_models_collaboration::events_payloads::strand::StrandPatchPayload =
+        serde_json::from_value(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    payload
+        .patch
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    for (path, _) in payload.patch.iter() {
+        if path.split('.').next() != Some("tracks")
+            || arkret_wire::patch::reducer_managed_patch_reason("strand", path).is_some()
+            || arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject(
+                "strand_patch_payload",
+                path,
+            )
+        {
+            return Err(PersistenceError::SchemaViolation(format!(
+                "Strand tracks update patch path is forbidden: {path}"
+            )));
+        }
+    }
+    let (row, current, position) = lock_active_patch_target(conn, event, commit, &payload).await?;
+    let mut post = payload
+        .patch
+        .apply_for_typed_target(&row.value, payload.target_ref.as_str())
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let object = post.as_object_mut().ok_or_else(|| {
+        PersistenceError::SchemaViolation("Strand patch did not produce an object".to_owned())
+    })?;
+    object.insert(
+        "updated_by".to_owned(),
+        serde_json::to_value(&event.actor_id).map_err(PersistenceError::database)?,
+    );
+    object.insert(
+        "updated_at".to_owned(),
+        Value::String(arkret_canonical::format_timestamp_canonical(
+            event.created_at,
+        )),
+    );
+    if arkret_wire::forbidden_wire::forbidden_wire_violation(
+        "materialized_object",
+        "strand.schema.json",
+        &post,
+    )
+    .is_some()
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "Strand post-patch value contains a forbidden field".to_owned(),
+        ));
+    }
+    let retained = |value: &Value| {
+        let mut members = value.as_object().cloned().unwrap_or_default();
+        for derived in ["tracks", "updated_by", "updated_at"] {
+            members.remove(derived);
+        }
+        members
+    };
+    if retained(&post) != retained(&row.value) {
+        return Err(PersistenceError::SchemaViolation(
+            "Strand tracks update changed a retained member".to_owned(),
+        ));
+    }
+    let next: arkret_models_collaboration::objects::strand::Strand =
+        serde_json::from_value(post.clone()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "Strand post-patch value is invalid: {error}"
+            ))
+        })?;
+    next.validate_content_surfaces()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let track_content =
+        |track: Option<&arkret_models_collaboration::objects::profiles::StrandTrack>| {
+            track.map_or((Value::Null, Value::Null), |track| {
+                (
+                    serde_json::to_value(&track.content).unwrap_or(Value::Null),
+                    serde_json::to_value(&track.encrypted_content).unwrap_or(Value::Null),
+                )
+            })
+        };
+    if current
+        .tracks
+        .keys()
+        .chain(next.tracks.keys())
+        .any(|name| track_content(current.tracks.get(name)) != track_content(next.tracks.get(name)))
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "Strand tracks update cannot change track content".to_owned(),
+        ));
+    }
+    arkret_models_collaboration::objects::profiles::validate_primary_track_transition(
+        &current.tracks,
+        &next.tracks,
+        None,
+    )
+    .map_err(|error| {
+        let detail = error.to_string();
+        if detail.contains("track_disabled") {
+            PersistenceError::Conflict(format!("track_disabled: {detail}"))
+        } else {
+            reject(format!("Strand primary track is required: {detail}"))
+        }
+    })?;
+    store_patched_strand(conn, event, commit, &payload, &row, position, &post).await
 }
 
 fn validate_calendar_profile(

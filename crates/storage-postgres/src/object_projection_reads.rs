@@ -205,6 +205,7 @@ pub(crate) async fn lists_for_actor(
                AND rc.realm_id=m.realm_id AND rc.stream_position=m.current_stream_position \
                AND rc.stream_ref=m.source_stream_ref \
              WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join' \
+               AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) \
                AND c.value->>'state'='active' \
                AND m.source_stream_ref->>'circle_id'=m.circle_id",
         ).bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(actor.to_string())
@@ -350,6 +351,78 @@ pub(crate) async fn lists_for_actor(
             ProjectionStrandList { realm_id: realm_id.clone(), total: strands.len() as u64, strands, next_cursor: None, has_more: false },
         )))
     }).await.map_err(PgTransactionError::into_persistence)
+}
+
+/// The effective scope of a non-terminal Strand that `actor` currently reads,
+/// from durable current rows at one cut: the actor is a current joined member
+/// (governed here or held as a verified replica) and, for a Circle-scoped
+/// Strand, a current joined member of that active Circle. Every hidden,
+/// missing or terminal target is the same `None`.
+pub(crate) async fn visible_strand_scope_for_actor(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    strand_id: &StrandId,
+    actor: &ActorId,
+) -> PersistenceResult<Option<ScopeRef>> {
+    let mut conn = pool.get().await.map_err(PersistenceError::database)?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        diesel::sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        if !crate::authority_commit::accepted_current_member_joined_in_connection(
+            conn, realm_id, actor,
+        )
+        .await?
+        {
+            return Ok(None);
+        }
+        let row: Option<ValueRow> = diesel::sql_query(
+            "SELECT value FROM strand_current_results WHERE realm_id=$1 AND strand_id=$2",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(strand_id.as_str())
+        .get_result(&mut *conn)
+        .await
+        .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let strand: Strand =
+            serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+        if strand.realm_id != *realm_id || strand.id.as_ref() != Some(strand_id) {
+            return Err(corrupt("Strand current identity disagrees with its row").into());
+        }
+        if strand.state.ok_or_else(|| corrupt("Strand state absent"))? == ObjectState::Redacted {
+            return Ok(None);
+        }
+        let Some(circle_id) = strand.scope_circle_id else {
+            return Ok(Some(ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            }));
+        };
+        let joined = diesel::sql_query(
+            "SELECT EXISTS(SELECT 1 FROM circle_member_state_current_results m \
+             JOIN circle_current_results c ON c.circle_id=m.circle_id AND c.realm_id=m.realm_id \
+             JOIN realm_commits rc ON rc.commit_id=m.current_commit_id \
+               AND rc.realm_id=m.realm_id AND rc.stream_position=m.current_stream_position \
+               AND rc.stream_ref=m.source_stream_ref \
+             WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
+               AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) \
+               AND c.value->>'state'='active' \
+               AND m.source_stream_ref->>'circle_id'=m.circle_id) AS present",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(circle_id.as_str())
+        .bind::<Text, _>(actor.to_string())
+        .get_result::<crate::ExistsRow>(&mut *conn)
+        .await?;
+        Ok(joined.present.then(|| ScopeRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id,
+        }))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
 }
 
 use diesel::OptionalExtension as _;

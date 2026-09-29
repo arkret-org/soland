@@ -59,6 +59,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::StrandCreate
         | EventKind::RealmProfile
         | EventKind::StrandUpdate
+        | EventKind::StrandTracksUpdate
         | EventKind::RsvpSet
         | EventKind::StrandArchive
         | EventKind::StrandRestore
@@ -84,7 +85,14 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::InviteCancel
         | EventKind::InviteAccept
         | EventKind::CapabilityRevoke
-        | EventKind::CapabilityRelinquish => Ok(SelfEventRoute::GuardedUnit),
+        | EventKind::CapabilityRelinquish
+        | EventKind::RelationCreate
+        | EventKind::RelationUpdate
+        | EventKind::RelationTombstone
+        | EventKind::SpaceArchive
+        | EventKind::SpaceRestore
+        | EventKind::ReactionAdd
+        | EventKind::ReactionRemove => Ok(SelfEventRoute::GuardedUnit),
         EventKind::Unknown(raw) => Err(ServiceError::SchemaViolation(format!(
             "self Event kind {raw} is not registered"
         ))),
@@ -152,6 +160,11 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
                     | arkret_wire::EventKind::MessageCreate
                     | arkret_wire::EventKind::ModerationDecision
                     | arkret_wire::EventKind::ModerationDecisionLift
+                    | arkret_wire::EventKind::RelationCreate
+                    | arkret_wire::EventKind::RelationUpdate
+                    | arkret_wire::EventKind::RelationTombstone
+                    | arkret_wire::EventKind::ReactionAdd
+                    | arkret_wire::EventKind::ReactionRemove
             ))
     {
         return Err(ServiceError::Conflict(
@@ -570,6 +583,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
+            EventKind::StrandTracksUpdate,
             EventKind::RsvpSet,
             EventKind::StrandArchive,
             EventKind::StrandRestore,
@@ -594,6 +608,13 @@ mod tests {
             EventKind::InviteAccept,
             EventKind::CapabilityRevoke,
             EventKind::CapabilityRelinquish,
+            EventKind::RelationCreate,
+            EventKind::RelationUpdate,
+            EventKind::RelationTombstone,
+            EventKind::SpaceArchive,
+            EventKind::SpaceRestore,
+            EventKind::ReactionAdd,
+            EventKind::ReactionRemove,
         ] {
             assert_eq!(
                 self_event_route(&kind).unwrap(),
@@ -618,6 +639,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::StrandUpdate,
+            EventKind::StrandTracksUpdate,
             EventKind::RsvpSet,
             EventKind::StrandArchive,
             EventKind::StrandRestore,
@@ -643,6 +665,13 @@ mod tests {
             EventKind::InviteAccept,
             EventKind::CapabilityRevoke,
             EventKind::CapabilityRelinquish,
+            EventKind::RelationCreate,
+            EventKind::RelationUpdate,
+            EventKind::RelationTombstone,
+            EventKind::SpaceArchive,
+            EventKind::SpaceRestore,
+            EventKind::ReactionAdd,
+            EventKind::ReactionRemove,
         ];
         let mut refused = 0;
         for kind in EventKind::ALL.iter().filter(|kind| !routed.contains(kind)) {

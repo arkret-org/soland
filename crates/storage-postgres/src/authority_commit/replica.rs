@@ -320,7 +320,7 @@ async fn hosts_joined_member(
     let rows = match stream {
         arkret_wire::CommitStreamRef::Realm { realm_id } => sql_query("SELECT member_id FROM member_state_current_results WHERE realm_id=$1 AND membership='join' FOR SHARE")
             .bind::<Text, _>(realm_id.as_str()).load::<MemberIdRow>(&mut *conn).await?,
-        arkret_wire::CommitStreamRef::Circle { realm_id, circle_id } => sql_query("SELECT cm.member_id FROM circle_member_state_current_results cm JOIN member_state_current_results rm ON rm.realm_id=cm.realm_id AND rm.member_id=cm.member_id JOIN circle_current_results circle ON circle.circle_id=cm.circle_id AND circle.realm_id=cm.realm_id WHERE cm.realm_id=$1 AND cm.circle_id=$2 AND cm.membership='join' AND rm.membership='join' AND circle.value->>'state'='active' FOR SHARE")
+        arkret_wire::CommitStreamRef::Circle { realm_id, circle_id } => sql_query("SELECT cm.member_id FROM circle_member_state_current_results cm JOIN member_state_current_results rm ON rm.realm_id=cm.realm_id AND rm.member_id=cm.member_id JOIN circle_current_results circle ON circle.circle_id=cm.circle_id AND circle.realm_id=cm.realm_id WHERE cm.realm_id=$1 AND cm.circle_id=$2 AND cm.membership='join' AND rm.membership='join' AND circle_member_parent_join_current(cm.realm_id,cm.member_id,cm.value) AND circle.value->>'state'='active' FOR SHARE")
             .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).load::<MemberIdRow>(&mut *conn).await?,
         _ => return Ok(false),
     };
@@ -721,20 +721,34 @@ async fn install_replica_commit_in_connection(
     let Some(member_account_id) = opening else {
         return store_held_successor(conn, replica, &key, head.as_ref(), anchor).await;
     };
+    // federation.md section 4.1.1: a Circle join opens the held stream only
+    // while the local parent Realm current is join at exactly the revision
+    // the join signed. A lagging Realm replica or a superseded parent join
+    // writes nothing and stays retryable.
     if matches!(
         commit.stream_ref,
         arkret_wire::CommitStreamRef::Circle { .. }
-    ) && !super::accepted_current_member_joined_in_connection(
-        conn,
-        &event.realm_id,
-        &arkret_wire::ActorId::account(member_account_id.clone()),
-    )
-    .await?
-    {
-        return Err(conflict(
-            ConflictCode::CapabilityDenied,
-            "Circle opening join has no accepted parent Realm membership",
-        ));
+    ) {
+        let payload: arkret_models_collaboration::events_payloads::circle::CircleMemberStatePayload =
+            serde_json::from_value(serde_json::json!(&event.payload))
+                .map_err(|error| invalid(format!("Circle opening join payload: {error}")))?;
+        let bound = payload
+            .parent_membership_revision
+            .as_ref()
+            .ok_or_else(|| invalid("Circle opening join names no parent membership revision"))?;
+        if !super::parent_join_at_revision_in_connection(
+            conn,
+            &event.realm_id,
+            &arkret_wire::ActorId::account(member_account_id.clone()),
+            bound,
+        )
+        .await?
+        {
+            return Err(conflict(
+                ConflictCode::DependencyMissing,
+                "Circle opening join names a parent Realm join this Station does not hold as current",
+            ));
+        }
     }
     let member_account_id =
         serde_json::to_value(member_account_id).map_err(PersistenceError::database)?;
@@ -978,7 +992,47 @@ pub(super) async fn install_replica_anchor_in_connection(
         ));
     }
     if matches!(realm_stream, arkret_wire::CommitStreamRef::Circle { .. }) {
-        let parent_joined = install.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::MemberState { actor_id }, source_stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id }, value, .. } if actor_id == &member && realm_id == &install.realm_id && value.get("membership").and_then(Value::as_str) == Some("join")));
+        // circle.md section 9.1: the snapshot's two typed currents of one cut
+        // must agree -- the parent join is current at the revision the
+        // opening Circle join bound.
+        let opening = install
+            .current_state_entries
+            .iter()
+            .find_map(|entry| match entry {
+                arkret_wire::TypedCurrentResult::Value {
+                    selector, value, ..
+                } if selector == &opening_selector => Some(value),
+                _ => None,
+            })
+            .map(|value| {
+                serde_json::from_value::<arkret_wire::CircleMemberStateCurrent>(value.clone())
+            })
+            .transpose()
+            .map_err(|error| invalid(format!("bootstrap Circle join current: {error}")))?;
+        let parent_joined = opening.is_some_and(|circle| {
+            install
+                .current_state_entries
+                .iter()
+                .any(|entry| match entry {
+                    arkret_wire::TypedCurrentResult::Value {
+                        selector: arkret_wire::CurrentSelector::MemberState { actor_id },
+                        source_stream_ref,
+                        revision,
+                        value,
+                    } if actor_id == &member => {
+                        serde_json::from_value::<arkret_wire::MemberStateCurrent>(value.clone())
+                            .is_ok_and(|parent| {
+                                circle.is_effective_under_parent(
+                                    &install.realm_id,
+                                    source_stream_ref,
+                                    revision,
+                                    parent.membership,
+                                )
+                            })
+                    }
+                    _ => false,
+                })
+        });
         if !parent_joined {
             return Err(conflict(
                 ConflictCode::CapabilityDenied,

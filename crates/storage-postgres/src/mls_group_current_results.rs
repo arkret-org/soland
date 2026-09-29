@@ -283,6 +283,20 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             "the installed public state is not at the Commit's epoch",
         ));
     }
+    // encryption-and-audit.md section 2.4.1: while a Circle tree holds a leaf
+    // of an actor that is no longer an effective Circle member, only a Commit
+    // whose post-state tree drops every such leaf proceeds with an Add
+    // (RFC 9420 proposal type 1); every Add target must itself be effective.
+    if event.kind == EventKind::MlsCommit
+        && installation
+            .consumed_proposals
+            .iter()
+            .any(|proposal| proposal.proposal_type == 1)
+        && circle_holds_invalid_owner(conn, &event.scope_ref, &installation.member_principals)
+            .await?
+    {
+        return Err(soland_storage::MlsSendGateRefusal::EpochUpdateRequired.into_conflict());
+    }
     write_group(
         conn,
         &key,
@@ -929,23 +943,37 @@ async fn require_live_claim(
 }
 
 /// encryption-and-audit.md §2.5.2: the current MLS send gate of one accepted
-/// `ak.message.create`, decided on the scope's `mls_group` row read in the
-/// accepting transaction. The unit already rechecked the actual signer's
-/// endpoint authorization at the top of this same transaction, so a revoked
-/// device or Agent is refused with its own code before any answer here, and
-/// a revocation never advances the key-access revision (§2.4.1).
+/// `ak.message.create` / `.revise` or `ak.reaction.add` / `.remove`, decided
+/// on the scope's `mls_group` row read in the accepting transaction. A
+/// reaction's only encrypted carrier is its `encrypted_payload`
+/// (strand-and-message.md §9.8.1). The unit already rechecked the actual
+/// signer's endpoint authorization at the top of this same transaction, so a
+/// revoked device or Agent is refused with its own code before any answer
+/// here, and a revocation never advances the key-access revision (§2.4.1).
 pub(crate) async fn require_mls_send_gate_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
 ) -> PersistenceResult<()> {
-    if !matches!(
-        event.kind,
-        EventKind::MessageCreate | EventKind::MessageRevise
-    ) {
-        return Ok(());
-    }
-    let envelopes = soland_storage::message_create_envelopes(&event.payload)
-        .map_err(PersistenceError::SchemaViolation)?;
+    let envelopes = match event.kind {
+        EventKind::MessageCreate | EventKind::MessageRevise => {
+            soland_storage::message_create_envelopes(&event.payload)
+                .map_err(PersistenceError::SchemaViolation)?
+        }
+        EventKind::ReactionAdd | EventKind::ReactionRemove => event
+            .payload
+            .get("encrypted_payload")
+            .map(|value| {
+                serde_json::from_value::<arkret_models_crypto::EncryptedEnvelope>(value.clone())
+                    .map(|envelope| vec![envelope])
+                    .map_err(|error| {
+                        PersistenceError::SchemaViolation(format!(
+                            "reaction encrypted_payload: {error}"
+                        ))
+                    })
+            })
+            .transpose()?,
+        _ => return Ok(()),
+    };
     let current = sql_query(
         "SELECT realm_id,current_commit_id,current_stream_position,value,public_state \
          FROM mls_group_current_results WHERE scope_key=$1 FOR SHARE",
@@ -957,6 +985,12 @@ pub(crate) async fn require_mls_send_gate_in_connection(
     .map_err(PersistenceError::database)?
     .map(decode_row)
     .transpose()?;
+    if envelopes.is_some()
+        && let Some(current) = &current
+        && circle_tree_holds_invalid_leaf(conn, &event.scope_ref, current).await?
+    {
+        return Err(soland_storage::MlsSendGateRefusal::EpochUpdateRequired.into_conflict());
+    }
     let envelopes = envelopes
         .as_ref()
         .map(|envelopes| envelopes.iter().collect::<Vec<_>>());
@@ -966,6 +1000,61 @@ pub(crate) async fn require_mls_send_gate_in_connection(
         envelopes.as_deref(),
     )
     .map_err(soland_storage::MlsSendGateRefusal::into_conflict)
+}
+
+/// encryption-and-audit.md section 2.4.1: an activated Circle whose current
+/// public tree still holds a leaf of an actor that is no longer an effective
+/// Circle member (`circle.md` section 9.1) is `epoch_update_required`. A
+/// parent Realm leave, ban or rejoin never advances the Circle key-access
+/// revision; this same-cut leaf judgment is the other, independent gate.
+async fn circle_tree_holds_invalid_leaf(
+    conn: &mut AsyncPgConnection,
+    scope: &ScopeRef,
+    current: &MlsGroupCurrentRecord,
+) -> PersistenceResult<bool> {
+    if !matches!(scope, ScopeRef::Circle { .. }) {
+        return Ok(false);
+    }
+    let group_id = scope
+        .canonical_mls_group_id()
+        .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+    let owners = arkret_mls::MlsPublicGroupTracker::restore(
+        &current.public_state,
+        group_id.as_str(),
+        current.value.epoch,
+    )
+    .and_then(|tracker| tracker.leaves())
+    .map_err(|error| {
+        PersistenceError::Internal(format!("stored public MLS state is unusable: {error}"))
+    })?
+    .into_iter()
+    .map(|leaf| leaf.actor_id)
+    .collect::<std::collections::BTreeSet<_>>();
+    circle_holds_invalid_owner(conn, scope, &owners).await
+}
+
+async fn circle_holds_invalid_owner(
+    conn: &mut AsyncPgConnection,
+    scope: &ScopeRef,
+    owners: &std::collections::BTreeSet<arkret_wire::ActorId>,
+) -> PersistenceResult<bool> {
+    let ScopeRef::Circle {
+        realm_id,
+        circle_id,
+    } = scope
+    else {
+        return Ok(false);
+    };
+    for owner in owners {
+        if !crate::circle_current_results::effective_member_in_connection(
+            conn, realm_id, circle_id, owner,
+        )
+        .await?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// encryption-and-audit.md §2.4.1: a membership change of the Realm scope

@@ -2,10 +2,13 @@
 //! Circle create and self-membership edges. Unsupported Circle branches remain
 //! closed; no projection table is an authorization source.
 
-use arkret_models_collaboration::events_payloads::circle::CircleCreatePayload;
-use arkret_models_collaboration::governance::circle::CircleState;
+use arkret_models_collaboration::events_payloads::circle::{
+    CircleCreatePayload, CircleMemberStatePayload,
+};
+use arkret_models_collaboration::governance::circle::{CircleMembership, CircleState};
 use arkret_wire::{
-    ActorId, CircleId, CommitStreamRef, Event, EventKind, RealmCommit, SchemaId, ScopeRef,
+    CircleId, CircleMemberStateCurrent, CommitStreamRef, Event, EventKind, MembershipState,
+    RealmCommit, SchemaId, ScopeRef, WirePresence,
 };
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension as _, sql_query};
@@ -78,7 +81,8 @@ pub(crate) async fn require_active_author_in_connection(
            AND mc.realm_id=member.realm_id AND mc.stream_position=member.current_stream_position \
            AND mc.stream_ref=member.source_stream_ref \
            AND mc.stream_ref->>'kind'='circle' AND mc.stream_ref->>'realm_id'=member.realm_id \
-           AND mc.stream_ref->>'circle_id'=member.circle_id AND mc.stream_position<$4) AS present",
+           AND mc.stream_ref->>'circle_id'=member.circle_id AND mc.stream_position<$4 \
+           AND circle_member_parent_join_current(member.realm_id,member.member_id,member.value)) AS present",
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(circle_id.as_str())
@@ -96,12 +100,40 @@ pub(crate) async fn require_active_author_in_connection(
     Ok(())
 }
 
+/// Effective Circle membership of one complete ActorId at this cut
+/// (`circle.md` section 9.1): the canonical Circle join whose bound parent
+/// revision is still the parent Realm `member_state` current.
+pub(crate) async fn effective_member_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    circle_id: &CircleId,
+    actor: &arkret_wire::ActorId,
+) -> PersistenceResult<bool> {
+    Ok(sql_query(
+        "SELECT EXISTS (SELECT 1 FROM circle_member_state_current_results m \
+         WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
+           AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value)) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .bind::<Text, _>(actor.to_string())
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .present)
+}
+
 fn conflict(code: ConflictCode, detail: &str) -> PersistenceError {
     PersistenceError::Conflict(format!("{code}: {detail}"))
 }
 
 fn schema(detail: &str) -> PersistenceError {
     PersistenceError::SchemaViolation(detail.to_owned())
+}
+
+fn member_state_payload(event: &Event) -> PersistenceResult<CircleMemberStatePayload> {
+    serde_json::from_value(json!(&event.payload))
+        .map_err(|error| schema(&format!("Circle membership payload is invalid: {error}")))
 }
 
 fn circle_id(event: &Event) -> CircleId {
@@ -207,31 +239,30 @@ pub(crate) async fn admit_in_connection(
             {
                 return Err(schema("Circle membership scope and payload differ"));
             }
-            let member: ActorId = serde_json::from_value(
-                event
-                    .payload
-                    .get("member_id")
-                    .cloned()
-                    .ok_or_else(|| schema("member_id missing"))?,
-            )
-            .map_err(|_| schema("member_id invalid"))?;
+            let payload = member_state_payload(event)?;
+            let member = payload.member_id.clone();
             if member != event.actor_id {
                 return Err(conflict(
                     ConflictCode::UnsupportedFeature,
                     "cross-actor Circle membership needs its audit and manager cut",
                 ));
             }
-            let next = event
-                .payload
-                .get("membership")
-                .and_then(Value::as_str)
-                .ok_or_else(|| schema("membership missing"))?;
+            let next = payload.membership.as_str();
             crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id)
                 .await?;
-            if crate::member_state_admission::locked_membership(conn, &event.realm_id, &member)
-                .await?
-                != "join"
-            {
+            // circle.md section 9.1: the parent current must be join, and a
+            // Circle join must name exactly its revision on the Realm stream.
+            let parent =
+                crate::member_state_admission::locked_membership_revision(conn, realm_id, &member)
+                    .await?;
+            let parent_admits = match &parent {
+                Some((MembershipState::Join, revision)) => {
+                    payload.membership != CircleMembership::Join
+                        || payload.parent_membership_revision.as_ref() == Some(revision)
+                }
+                _ => false,
+            };
+            if !parent_admits {
                 return Err(conflict(
                     ConflictCode::FailedPrecondition,
                     "circle_member_must_be_realm_member",
@@ -278,18 +309,16 @@ pub(crate) async fn admit_in_connection(
             .optional()
             .map_err(PersistenceError::database)?;
             let previous = current.as_ref().map(|row| row.membership.as_str());
-            if let Some(expected) = event.payload.get("expected_membership") {
-                let matches = match expected {
-                    Value::Null => previous.is_none(),
-                    Value::String(value) => previous == Some(value.as_str()),
-                    _ => false,
-                };
-                if !matches {
-                    return Err(conflict(
-                        ConflictCode::FailedPrecondition,
-                        "Circle membership CAS differs",
-                    ));
-                }
+            let expected_matches = match &payload.expected_membership {
+                WirePresence::Missing => true,
+                WirePresence::Null => previous.is_none(),
+                WirePresence::Value(expected) => previous == Some(expected.as_str()),
+            };
+            if !expected_matches {
+                return Err(conflict(
+                    ConflictCode::FailedPrecondition,
+                    "Circle membership CAS differs",
+                ));
             }
             if !matches!(
                 (previous, next),
@@ -343,29 +372,20 @@ pub(crate) async fn commit_in_connection(
             let ScopeRef::Circle { circle_id, .. } = &event.scope_ref else {
                 return Err(schema("Circle membership scope invalid"));
             };
-            let member: ActorId = serde_json::from_value(
-                event
-                    .payload
-                    .get("member_id")
-                    .cloned()
-                    .ok_or_else(|| schema("member_id missing"))?,
-            )
-            .map_err(|_| schema("member_id invalid"))?;
-            let membership = event
-                .payload
-                .get("membership")
-                .and_then(Value::as_str)
-                .ok_or_else(|| schema("membership missing"))?;
-            let effective_at = event
-                .payload
-                .get("effective_at")
-                .cloned()
-                .unwrap_or_else(|| {
-                    json!(arkret_canonical::format_timestamp_canonical(
-                        event.created_at
-                    ))
-                });
-            let value = json!({"membership": membership, "effective_at": effective_at});
+            let payload = member_state_payload(event)?;
+            let member = payload.member_id.clone();
+            let membership = payload.membership.as_str();
+            // The signed parent revision is copied verbatim, never derived.
+            let current = CircleMemberStateCurrent {
+                membership: serde_json::from_value(json!(membership))
+                    .map_err(|_| schema("membership invalid"))?,
+                parent_membership_revision: payload.parent_membership_revision.clone(),
+                effective_at: payload.effective_at.unwrap_or(event.created_at),
+            };
+            current
+                .validate()
+                .map_err(|error| schema(&error.to_string()))?;
+            let value = serde_json::to_value(&current).map_err(PersistenceError::database)?;
             let changed = sql_query(
                 "INSERT INTO circle_member_state_current_results \
                  (realm_id,circle_id,member_id,membership,current_commit_id,current_stream_position,source_stream_ref,value,updated_at) \

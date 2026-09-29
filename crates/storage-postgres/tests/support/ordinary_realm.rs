@@ -98,7 +98,11 @@ pub fn signature(
     station: &arkret_wire::DidCoreId,
     at: chrono::DateTime<chrono::Utc>,
 ) -> arkret_wire::DetachedObjectSignature {
-    let did = station.as_str().replace("ak:did_core:", "did:");
+    // A did:webvh Core DID keeps only the SCID; any host projects back to it.
+    let did = match station.as_str().strip_prefix("ak:did_core:webvh:") {
+        Some(scid) => format!("did:webvh:{scid}:station.example"),
+        None => station.as_str().replace("ak:did_core:", "did:"),
+    };
     signature_for_did(&arkret_wire::Did::new(did).unwrap(), at)
 }
 
@@ -612,4 +616,37 @@ async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitU
         strand_id,
         head: default,
     }
+}
+
+#[derive(diesel::QueryableByName)]
+struct ParentMembershipRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    current_stream_position: i64,
+}
+
+/// The exact typed revision of `actor`'s current parent Realm `member_state`,
+/// read from the durable current -- the value a Circle join signs as its
+/// `parent_membership_revision` (`circle.md` section 9.1).
+pub async fn parent_membership_revision(
+    pool: &PgPool,
+    realm_id: &arkret_wire::RealmId,
+    actor: &arkret_wire::ActorId,
+) -> serde_json::Value {
+    use diesel_async::RunQueryDsl as _;
+    let mut conn = pool.get().await.unwrap();
+    let row = diesel::sql_query(
+        "SELECT current_commit_id,current_stream_position FROM member_state_current_results \
+         WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<diesel::sql_types::Text, _>(realm_id.as_str())
+    .bind::<diesel::sql_types::Text, _>(actor.to_string())
+    .get_result::<ParentMembershipRow>(&mut conn)
+    .await
+    .expect("the actor has a parent Realm member_state current");
+    serde_json::json!({
+        "commit_id": row.current_commit_id,
+        "stream_position": row.current_stream_position,
+    })
 }

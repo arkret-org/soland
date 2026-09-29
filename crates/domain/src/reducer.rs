@@ -75,7 +75,7 @@ pub use projections::{
     RealmOrganizationStatementState, RedactionCellValue, RelationCurrentResultProjection,
     RsvpProjection, SidecarContextProjection, SidecarProjection, SolandMembershipState,
     SolandRealmState, SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection,
-    StrandProjection, StrandWatchProjection, object_stage_from_wire_value, object_stage_wire_value,
+    StrandProjection, object_stage_from_wire_value, object_stage_wire_value,
 };
 use serde_json::Value;
 

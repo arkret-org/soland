@@ -702,9 +702,6 @@ pub(super) async fn agent_view_from_record(
                     AppError::internal(format!("accepted Agent lifecycle is invalid: {error}"))
                 })
             }
-            _ => Err(AppError::internal(
-                "accepted Agent lifecycle result is invalid",
-            )),
         })
         .transpose()?;
     let mut projected_record = record.clone();

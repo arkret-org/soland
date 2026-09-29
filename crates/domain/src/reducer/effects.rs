@@ -102,18 +102,6 @@ pub enum ProjectionEffect {
         member: String,
         target_state: String,
     },
-    /// Strand watch cell touched. Cell write itself is owned by the
-    /// Move/Seal pipeline (registered state model at SDK layer); the projection
-    /// only records that a watch change happened for `(strand_id, actor_id)`
-    /// so downstream listeners (notification dispatcher, watcher list
-    /// projection) can react. `level` is `None` when the effect clears
-    /// the cell.
-    StrandWatchUpdated {
-        strand_id: String,
-        actor_id: String,
-        level: Option<String>,
-        level_public: Option<bool>,
-    },
     /// Applet registry projection updated (registration or discovery).
     AppletProjectionUpdated {
         applet_id: AppletId,

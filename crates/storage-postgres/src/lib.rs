@@ -83,6 +83,7 @@ mod member_identity;
 mod member_identity_current_results;
 mod member_state_admission;
 mod message_interactions;
+mod message_reactions_current_results;
 mod message_revision_current_results;
 mod mls;
 mod mls_group_current_results;

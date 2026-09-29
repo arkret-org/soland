@@ -66,6 +66,12 @@ use crate::capability_grant_current_results::{
 };
 use crate::direct_conversation_admission::ProfileAuthority;
 
+/// The value members of the closed `realm-profile.schema.json` object, the
+/// `schema` discriminator excepted (`models/realm-and-space.md` section 2.3.A:
+/// `title`, `summary` and `avatar_blob_ref` are carried only by
+/// `ak.realm.profile`).
+const REALM_PROFILE_VALUE_FIELDS: [&str; 3] = ["title", "summary", "avatar_blob_ref"];
+
 #[derive(QueryableByName)]
 struct PolicyBundleRow {
     #[diesel(sql_type = Jsonb)]
@@ -794,6 +800,17 @@ impl RealmAuthorizationCut {
                 );
             }
         }
+        if event.kind == EventKind::StrandTracksUpdate {
+            // event-kind-registry.json: the tracks writer selects its Strand
+            // by `payload.target_ref`; the action carries no field constraint.
+            if let Some(strand) = payload_id("target_ref").and_then(|id| StrandId::new(id).ok()) {
+                facts.strand_id = Some(strand.to_string());
+                return (
+                    WireResourceSelector::strand(self.realm_id.clone(), strand),
+                    facts,
+                );
+            }
+        }
         if matches!(event.kind, EventKind::StrandMove | EventKind::StrandReorder) {
             let payload = serde_json::to_value(&event.payload).unwrap_or(serde_json::Value::Null);
             let target = if event.kind == EventKind::StrandMove {
@@ -815,6 +832,19 @@ impl RealmAuthorizationCut {
                     facts,
                 );
             }
+        }
+        if event.kind == EventKind::RealmProfile {
+            // `ak.realm.profile` is a complete replacement of the closed
+            // `realm-profile.schema.json` value: a member the payload omits is
+            // cleared. Every value member is therefore touched, so the
+            // registry-required `allowed_write_fields` of `ak.realm.profile`
+            // admits the write only when it covers all of them.
+            facts.write_fields = Some(
+                REALM_PROFILE_VALUE_FIELDS
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect(),
+            );
         }
         if event.kind == EventKind::SpaceCreate {
             facts.space_kind = event
@@ -1045,5 +1075,46 @@ mod operation_fact_tests {
             assert_eq!(facts.strand_id.as_deref(), Some(strand_id.as_str()));
             assert_eq!(facts.space_id.as_deref(), Some(list.as_str()));
         }
+    }
+
+    #[test]
+    fn realm_profile_replacement_touches_every_profile_value_field() {
+        let realm_id =
+            RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7").unwrap();
+        let actor = ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:profile-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:profile-station.example").unwrap(),
+        ));
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            EventKind::RealmProfile.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor.clone(),
+            json!({"schema":"ak.schema.realm_profile.v1","title":"Only a title"}),
+            arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+        )
+        .unwrap();
+        let cut = RealmAuthorizationCut {
+            realm_id: realm_id.clone(),
+            actor,
+            root: None,
+            grants: BTreeMap::new(),
+            revisions: BTreeMap::new(),
+            policy_bundle: None,
+            actor_membership: None,
+            lifecycle: RealmLifecycleGates::default(),
+            direct_conversation: None,
+        };
+        let (target, facts) = cut.event_operation(&event);
+        assert_eq!(target, WireResourceSelector::realm(realm_id));
+        assert_eq!(
+            facts.write_fields,
+            Some(vec![
+                "title".to_owned(),
+                "summary".to_owned(),
+                "avatar_blob_ref".to_owned(),
+            ])
+        );
     }
 }

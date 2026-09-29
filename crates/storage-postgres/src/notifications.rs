@@ -1,17 +1,21 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use arkret_models_collaboration::objects::read_receipts::{
     Notification, NotificationEventSource, NotificationIdentity, NotificationSchema,
     NotificationSource, NotificationSourceRef, OrdinaryProjectionContent,
 };
+use arkret_models_collaboration::objects::relation::Relation;
+use arkret_models_collaboration::objects::strand::Strand;
 use arkret_models_collaboration::sync_frames::account_subscribe::{
     NotificationData, NotificationDelta, NotificationDeltaAction,
 };
 use arkret_wire::events::EventKind;
-use arkret_wire::{
-    ActorId, DidCoreId, EventId, NotificationId, NotificationKind, RealmId, StrandId,
-};
+use arkret_wire::{ActorId, DidCoreId, EventId, NotificationKind, RealmId, StrandId};
+use diesel::OptionalExtension as _;
+use diesel_async::AsyncConnection as _;
 use soland_storage::{
-    AccountNotificationDeltaWrite, AccountPk, RecipientNotificationRecord,
-    StoredAccountNotificationDelta,
+    AccountNotificationDeltaWrite, AccountPk, NotificationFanoutBasis, NotificationStrandScope,
+    RecipientNotificationRecord, StoredAccountNotificationDelta,
 };
 
 use super::{
@@ -19,6 +23,7 @@ use super::{
     QueryableByName, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
     sql_query, sql_types,
 };
+use crate::PgTransactionError;
 #[derive(QueryableByName, serde::Deserialize)]
 struct NotificationRow {
     #[diesel(sql_type = sql_types::Uuid)]
@@ -544,6 +549,170 @@ impl NotificationStore for PgNotificationStore {
         .map(NotificationRow::into_account_record)
         .collect()
     }
+
+    async fn fanout_basis(
+        &self,
+        realm_id: &RealmId,
+        strand_id: Option<&StrandId>,
+    ) -> PersistenceResult<NotificationFanoutBasis> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let realm_id = realm_id.clone();
+        let strand_id = strand_id.cloned();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let joined_members = sql_query(FANOUT_JOINED_MEMBERS_SQL)
+                .bind::<Text, _>(realm_id.as_str())
+                .load::<FanoutActorRow>(&mut *conn)
+                .await?
+                .into_iter()
+                .map(|row| fanout_actor(&row.actor_id))
+                .collect::<PersistenceResult<BTreeSet<_>>>()?;
+            let Some(strand_id) = strand_id else {
+                return Ok(NotificationFanoutBasis {
+                    joined_members,
+                    ..NotificationFanoutBasis::default()
+                });
+            };
+            let strand = sql_query("SELECT value FROM strand_current_results WHERE strand_id=$1")
+                .bind::<Text, _>(strand_id.as_str())
+                .get_result::<FanoutValueRow>(&mut *conn)
+                .await
+                .optional()?
+                .map(|row| {
+                    serde_json::from_value::<Strand>(row.value).map_err(|error| {
+                        fanout_corrupt(format!("Strand current value is invalid: {error}"))
+                    })
+                })
+                .transpose()?;
+            let strand = match strand {
+                Some(strand) => {
+                    let circle_members = match strand.scope_circle_id.as_ref() {
+                        Some(circle_id) => sql_query(FANOUT_CIRCLE_MEMBERS_SQL)
+                            .bind::<Text, _>(strand.realm_id.as_str())
+                            .bind::<Text, _>(circle_id.as_str())
+                            .load::<FanoutActorRow>(&mut *conn)
+                            .await?
+                            .into_iter()
+                            .map(|row| fanout_actor(&row.actor_id))
+                            .collect::<PersistenceResult<BTreeSet<_>>>()?,
+                        None => BTreeSet::new(),
+                    };
+                    Some(NotificationStrandScope {
+                        active: strand.state == Some(arkret_wire::ObjectState::Active),
+                        realm_id: strand.realm_id,
+                        scope_circle_id: strand.scope_circle_id,
+                        circle_members,
+                    })
+                }
+                None => None,
+            };
+            let watch_levels = sql_query(FANOUT_WATCH_LEVELS_SQL)
+                .bind::<Text, _>(realm_id.as_str())
+                .bind::<Text, _>(strand_id.as_str())
+                .load::<FanoutWatchRow>(&mut *conn)
+                .await?
+                .into_iter()
+                .map(|row| {
+                    let level = row
+                        .level
+                        .ok_or_else(|| fanout_corrupt("watch current value has no level"))?;
+                    Ok((fanout_actor(&row.actor_id)?, level))
+                })
+                .collect::<PersistenceResult<BTreeMap<_, _>>>()?;
+            let active_assignees = sql_query(FANOUT_ASSIGNEES_SQL)
+                .bind::<Text, _>(realm_id.as_str())
+                .bind::<Text, _>(strand_id.as_str())
+                .load::<FanoutValueRow>(&mut *conn)
+                .await?
+                .into_iter()
+                .map(|row| {
+                    let relation =
+                        serde_json::from_value::<Relation>(row.value).map_err(|error| {
+                            fanout_corrupt(format!("Relation current value is invalid: {error}"))
+                        })?;
+                    relation
+                        .to_ref
+                        .as_actor_id()
+                        .cloned()
+                        .ok_or_else(|| fanout_corrupt("assignment target is not an Actor"))
+                })
+                .collect::<PersistenceResult<BTreeSet<_>>>()?;
+            Ok(NotificationFanoutBasis {
+                joined_members,
+                strand,
+                watch_levels,
+                active_assignees,
+            })
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+}
+
+/// Joined Realm members at the current cut. An Agent member counts only
+/// while its current join's controller binding names the controller's own
+/// current join (agent-membership generation binding).
+const FANOUT_JOINED_MEMBERS_SQL: &str = "SELECT m.member_id AS actor_id \
+     FROM member_state_current_results m \
+     JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id \
+     JOIN canonical_events e ON e.pk=c.event_pk \
+     WHERE m.realm_id=$1 AND m.membership='join' \
+       AND (NOT (e.envelope->'payload' ? 'agent_controller_binding') \
+         OR EXISTS (SELECT 1 FROM member_state_current_results cm \
+           JOIN realm_commits cc ON cc.commit_id=cm.current_commit_id AND cc.realm_id=cm.realm_id \
+           JOIN canonical_events ce ON ce.pk=cc.event_pk \
+           WHERE cm.realm_id=m.realm_id AND cm.membership='join' \
+             AND cm.member_id::jsonb=jsonb_build_object('kind','account','account_id', \
+               e.envelope->'payload'->'agent_controller_binding'->'controller_account_id') \
+             AND ce.envelope->>'event_id'= \
+               e.envelope->'payload'->'agent_controller_binding'->>'controller_membership_generation_ref')) \
+     ORDER BY m.member_id";
+
+const FANOUT_CIRCLE_MEMBERS_SQL: &str = "SELECT m.member_id AS actor_id \
+     FROM circle_member_state_current_results m \
+     JOIN circle_current_results c ON c.circle_id=m.circle_id AND c.realm_id=m.realm_id \
+     WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.membership='join' \
+       AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) \
+       AND c.value->>'state'='active' ORDER BY m.member_id";
+
+const FANOUT_WATCH_LEVELS_SQL: &str = "SELECT watcher_actor_id AS actor_id, value->>'level' AS level \
+     FROM strand_watch_current_results \
+     WHERE realm_id=$1 AND strand_id=$2 AND value<>'null'::jsonb \
+     ORDER BY watcher_actor_id";
+
+const FANOUT_ASSIGNEES_SQL: &str = "SELECT value FROM relation_current_results \
+     WHERE realm_id=$1 AND state='active' \
+       AND value->>'relation_kind'='assigned_to' AND value->>'from_ref'=$2 \
+     ORDER BY relation_id";
+
+#[derive(QueryableByName)]
+struct FanoutActorRow {
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+}
+
+#[derive(QueryableByName)]
+struct FanoutWatchRow {
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    level: Option<String>,
+}
+
+#[derive(QueryableByName)]
+struct FanoutValueRow {
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
+fn fanout_corrupt(detail: impl std::fmt::Display) -> PersistenceError {
+    PersistenceError::Internal(format!("notification fanout current is invalid: {detail}"))
+}
+
+fn fanout_actor(value: &str) -> PersistenceResult<ActorId> {
+    serde_json::from_str(value).map_err(|error| fanout_corrupt(format!("actor id: {error}")))
 }
 
 fn encode_enum<T>(field: &str, value: &T) -> PersistenceResult<String>

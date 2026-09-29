@@ -12,6 +12,7 @@ mod common;
 mod admin_b_track;
 mod admin_production_queries;
 mod blob_resumable;
+mod blob_upload;
 mod deactivation_push_fanout;
 mod device_message_send_admission;
 mod health;

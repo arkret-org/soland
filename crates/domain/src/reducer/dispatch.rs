@@ -468,13 +468,6 @@ fn apply_strand_position_touch_dispatch(
 ) -> ProjectionEffect {
     s.apply_strand_position_touch(op, op.created_at)
 }
-fn apply_strand_watch_set_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_strand_watch_set(op, op.created_at)
-}
 fn apply_strand_track_touch_dispatch(
     s: &mut ProjectionState,
     op: &Operation,

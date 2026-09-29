@@ -4069,10 +4069,7 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
             revision,
             value,
             ..
-        } = entry
-        else {
-            unreachable!();
-        };
+        } = entry;
         assert_eq!(
             source_stream_ref,
             &request.authority_commit.commit.stream_ref
@@ -5160,6 +5157,7 @@ fn circle_self_member_request(
     circle_id: &arkret_wire::CircleId,
     membership: &str,
     expected: Option<serde_json::Value>,
+    parent: Option<&serde_json::Value>,
 ) -> EventCommitRequest {
     let mut request = previous.clone();
     let realm_id = previous.authority_commit.event.realm_id.clone();
@@ -5170,6 +5168,9 @@ fn circle_self_member_request(
     });
     if let Some(expected) = expected {
         payload["expected_membership"] = expected;
+    }
+    if let Some(parent) = parent {
+        payload["parent_membership_revision"] = parent.clone();
     }
     let event = event(
         arkret_wire::EventKind::CircleMemberState,
@@ -5296,12 +5297,25 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         arkret_wire::DidCoreId::new("ak:did_core:web:circle-outsider.example").unwrap(),
         creator.station_id.clone(),
     );
+    let creator_parent = {
+        let creator_join = unit
+            .transactions
+            .iter()
+            .rev()
+            .find(|transaction| transaction.event.kind == arkret_wire::EventKind::MemberState)
+            .expect("the bootstrap unit admits the creator's Realm join");
+        serde_json::json!({
+            "commit_id": creator_join.commit.commit_id,
+            "stream_position": creator_join.commit.stream_position,
+        })
+    };
     let outsider_join = circle_self_member_request(
         &create,
         &outsider,
         &circle_id,
         "join",
         Some(serde_json::Value::Null),
+        Some(&creator_parent),
     );
     let refused = uow.commit_event(outsider_join.clone()).await.unwrap_err();
     assert_eq!(
@@ -5337,6 +5351,7 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         &circle_id,
         "join",
         Some(serde_json::Value::Null),
+        Some(&creator_parent),
     );
     uow.commit_event(join.clone()).await.unwrap();
     let mut conn = pool.get().await.unwrap();
@@ -5481,6 +5496,7 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         &circle_id,
         "leave",
         Some(serde_json::json!("leave")),
+        None,
     );
     let refused = uow.commit_event(stale.clone()).await.unwrap_err();
     assert_eq!(
@@ -5513,6 +5529,7 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         &circle_id,
         "leave",
         Some(serde_json::json!("join")),
+        None,
     );
     uow.commit_event(leave).await.unwrap();
     let after_leave = store
@@ -6999,10 +7016,7 @@ async fn member_identity_accepted_assertions_keep_bad_proofs_edges_and_restart_e
     let entry = material.current_state_entries.iter().find(|entry| matches!(entry,arkret_wire::TypedCurrentResult::Value{selector:found,..} if found == &selector)).unwrap();
     let arkret_wire::TypedCurrentResult::Value {
         revision, value, ..
-    } = entry
-    else {
-        unreachable!()
-    };
+    } = entry;
     assert_eq!(revision.commit_id, third.authority_commit.commit.commit_id);
     assert_eq!(value["assertions"].as_array().unwrap().len(), 3);
     for (request, payload) in [

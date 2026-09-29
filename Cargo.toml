@@ -88,6 +88,7 @@ hex = "0.4.3"
 hmac = "0.13"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+multra = "1.1.0"
 object_store = "0.14.1"
 opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry-otlp = { version = "0.32.0", default-features = false }
