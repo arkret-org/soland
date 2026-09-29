@@ -92,7 +92,7 @@ fn unavailable(detail: &str) -> PersistenceError {
     PersistenceError::Conflict(format!("{}: {detail}", ConflictCode::FailedPrecondition))
 }
 
-async fn install_in_connection(
+pub(crate) async fn install_in_connection(
     conn: &mut AsyncPgConnection,
     verified: &VerifiedMlsAddAuthorityAttestation,
     issuer: &DidCoreId,
@@ -176,7 +176,7 @@ async fn install_in_connection(
 
     let welcome = sql_query(
         "SELECT realm_id,scope_key,commit_event_ref,recipient_station_id,claim_id, \
-         delivery_digest,delivery_canonical_json FROM mls_remote_welcome_provenance \
+         delivery_digest,delivery_canonical_json FROM mls_welcome_provenance \
          WHERE welcome_id=$1 FOR SHARE",
     )
     .bind::<Text, _>(attestation.welcome_id.as_str())
@@ -184,7 +184,7 @@ async fn install_in_connection(
     .await
     .optional()
     .map_err(PersistenceError::database)?
-    .ok_or_else(|| unavailable("frozen remote Welcome is unavailable"))?;
+    .ok_or_else(|| unavailable("frozen Welcome is unavailable"))?;
     let delivery: MlsWelcomeDelivery = serde_json::from_slice(&welcome.delivery_canonical_json)
         .map_err(|error| PersistenceError::Internal(format!("stored Welcome invalid: {error}")))?;
     let canonical_delivery =
@@ -204,7 +204,7 @@ async fn install_in_connection(
         || delivery.keypackage_claim_ref != attestation.claim_id
         || delivery.commit_event_ref != event.event_id
     {
-        return Err(refused("Add proof differs from frozen remote Welcome"));
+        return Err(refused("Add proof differs from frozen Welcome"));
     }
 
     let group = sql_query(

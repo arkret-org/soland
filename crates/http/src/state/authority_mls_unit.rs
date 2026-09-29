@@ -32,15 +32,21 @@ use arkret_mls::{MlsPublicEndpointLeaf, MlsPublicGroupTracker, MlsPublicHandshak
 use arkret_models_collaboration::authority_commit::MlsGenesisMaterial;
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_collaboration::events_payloads::mls_proposal_admission::MlsProposalSenderClass;
-use arkret_models_crypto::{KeyPackageClaimRecord, MlsCommitPayload, PeerKeyPackagesClaimOutcome};
+use arkret_models_collaboration::mls_roster_authority::{
+    MlsAddAuthorityAttestation, MlsAttestAddRequestBody,
+};
+use arkret_models_crypto::{
+    KeyOperationSignature, KeyPackageClaimRecord, MlsCommitPayload, PeerKeyPackagesClaimOutcome,
+};
 use arkret_wire::{
-    AuthoritySubmitOutcome, DetachedSignatureContext, Event, EventAdmissionSubmission, EventKind,
-    MlsWelcomeDelivery, MlsWelcomeRecipientEndpoint, ScopeRef,
+    AuthoritySubmitOutcome, Base64UrlString, DetachedSignatureContext, Event,
+    EventAdmissionSubmission, EventKind, MlsWelcomeDelivery, MlsWelcomeRecipientEndpoint, ScopeRef,
 };
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
     ConflictCode, MlsConsumedProposalInstallation, MlsGenesisBlob, MlsInstalledBase,
-    MlsProposalLeafProvenance, MlsStateInstallation, MlsWelcomeClaimLedgerKey, VerifiedMlsWelcome,
+    MlsProposalLeafProvenance, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
+    VerifiedMlsRecipientRosterWitness, VerifiedMlsWelcome,
 };
 
 use super::AppState;
@@ -128,6 +134,158 @@ pub(super) async fn admit_mls_event(
         },
     )
     .await
+}
+
+/// Sign the original local claim's Add proof after the covering Commit has
+/// received its exact stream position, but before the accepting transaction.
+/// The transaction rechecks all selectors against its locked accepted cut.
+pub(super) async fn attach_local_roster_witnesses(
+    state: &AppState,
+    transaction: &mut soland_storage::AuthorityCommitTransaction,
+) -> ServiceResult<()> {
+    if transaction.event.kind != EventKind::MlsCommit {
+        return Ok(());
+    }
+    if !transaction
+        .welcomes
+        .iter()
+        .any(|welcome| welcome.claim.is_some())
+    {
+        return Ok(());
+    }
+    let current = state
+        .mls_groups()
+        .current(&transaction.event.scope_ref)
+        .await?
+        .ok_or_else(|| failed_precondition("the scope has no accepted MLS Genesis"))?;
+    let resolution =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await
+            .map_err(|error| {
+                ServiceError::Internal(format!("local Station history unavailable: {error}"))
+            })?;
+    let station = state.service_core_id();
+    let method = format!("{}#notary-key", state.service_did());
+    let group = transaction
+        .event
+        .scope_ref
+        .canonical_mls_group_id()
+        .map_err(schema)?;
+    let installation = transaction
+        .mls_state
+        .as_ref()
+        .ok_or_else(|| schema("MLS Commit has no public transition"))?;
+    for welcome in &mut transaction.welcomes {
+        let Some(claim_key) = &welcome.claim else {
+            continue;
+        };
+        let row = state
+            .mls_key_packages()
+            .peer_claim_by_claim_id(welcome.delivery.keypackage_claim_ref.as_str())
+            .await?
+            .ok_or_else(|| failed_precondition("local Add claim outcome is unavailable"))?;
+        if row.source_id != claim_key.source_id
+            || row.claim_request_id != claim_key.claim_request_id
+            || row.request_digest != claim_key.request_digest
+            || !matches!(row.state.as_str(), "claimed" | "last_resort_claimed")
+        {
+            return Err(failed_precondition(
+                "local Add claim differs from the verified claim",
+            ));
+        }
+        let outcome: PeerKeyPackagesClaimOutcome = serde_json::from_value(
+            row.outcome
+                .ok_or_else(|| failed_precondition("local Add claim has no signed outcome"))?,
+        )
+        .map_err(schema)?;
+        let selected = outcome
+            .claims
+            .iter()
+            .find(|claim| claim.claim_id == welcome.delivery.keypackage_claim_ref.as_str())
+            .ok_or_else(|| failed_precondition("local Add claim id is absent"))?;
+        let package = arkret_canonical::base64url_decode(&selected.keypackage).map_err(schema)?;
+        let mut matching = installation
+            .consumed_proposals
+            .iter()
+            .filter_map(|proposal| {
+                if proposal.proposal_type != 1 {
+                    return None;
+                }
+                arkret_mls::verify_add_proposal_leaf(&proposal.proposal_wire)
+                    .ok()
+                    .filter(|parsed| {
+                        parsed.actor_id == welcome.delivery.recipient_actor_id
+                            && parsed.key_package_bytes == package
+                    })
+            });
+        let parsed = matching
+            .next()
+            .ok_or_else(|| failed_precondition("local claim does not match a consumed Add"))?;
+        if matching.next().is_some() {
+            return Err(failed_precondition(
+                "local claim matches multiple consumed Adds",
+            ));
+        }
+        let authorization_event_ref = match &welcome.delivery.recipient_endpoint {
+            MlsWelcomeRecipientEndpoint::Device { .. } => {
+                selected.device_authorize_event_id.clone()
+            }
+            MlsWelcomeRecipientEndpoint::AgentRuntime { .. } => {
+                selected.agent_key_authorize_event_id.clone()
+            }
+        }
+        .ok_or_else(|| failed_precondition("local Add lacks endpoint authorization"))?;
+        let mut attestation = MlsAddAuthorityAttestation {
+            attestor_station_id: station.clone(),
+            realm_id: transaction.event.realm_id.clone(),
+            effective_scope: transaction.event.scope_ref.clone(),
+            mls_group_id: group.clone(),
+            genesis_event_ref: current.value.genesis_event_ref.clone(),
+            commit_event_ref: transaction.event.event_id.clone(),
+            commit_stream_position: transaction.commit.stream_position,
+            epoch: installation.epoch,
+            welcome_id: welcome.delivery.welcome_id.clone(),
+            claim_id: welcome.delivery.keypackage_claim_ref.clone(),
+            actor_id: welcome.delivery.recipient_actor_id.clone(),
+            endpoint: welcome.delivery.recipient_endpoint.clone(),
+            authorization_event_ref,
+            leaf_signature_key_b64u: parsed.leaf_signature_key,
+            claim_record_digest: arkret_wire::Hash::new(
+                arkret_canonical::canonical_sha256(selected).map_err(schema)?,
+            )
+            .map_err(schema)?,
+            claim_receipt: outcome.claim_receipt.clone(),
+            attested_at: transaction.commit.committed_at,
+            signature: KeyOperationSignature {
+                kid: arkret_wire::NonEmptyString::new(method.clone()).map_err(schema)?,
+                signature_algorithm: Some(
+                    arkret_wire::NonEmptyString::new("Ed25519").map_err(schema)?,
+                ),
+                sig: Base64UrlString::new("AA").map_err(schema)?,
+            },
+        };
+        attestation.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+            &state.notary_signing_key().to_bytes(),
+            &method,
+            &attestation.signing_bytes().map_err(schema)?,
+        )
+        .map_err(schema)?;
+        let request = MlsAttestAddRequestBody {
+            attestation,
+            claim_outcome: outcome,
+        };
+        request.validate_claim_binding().map_err(schema)?;
+        arkret::verify_mls_attest_add_request(&request, &resolution).map_err(schema)?;
+        welcome.roster_witness = Some(VerifiedMlsRecipientRosterWitness {
+            accepted_genesis_event_ref: current.value.genesis_event_ref.clone(),
+            signed_attest_add_request_canonical_json: arkret_canonical::canonical_json_bytes(
+                &request,
+            )
+            .map_err(schema)?,
+            local_attestor_resolution: Some(resolution.clone()),
+        });
+    }
+    Ok(())
 }
 
 /// §5.1: the Genesis GroupInfo and ratchet tree are content-addressed Blobs

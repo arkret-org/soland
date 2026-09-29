@@ -822,6 +822,9 @@ pub struct VerifiedMlsWelcome {
 pub struct VerifiedMlsRecipientRosterWitness {
     pub accepted_genesis_event_ref: EventId,
     pub signed_attest_add_request_canonical_json: Vec<u8>,
+    /// Present for a same-Station recipient. Remote recipients resolve and
+    /// freeze this closure when their signed proof reaches governance.
+    pub local_attestor_resolution: Option<arkret_models_identity::AuthenticatedServiceResolution>,
 }
 
 /// Peer-authenticated Add authority proof after the serving layer has verified

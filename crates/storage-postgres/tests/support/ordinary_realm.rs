@@ -547,6 +547,15 @@ pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
     open_discussion_unit(pool, bootstrap_unit(seed)).await
 }
 
+pub async fn open_discussion_for_station(
+    pool: &PgPool,
+    seed: &str,
+    station: &arkret_wire::DidCoreId,
+    did: &arkret_wire::Did,
+) -> Discussion {
+    open_discussion_unit(pool, bootstrap_unit_for_station(seed, station, did)).await
+}
+
 /// Admit the founder's real PCR and Human Profile before opening discussion.
 pub async fn open_human_discussion(pool: &PgPool, seed: &str) -> Discussion {
     let account = human_profile::admit(pool, &station(), "ordinary-founder").await;

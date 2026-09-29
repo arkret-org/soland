@@ -338,6 +338,71 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         .await
         .map_err(crate::PgTransactionError::into_persistence)?;
         bind_claim_welcome_in_connection(conn, claim, &welcome.delivery).await?;
+        // Storage queue fixtures can exercise a Commit without any consumed
+        // Proposal. A real Add is always present in the verified transition.
+        if installation.consumed_proposals.is_empty() {
+            continue;
+        }
+        let witness = welcome.roster_witness.as_ref().ok_or_else(|| {
+            failed_precondition("same-Station Add has no signed historical attestation")
+        })?;
+        let resolution = witness.local_attestor_resolution.as_ref().ok_or_else(|| {
+            failed_precondition("same-Station Add has no historical Station resolution")
+        })?;
+        if witness.accepted_genesis_event_ref != next.genesis_event_ref {
+            return Err(binding_mismatch("same-Station Add names another Genesis"));
+        }
+        let request: MlsAttestAddRequestBody =
+            serde_json::from_slice(&witness.signed_attest_add_request_canonical_json)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let stored_claim = sql_query(
+            "SELECT outcome FROM peer_keypackage_claims \
+             WHERE source_id=$1 AND claim_request_id=$2 AND request_digest=$3 FOR UPDATE",
+        )
+        .bind::<Text, _>(&claim.source_id)
+        .bind::<Text, _>(&claim.claim_request_id)
+        .bind::<Text, _>(&claim.request_digest)
+        .get_result::<ClaimOutcomeRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if stored_claim.and_then(|row| row.outcome)
+            != Some(
+                serde_json::to_value(&request.claim_outcome).map_err(PersistenceError::database)?,
+            )
+        {
+            return Err(binding_mismatch(
+                "same-Station Add differs from original claim outcome",
+            ));
+        }
+        if arkret_canonical::canonical_json_bytes(&request).map_err(PersistenceError::database)?
+            != witness.signed_attest_add_request_canonical_json
+            || request.attestation.genesis_event_ref != next.genesis_event_ref
+            || request.attestation.welcome_id != welcome.delivery.welcome_id
+        {
+            return Err(binding_mismatch(
+                "same-Station Add witness differs from accepted facts",
+            ));
+        }
+        crate::realm_fanout::freeze_welcomes_in_connection(
+            conn,
+            event,
+            commit,
+            &[&welcome.delivery],
+        )
+        .await
+        .map_err(crate::PgTransactionError::into_persistence)?;
+        let verified = soland_storage::VerifiedMlsAddAuthorityAttestation {
+            source_station_id: transaction.expected_authority.service_id.clone(),
+            request,
+            attestor_resolution: resolution.clone(),
+        };
+        crate::mls_roster_attest_add::install_in_connection(
+            conn,
+            &verified,
+            &transaction.expected_authority.service_id,
+        )
+        .await?;
     }
     Ok(())
 }

@@ -265,7 +265,7 @@ pub(super) async fn commit_event_unit(
         event.kind,
         arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
     );
-    let transaction = match mls {
+    let mut transaction = match mls {
         Some(mls) if is_mls => {
             state
                 .authority_commits()
@@ -298,6 +298,9 @@ pub(super) async fn commit_event_unit(
             ));
         }
     };
+    if event.kind == arkret_wire::EventKind::MlsCommit {
+        super::authority_mls_unit::attach_local_roster_witnesses(state, &mut transaction).await?;
+    }
     let canonical_bytes = arkret_canonical::canonical_json_bytes(
         &event
             .digest_payload()

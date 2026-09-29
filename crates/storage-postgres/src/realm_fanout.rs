@@ -84,7 +84,7 @@ struct FrozenRemoteWelcomeRow {
     delivery_canonical_json: Vec<u8>,
 }
 
-async fn freeze_remote_welcomes_in_connection(
+pub(crate) async fn freeze_welcomes_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
@@ -95,7 +95,7 @@ async fn freeze_remote_welcomes_in_connection(
     }
     if event.kind != arkret_wire::EventKind::MlsCommit {
         return Err(PersistenceError::SchemaViolation(
-            "remote Welcomes accompany only an MLS Commit".into(),
+            "Welcomes accompany only an MLS Commit".into(),
         )
         .into());
     }
@@ -111,7 +111,7 @@ async fn freeze_remote_welcomes_in_connection(
             || welcome.commit_event_ref != event.event_id
         {
             return Err(PersistenceError::SchemaViolation(
-                "remote Welcome differs from its accepted Commit".into(),
+                "Welcome differs from its accepted Commit".into(),
             )
             .into());
         }
@@ -121,7 +121,7 @@ async fn freeze_remote_welcomes_in_connection(
             arkret_canonical::canonical_sha256(welcome).map_err(PersistenceError::database)?;
         let station = welcome.recipient_actor_id.route_service_id();
         sql_query(
-            "INSERT INTO mls_remote_welcome_provenance \
+            "INSERT INTO mls_welcome_provenance \
              (welcome_id,realm_id,scope_key,commit_event_ref,recipient_station_id,claim_id, \
               delivery_digest,delivery_canonical_json,accepted_at) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
@@ -140,7 +140,7 @@ async fn freeze_remote_welcomes_in_connection(
         .map_err(PersistenceError::database)?;
         let frozen = sql_query(
             "SELECT realm_id,scope_key,commit_event_ref,recipient_station_id,claim_id, \
-             delivery_digest,delivery_canonical_json FROM mls_remote_welcome_provenance \
+             delivery_digest,delivery_canonical_json FROM mls_welcome_provenance \
              WHERE welcome_id=$1 FOR SHARE",
         )
         .bind::<Text, _>(welcome.welcome_id.as_str())
@@ -158,7 +158,7 @@ async fn freeze_remote_welcomes_in_connection(
                 && row.delivery_canonical_json == bytes
         }) {
             return Err(PersistenceError::Conflict(format!(
-                "{}: remote Welcome replay differs from the frozen signed delivery",
+                "{}: Welcome replay differs from the frozen signed delivery",
                 soland_storage::ConflictCode::DuplicateConflict
             ))
             .into());
@@ -704,7 +704,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
         .pk;
     let idempotency_key = fanout_idempotency_key(&commit.commit_id);
     let genesis_event_ref = accepted_mls_genesis_for_fanout(conn, event).await?;
-    freeze_remote_welcomes_in_connection(conn, event, commit, welcomes).await?;
+    freeze_welcomes_in_connection(conn, event, commit, welcomes).await?;
     let mut inserted = 0;
     for (station, authority_witnesses) in targets {
         let request =

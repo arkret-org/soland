@@ -360,7 +360,7 @@ async fn read_in_connection(
             return Ok(unavailable());
         }
         let Some(welcome) = sql_query(
-            "SELECT delivery_digest,delivery_canonical_json FROM mls_remote_welcome_provenance \
+            "SELECT delivery_digest,delivery_canonical_json FROM mls_welcome_provenance \
              WHERE welcome_id=$1 AND scope_key=$2 AND commit_event_ref=$3",
         )
         .bind::<Text, _>(attestation.welcome_id.as_str())

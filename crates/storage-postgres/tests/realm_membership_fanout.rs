@@ -3737,6 +3737,7 @@ fn recipient_roster_witness(
                 &request,
             )
             .unwrap(),
+            local_attestor_resolution: None,
         },
         json,
     )

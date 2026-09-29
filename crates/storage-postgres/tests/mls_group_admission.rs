@@ -1587,7 +1587,7 @@ async fn frozen_remote_welcomes(
     }
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
-        "SELECT welcome_id,delivery_canonical_json FROM mls_remote_welcome_provenance \
+        "SELECT welcome_id,delivery_canonical_json FROM mls_welcome_provenance \
          WHERE commit_event_ref=$1 ORDER BY welcome_id",
     )
     .bind::<Text, _>(commit.authority_commit.event.event_id.as_str())
@@ -1800,6 +1800,216 @@ async fn frozen_roster_attestor_resolution(pool: &PgPool) -> Vec<u8> {
     .attestor_resolution_canonical_json
 }
 
+#[tokio::test]
+async fn same_station_add_installs_signed_history_atomically() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let resolution = historical_roster_attestor_resolution();
+    let station = resolution.service_id.clone();
+    let station_did = resolution.normalized_did_document.id.clone();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+        .bind::<Text, _>(station.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    let recipient = pcr_genesis::PcrGenesisFixture::new(station_did.clone())
+        .admit_founding_device(&persistence)
+        .await
+        .unwrap();
+    let discussion = ordinary_realm::open_discussion_for_station(
+        &pool,
+        "mls-local-signed-history",
+        &station,
+        &station_did,
+    )
+    .await;
+    let realm_id = discussion.realm_id();
+    let founder = ordinary_realm::founder();
+    let at = discussion.committed_at();
+    join(&pool, &discussion.head, &recipient_actor(&recipient)).await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let genesis = with_installation(
+        ordinary_realm::next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::MlsGenesis,
+            &founder,
+            genesis_payload(&realm_id, at),
+            at,
+        ),
+        None,
+        0,
+    );
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let genesis_ref = genesis.authority_commit.event.event_id.clone();
+    let mut commit = with_installation(
+        ordinary_realm::next_request(
+            &genesis.authority_commit,
+            arkret_wire::EventKind::MlsCommit,
+            &founder,
+            commit_payload(&realm_id, &genesis_ref, 0, 0, b"local signed add"),
+            at,
+        ),
+        Some((&genesis_ref, 0)),
+        1,
+    );
+    let claim_id = claim_id();
+    let delivery = welcome(&commit, &recipient, &claim_id);
+    let actor = recipient_actor(&recipient);
+    let device_id = match &delivery.recipient_endpoint {
+        arkret_wire::MlsWelcomeRecipientEndpoint::Device { device_id } => device_id.clone(),
+        _ => unreachable!(),
+    };
+    let founder_device =
+        arkret_wire::DeviceId::new(format!("ak:device:{}", uuid::Uuid::now_v7())).unwrap();
+    let founder_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        founder.clone(),
+        station.clone(),
+    ));
+    let mut group =
+        arkret_mls::ArkretMlsIdentity::new_test_human_device(founder_actor, founder_device)
+            .unwrap()
+            .create_group_with_governance_binding(
+                &realm_scope(&realm_id),
+                &MlsGovernanceBindingPayload::realm(realm_id.clone(), None, 0, 0, 0).unwrap(),
+            )
+            .unwrap();
+    let (group_info, tree) = group.public_group_state_bytes().unwrap();
+    let mut tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+        &group_info,
+        &tree,
+        group.group_id().as_str(),
+        0,
+    )
+    .unwrap();
+    let member_identity =
+        arkret_mls::ArkretMlsIdentity::new_test_human_device(actor.clone(), device_id).unwrap();
+    let mut package = member_identity.key_package_record().unwrap();
+    package.state = arkret_models_crypto::MlsKeyPackageState::Claimed;
+    package.claim_id = Some(claim_id.clone());
+    let added = group
+        .add_member_with_governance_binding(
+            &package,
+            &MlsGovernanceBindingPayload::realm(
+                realm_id.clone(),
+                Some(genesis_ref.clone()),
+                0,
+                1,
+                0,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let arkret_mls::MlsPublicHandshakeTransition::Commit {
+        consumed_proposals, ..
+    } = tracker
+        .process_public_handshake(
+            &arkret_canonical::base64url_decode(&added.commit.commit).unwrap(),
+        )
+        .unwrap()
+    else {
+        panic!("a real Add must produce a Commit")
+    };
+    let leaf = |leaf: arkret_mls::MlsPublicEndpointLeaf| MlsProposalLeafProvenance {
+        leaf_index: leaf.leaf_index,
+        actor_id: leaf.actor_id,
+        signature_key: leaf.signature_key,
+    };
+    commit
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .consumed_proposals = consumed_proposals
+        .into_iter()
+        .map(|proposal| MlsConsumedProposalInstallation {
+            ordinal: proposal.ordinal,
+            proposal_ref: proposal.proposal_ref,
+            proposal_type: proposal.proposal_type,
+            proposal_wire: proposal.proposal_wire,
+            sender_leaf: leaf(proposal.sender_leaf),
+            target_before: proposal.target_before.map(leaf),
+            target_after: proposal.target_after.map(leaf),
+        })
+        .collect();
+    let parsed = arkret_mls::verify_add_proposal_leaf(
+        &commit
+            .authority_commit
+            .mls_state
+            .as_ref()
+            .unwrap()
+            .consumed_proposals[0]
+            .proposal_wire,
+    )
+    .unwrap();
+    let mut local = VerifiedMlsWelcome {
+        delivery,
+        claim: None,
+        roster_witness: None,
+    };
+    let proof = signed_remote_add_attestation(
+        &commit,
+        &genesis_ref,
+        &local,
+        &package,
+        &station,
+        parsed.leaf_signature_key,
+    );
+    let receipt = &proof.claim_outcome.claim_receipt;
+    let key = MlsWelcomeClaimLedgerKey {
+        source_id: station.to_string(),
+        claim_request_id: receipt.claim_request_id.to_string(),
+        request_digest: receipt.request_digest.to_string(),
+    };
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO peer_keypackage_claims \
+         (source_id,claim_request_id,request_digest,key_package_use,keypackage_id,outcome, \
+          terminal_receipt,consume_receipt,claim_expires_at_unix_ms,expires_at,state,updated_at) \
+         VALUES ($1,$2,$3,'single_use',NULL,$4,NULL,NULL,$5,$6,'claimed',$7)",
+    )
+    .bind::<Text, _>(&key.source_id)
+    .bind::<Text, _>(&key.claim_request_id)
+    .bind::<Text, _>(&key.request_digest)
+    .bind::<Jsonb, _>(serde_json::to_value(&proof.claim_outcome).unwrap())
+    .bind::<BigInt, _>(receipt.expires_at.timestamp_millis())
+    .bind::<BigInt, _>(receipt.expires_at.timestamp())
+    .bind::<BigInt, _>(at.timestamp())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    local.claim = Some(key);
+    local.roster_witness = Some(soland_storage::VerifiedMlsRecipientRosterWitness {
+        accepted_genesis_event_ref: genesis_ref.clone(),
+        signed_attest_add_request_canonical_json: arkret_canonical::canonical_json_bytes(&proof)
+            .unwrap(),
+        local_attestor_resolution: Some(resolution.clone()),
+    });
+    commit.authority_commit.welcomes = vec![local.clone()];
+    commit.authority_commit.recipient_queue_capacity = 4;
+    let mut tampered = commit.clone();
+    tampered.authority_commit.welcomes[0]
+        .roster_witness
+        .as_mut()
+        .unwrap()
+        .local_attestor_resolution
+        .as_mut()
+        .unwrap()
+        .service_kind = "other".to_owned();
+    assert_zero_write_refusal(&pool, &tampered, ConflictCode::DuplicateConflict).await;
+    assert_eq!(installed_add_attestation_count(&pool).await, 0);
+    uow.commit_event(commit.clone()).await.unwrap();
+    assert_eq!(welcome_count(&pool).await, 1);
+    assert_eq!(installed_add_attestation_count(&pool).await, 1);
+    assert_eq!(
+        frozen_roster_attestor_resolution(&pool).await,
+        arkret_canonical::canonical_json_bytes(&resolution).unwrap(),
+    );
+}
+
 /// encryption-and-audit.md §2.2 "跨站 recipient": the governance Station
 /// verifies everything but the claim of a Welcome whose recipient another
 /// Station hosts and writes it, in submission order, into the Commit's
@@ -1812,13 +2022,6 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let station = governing_station(&pool).await;
-    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
-    let local = pcr_genesis::PcrGenesisFixture::new(device_authorization_history::did_web_station(
-        &station,
-    ))
-    .admit_founding_device(&persistence)
-    .await
-    .expect("accepted local recipient device");
     let discussion = ordinary_realm::open_discussion(&pool, "mls-remote-welcome").await;
     let realm_id = discussion.realm_id();
     let founder = ordinary_realm::founder();
@@ -1839,7 +2042,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
         member("mls-remote-second", remote_station),
         member("mls-remote-bystander", other_station),
     );
-    for joined in [&first, &second, &bystander, &recipient_actor(&local)] {
+    for joined in [&first, &second, &bystander] {
         join(&pool, &discussion.head, joined).await;
     }
     let genesis = with_installation(
@@ -1880,15 +2083,8 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     assert!(frozen_remote_welcomes(&pool, &stranger).await.is_empty());
 
     let mut commit = add(b"cross-station add");
-    let local_claim = claim_id();
-    let local_key = live_claim(&pool, station.as_str(), &local_claim).await;
     let mut welcomes = vec![
         remote_welcome(&commit, &first),
-        VerifiedMlsWelcome {
-            delivery: welcome(&commit, &local, &local_claim),
-            claim: Some(local_key),
-            roster_witness: None,
-        },
         remote_welcome(&commit, &second),
     ];
     welcomes.sort_by(|left, right| left.delivery.welcome_id.cmp(&right.delivery.welcome_id));
@@ -1990,11 +2186,7 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     commit.authority_commit.welcomes = welcomes.clone();
     commit.authority_commit.recipient_queue_capacity = 4;
     uow.commit_event(commit.clone()).await.unwrap();
-    assert_eq!(
-        welcome_count(&pool).await,
-        1,
-        "only the local Welcome is queued"
-    );
+    assert_eq!(welcome_count(&pool).await, 0);
 
     let payloads = replication_payloads(&pool, &commit).await;
     let expected_frozen = welcomes
