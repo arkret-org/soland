@@ -701,3 +701,8 @@ async fn wip_override_requires_a_current_grant_matching_the_strand_and_destinati
         json!({"list_space_id":list_b_id,"rank":"a"})
     );
 }
+
+#[path = "support/approval_wip_cases.rs"]
+mod approval_wip_cases;
+#[path = "support/grant_approval_cases.rs"]
+mod grant_approval_cases;

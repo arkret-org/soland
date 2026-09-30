@@ -90,6 +90,7 @@ fn persistence_event_commit_request(
         authority_commit: command.authority_commit,
         self_producer_guard: command.self_producer_guard,
         applet_producer_guard: command.applet_producer_guard,
+        widget_token_gate: command.widget_token_gate,
         forwarded_producer_evidence: command.forwarded_producer_evidence,
         event: command.event,
         parent_membership_admission: command.parent_membership_admission,
@@ -334,6 +335,42 @@ impl crate::events::MessagePort for PersistenceEventReader {
 
 #[async_trait::async_trait]
 impl crate::events::AppletPort for PersistenceEventReader {
+    async fn issue_widget_token(
+        &self,
+        record: soland_storage::AppletWidgetTokenRecord,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self.0.applets().issue_widget_token(record).await?)
+    }
+
+    async fn widget_tokens(
+        &self,
+        install: &soland_storage::AppletWidgetInstallSelector,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<Vec<soland_storage::AppletWidgetTokenRecord>> {
+        Ok(self.0.applets().widget_tokens(install, at).await?)
+    }
+
+    async fn check_widget_token(
+        &self,
+        gate: &soland_storage::AppletWidgetTokenGateSelector,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::AppletWidgetTokenRecord> {
+        Ok(self.0.applets().check_widget_token(gate, at).await?)
+    }
+
+    async fn invalidate_widget_token(
+        &self,
+        install: &soland_storage::AppletWidgetInstallSelector,
+        token_ref: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::AppletWidgetTokenInvalidation> {
+        Ok(self
+            .0
+            .applets()
+            .invalidate_widget_token(install, token_ref, at)
+            .await?)
+    }
+
     async fn pending_applet_authoring_completions(
         &self,
         limit: u32,
@@ -951,6 +988,8 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     .map(persistence_event_commit_request)
                     .collect(),
                 realm_organization_proof: command.realm_organization_proof,
+                invite_claim_proof: command.invite_claim_proof,
+                event_approvals: command.event_approvals,
                 franking_replay_nonce: command.franking_replay_nonce,
                 applet_record: command.applet_record,
                 applet_authoring_preview: command.applet_authoring_preview,

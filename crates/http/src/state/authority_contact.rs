@@ -139,6 +139,7 @@ pub(crate) async fn commit_contact_event_unit(
         authority_commit: transaction.clone(),
         self_producer_guard: Some(guard),
         applet_producer_guard: None,
+        widget_token_gate: None,
         forwarded_producer_evidence: None,
         event: soland_storage::CanonicalEventRecord {
             event_id: event.event_id.to_string(),

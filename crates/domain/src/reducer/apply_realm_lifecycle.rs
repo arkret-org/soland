@@ -496,14 +496,7 @@ impl ProjectionState {
             },
         );
         if matches!(new_state.as_str(), "leave" | "ban") {
-            let updated_by = operation.context.sender.to_string();
-            self.cascade_realm_member_removal_to_circles(
-                &realm_id,
-                &member,
-                new_state.as_str(),
-                &updated_by,
-                now,
-            );
+            self.invalidate_realm_member_circle_visibility(&realm_id, &member);
         }
 
         // The facet subject is the complete tagged actor key (including its
@@ -530,48 +523,15 @@ impl ProjectionState {
         }
     }
 
-    fn cascade_realm_member_removal_to_circles(
-        &mut self,
-        realm_id: &str,
-        member: &str,
-        trigger_membership: &str,
-        updated_by: &str,
-        now: chrono::DateTime<chrono::Utc>,
-    ) {
-        let mut removed_circle_ids = Vec::new();
+    fn invalidate_realm_member_circle_visibility(&mut self, realm_id: &str, member: &str) {
+        // Only the derived active set changes. Canonical Circle membership,
+        // join provenance and Circle metadata remain authored by Circle Events.
         for circle in self
             .circles
             .values_mut()
             .filter(|circle| circle.realm_id == realm_id)
         {
-            if !circle.members.remove(member) {
-                continue;
-            }
-            removed_circle_ids.push(circle.circle_id.clone());
-            circle.updated_by = Some(updated_by.to_owned());
-            circle.updated_at = Some(now);
-        }
-        for circle_id in removed_circle_ids {
-            let previous = self
-                .circle_memberships
-                .get(&(circle_id.clone(), member.to_owned()))
-                .cloned();
-            self.circle_memberships.insert(
-                (circle_id.clone(), member.to_owned()),
-                CircleMembershipState {
-                    circle_id,
-                    member: member.to_owned(),
-                    state: trigger_membership.to_owned(),
-                    invited_at: previous
-                        .as_ref()
-                        .and_then(|membership| membership.invited_at),
-                    joined_at: previous
-                        .as_ref()
-                        .map(|membership| membership.joined_at)
-                        .unwrap_or(now),
-                    updated_at: now,
-                },
-            );
+            circle.members.remove(member);
         }
     }
 
@@ -1065,10 +1025,7 @@ impl ProjectionState {
                     "operation_id": operation.operation_id.as_str(),
                 });
                 self.set_realm_facet(&realm_id, facet::REALM_TOMBSTONE, value);
-                // Tombstone keeps child Space/Strand placement live:
-                // succession transfers the navigation surface to the
-                // successor Realm. Spec §2.5 row "tombstone" — no
-                // realm_destroyed_orphan cascade fires here.
+                self.cascade_realm_terminal(&realm_id);
             }
             arkret_wire::EventKind::RealmDestroy => {
                 // Terminal facet: {destroyed: true, at: ts}.
@@ -1080,7 +1037,7 @@ impl ProjectionState {
                 });
                 self.set_realm_facet(&realm_id, facet::REALM_DESTROY, value);
                 // Destroy cascade per spec §2.5.1 ¶6 + ¶7.
-                self.cascade_realm_destroy(&realm_id);
+                self.cascade_realm_terminal(&realm_id);
             }
             _ => {}
         }
@@ -1110,11 +1067,11 @@ impl ProjectionState {
     /// projection-side downgrade so UI / navigation surfaces honour
     /// the destroy frontier without a fresh query against the
     /// terminated Realm.
-    pub(crate) fn cascade_realm_destroy(&mut self, destroyed_realm_id: &str) {
+    pub(crate) fn cascade_realm_terminal(&mut self, terminal_realm_id: &str) {
         // ¶6 same-Realm child Space-container cascade.
         let mut orphaned_count = 0_usize;
         for container in self.space_containers.values_mut() {
-            if container.realm_id == destroyed_realm_id && !container.orphaned {
+            if container.realm_id == terminal_realm_id && !container.orphaned {
                 container.orphaned = true;
                 orphaned_count += 1;
             }
@@ -1126,9 +1083,9 @@ impl ProjectionState {
         // admission check in `event_log::validate_event_envelope`.
 
         tracing::info!(
-            destroyed_realm_id = %destroyed_realm_id,
+            terminal_realm_id = %terminal_realm_id,
             orphaned_space_containers = orphaned_count,
-            "stream-F realm.destroy cascade applied"
+            "Realm terminal navigation fence applied"
         );
     }
 }

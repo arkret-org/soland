@@ -73,10 +73,12 @@ pub(crate) async fn commit_authority_position_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
+    event_approvals: Option<&soland_storage::EventApprovalCommit>,
 ) -> PersistenceResult<()> {
     use arkret_models_collaboration::events_payloads::strand::{
         StrandMovePayload, StrandReorderPayload,
     };
+    let mut accepted_approvals = Vec::new();
     let (board, strand, destination, rank, from, expected, reorder) = match event.kind {
         arkret_wire::EventKind::StrandMove => {
             let body: StrandMovePayload = serde_json::from_value(json!(&event.payload))
@@ -240,14 +242,17 @@ pub(crate) async fn commit_authority_position_in_connection(
             return Err(refused("source List is not in the Board"));
         }
     }
-    let wip_override = crate::realm_authorization_cut::authorize_strand_position_in_connection(
-        conn,
-        event,
-        current.as_ref().map(|value| &value.list_space_id),
-        &destination,
-        commit.committed_at,
-    )
-    .await?;
+    let (wip_override, general_approvals) =
+        crate::realm_authorization_cut::authorize_strand_position_in_connection(
+            conn,
+            event,
+            current.as_ref().map(|value| &value.list_space_id),
+            &destination,
+            commit,
+            event_approvals,
+        )
+        .await?;
+    accepted_approvals.extend(general_approvals);
     if !reorder {
         let fields = &list.space["fields"];
         if let Some(limit) = fields.get("wip_limit").and_then(Value::as_i64) {
@@ -283,19 +288,32 @@ pub(crate) async fn commit_authority_position_in_connection(
                         return Err(refused("target List WIP limit exceeded"));
                     }
                     Some("require_review") => {
-                        // This UOW has no verified approval evidence input yet.
-                        // Do not infer acceptance from an Event payload field or
-                        // an unrelated grant/governance vote.
-                        return Err(PersistenceError::Conflict(format!(
-                            "{}: target List WIP review has no verified approval",
-                            soland_storage::ConflictCode::ApprovalRequired.as_str()
-                        )));
+                        accepted_approvals.extend(
+                            crate::approval_admission::require_list_wip(
+                                conn,
+                                event,
+                                commit,
+                                event_approvals,
+                                &destination,
+                                &CurrentRevision {
+                                    commit_id: arkret_wire::RealmCommitId::new(
+                                        &list.space_commit_id,
+                                    )
+                                    .map_err(|error| {
+                                        PersistenceError::Internal(error.to_string())
+                                    })?,
+                                    stream_position: list.space_position as u64,
+                                },
+                            )
+                            .await?,
+                        );
                     }
                     _ => return Err(refused("target List WIP policy is unresolved")),
                 }
             }
         }
     }
+    let list_id_for_audit = destination.clone();
     install_in_connection(
         conn,
         &event.realm_id,
@@ -310,6 +328,16 @@ pub(crate) async fn commit_authority_position_in_connection(
             rank,
         }),
         commit.committed_at,
+    )
+    .await?;
+    crate::approval_admission::consume_and_audit(
+        conn,
+        event,
+        commit,
+        &accepted_approvals,
+        &json!({"list_space_id":list_id_for_audit, "list_policy_revision": {
+            "commit_id":list.space_commit_id,"stream_position":list.space_position},
+            "wip_override":wip_override}),
     )
     .await
 }

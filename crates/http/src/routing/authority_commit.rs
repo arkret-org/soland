@@ -159,6 +159,16 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            Some(soland_storage::ConflictCode::InvalidMembershipTransition) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    crate::error::error_http_status(ErrorCode::FailedPrecondition),
+                    ErrorCode::FAILED_PRECONDITION,
+                    detail,
+                    arkret_wire::ReasonCode::INVALID_MEMBERSHIP_TRANSITION,
+                    None,
+                );
+            }
             Some(soland_storage::ConflictCode::InviteLiveTargetOccupied) => {
                 // The detail is the occupant's exact create Event id; the
                 // closed details are derived from it alone.
@@ -665,6 +675,25 @@ mod tests {
             "https://arkret.org/problems/failed_precondition"
         );
         assert_eq!(body["reason_code"], "snapshot_capacity_exceeded");
+    }
+
+    #[tokio::test]
+    async fn membership_fsm_failure_renders_registered_reason() {
+        let mut res = Response::new();
+        render_service_error(
+            &mut res,
+            ServiceError::Conflict(
+                "invalid_membership_transition: membership transition is not a listed edge"
+                    .to_owned(),
+            ),
+        );
+        assert_eq!(res.status_code, Some(StatusCode::CONFLICT));
+        let body: serde_json::Value = salvo::test::ResponseExt::take_json(&mut res).await.unwrap();
+        assert_eq!(
+            body["type"],
+            "https://arkret.org/problems/failed_precondition"
+        );
+        assert_eq!(body["reason_code"], "invalid_membership_transition");
     }
 
     #[tokio::test]

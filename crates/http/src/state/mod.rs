@@ -22,6 +22,8 @@ mod authority_mls_unit;
 mod authority_port;
 mod authority_producer_validation;
 mod authority_self_event_unit;
+mod authority_sidecar_unit;
+pub(crate) use authority_sidecar_unit::commit_sidecar_ensure_unit;
 mod committed_replication;
 mod member_identity;
 mod notification;
@@ -50,9 +52,12 @@ pub(crate) use authority_forward::{
 };
 pub use authority_franking::spawn_pending_franking_sweeper;
 pub(crate) use authority_producer_validation::{
-    verify_account_device_payload_proof, verify_account_device_producer, verify_self_event_producer,
+    verify_account_device_payload_proof, verify_account_device_producer,
+    verify_mimi_binding_producer, verify_self_event_producer,
 };
-pub(crate) use authority_self_event_unit::{submit_applet_event, submit_self_moderation_report};
+pub(crate) use authority_self_event_unit::{
+    submit_applet_event, submit_mimi_binding_event, submit_self_moderation_report,
+};
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
     MemberIdentitySubjectKey,
@@ -63,3 +68,8 @@ pub use notification::{
 pub use replica_anchor::spawn_pending_anchor_sweeper;
 pub(crate) use service_route_fetcher::VerifiedBindingRouteFetcher;
 pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};
+
+mod authority_mimi_unit;
+pub(crate) use authority_mimi_unit::{
+    author_mimi_event, commit_mimi_event, mimi_reporter_device_guard,
+};

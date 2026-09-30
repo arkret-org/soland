@@ -1,0 +1,211 @@
+//! Grant-local detached approvals; no governance configuration grants authority.
+//! This module is prepared independently until the shared evaluator window opens.
+use arkret_models_collaboration::governance::grant_constraint::{
+    CapabilityGrant, GrantConstraint, GrantConstraintKind, GrantConstraintSubkind,
+};
+use arkret_wire::{
+    ApprovalContext, CapabilityActionId, Event, GrantId, RealmCommit, WireResourceSelector,
+};
+use diesel_async::AsyncPgConnection;
+use soland_storage::{EventApprovalCommit, OperationFacts, PersistenceError, PersistenceResult};
+
+use crate::approval_admission::{QualifiedApproval, validate_candidate};
+
+#[derive(Clone, Debug)]
+pub(crate) struct SatisfiedGrantApproval {
+    pub grant_id: GrantId,
+    pub constraint_digest: String,
+    pub accepted: Vec<QualifiedApproval>,
+    pub eligible_principals: Vec<arkret_wire::DidCoreId>,
+    pub quorum: u64,
+}
+
+fn missing(action: CapabilityActionId, quorum: u64, count: usize) -> PersistenceError {
+    PersistenceError::Conflict(format!(
+        "approval_required: action={} effective_approval_quorum={} counted_approvals={}",
+        action.as_str(),
+        quorum,
+        count
+    ))
+}
+
+pub(crate) fn is_approval_constraint(constraint: &GrantConstraint) -> bool {
+    constraint.constraint_kind == GrantConstraintKind::ClaimBased
+        && matches!(
+            constraint.constraint_subkind,
+            Some(GrantConstraintSubkind::Approval | GrantConstraintSubkind::Accountability)
+        )
+}
+
+fn approval_deadline(
+    approved_at: chrono::DateTime<chrono::Utc>,
+    committed_at: chrono::DateTime<chrono::Utc>,
+    timeout: Option<chrono::TimeDelta>,
+) -> bool {
+    approved_at <= committed_at
+        && timeout.map_or(true, |age| {
+            approved_at
+                .checked_add_signed(age)
+                .is_some_and(|deadline| committed_at <= deadline)
+        })
+}
+
+fn approval_not_before(grant: &CapabilityGrant) -> chrono::DateTime<chrono::Utc> {
+    grant
+        .constraints
+        .iter()
+        .filter(|constraint| constraint.constraint_kind == GrantConstraintKind::Temporal)
+        .filter_map(|constraint| constraint.not_before)
+        .fold(grant.issued_at, std::cmp::max)
+}
+
+/// Return only exact constraints proved at this cut. The shared evaluator must
+/// preserve every deny/quarantine and all other unproved review constraints.
+pub(crate) async fn require_grant_approvals(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    commit: &RealmCommit,
+    prepared: Option<&EventApprovalCommit>,
+    grant: &CapabilityGrant,
+    action: CapabilityActionId,
+    target: &WireResourceSelector,
+    facts: &OperationFacts,
+) -> PersistenceResult<Vec<SatisfiedGrantApproval>> {
+    let methods = validate_candidate(event, commit, prepared)?;
+    let mut requirements = Vec::new();
+    for constraint in grant
+        .constraints
+        .iter()
+        .filter(|constraint| is_approval_constraint(constraint))
+    {
+        if !constraint.applies_to_actions.is_empty()
+            && !constraint
+                .applies_to_actions
+                .iter()
+                .any(|named| named.as_str() == action.as_str())
+        {
+            continue;
+        }
+        let required = constraint.approval_required == Some(true)
+            || constraint.guardian_approval_required == Some(true)
+            || constraint.controller_approval_required == Some(true);
+        if !required {
+            continue;
+        }
+        // Unregistered profile predicates cannot be discharged by a signature.
+        if !constraint.extensions.is_empty() || constraint.condition.is_some() {
+            return Err(missing(action, 0, 0));
+        }
+        let timeout = match constraint.timeout.as_deref() {
+            Some(value) => Some(
+                soland_storage::fixed_duration(value)
+                    .filter(|age| *age > chrono::TimeDelta::zero())
+                    .ok_or_else(|| missing(action, 0, 0))?,
+            ),
+            None => None,
+        };
+        let roster = constraint
+            .approval_actor_ids
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut qualified = std::collections::BTreeMap::new();
+        for principal in roster {
+            if &principal == event.actor_id.signing_principal_id() {
+                continue;
+            }
+            if let Some(basis) = crate::approval_admission::qualify_principal(
+                conn,
+                event,
+                &principal,
+                action,
+                target,
+                facts,
+                commit.committed_at,
+                false,
+            )
+            .await?
+            {
+                qualified.insert(principal, basis);
+            }
+        }
+        let threshold = constraint.approval_threshold.unwrap_or_default();
+        let Some(quorum) = threshold.required_votes(qualified.len() as u64) else {
+            return Err(missing(action, 0, 0));
+        };
+        let constraint_digest = arkret_canonical::canonical_sha256(constraint)
+            .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+        let roster_basis=qualified.iter().map(|(principal,basis)|serde_json::json!({"principal":principal,"qualification":basis})).collect::<Vec<_>>();
+        let mut accepted = Vec::new();
+        let mut counted = std::collections::BTreeSet::new();
+        for method in methods {
+            let vote = &method.signature;
+            if vote.input.action != action
+                || !matches!(&vote.input.approval_context,ApprovalContext::Grant {grant_id} if grant_id==&grant.id)
+            {
+                continue;
+            }
+            if vote.input.approved_at < approval_not_before(grant)
+                || !approval_deadline(vote.input.approved_at, commit.committed_at, timeout)
+            {
+                continue;
+            }
+            let principal = arkret_wire::project_did_to_core_id(&vote.input.approver_did)
+                .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+            if let Some(basis) = qualified.get(&principal) {
+                if counted.insert(principal.clone()) {
+                    accepted.push(QualifiedApproval {
+                        method: method.clone(),
+                        qualification_basis: serde_json::json!({"voter":basis,"grant_requirement":{
+                            "grant_id":grant.id,"constraint_digest":constraint_digest,"constraint":constraint,
+                            "eligible_roster":roster_basis,"effective_approval_quorum":quorum}}),
+                    });
+                }
+            }
+        }
+        if (accepted.len() as u64) < quorum {
+            return Err(missing(action, quorum, accepted.len()));
+        }
+        requirements.push(SatisfiedGrantApproval {
+            grant_id: grant.id.clone(),
+            constraint_digest,
+            accepted,
+            eligible_principals: qualified.into_keys().collect(),
+            quorum,
+        });
+    }
+    Ok(requirements)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::approval_deadline;
+    #[test]
+    fn approval_timeout_uses_signed_time_and_includes_the_exact_deadline() {
+        let signed = chrono::DateTime::parse_from_rfc3339("2026-09-30T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let age = chrono::TimeDelta::seconds(60);
+        assert!(approval_deadline(signed, signed + age, Some(age)));
+        assert!(!approval_deadline(
+            signed,
+            signed + age + chrono::TimeDelta::milliseconds(1),
+            Some(age)
+        ));
+        assert!(!approval_deadline(
+            signed,
+            signed - chrono::TimeDelta::milliseconds(1),
+            None
+        ));
+        assert!(approval_deadline(
+            signed,
+            signed + chrono::TimeDelta::days(365),
+            None
+        ));
+        assert!(!approval_deadline(
+            chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            Some(age)
+        ));
+    }
+}

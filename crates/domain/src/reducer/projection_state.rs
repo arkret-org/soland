@@ -434,6 +434,14 @@ impl ProjectionState {
                 reason: "unknown_event_kind".to_owned(),
             };
         };
+        if kind == arkret_wire::EventKind::RealmDestroy
+            || (self.realm_is_in_terminal_state(operation.realm_id.as_str())
+                && !arkret_wire::events::kinds::is_audit_kind(&kind))
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::FAILED_PRECONDITION.to_owned(),
+            };
+        }
         let effect = match APPLY_REGISTRY.get(&kind) {
             Some(dispatch) => dispatch(self, operation, hlc),
             None => ProjectionEffect::Rejected {

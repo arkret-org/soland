@@ -1200,6 +1200,41 @@ impl AuthorityCommitApplication {
         Ok(self.store().current_authority(realm_id).await?)
     }
 
+    pub async fn sidecar_participant_authority_cut(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        sidecar_id: &arkret_wire::SidecarId,
+        controller: &arkret_wire::AccountId,
+    ) -> ServiceResult<
+        Option<arkret_models_collaboration::agent_sidecar::SidecarParticipantAuthorityCut>,
+    > {
+        Ok(self
+            .store()
+            .sidecar_participant_authority_cut(realm_id, sidecar_id, controller)
+            .await?)
+    }
+
+    /// Record a verified remote current authority of a Realm this Station
+    pub async fn sidecar_access_cut(
+        &self,
+        realm: &arkret_wire::RealmId,
+        sidecar: &arkret_wire::SidecarId,
+        controller: &arkret_wire::AccountId,
+        device: &arkret_wire::DeviceId,
+    ) -> ServiceResult<
+        Option<(
+            arkret_models_collaboration::agent_sidecar::SidecarParticipantAuthorityCut,
+            Vec<arkret_wire::DidCoreId>,
+            Option<arkret_wire::MlsGroupCurrent>,
+            bool,
+        )>,
+    > {
+        Ok(self
+            .store()
+            .sidecar_access_cut(realm, sidecar, controller, device)
+            .await?)
+    }
+
     /// Record a verified remote current authority of a Realm this Station
     /// does not govern.
     pub async fn record_remote_authority(

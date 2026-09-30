@@ -187,7 +187,9 @@ async fn replicate_one(
     let commit = &item.source_commit;
     if !matches!(
         commit.stream_ref,
-        CommitStreamRef::Realm { .. } | CommitStreamRef::Circle { .. }
+        CommitStreamRef::Realm { .. }
+            | CommitStreamRef::Circle { .. }
+            | CommitStreamRef::Sidecar { .. }
     ) {
         return Err(ServiceError::UnsupportedEventKind(
             "Circle and Sidecar replicas need their own scope membership basis".to_owned(),

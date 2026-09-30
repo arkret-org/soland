@@ -119,16 +119,22 @@ fn remove_authorization(entries: &mut Vec<Value>, event_id: &arkret_wire::EventI
 }
 
 fn canonicalize_entries(entries: &mut [Value]) -> PersistenceResult<()> {
-    entries.sort_by(|a, b| {
-        a.get("tag_id")
-            .and_then(Value::as_str)
-            .cmp(&b.get("tag_id").and_then(Value::as_str))
-    });
-    if entries
-        .windows(2)
-        .any(|pair| pair[0]["tag_id"] == pair[1]["tag_id"])
-    {
+    let mut sorted = entries
+        .iter()
+        .map(|entry| {
+            let dot = serde_json::from_value::<
+                arkret_models_collaboration::exact_current_results::CanonicalEventDot,
+            >(entry["tag_id"].clone())
+            .map_err(|_| invalid("Agent key current contains an invalid Event dot"))?;
+            Ok((dot, entry.clone()))
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    if sorted.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(invalid("Agent key current contains duplicate Event dots"));
+    }
+    for (entry, (_, value)) in entries.iter_mut().zip(sorted) {
+        *entry = value;
     }
     Ok(())
 }
@@ -412,5 +418,22 @@ mod tests {
         assert_eq!(active_event_id(&entries[0]), Some(other_event.as_str()));
         assert!(active_event_id(&entries[1]).is_none());
         assert!(!remove_authorization(&mut entries, &old_event));
+    }
+
+    #[test]
+    fn agent_key_dots_sort_numeric_indices_and_reject_duplicates() {
+        let event =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x11; 32]);
+        let mut entries = vec![
+            json!({"tag_id":format!("{event}:10")}),
+            json!({"tag_id":format!("{event}:2")}),
+        ];
+        canonicalize_entries(&mut entries).unwrap();
+        assert_eq!(entries[0]["tag_id"], format!("{event}:2"));
+        assert_eq!(entries[1]["tag_id"], format!("{event}:10"));
+        entries[1] = entries[0].clone();
+        assert!(canonicalize_entries(&mut entries).is_err());
+        entries[1] = json!({"tag_id":format!("{event}:02")});
+        assert!(canonicalize_entries(&mut entries).is_err());
     }
 }

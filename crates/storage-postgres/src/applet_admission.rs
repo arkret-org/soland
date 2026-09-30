@@ -707,7 +707,11 @@ async fn admit_in_connection(
             }
             verify_prior_service_event(conn, e, input, &prior[0].event_id).await?;
         }
-        if input.prior_managed_refs
+        if input
+            .prior_managed_refs
+            .iter()
+            .map(|reference| reference.event_id.clone())
+            .collect::<Vec<_>>()
             != vec![
                 reuse.managed_actor_provision_ref.clone(),
                 reuse.pcr_genesis_ref.clone(),
@@ -1011,6 +1015,9 @@ async fn verify_admin_producer(
         .verify_event_id_matches_content_with_digest_suite(suite)
         .map_err(rejected)?;
     match guard {
+        soland_storage::SelfProducerCommitGuard::MimiFacade { .. } => {
+            return Err(rejected("MIMI facade is not an Applet admin producer"));
+        }
         soland_storage::SelfProducerCommitGuard::HumanDevice(selector) => {
             let account = event
                 .actor_id
@@ -1126,7 +1133,8 @@ fn validate_finalized_refs(
                 .iter()
                 .map(|e| arkret_wire::GrantId::from_event_id(&e.event_id))
                 .collect::<Vec<_>>();
-            if refs.first().map(|reference| &reference.event_id) != Some(&outcome.registration_event_ref)
+            if refs.first().map(|reference| &reference.event_id)
+                != Some(&outcome.registration_event_ref)
                 || outcome.bot_actor_provision_ref != provision_ref.event_id
                 || &outcome.bot_principal_control_realm_id != pcr.stream_ref.realm_id()
                 || outcome.bot_actor_id != provision.actor_id

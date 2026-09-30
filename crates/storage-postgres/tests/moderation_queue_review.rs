@@ -1,5 +1,5 @@
-#[path = "support/accepted_human_profile.rs"]
-mod accepted_human_profile;
+#[path = "support/accepted_pcr_account.rs"]
+mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -136,7 +136,7 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let governing_did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let human = accepted_human_profile::accepted_human_profile(&pool, governing_did.clone()).await;
+    let human = accepted_pcr_account::accepted_pcr_account(&pool, governing_did.clone()).await;
     let unit = ordinary_realm::bootstrap_unit_for_account(
         &uuid::Uuid::now_v7().to_string(),
         human.as_account_id().unwrap(),

@@ -384,5 +384,6 @@ pub(crate) async fn admit_agent_control_event_in_connection(
             &format!("Agent control projection refused: {error}"),
         )
     })?;
+    crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event).await?;
     Ok(AgentControlAdmissionOutcome::Committed(commit.clone()))
 }

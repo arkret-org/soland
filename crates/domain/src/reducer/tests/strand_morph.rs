@@ -953,7 +953,7 @@ fn strand_tracks_update_touches_active_strand_only() {
             serde_json::json!({
                 "target_ref": strand_id,
                 "patch": {
-                    "tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}
+                    "tracks.synthesis.profile": {"$op": "set", "value": "synthesis"}
                 },
                 "sender": "ak:did_core:web:alice.example",
             }),
@@ -1138,7 +1138,7 @@ fn strand_tracks_preflight_rejects_when_strand_archived() {
         realm_id,
         serde_json::json!({
             "target_ref": strand_id,
-            "patch": {"tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}}
+            "patch": {"tracks.synthesis.profile": {"$op": "set", "value": "synthesis"}}
         }),
     );
     assert_eq!(
@@ -1163,7 +1163,7 @@ fn strand_tracks_preflight_tolerates_unknown_strand() {
         "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
         serde_json::json!({
             "target_ref": "ak:strand:nope-not-here",
-            "patch": {"tracks.synthesis": {"$op": "set", "value": {"profile": "synthesis"}}}
+            "patch": {"tracks.synthesis.profile": {"$op": "set", "value": "synthesis"}}
         }),
     );
     assert_eq!(state.check_strand_tracks_transition(&tracks_op), Ok(()));

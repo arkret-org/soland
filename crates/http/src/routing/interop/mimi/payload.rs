@@ -9,18 +9,101 @@ pub(super) fn typed_body_value<T: Serialize>(
 }
 
 pub(super) async fn persist_mimi_canonical_message_event(
-    _state: &AppState,
-    _realm_id: &str,
-    _created_at: chrono::DateTime<chrono::Utc>,
-    _payload: Value,
+    state: &AppState,
+    realm_id: &str,
+    room_uri: MimiRoomUri,
+    binding_event_id: EventId,
+    source_provider_id: arkret_wire::DidCoreId,
+    request: &MimiSubmitMessageRequestBody,
+    payload: Value,
 ) -> Result<String, AppError> {
-    // Service-owned Event authoring must enter through an authenticated
-    // AuthorityProtocolPort. The old actor-sequence/Seal submit path cannot
-    // produce a valid RealmCommit or prove the service identity.
-    Err(crate::app_error!(
-        ServiceUnavailable,
-        "MIMI message authority admission is not connected",
-    ))
+    let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
+        .map_err(|e| AppError::param_invalid(e.to_string()))?;
+    let event = crate::state::author_mimi_event(
+        state,
+        arkret_wire::EventKind::MessageCreate,
+        arkret_wire::ScopeRef::Realm { realm_id },
+        payload,
+    )
+    .await
+    .map_err(mimi_admission_error)?;
+    let event_id = event.event_id.to_string();
+    use arkret_wire::PayloadSigner as _;
+    let method = event
+        .producer_proof
+        .as_ref()
+        .expect("authored Event proof")
+        .verification_method
+        .clone();
+    let mut receipt = json!({"schema":arkret_wire::SchemaId::MIMI_INTEROP_V1,
+        "receipt_kind":"content_mapping_receipt","profile":arkret_wire::ProfileId::MIMI_INTEROP_V1,
+        "mimi_room_uri":room_uri,"source_format":request.ciphertext.content_type,
+        "target_format":"ak.message.create","original_envelope_digest":event.payload["mimi_provenance"]["source_envelope_digest"],
+        "mapped_operation_id":event.event_id.as_str().trim_start_matches("ak:event:"),"arkret_event_id":event.event_id,
+    });
+    let bytes = arkret_canonical::canonical_json_bytes(&receipt)
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        state.service_did(),
+        method,
+    );
+    let signature = signer
+        .sign_payload(&bytes)
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    receipt["proof"] = serde_json::to_value(arkret_wire::PayloadProof {
+        kind: "detached_jws".into(),
+        verification_method: signature.verification_method,
+        payload_digest: signature.payload_digest,
+        created_at: signature.created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: signature.jws,
+    })
+    .map_err(|e| AppError::internal(e.to_string()))?;
+    let guard = soland_storage::SelfProducerCommitGuard::MimiFacade {
+        service_id: state.service_core_id(),
+        verification_method: event
+            .producer_proof
+            .as_ref()
+            .expect("authored Event proof")
+            .verification_method
+            .clone(),
+        room_uri,
+        binding_event_id,
+        attributed_actor: request.sender_actor_id.clone(),
+        source_provider_id,
+        reporter_authority: None,
+        mapping_receipt: Some(receipt),
+        reporter_device_guard: None,
+        submit_request: Some(
+            serde_json::to_value(request).map_err(|e| AppError::internal(e.to_string()))?,
+        ),
+    };
+    crate::state::commit_mimi_event(state, event, guard, None)
+        .await
+        .map_err(mimi_admission_error)?;
+    Ok(event_id)
+}
+
+pub(super) fn mimi_admission_error(error: soland_services::ServiceError) -> AppError {
+    let detail = error.to_string();
+    if detail.contains("mimi_observer_write_forbidden") {
+        return AppError::capability_denied(detail)
+            .with_reason_code(arkret_wire::ReasonCode::MIMI_OBSERVER_WRITE_FORBIDDEN);
+    }
+    if detail.contains("mimi_governance_binding_mismatch")
+        || detail.contains("mimi_mls_group_id_mismatch")
+    {
+        return AppError::capability_denied(detail)
+            .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH);
+    }
+    if error.is_conflict_kind() || error.is_not_found() {
+        AppError::capability_denied(detail)
+    } else {
+        AppError::internal(detail)
+    }
 }
 
 pub(super) fn decode_mimi_update_payload(body: &Value) -> Result<Option<Value>, AppError> {
@@ -379,9 +462,6 @@ pub(super) fn map_mimi_message_content(
                 arkret_models_collaboration::events_payloads::CONTENT_KIND_TEXT.to_owned(),
             ),
         );
-        object
-            .entry("source_format".to_owned())
-            .or_insert_with(|| Value::String(kind.to_owned()));
     }
     let e2ee_boundary = mimi_e2ee_boundary(body, &content);
     let plaintext_detected = mimi_plaintext_detected(body) || mimi_plaintext_detected(&content);

@@ -1,5 +1,5 @@
-#[path = "support/accepted_human_profile.rs"]
-mod accepted_human_profile;
+#[path = "support/accepted_pcr_account.rs"]
+mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -83,7 +83,7 @@ async fn check_circle_reads(history: &str) {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let actor = accepted_human_profile::accepted_human_profile(&pool, did.clone()).await;
+    let actor = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
     let account = actor.as_account_id().unwrap();
     let unit = ordinary_realm::bootstrap_unit_for_account(
         &uuid::Uuid::now_v7().to_string(),

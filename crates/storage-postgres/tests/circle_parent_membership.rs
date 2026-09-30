@@ -7,8 +7,8 @@
 //! Event or rewritten canonical row, and only an explicit new Circle join
 //! bound to the new revision restores it.
 
-#[path = "support/accepted_human_profile.rs"]
-mod accepted_human_profile;
+#[path = "support/accepted_pcr_account.rs"]
+mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -70,6 +70,9 @@ fn circle_request(
     actor: &ActorId,
     payload: Value,
 ) -> EventCommitRequest {
+    // Distinct transitions with equal payloads are distinct signed Events;
+    // the content address includes created_at, not the later Commit cursor.
+    let at = previous.commit.committed_at + chrono::TimeDelta::milliseconds(1);
     let event = ordinary_realm::event_for_actor(
         EventKind::CircleMemberState,
         ScopeRef::Circle {
@@ -78,10 +81,9 @@ fn circle_request(
         },
         actor.clone(),
         payload,
-        previous.commit.committed_at,
+        at,
     );
-    let mut request =
-        ordinary_realm::request_for_event(previous, event, previous.commit.committed_at);
+    let mut request = ordinary_realm::request_for_event(previous, event, at);
     let stream = CommitStreamRef::Circle {
         realm_id: previous.event.realm_id.clone(),
         circle_id: circle.clone(),
@@ -184,12 +186,18 @@ fn refusal_code(error: &PersistenceError) -> Option<ConflictCode> {
 
 #[tokio::test]
 async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_it() {
+    for history in ["since_join", "all_history_for_current_members"] {
+        parent_revision_matrix(history).await;
+    }
+}
+
+async fn parent_revision_matrix(history: &str) {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let creator = accepted_human_profile::accepted_human_profile(&pool, did.clone()).await;
+    let creator = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
     let unit = ordinary_realm::bootstrap_unit_for_account(
         &uuid::Uuid::now_v7().to_string(),
         creator.as_account_id().unwrap(),
@@ -216,7 +224,7 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
         creator.clone(),
         json!({"object":{"schema":"ak.schema.circle.v1","realm_id":realm,
             "title":"Parent bound","display":{"short_name":"Parent","color_token":"blue","symbol":{"glyph":"lock"}},
-            "directory_visibility":"members","join_rule":"public","history_access":"since_join",
+            "directory_visibility":"members","join_rule":"public","history_access":history,
             "state":"active","created_by":creator,
             "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
@@ -249,7 +257,7 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
         creator.clone(),
         json!({"grant":{
             "schema":"ak.schema.capability.v1","realm_id":realm,
-            "issuer_id":creator,"subject":alice,"actions":["ak.circle.member.add"],
+            "issuer_id":creator,"subject":alice,"actions":["ak.circle.member.add","ak.mls.genesis"],
             "resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
             "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,
                 "authority_event_ref":root_event_ref,"authority_generation":0}],
@@ -328,6 +336,153 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     assert_eq!(joined.value["parent_membership_revision"], first_parent);
     assert!(circle_scan_authorized(&store, &stream, &alice).await);
 
+    let binding = arkret_models_crypto::MlsGovernanceBindingPayload::circle(
+        realm.clone(),
+        circle.clone(),
+        None,
+        0,
+        0,
+        0,
+    )
+    .unwrap();
+    let payload = json!({
+        "cipher_suite":"MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        "group_info_ref":format!("ak:blob:sha256:{}", "3".repeat(64)),
+        "ratchet_tree_ref":format!("ak:blob:sha256:{}", "4".repeat(64)),
+        "creator_leaf_authority":{
+            "leaf_signature_key_b64u":arkret_canonical::base64url_encode([7_u8;32]),
+            "endpoint":{"kind":"device","device_id":format!("ak:device:{}",uuid::Uuid::now_v7())},
+            "authorization_event_ref":arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256,[8_u8;32]),
+        },
+        "governance_binding":binding,
+        "created_at":arkret_canonical::format_timestamp_canonical(at),
+    });
+    let event = ordinary_realm::event_for_actor(
+        EventKind::MlsGenesis,
+        ScopeRef::Circle {
+            realm_id: realm.clone(),
+            circle_id: circle.clone(),
+        },
+        alice.clone(),
+        payload.clone(),
+        at,
+    );
+    let mut genesis = sourced(ordinary_realm::request_for_event(
+        &circle_join.authority_commit,
+        event,
+        at,
+    ));
+    genesis.authority_commit.commit.stream_ref = stream.clone();
+    genesis.authority_commit.mls_state = Some(soland_storage::MlsStateInstallation {
+        effective_scope: ScopeRef::Circle {
+            realm_id: realm.clone(),
+            circle_id: circle.clone(),
+        },
+        base: None,
+        epoch: 0,
+        public_state: b"circle-public-state".to_vec(),
+        member_principals: Default::default(),
+        consumed_proposals: Vec::new(),
+        genesis_blobs: Vec::new(),
+    });
+    let activated = history == "since_join";
+    if activated {
+        uow.commit_event(genesis.clone()).await.unwrap();
+    } else {
+        assert_eq!(
+            refusal_code(&uow.commit_event(genesis.clone()).await.unwrap_err()),
+            Some(ConflictCode::FailedPrecondition)
+        );
+        assert_eq!(circle_stream_commits(&pool, &stream).await, 1);
+    }
+    let material_request =
+        arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody {
+            realm_id: realm.clone(),
+            effective_scope: genesis.authority_commit.event.scope_ref.clone(),
+            mls_group_id: binding.mls_group_id().unwrap(),
+            epoch: Default::default(),
+            group_state_event_id: genesis.authority_commit.event.event_id.clone(),
+            caller_actor_id: Some(alice.clone()),
+            target_commit_event_ref: Some(genesis.authority_commit.event.event_id.clone()),
+            target_epoch: Some(0),
+            group_info_ref: serde_json::from_value(payload["group_info_ref"].clone()).unwrap(),
+            ratchet_tree_ref: serde_json::from_value(payload["ratchet_tree_ref"].clone()).unwrap(),
+            max_response_bytes: None,
+        };
+    let roster_request =
+        arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody {
+            realm_id: realm.clone(),
+            effective_scope: material_request.effective_scope.clone(),
+            mls_group_id: material_request.mls_group_id.clone(),
+            genesis_event_ref: material_request.group_state_event_id.clone(),
+            target_commit_event_ref: material_request.target_commit_event_ref.clone().unwrap(),
+            target_epoch: 0,
+            caller_actor_id: alice.clone(),
+            cursor: None,
+        };
+    if activated {
+        assert!(matches!(
+            store
+                .mls_member_group_state_material_read(
+                    &material_request,
+                    &ordinary_realm::station(),
+                    None
+                )
+                .await
+                .unwrap(),
+            soland_storage::MlsMemberGroupStateMaterialRead::Authorized { genesis: Some(_) }
+        ));
+        assert!(matches!(
+            store
+                .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+                .await
+                .unwrap(),
+            soland_storage::MlsRosterAuthorityRead::Authorized { facts: Some(_) }
+        ));
+    }
+    let circle_head = if activated {
+        genesis.authority_commit.clone()
+    } else {
+        circle_join.authority_commit.clone()
+    };
+
+    // A renewed since-join Circle floor hides the old MLS target. The
+    // all-history fixture has no accepted MLS target to disclose.
+    let same_parent_leave = circle_request(
+        &circle_head,
+        &circle,
+        &alice,
+        circle_membership(&circle, &alice, "leave", json!("join"), None),
+    );
+    uow.commit_event(same_parent_leave.clone()).await.unwrap();
+    let same_parent_join = circle_request(
+        &same_parent_leave.authority_commit,
+        &circle,
+        &alice,
+        circle_membership(&circle, &alice, "join", json!("leave"), Some(&first_parent)),
+    );
+    uow.commit_event(same_parent_join.clone()).await.unwrap();
+    let answer = store
+        .mls_member_group_state_material_read(&material_request, &ordinary_realm::station(), None)
+        .await
+        .unwrap();
+    let roster = store
+        .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+        .await
+        .unwrap();
+    {
+        assert!(matches!(
+            answer,
+            soland_storage::MlsMemberGroupStateMaterialRead::NotFound
+        ));
+        assert!(matches!(
+            roster,
+            soland_storage::MlsRosterAuthorityRead::NotFound
+        ));
+    }
+    let joined = circle_member(&pool, &circle, &alice).await;
+    let circle_head = same_parent_join.authority_commit.clone();
+
     // Parent leave: the old Circle join is effective-invalid at once; no
     // Circle Event is synthesized and the canonical row is not rewritten.
     let realm_leave = realm_membership(
@@ -343,8 +498,29 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     assert_eq!(after_leave.membership, "join");
     assert_eq!(after_leave.current_commit_id, joined.current_commit_id);
     assert_eq!(after_leave.value, joined.value);
-    assert_eq!(circle_stream_commits(&pool, &stream).await, 1);
+    assert_eq!(
+        circle_stream_commits(&pool, &stream).await,
+        if activated { 4 } else { 3 }
+    );
     assert!(!circle_scan_authorized(&store, &stream, &alice).await);
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
+        soland_storage::MlsMemberGroupStateMaterialRead::NotFound
+    ));
+    assert!(matches!(
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
+        soland_storage::MlsRosterAuthorityRead::NotFound
+    ));
 
     // Parent rejoin: a new revision never revives the old Circle join.
     let rejoin = realm_membership(
@@ -360,11 +536,32 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     let after_rejoin = circle_member(&pool, &circle, &alice).await;
     assert!(!after_rejoin.effective);
     assert_eq!(after_rejoin.value, joined.value);
-    assert_eq!(circle_stream_commits(&pool, &stream).await, 1);
+    assert_eq!(
+        circle_stream_commits(&pool, &stream).await,
+        if activated { 4 } else { 3 }
+    );
     assert!(!circle_scan_authorized(&store, &stream, &alice).await);
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
+        soland_storage::MlsMemberGroupStateMaterialRead::NotFound
+    ));
+    assert!(matches!(
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
+        soland_storage::MlsRosterAuthorityRead::NotFound
+    ));
     // The old revision is no longer the parent current join.
     let stale = circle_request(
-        &circle_join.authority_commit,
+        &circle_head,
         &circle,
         &alice,
         circle_membership(&circle, &alice, "join", json!("leave"), Some(&first_parent)),
@@ -375,7 +572,7 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     );
     // A leave never carries the revision.
     let misplaced = circle_request(
-        &circle_join.authority_commit,
+        &circle_head,
         &circle,
         &alice,
         circle_membership(
@@ -393,7 +590,7 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     // Only an explicit leave then a new join bound to the new revision
     // restores the Circle.
     let circle_leave = circle_request(
-        &circle_join.authority_commit,
+        &circle_head,
         &circle,
         &alice,
         circle_membership(&circle, &alice, "leave", json!("join"), None),
@@ -415,6 +612,26 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     let restored = circle_member(&pool, &circle, &alice).await;
     assert!(restored.effective);
     assert_eq!(restored.value["parent_membership_revision"], second_parent);
+    // Even all-history policy cannot authorize a historical Circle cut whose
+    // join belongs to the previous parent Realm join instance.
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
+        soland_storage::MlsMemberGroupStateMaterialRead::NotFound
+    ));
+    assert!(matches!(
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
+        soland_storage::MlsRosterAuthorityRead::NotFound
+    ));
     assert!(circle_scan_authorized(&store, &stream, &alice).await);
 
     // Parent ban invalidates exactly like leave.
@@ -429,6 +646,27 @@ async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_i
     let after_ban = circle_member(&pool, &circle, &alice).await;
     assert!(!after_ban.effective);
     assert_eq!(after_ban.value, restored.value);
-    assert_eq!(circle_stream_commits(&pool, &stream).await, 3);
+    assert_eq!(
+        circle_stream_commits(&pool, &stream).await,
+        if activated { 6 } else { 5 }
+    );
     assert!(!circle_scan_authorized(&store, &stream, &alice).await);
+    assert!(matches!(
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
+        soland_storage::MlsMemberGroupStateMaterialRead::NotFound
+    ));
+    assert!(matches!(
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
+        soland_storage::MlsRosterAuthorityRead::NotFound
+    ));
 }

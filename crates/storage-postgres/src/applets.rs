@@ -84,6 +84,66 @@ pub struct PgAppletStore {
 }
 #[async_trait]
 impl AppletStore for PgAppletStore {
+    async fn issue_widget_token(
+        &self,
+        record: soland_storage::AppletWidgetTokenRecord,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            Ok(crate::applet_widget_tokens::issue(conn, &record).await?)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn widget_tokens(
+        &self,
+        install: &soland_storage::AppletWidgetInstallSelector,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Vec<soland_storage::AppletWidgetTokenRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            Ok(crate::applet_widget_tokens::inventory(conn, install, at).await?)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn check_widget_token(
+        &self,
+        gate: &soland_storage::AppletWidgetTokenGateSelector,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::AppletWidgetTokenRecord> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            Ok(crate::applet_widget_tokens::check(conn, gate, at).await?)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn invalidate_widget_token(
+        &self,
+        install: &soland_storage::AppletWidgetInstallSelector,
+        token_ref: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::AppletWidgetTokenInvalidation> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            Ok(crate::applet_widget_tokens::invalidate(conn, install, token_ref, at).await?)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn pending_authoring_completions(
         &self,
         limit: u32,
@@ -229,18 +289,32 @@ impl AppletStore for PgAppletStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "UPDATE applet_installations SET record = $4, updated_at = NOW() \
-             WHERE applet_id = $1 AND effective_scope_key = $2 AND record = $3",
-        )
-        .bind::<Text, _>(applet_id)
-        .bind::<Text, _>(effective_scope_key)
-        .bind::<Jsonb, _>(expected)
-        .bind::<Jsonb, _>(&replacement)
-        .execute(&mut *conn)
-        .await
-        .map(|updated| updated == 1)
-        .map_err(PersistenceError::database)
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let current=sql_query("SELECT record FROM applet_installations WHERE applet_id=$1 AND effective_scope_key=$2 FOR UPDATE")
+                .bind::<Text,_>(applet_id).bind::<Text,_>(effective_scope_key)
+                .get_result::<AppletRegistrationRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            if current.as_ref().map(|r|&r.record)!=Some(expected) {return Ok(false);}
+            if expected.get("revoke_execution")!=replacement.get("revoke_execution")
+                && expected.pointer("/revoke_execution/outcome/operation_id") != replacement.pointer("/revoke_execution/outcome/operation_id") {
+                if let Some(plan)=replacement.pointer("/revoke_execution/revoke_plan") {
+                    let plan:arkret_models_integration::AppletRevokePlan=serde_json::from_value(plan.clone()).map_err(PersistenceError::database)?;
+                    if matches!(plan.revoke_mode,arkret_wire::AppletRevokeMode::RevokeAll|arkret_wire::AppletRevokeMode::RevokeWidgetOnly) {
+                        let install=soland_storage::AppletWidgetInstallSelector {
+                            applet_id:plan.applet_id,effective_scope:plan.effective_scope,registration_epoch:plan.registration_epoch,
+                            registration_event_ref:serde_json::from_value(expected.pointer("/install_response/registration_event_ref").cloned().ok_or_else(||PersistenceError::SchemaViolation("Applet registration Event is absent".into()))?).map_err(PersistenceError::database)?
+                        };
+                        let inventory=crate::applet_widget_tokens::inventory(conn,&install,chrono::Utc::now()).await?;
+                        let actual=inventory.iter().map(|t|t.token_ref.as_str()).collect::<std::collections::BTreeSet<_>>();
+                        let planned=plan.widget_token_refs.iter().map(|t|t.as_str()).collect::<std::collections::BTreeSet<_>>();
+                        if actual!=planned {return Err(PersistenceError::Conflict("stale_state: widget inventory differs from the frozen revoke plan".into()).into());}
+                    }
+                }
+            }
+            let updated=sql_query("UPDATE applet_installations SET record=$3,updated_at=NOW() WHERE applet_id=$1 AND effective_scope_key=$2")
+                .bind::<Text,_>(applet_id).bind::<Text,_>(effective_scope_key).bind::<Jsonb,_>(&replacement)
+                .execute(conn).await.map_err(PersistenceError::database)?;
+            Ok(updated==1)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn fence_installation(

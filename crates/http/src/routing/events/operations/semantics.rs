@@ -114,7 +114,13 @@ fn validate_moderation_report_provenance(
     if payload.realm_id != operation.realm_id {
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
-    if &payload.reporter_id != operation.context.sender.signing_principal_id() {
+    let mimi = payload.provenance
+        == Some(
+            arkret_models_collaboration::events_payloads::ModerationReportProvenance::MimiFacade,
+        );
+    if (mimi && operation.context.sender != arkret_wire::ActorId::service(state.service_core_id()))
+        || (!mimi && &payload.reporter_id != operation.context.sender.signing_principal_id())
+    {
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
     match payload.provenance {
@@ -131,11 +137,8 @@ fn validate_moderation_report_provenance(
         }
         _ => {}
     }
-    // MIMI reports are caller-authored ordinary Events. The interop handler
-    // verifies the authenticated provider and exact reporter authority before
-    // admission; provenance never authorizes the local facade to substitute
-    // its service actor or signature.
-    let _ = state;
+    // The independent MimiFacade guard authenticates the local Service
+    // producer and exact reporter Account at the accepting transaction cut.
     Ok(())
 }
 

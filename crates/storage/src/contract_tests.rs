@@ -1455,6 +1455,7 @@ fn contract_applet_event_request(
         authority_commit: stream.accept(&event),
         self_producer_guard: None,
         applet_producer_guard: None,
+        widget_token_gate: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: None,
@@ -1514,6 +1515,8 @@ fn contract_applet_batch(
     EventBatchCommitRequest {
         events,
         realm_organization_proof: None,
+        invite_claim_proof: None,
+        event_approvals: None,
         franking_replay_nonce: None,
         applet_record: Some(AppletRecordCommit {
             applet_id: applet_id.clone(),
@@ -2537,6 +2540,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         authority_commit: stream.accept(&contact_event),
         self_producer_guard: None,
         applet_producer_guard: None,
+        widget_token_gate: None,
         forwarded_producer_evidence: None,
         parent_membership_admission: None,
         contact_projection: Some(ContactProjectionCommit {
@@ -2633,6 +2637,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             authority_commit: stream.accept(&failed_contact_event),
             self_producer_guard: None,
             applet_producer_guard: None,
+            widget_token_gate: None,
             forwarded_producer_evidence: None,
             parent_membership_admission: None,
             contact_projection: Some(ContactProjectionCommit {

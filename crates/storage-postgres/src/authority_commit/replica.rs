@@ -327,6 +327,7 @@ async fn hosts_joined_member(
             .bind::<Text, _>(realm_id.as_str()).load::<MemberIdRow>(&mut *conn).await?,
         arkret_wire::CommitStreamRef::Circle { realm_id, circle_id } => sql_query("SELECT cm.member_id FROM circle_member_state_current_results cm JOIN member_state_current_results rm ON rm.realm_id=cm.realm_id AND rm.member_id=cm.member_id JOIN circle_current_results circle ON circle.circle_id=cm.circle_id AND circle.realm_id=cm.realm_id WHERE cm.realm_id=$1 AND cm.circle_id=$2 AND cm.membership='join' AND rm.membership='join' AND circle_member_parent_join_current(cm.realm_id,cm.member_id,cm.value) AND circle.value->>'state'='active' FOR SHARE")
             .bind::<Text, _>(realm_id.as_str()).bind::<Text, _>(circle_id.as_str()).load::<MemberIdRow>(&mut *conn).await?,
+        arkret_wire::CommitStreamRef::Sidecar {realm_id,sidecar_id} => return crate::sidecar_replica_authority::holds_source_in_connection(conn,realm_id,sidecar_id,local_service_id).await.map_err(Into::into),
         _ => return Ok(false),
     };
     for row in rows {
@@ -488,6 +489,36 @@ async fn require_visible(
     event: &arkret_wire::Event,
     local_service_id: &arkret_wire::DidCoreId,
 ) -> Result<(), PgTransactionError> {
+    if let arkret_wire::ScopeRef::Sidecar {
+        realm_id,
+        sidecar_id,
+    } = &event.scope_ref
+    {
+        if !crate::sidecar_replica_authority::holds_source_in_connection(
+            conn,
+            realm_id,
+            sidecar_id,
+            local_service_id,
+        )
+        .await?
+        {
+            return Err(conflict(
+                ConflictCode::CapabilityDenied,
+                "private Sidecar source is not held by this exact controller Station",
+            ));
+        }
+    }
+    if event.kind == arkret_wire::EventKind::SidecarCreate
+        && event
+            .actor_id
+            .as_account_id()
+            .is_none_or(|owner| &owner.station_id != local_service_id)
+    {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "Sidecar creation is private to its exact controller Station",
+        ));
+    }
     if crate::realm_fanout::plaintext_message(event) {
         let services = sql_query(
             "SELECT value FROM realm_bootstrap_current_results \
@@ -567,6 +598,12 @@ async fn store_replica_rows(
     key: &str,
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), PgTransactionError> {
+    if event.kind == arkret_wire::EventKind::RealmDestroy {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: v1 does not admit Realm destruction".to_owned(),
+        )
+        .into());
+    }
     super::queue_event_in_connection(conn, event, received_at).await?;
     let token = super::ids::parse_event_id(event.event_id.as_str())
         .ok_or_else(|| invalid("Event id is not a canonical Event token"))?;
@@ -618,7 +655,7 @@ async fn insert_commit_row(
 }
 
 fn require_realm_stream(commit: &arkret_wire::RealmCommit) -> Result<(), PgTransactionError> {
-    if !matches!(&commit.stream_ref, arkret_wire::CommitStreamRef::Realm { realm_id } | arkret_wire::CommitStreamRef::Circle { realm_id, .. } if realm_id == &commit.realm_id)
+    if !matches!(&commit.stream_ref, arkret_wire::CommitStreamRef::Realm { realm_id } | arkret_wire::CommitStreamRef::Circle { realm_id, .. } | arkret_wire::CommitStreamRef::Sidecar{realm_id,..} if realm_id == &commit.realm_id)
     {
         return Err(invalid("replica stream has no supported scope membership basis").into());
     }
@@ -701,6 +738,13 @@ async fn install_replica_commit_in_connection(
     {
         return Err(invalid("replica Commit does not bind its Event and Realm").into());
     }
+    if arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None).map_err(invalid)?
+        != commit.stream_ref
+    {
+        return Err(
+            invalid("replica Event source scope differs from its covering Commit stream").into(),
+        );
+    }
     require_realm_stream(commit)?;
     record_remote_authority_in_connection(conn, &replica.authority, &replica.local_service_id)
         .await?;
@@ -711,6 +755,40 @@ async fn install_replica_commit_in_connection(
     let key = stream_key(&commit.stream_ref)?;
     let head = locked_head(conn, &key).await?;
     let anchor = locked_anchor(conn, &key).await?;
+    if matches!(
+        commit.stream_ref,
+        arkret_wire::CommitStreamRef::Sidecar { .. }
+    ) && head.is_none()
+    {
+        if anchor.is_some() || !crate::sidecar_replica_authority::is_native_origin(commit) {
+            return Err(conflict(
+                ConflictCode::DependencyMissing,
+                "private Sidecar origin is not held",
+            ));
+        }
+        if !crate::sidecar_replica_authority::permits_in_connection(
+            conn,
+            commit,
+            &replica.local_service_id,
+        )
+        .await?
+        {
+            return Err(conflict(
+                ConflictCode::CapabilityDenied,
+                "private Sidecar source authority is unproved",
+            ));
+        }
+        require_visible(conn, event, &replica.local_service_id).await?;
+        crate::realm_lifecycle_current_results::require_replica_live_in_connection(conn, event)
+            .await?;
+        store_replica_rows(conn, event, commit, &key, replica.received_at).await?;
+        crate::replica_current::advance_in_connection(conn, event, commit).await?;
+        sql_query("INSERT INTO replica_stream_anchors (stream_key,realm_id,join_commit_id,member_account_id,anchor_commit_id,anchor_stream_position,anchored_at) VALUES($1,$2,$3,$4,$3,0,$5)")
+            .bind::<Text,_>(&key).bind::<Text,_>(commit.realm_id.as_str()).bind::<Text,_>(commit.commit_id.as_str())
+            .bind::<Jsonb,_>(crate::sidecar_replica_authority::controller_in_connection(conn,&commit.stream_ref).await?.ok_or_else(||invalid("private Sidecar owner vanished"))?)
+            .bind::<Timestamptz,_>(replica.received_at).execute(&mut *conn).await?;
+        return Ok(CommittedReplicaOutcome::Stored);
+    }
     // A hosted member's own join opens the stream -- or, once no hosted
     // member is joined any more, re-opens it at the join (decision 0122).
     let opening = match &replica.role {
@@ -833,6 +911,7 @@ async fn store_held_successor(
         store_replica_rows(conn, event, commit, key, replica.received_at).await?;
         return Ok(CommittedReplicaOutcome::Stored);
     }
+    crate::realm_lifecycle_current_results::require_replica_live_in_connection(conn, event).await?;
     store_replica_rows(conn, event, commit, key, replica.received_at).await?;
     crate::replica_current::advance_in_connection(conn, event, commit).await?;
     if crate::account_summary::changes_account_summary_inputs(&event.kind) {

@@ -329,6 +329,7 @@ async fn publish_one(
             authority_commit: transaction,
             self_producer_guard: None,
             applet_producer_guard: None,
+            widget_token_gate: None,
             forwarded_producer_evidence: None,
             event: soland_storage::CanonicalEventRecord {
                 event_id: event.event_id.to_string(),

@@ -54,10 +54,18 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::ConsentGrant | EventKind::ConsentRevoke => Ok(SelfEventRoute::Consent),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::CircleCreate
+        | EventKind::SidecarCreate
+        | EventKind::SidecarContextAttach
         | EventKind::RealmOrganization
         | EventKind::CircleMemberState
         | EventKind::StrandCreate
         | EventKind::RealmProfile
+        | EventKind::RealmTombstone
+        | EventKind::RealmDestroy
+        | EventKind::RealmArchive
+        | EventKind::RealmRestore
+        | EventKind::RealmFreeze
+        | EventKind::RealmUnfreeze
         | EventKind::StrandUpdate
         | EventKind::StrandTracksUpdate
         | EventKind::RsvpSet
@@ -81,6 +89,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::ModerationDecisionLift
         | EventKind::InviteCreate
         | EventKind::InviteThirdParty
+        | EventKind::InviteClaim
         | EventKind::InviteRevoke
         | EventKind::InviteCancel
         | EventKind::InviteAccept
@@ -92,7 +101,8 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::SpaceArchive
         | EventKind::SpaceRestore
         | EventKind::ReactionAdd
-        | EventKind::ReactionRemove => Ok(SelfEventRoute::GuardedUnit),
+        | EventKind::ReactionRemove
+        | EventKind::MimiRoomBinding => Ok(SelfEventRoute::GuardedUnit),
         EventKind::Unknown(raw) => Err(ServiceError::SchemaViolation(format!(
             "self Event kind {raw} is not registered"
         ))),
@@ -145,11 +155,6 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
             "{} is admitted only on its producer's own Station",
             event.kind.as_str()
         )));
-    }
-    if request.approval_signatures.is_some() {
-        return Err(ServiceError::Conflict(
-            "Event approval signatures are not verified".to_owned(),
-        ));
     }
     if !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. })
         && !(matches!(event.scope_ref, arkret_wire::ScopeRef::Circle { .. })
@@ -582,6 +587,12 @@ mod tests {
             EventKind::RealmOrganization,
             EventKind::StrandCreate,
             EventKind::RealmProfile,
+            EventKind::RealmTombstone,
+            EventKind::RealmDestroy,
+            EventKind::RealmArchive,
+            EventKind::RealmRestore,
+            EventKind::RealmFreeze,
+            EventKind::RealmUnfreeze,
             EventKind::StrandUpdate,
             EventKind::StrandTracksUpdate,
             EventKind::RsvpSet,
@@ -638,6 +649,12 @@ mod tests {
             EventKind::RealmOrganization,
             EventKind::StrandCreate,
             EventKind::RealmProfile,
+            EventKind::RealmTombstone,
+            EventKind::RealmDestroy,
+            EventKind::RealmArchive,
+            EventKind::RealmRestore,
+            EventKind::RealmFreeze,
+            EventKind::RealmUnfreeze,
             EventKind::StrandUpdate,
             EventKind::StrandTracksUpdate,
             EventKind::RsvpSet,

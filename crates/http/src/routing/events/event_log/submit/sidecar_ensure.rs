@@ -10,8 +10,8 @@ use salvo::http::StatusCode;
 use super::{AppState, SessionRecord, SubmitOneError};
 
 pub(crate) async fn submit_sidecar_ensure_batch(
-    _state: &AppState,
-    _session: &SessionRecord,
+    state: &AppState,
+    session: &SessionRecord,
     create_event: Option<Event>,
     context_attach_event: Event,
 ) -> Result<(), SubmitOneError> {
@@ -29,7 +29,7 @@ pub(crate) async fn submit_sidecar_ensure_batch(
             format!("invalid Sidecar attach Event: {error}"),
         )
     })?;
-    if let Some(create_event) = create_event {
+    if let Some(create_event) = &create_event {
         if create_event.kind != EventKind::SidecarCreate
             || create_event.realm_id != context_attach_event.realm_id
             || create_event.actor_id != context_attach_event.actor_id
@@ -48,9 +48,16 @@ pub(crate) async fn submit_sidecar_ensure_batch(
             )
         })?;
     }
-    Err(SubmitOneError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "service_unavailable",
-        "Sidecar ensure awaits atomic Event/RealmCommit/current admission",
-    ))
+    crate::state::commit_sidecar_ensure_unit(state, session, create_event, context_attach_event)
+        .await
+        .map_err(|error| {
+            let code = error
+                .conflict_code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| match error {
+                    soland_services::ServiceError::SchemaViolation(_) => "schema_violation".into(),
+                    _ => "internal_error".into(),
+                });
+            SubmitOneError::new(StatusCode::CONFLICT, code, error.to_string())
+        })
 }

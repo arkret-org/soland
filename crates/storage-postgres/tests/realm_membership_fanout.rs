@@ -8,8 +8,8 @@
 //!   its held Realm stream, later Commits must directly follow it, and gaps, forks and unheld
 //!   streams are refused with zero writes.
 
-#[path = "support/accepted_human_profile.rs"]
-mod accepted_human_profile;
+#[path = "support/accepted_pcr_account.rs"]
+mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -384,12 +384,12 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = accepted_human_profile::accepted_human_profile(
+    let alice = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
     )
     .await;
-    let bob = accepted_human_profile::accepted_human_profile(
+    let bob = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
     )
@@ -430,7 +430,7 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         &pool,
         &uow,
         membership_request(&alice_join.authority_commit, alice.clone(), &alice, "join"),
-        ConflictCode::FailedPrecondition,
+        ConflictCode::InvalidMembershipTransition,
     )
     .await;
     let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
@@ -470,13 +470,13 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         &pool,
         &uow,
         membership_request(&ban.authority_commit, bob.clone(), &bob, "join"),
-        ConflictCode::FailedPrecondition,
+        ConflictCode::InvalidMembershipTransition,
     )
     .await;
 
     // A grant of `ak.realm.admin` from the root lets Alice remove Carol; once
     // the root revokes it, the same Alice is refused at the next cut.
-    let carol = accepted_human_profile::accepted_human_profile(
+    let carol = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
     )
@@ -2350,12 +2350,12 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let unit = admit(&pool, "grant-guards", "public").await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
-    let alice = accepted_human_profile::accepted_human_profile(
+    let alice = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
     )
     .await;
-    let bob = accepted_human_profile::accepted_human_profile(
+    let bob = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
     )
@@ -4150,7 +4150,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
     };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let creator = accepted_human_profile::accepted_human_profile(&pool, did.clone()).await;
+    let creator = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
     let unit = ordinary_realm::bootstrap_unit_for_account(
         &uuid::Uuid::now_v7().to_string(),
         creator.as_account_id().unwrap(),
@@ -4561,5 +4561,69 @@ fn rows_of_circle_scan(scan: soland_storage::AccountStreamScan) -> Vec<bool> {
             .map(|event| matches!(event, arkret_wire::CommittedEventView::Full(_)))
             .collect(),
         other => panic!("Circle page expected: {other:?}"),
+    }
+}
+
+/// Exercise the real same-cut recipient query, not confirmation admission:
+/// joined membership never proves entitlement to a private source's bytes.
+#[tokio::test]
+async fn private_confirmation_and_policy_ref_sources_are_never_owed_to_ordinary_peers() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = admit(&pool, "private-source-fanout", "public").await;
+    let remote = remote_member("private-source-peer");
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        remote.clone(),
+        &remote,
+        "join",
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    let at = join.authority_commit.commit.committed_at;
+    let witnesses = [RealmFanoutAuthorityWitness {
+        member_id: remote,
+        membership_event_ref: join.authority_commit.event.event_id.to_string(),
+        circle_membership_event_ref: None,
+    }];
+    for (kind, payload, expected) in [
+        (
+            arkret_wire::EventKind::AgentActionApprove,
+            serde_json::json!({"approval_nonce":"private-controller-nonce"}),
+            false,
+        ),
+        (
+            arkret_wire::EventKind::PolicyAction,
+            serde_json::json!({"policy_id":"private-policy-reference"}),
+            false,
+        ),
+        (
+            arkret_wire::EventKind::PolicyAction,
+            serde_json::json!({"action_id":"shared-realm-action"}),
+            true,
+        ),
+        (
+            arkret_wire::EventKind::PolicySet,
+            serde_json::json!({"policy_id":"shared-policy"}),
+            true,
+        ),
+    ] {
+        let request = next_request(&join.authority_commit, kind, &founder(), payload, at);
+        assert_eq!(
+            store
+                .realm_fanout_still_owed(
+                    &request.authority_commit.event,
+                    &ordinary_realm::station(),
+                    &member_station(),
+                    &witnesses,
+                    at
+                )
+                .await
+                .unwrap(),
+            expected,
+            "{}",
+            request.authority_commit.event.kind.as_str()
+        );
     }
 }

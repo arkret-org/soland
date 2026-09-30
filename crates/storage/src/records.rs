@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{BlobRef, Hash};
-use arkret_models_collaboration::objects::blob::BlobVisibility;
+use arkret_models_collaboration::objects::blob::{BlobStorageEncryption, BlobVisibility};
 use arkret_models_crypto::RecoveryIdentityModel;
 use arkret_wire::{
     ActorId, CommitStreamHead, DidCoreId, EventId, FreshnessState, PlaintextDataClassKind,
@@ -591,7 +591,7 @@ pub struct BlobRecord {
     pub media_type: String,
     pub filename: Option<String>,
     pub realm_id: Option<String>,
-    pub encryption: Option<Value>,
+    pub encryption: Option<BlobStorageEncryption>,
     pub legal_hold: bool,
     pub redacted: bool,
     pub visibility: BlobVisibility,

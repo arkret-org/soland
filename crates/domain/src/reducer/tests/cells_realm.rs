@@ -459,22 +459,33 @@ fn realm_profile_writes_the_profile_facet_and_nothing_else() {
 }
 
 #[test]
-fn realm_destroy_writes_the_destroy_facet_and_marks_cache_deleted() {
+fn realm_destroy_refuses_without_a_registered_confirmation_carrier() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    // First create...
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::RealmCreate,
-            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({"action": "create", "owner": "ak:did_core:web:alice"}),
-        ),
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    apply_projected_create(
+        &mut state,
+        realm_id,
+        serde_json::json!({"object": {
+            "schema": "ak.schema.realm_genesis.v1",
+            "purpose": "collaboration",
+            "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "trust_domain": "ak:trust_domain:example.net",
+            "schema_refs": ["ak.schema.realm.v1"],
+            "digest_algorithm": "sha256",
+            "security_class": "standard",
+            "governance_station_id": FIXTURE_GOVERNANCE_STATION,
+            "initial_join_rule": "invite",
+            "initial_history_access": "since_join",
+            "initial_discoverability": "invite_only"
+        }}),
         &hlc,
     );
+    assert!(state.realm_genesis_value(realm_id).is_some());
     assert!(!state.realm_is_destroyed("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"));
 
     // ...then destroy.
-    state.apply(
+    let effect = state.apply(
         &make_operation(
             arkret_wire::EventKind::RealmDestroy,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
@@ -483,14 +494,18 @@ fn realm_destroy_writes_the_destroy_facet_and_marks_cache_deleted() {
         &hlc,
     );
 
-    // Facet-keyed query returns true.
-    assert!(state.realm_is_destroyed("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"));
-    // Structured cache mirror agrees.
-    let realm = state
-        .realm_states
-        .get("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb")
-        .unwrap();
-    assert!(realm.deleted);
+    assert!(
+        matches!(effect, ProjectionEffect::Rejected { reason } if reason == "failed_precondition")
+    );
+    assert!(!state.realm_is_destroyed("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"));
+    assert!(
+        state
+            .realm_facet_value(
+                "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+                facet::REALM_DESTROY,
+            )
+            .is_none()
+    );
 }
 
 #[test]

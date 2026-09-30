@@ -11,7 +11,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
     if projection.realm_is_in_terminal_state(realm_id)
         && !arkret_wire::events::kinds::is_audit_kind(&kind)
     {
-        return Err("realm_terminal_state");
+        return Err("failed_precondition");
     }
     // A new Realm's closed founding batch has no durable projection yet.
     // Its genesis and registered follow-ups use initial facets, while actual

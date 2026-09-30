@@ -74,16 +74,9 @@ pub(super) async fn mimi_bound_realm_id(
         .map(|binding| binding.map(|binding| binding.realm_id))
 }
 
-pub(super) async fn enforce_mimi_submit_binding(
-    state: &AppState,
-    source_provider: &str,
-    room_binding: &MimiRoomBindingProjection,
-    body: &MimiSubmitMessageRequestBody,
-    message: &Value,
-    associated_data: Option<&Value>,
-) -> Result<(), AppError> {
-    validate_mimi_room_binding_payload(&room_binding.binding)?;
-    let binding_payload = mimi_room_binding_security_payload(&room_binding.binding);
+pub(super) fn enforce_mimi_writable_binding(binding: &Value) -> Result<(), AppError> {
+    validate_mimi_room_binding_payload(binding)?;
+    let binding_payload = mimi_room_binding_security_payload(binding);
     match binding_payload.get("status").and_then(Value::as_str) {
         Some("accepted") => {}
         Some(_) | None => {
@@ -112,6 +105,19 @@ pub(super) async fn enforce_mimi_submit_binding(
         }
     }
 
+    Ok(())
+}
+
+pub(super) async fn enforce_mimi_submit_binding(
+    state: &AppState,
+    source_provider: &str,
+    room_binding: &MimiRoomBindingProjection,
+    body: &MimiSubmitMessageRequestBody,
+    message: &Value,
+    associated_data: Option<&Value>,
+) -> Result<(), AppError> {
+    enforce_mimi_writable_binding(&room_binding.binding)?;
+    let binding_payload = mimi_room_binding_security_payload(&room_binding.binding);
     let Some(binding_group_id) = binding_payload
         .get("mls_group_id")
         .and_then(Value::as_str)
@@ -181,8 +187,32 @@ pub(super) async fn enforce_mimi_submit_binding(
         )
         .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
+    let mismatch = || {
+        AppError::param_invalid(
+            "MIMI accepted GroupInfo, room binding and effective scope disagree",
+        )
+        .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
+    };
+    let derived = expected_scope
+        .canonical_mls_group_id()
+        .map_err(|_| mismatch())?;
+    if current.value.effective_scope != expected_scope {
+        return Err(mismatch());
+    }
+    // This public state is installed only by native RFC 9420 admission. Recheck
+    // its actual authenticated group, rather than trusting a claimed JSON id.
+    let tracker = arkret_mls::MlsPublicGroupTracker::restore(
+        &current.public_state,
+        derived.as_str(),
+        current.value.epoch,
+    )
+    .map_err(|_| mismatch())?;
+    let verified_binding = tracker.governance_binding().map_err(|_| mismatch())?;
     let current = current.value;
     let current_binding = crate::routing::mls::current_mls_group_binding(state, &current).await?;
+    if verified_binding != current_binding {
+        return Err(mismatch());
+    }
     let current_group_id = expected_scope.canonical_mls_group_id().map_err(|_| {
         AppError::param_invalid("MIMI MLS scope cannot derive a group id")
             .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
@@ -389,39 +419,12 @@ pub(super) async fn admit_mimi_room_binding_event(
             AppError::internal(format!("MIMI current binding lookup failed: {error}"))
         })?;
     validate_mimi_binding_transition_preflight(current.as_ref(), &next)?;
-    let sender_account = local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
-    let device_id = event
-        .producer_proof
-        .as_ref()
-        .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
-        .map(|(_, fragment)| fragment.to_owned())
-        .ok_or_else(|| {
-            AppError::param_invalid("MIMI room binding Event requires a DID URL proof key")
-                .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
-        })?;
-    let now = chrono::Utc::now();
-    let session = soland_services::identity::SessionIdentityState {
-        account_pk: None,
-        token_hash: format!("mimi-room-binding:{}", event.event_id),
-        actor: sender_account.principal_id.to_string(),
-        endpoint: soland_services::identity::SessionEndpointState::HumanDevice { device_id },
-        audience: sender_account.station_id.to_string(),
-        session_public_key: None,
-        session_grant: None,
-        expires_at: now + chrono::Duration::minutes(5),
-        created_at: now,
-        revoked_at: None,
-    };
+    local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
     let event_id = event.event_id.to_string();
-    crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
+    crate::state::submit_mimi_binding_event(state, &submission)
         .await
         .map_err(|error| {
-            crate::routing::events::event_log::submit_one_error_to_app_error(
-                "MIMI room binding Event submit failed",
-                error.status(),
-                error.code(),
-                &error.message(),
-            )
+            AppError::capability_denied(format!("MIMI room binding admission refused: {error}"))
         })?;
     Ok(event_id)
 }

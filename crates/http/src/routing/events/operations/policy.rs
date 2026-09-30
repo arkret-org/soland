@@ -57,7 +57,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
         )
-    } else if message.starts_with("direct_conversation_") || message == "reaction_outside_scope" {
+    } else if message.starts_with("direct_conversation_")
+        || message == "reaction_outside_scope"
+        || message == "failed_precondition"
+    {
         (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message == "applet_registration_unauthorized" {
         // applet-integration.md §4 — surface the spec reason verbatim (matches
@@ -106,8 +109,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::UNPROCESSABLE_ENTITY,
             "circle_member_must_be_realm_member",
         )
-    } else if message == "realm_terminal_state" {
-        (salvo::http::StatusCode::FORBIDDEN, "realm_terminal_state")
     } else if message == arkret_wire::ErrorCode::REALM_FROZEN {
         (
             salvo::http::StatusCode::FORBIDDEN,

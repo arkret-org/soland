@@ -358,6 +358,50 @@ pub use soland_storage::{
 
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
+    async fn issue_widget_token(
+        &self,
+        _record: soland_storage::AppletWidgetTokenRecord,
+    ) -> ServiceResult<bool> {
+        Err(soland_storage::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        )
+        .into())
+    }
+
+    async fn widget_tokens(
+        &self,
+        _install: &soland_storage::AppletWidgetInstallSelector,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<Vec<soland_storage::AppletWidgetTokenRecord>> {
+        Err(soland_storage::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        )
+        .into())
+    }
+
+    async fn check_widget_token(
+        &self,
+        _gate: &soland_storage::AppletWidgetTokenGateSelector,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<soland_storage::AppletWidgetTokenRecord> {
+        Err(soland_storage::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        )
+        .into())
+    }
+
+    async fn invalidate_widget_token(
+        &self,
+        _install: &soland_storage::AppletWidgetInstallSelector,
+        _token_ref: &str,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<soland_storage::AppletWidgetTokenInvalidation> {
+        Err(soland_storage::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        )
+        .into())
+    }
+
     async fn admit_applet_authoring_unit(
         &self,
         input: soland_storage::AppletAuthoringUnitWrite,
@@ -460,6 +504,7 @@ pub struct CommitAcceptedEventCommand {
     pub authority_commit: soland_storage::AuthorityCommitTransaction,
     pub self_producer_guard: Option<soland_storage::SelfProducerCommitGuard>,
     pub applet_producer_guard: Option<soland_storage::AppletEventProducerGuard>,
+    pub widget_token_gate: Option<soland_storage::AppletWidgetTokenGateSelector>,
     /// Verified `producer_device_evidence` of a cross-Station human-device
     /// producer, retained for audit with the Event's first Commit.
     pub forwarded_producer_evidence: Option<soland_storage::ForwardedProducerDeviceEvidence>,
@@ -495,6 +540,8 @@ pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
     pub franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
     pub realm_organization_proof: Option<soland_storage::RealmOrganizationProofCommit>,
+    pub invite_claim_proof: Option<soland_storage::InviteClaimProofCommit>,
+    pub event_approvals: Option<soland_storage::EventApprovalCommit>,
     pub applet_record: Option<CommitAppletRecord>,
     pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,
     pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
@@ -890,6 +937,59 @@ impl EventQueryService {
     ) -> ServiceResult<Option<AppletAuthoringPreviewState>> {
         self.applets
             .current_applet_authoring_preview(subject_key)
+            .await
+    }
+    /// Local host issuer. Return the opaque secret once; durable state contains only its digest.
+    pub async fn issue_widget_credential(
+        &self,
+        mut record: soland_storage::AppletWidgetTokenRecord,
+    ) -> ServiceResult<(String, soland_storage::AppletWidgetTokenRecord)> {
+        let mut entropy = [0u8; 32];
+        getrandom::fill(&mut entropy).map_err(|error| {
+            crate::ServiceError::Internal(format!("widget credential entropy failed: {error}"))
+        })?;
+        let secret = hex::encode(entropy);
+        record.token_digest =
+            arkret_wire::Hash::new(arkret_canonical::sha256_digest(secret.as_bytes()))
+                .map_err(|error| crate::ServiceError::Internal(error.to_string()))?;
+        record.token_ref = format!("ak:widget_token:{}", uuid::Uuid::now_v7());
+        record.invalidated_at = None;
+        record.issued_at = Utc::now();
+        if !self.applets.issue_widget_token(record.clone()).await? {
+            return Err(crate::ServiceError::Conflict(
+                "widget issuance collided".into(),
+            ));
+        }
+        Ok((secret, record))
+    }
+    pub async fn issue_widget_token(
+        &self,
+        record: soland_storage::AppletWidgetTokenRecord,
+    ) -> ServiceResult<bool> {
+        self.applets.issue_widget_token(record).await
+    }
+    pub async fn widget_tokens(
+        &self,
+        install: &soland_storage::AppletWidgetInstallSelector,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<Vec<soland_storage::AppletWidgetTokenRecord>> {
+        self.applets.widget_tokens(install, at).await
+    }
+    pub async fn check_widget_token(
+        &self,
+        gate: &soland_storage::AppletWidgetTokenGateSelector,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<soland_storage::AppletWidgetTokenRecord> {
+        self.applets.check_widget_token(gate, at).await
+    }
+    pub async fn invalidate_widget_token(
+        &self,
+        install: &soland_storage::AppletWidgetInstallSelector,
+        token_ref: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<soland_storage::AppletWidgetTokenInvalidation> {
+        self.applets
+            .invalidate_widget_token(install, token_ref, at)
             .await
     }
     pub async fn pending_applet_authoring_completions(
@@ -1597,6 +1697,7 @@ mod tests {
                 authority_commit,
                 self_producer_guard: None,
                 applet_producer_guard: None,
+                widget_token_gate: None,
                 forwarded_producer_evidence: None,
                 parent_membership_admission: None,
                 contact_projection: None,

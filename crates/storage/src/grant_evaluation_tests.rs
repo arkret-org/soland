@@ -870,3 +870,165 @@ fn undeclared_families_and_mismatched_classes_fail_closed() {
         GrantEvaluation::RequiresReview
     ));
 }
+
+#[test]
+fn verified_approvals_discharge_only_the_exact_grant_constraint_and_action() {
+    let action = CapabilityActionId::STRAND_MOVE;
+    let subject = actor();
+    let target = strand(STRAND_A);
+    let facts = OperationFacts::default();
+    let operation = AuthorizationOperation {
+        actor: &subject,
+        actions: &[action],
+        target: &target,
+        at: now(),
+        facts: &facts,
+    };
+    let mut approval = constraint(
+        GrantConstraintKind::ClaimBased,
+        GrantConstraintEffect::RequireReview,
+    );
+    approval.constraint_subkind = Some(GrantConstraintSubkind::Approval);
+    approval.approval_required = Some(true);
+    let mut grants = vec![grant(91, &[action], realm_wide(), vec![approval.clone()])];
+    let proof = VerifiedGrantApproval {
+        grant_id: grants[0].id.clone(),
+        constraint_digest: arkret_canonical::canonical_sha256(&approval).unwrap(),
+        action: CapabilityActionId::StrandMove,
+    };
+    assert!(allowed(&evaluate_grants_with_verified_approvals(
+        &operation,
+        &grants,
+        &[proof.clone()]
+    )));
+    let mut wrong = proof.clone();
+    wrong.constraint_digest.push('0');
+    assert!(matches!(
+        evaluate_grants_with_verified_approvals(&operation, &grants, &[wrong]),
+        GrantEvaluation::RequiresReview
+    ));
+    let mut wrong = proof.clone();
+    wrong.action = CapabilityActionId::StrandReorder;
+    assert!(matches!(
+        evaluate_grants_with_verified_approvals(&operation, &grants, &[wrong]),
+        GrantEvaluation::RequiresReview
+    ));
+    grants.push(grant(92, &[action], realm_wide(), vec![approval]));
+    assert!(matches!(
+        evaluate_grants_with_verified_approvals(&operation, &grants, &[proof.clone()]),
+        GrantEvaluation::RequiresReview
+    ));
+    let mut deny = constraint(
+        GrantConstraintKind::ScopeLimitation,
+        GrantConstraintEffect::Deny,
+    );
+    deny.denied_strand_ids = vec![STRAND_A.to_owned()];
+    grants[1].constraints = vec![deny];
+    assert!(matches!(
+        evaluate_grants_with_verified_approvals(&operation, &grants, &[proof]),
+        GrantEvaluation::Denied
+    ));
+}
+
+#[test]
+fn false_grant_approval_requirement_withdraws_only_its_own_review() {
+    let subject = actor();
+    let target = strand(STRAND_A);
+    let facts = OperationFacts::default();
+    let operation = AuthorizationOperation {
+        actor: &subject,
+        actions: &[CapabilityActionId::STRAND_MOVE],
+        target: &target,
+        at: now(),
+        facts: &facts,
+    };
+    let mut approval = constraint(
+        GrantConstraintKind::ClaimBased,
+        GrantConstraintEffect::RequireReview,
+    );
+    approval.constraint_subkind = Some(GrantConstraintSubkind::Approval);
+    approval.approval_required = Some(false);
+    let mut grants = vec![grant(
+        93,
+        &[CapabilityActionId::STRAND_MOVE],
+        realm_wide(),
+        vec![approval],
+    )];
+    assert!(allowed(&evaluate_grants_with_verified_approvals(
+        &operation,
+        &grants,
+        &[]
+    )));
+    grants[0].constraints.push(constraint(
+        GrantConstraintKind::Confidentiality,
+        GrantConstraintEffect::RequireReview,
+    ));
+    assert!(matches!(
+        evaluate_grants_with_verified_approvals(&operation, &grants, &[]),
+        GrantEvaluation::RequiresReview
+    ));
+}
+
+#[test]
+fn approval_proof_never_discharges_mixed_predicates() {
+    let subject = actor();
+    let target = strand(STRAND_A);
+    let facts = OperationFacts::default();
+    let operation = AuthorizationOperation {
+        actor: &subject,
+        actions: &[CapabilityActionId::STRAND_MOVE],
+        target: &target,
+        at: now(),
+        facts: &facts,
+    };
+    for (field, value) in [
+        (
+            "not_before",
+            serde_json::json!(
+                (now() + TimeDelta::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            ),
+        ),
+        (
+            "expires_at",
+            serde_json::json!(
+                (now() - TimeDelta::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            ),
+        ),
+        ("max_resources", serde_json::json!(0)),
+        ("allowed_space_ids", serde_json::json!([LIST_B])),
+        ("accountability_required", serde_json::json!(true)),
+        ("condition", serde_json::json!({"kind":"always"})),
+        ("x_unregistered_predicate", serde_json::json!(true)),
+    ] {
+        for effect in [
+            GrantConstraintEffect::Allow,
+            GrantConstraintEffect::RequireReview,
+        ] {
+            for required in [true, false] {
+                let mut raw =
+                    serde_json::to_value(constraint(GrantConstraintKind::ClaimBased, effect))
+                        .unwrap();
+                raw["constraint_subkind"] = serde_json::json!("approval");
+                raw["approval_required"] = serde_json::json!(required);
+                raw[field] = value.clone();
+                let mixed: GrantConstraint = serde_json::from_value(raw).unwrap();
+                let grants = [grant(
+                    94,
+                    &[CapabilityActionId::STRAND_MOVE],
+                    realm_wide(),
+                    vec![mixed.clone()],
+                )];
+                let proof = VerifiedGrantApproval {
+                    grant_id: grants[0].id.clone(),
+                    constraint_digest: arkret_canonical::canonical_sha256(&mixed).unwrap(),
+                    action: CapabilityActionId::StrandMove,
+                };
+                let result = evaluate_grants_with_verified_approvals(&operation, &grants, &[proof]);
+                assert!(
+                    !allowed(&result),
+                    "{field}: {effect:?}, required={required}"
+                );
+            }
+        }
+    }
+}

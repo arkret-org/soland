@@ -170,6 +170,24 @@ pub fn evaluate_grants<'g>(
     operation: &AuthorizationOperation<'_>,
     grants: impl IntoIterator<Item = &'g CapabilityGrant>,
 ) -> GrantEvaluation<'g> {
+    evaluate_grants_with_verified_approvals(operation, grants, &[])
+}
+
+/// Internal admission evidence for one immutable constraint of one grant. This
+/// is never deserialized from a request; the accepting transaction earns it by
+/// verifying exact detached evidence and the eligible roster at its cut.
+#[derive(Clone, Debug)]
+pub struct VerifiedGrantApproval {
+    pub grant_id: arkret_wire::GrantId,
+    pub constraint_digest: String,
+    pub action: arkret_wire::CapabilityActionId,
+}
+
+pub fn evaluate_grants_with_verified_approvals<'g>(
+    operation: &AuthorizationOperation<'_>,
+    grants: impl IntoIterator<Item = &'g CapabilityGrant>,
+    approvals: &[VerifiedGrantApproval],
+) -> GrantEvaluation<'g> {
     let mut named = Vec::new();
     for grant in grants {
         for action in operation.actions {
@@ -196,7 +214,11 @@ pub fn evaluate_grants<'g>(
                 .constraints
                 .iter()
                 .filter(|constraint| constraint.effect == effect)
-                .any(|constraint| constraint_matches(operation, action, constraint))
+                .any(|constraint| {
+                    !(effect == GrantConstraintEffect::RequireReview
+                        && approval_discharged(grant, constraint, action, approvals))
+                        && constraint_matches(operation, action, constraint)
+                })
         });
         if hit {
             return match effect {
@@ -208,7 +230,7 @@ pub fn evaluate_grants<'g>(
     }
     let mut satisfied: Vec<SatisfiedGrant<'g>> = Vec::new();
     for (grant, action) in named {
-        let Some(reservations) = grant_allows(operation, action, grant) else {
+        let Some(reservations) = grant_allows(operation, action, grant, approvals) else {
             continue;
         };
         if let Some(existing) = satisfied
@@ -238,12 +260,89 @@ pub fn evaluate_grants<'g>(
     GrantEvaluation::Allowed(satisfied)
 }
 
+fn approval_discharged(
+    grant: &CapabilityGrant,
+    constraint: &GrantConstraint,
+    action: &str,
+    approvals: &[VerifiedGrantApproval],
+) -> bool {
+    if constraint.constraint_kind != GrantConstraintKind::ClaimBased
+        || !matches!(
+            constraint.constraint_subkind,
+            Some(GrantConstraintSubkind::Approval | GrantConstraintSubkind::Accountability)
+        )
+        || !constraint.extensions.is_empty()
+        || constraint.condition.is_some()
+        || !approval_only_constraint(constraint)
+        || constraint
+            .evaluation_class
+            .is_some_and(|class| Some(class) != canonical_evaluation_class(constraint))
+    {
+        return false;
+    }
+    if !constraint.applies_to_actions.is_empty()
+        && !constraint
+            .applies_to_actions
+            .iter()
+            .any(|named| named.as_str() == action)
+    {
+        return true;
+    }
+    let required = constraint.approval_required == Some(true)
+        || constraint.guardian_approval_required == Some(true)
+        || constraint.controller_approval_required == Some(true);
+    if !required && constraint.accountability_required != Some(true) {
+        return true;
+    }
+    let Ok(digest) = arkret_canonical::canonical_sha256(constraint) else {
+        return false;
+    };
+    approvals.iter().any(|proof| {
+        proof.grant_id == grant.id
+            && proof.action.as_str() == action
+            && proof.constraint_digest == digest
+    })
+}
+
+/// A verified vote discharges only the registered approval obligation. Mixed
+/// constraints retain their original fail-closed evaluation; a signature does
+/// not establish temporal, resource, claim, or accountability predicates.
+fn approval_only_constraint(constraint: &GrantConstraint) -> bool {
+    if constraint.accountability_required == Some(true) {
+        return false;
+    }
+    let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(constraint) else {
+        return false;
+    };
+    fields.keys().all(|field| {
+        matches!(
+            field.as_str(),
+            "constraint_id"
+                | "constraint_kind"
+                | "constraint_subkind"
+                | "effect"
+                | "evaluation_class"
+                | "applies_to_actions"
+                | "approval_required"
+                | "guardian_approval_required"
+                | "controller_approval_required"
+                | "approval_mode"
+                | "approval_actor_ids"
+                | "approval_relation"
+                | "approval_threshold"
+                | "timeout"
+                | "accountability_required"
+        )
+    })
+}
+
 /// The reservations `grant` owes when it alone allows `operation` under
 /// `action`, or `None` when it does not.
 fn grant_allows(
     operation: &AuthorizationOperation<'_>,
     action: &str,
     grant: &CapabilityGrant,
+    approvals: &[VerifiedGrantApproval],
 ) -> Option<Vec<QuotaReservation>> {
     if !required_constraints_declared(operation, action, grant) {
         return None;
@@ -254,6 +353,9 @@ fn grant_allows(
         .iter()
         .filter(|constraint| constraint.effect == GrantConstraintEffect::Allow)
     {
+        if approval_discharged(grant, constraint, action, approvals) {
+            continue;
+        }
         match judge_allow(operation, action, grant, constraint) {
             Allow::Holds => {}
             Allow::Fails => return None,

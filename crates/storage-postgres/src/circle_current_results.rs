@@ -325,7 +325,7 @@ pub(crate) async fn admit_in_connection(
                 (None | Some("leave"), "join") | (Some("join"), "leave")
             ) {
                 return Err(conflict(
-                    ConflictCode::FailedPrecondition,
+                    ConflictCode::InvalidMembershipTransition,
                     "Circle self-membership edge is invalid",
                 ));
             }

@@ -1,5 +1,5 @@
-#[path = "support/accepted_human_profile.rs"]
-mod accepted_human_profile;
+#[path = "support/accepted_pcr_account.rs"]
+mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -931,6 +931,7 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
         },
         self_producer_guard: None,
         applet_producer_guard: None,
+        widget_token_gate: None,
         forwarded_producer_evidence: None,
         event: record,
         parent_membership_admission: None,
@@ -3471,6 +3472,8 @@ fn franking_nonce(
     soland_storage::EventBatchCommitRequest {
         events: vec![request.clone()],
         realm_organization_proof: None,
+        invite_claim_proof: None,
+        event_approvals: None,
         franking_replay_nonce: Some(soland_storage::FrankingReplayNonceCommit {
             realm_id: request.authority_commit.event.realm_id.to_string(),
             received_by: received_by.clone(),
@@ -3596,7 +3599,12 @@ async fn self_moderation_report_commits_exact_current_and_refuses_with_zero_writ
     facade["source_provider_id"] = serde_json::json!("ak:did_core:web:mimi-provider.example");
     let denied = moderation_report_request(&message, &reporter, facade);
     let error = uow.commit_event(denied.clone()).await.unwrap_err();
-    assert!(error.to_string().contains("directly authored"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("MIMI facade requires its verified Service producer guard"),
+        "{error}"
+    );
     assert_zero_writes(&denied, 0, 0).await;
 
     // A Circle effective scope does not match a Realm-scope target.
@@ -3981,7 +3989,7 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let controller = default.authority_commit.event.actor_id.clone();
     let reporter = controller.signing_principal_id().clone();
-    let stranger = accepted_human_profile::accepted_human_profile(
+    let stranger = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(
             &controller.as_account_id().unwrap().station_id,
@@ -5573,13 +5581,13 @@ async fn invite_create_without_invite_capability_is_capability_denied_with_zero_
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let station = unit.transactions[0].expected_authority.service_id.clone();
-    let member = accepted_human_profile::accepted_human_profile(
+    let member = accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&station),
     )
     .await
     .as_account_id()
-    .expect("profiled Human is an Account")
+    .expect("accepted PCR has an Account")
     .clone();
     let stranger = invite_account(
         "stranger.example",
@@ -6181,16 +6189,12 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
     )
     .await;
 
-    // Only the create's plain body passes the shared content gate.
+    // Unsupported mentions and metadata remain outside the revision carrier.
     let mut mentioned = plain_revision(&message_id, "@bob");
     mentioned["content"]["mentions"] =
         serde_json::json!([{"target_id": "ak:did_core:web:bob.example"}]);
     for payload in [
         mentioned,
-        serde_json::json!({
-            "message_id": message_id,
-            "content": {"kind": "ak.content.text", "body": "md", "format": "markdown"}
-        }),
         serde_json::json!({
             "message_id": message_id,
             "content": {"kind": "ak.content.text", "body": "meta", "format": "plain"},
@@ -6207,6 +6211,26 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
         assert!(uow.commit_event(refused.clone()).await.is_err());
         assert_eq!(message_families(&pool, &realm_id).await, before);
     }
+
+    let markdown_payload = serde_json::json!({
+        "message_id": message_id,
+        "content": {"kind": "ak.content.text", "body": "**edited**", "format": "markdown"}
+    });
+    let revised = realm_event_request_as(
+        &revised,
+        &creator,
+        arkret_wire::EventKind::MessageRevise,
+        markdown_payload.clone(),
+    );
+    uow.commit_event(revised.clone()).await.unwrap();
+    assert_eq!(
+        message_families(&pool, &realm_id).await.revisions,
+        vec![(
+            message_id.to_string(),
+            revised.authority_commit.commit.commit_id.to_string(),
+            markdown_payload
+        )]
+    );
 
     let station = unit.transactions[0].expected_authority.service_id.clone();
     let (member, membership_head) =
@@ -7103,3 +7127,9 @@ async fn member_identity_accepted_assertions_keep_bad_proofs_edges_and_restart_e
         .unwrap();
     assert_eq!(after.current_state_entries, material.current_state_entries);
 }
+
+#[path = "support/invite_claim_cases.rs"]
+mod invite_claim_cases;
+
+#[path = "support/realm_lifecycle_cases.rs"]
+mod realm_lifecycle_cases;

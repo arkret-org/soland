@@ -271,10 +271,8 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     if !is_pending_third_party && !is_duplicate_claim_by_invitee {
         return false;
     }
-    // third-party-invites.md §4.3 step 2: expiry is a reducer state
-    // transition (`pending -> expired`) that also scrubs active token material.
-    // Do not short-circuit expired pending invites at the membership gate; let
-    // the invite reducer observe the claim and produce `expired_invite_token`.
+    // The claim writer checks canonical expiry at its accepting cut. A refused
+    // claim writes nothing; only an independently accepted revoke expires it.
     invite
         .invitee_account_id
         .as_ref()

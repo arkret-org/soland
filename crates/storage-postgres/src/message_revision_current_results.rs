@@ -196,14 +196,37 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         ));
     }
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
-    let mls_carrier = supported_mls_carrier(&payload);
+    let mimi = payload.get("mimi_provenance");
+    let mut carrier = payload.clone();
+    if mimi.is_some() {
+        carrier
+            .as_object_mut()
+            .ok_or_else(|| conflict("invalid MIMI carrier"))?
+            .remove("mimi_provenance");
+        carrier
+            .as_object_mut()
+            .expect("object checked")
+            .remove("metadata");
+    }
+    let mls_carrier = supported_mls_carrier(&carrier);
     let poll = crate::poll_state::supported_plaintext_poll(&payload);
-    if !mls_carrier && !supported_plain_text(&payload) && poll.is_none() {
+    if !mls_carrier && !supported_plain_text(&carrier) && poll.is_none() {
         return Err(conflict("Message carrier needs a dedicated authority cut"));
     }
     let typed: arkret_models_collaboration::events_payloads::message::MessageCreatePayload =
         serde_json::from_value(payload.clone())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let mut attributed = event.clone();
+    if let Some(provenance) = mimi {
+        attributed.actor_id = serde_json::from_value(
+            provenance
+                .get("attributed_sender_actor_id")
+                .cloned()
+                .ok_or_else(|| conflict("MIMI sender missing"))?,
+        )
+        .map_err(PersistenceError::database)?;
+    }
+    let admitted_actor = &attributed.actor_id;
     let root = diesel::sql_query(
         "SELECT r.controller_actor_id,r.authority_event_ref FROM realm_authority_root_current_results r \
          JOIN realm_commits c ON c.commit_id=r.current_commit_id \
@@ -227,7 +250,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     // controller through its effective `ak.realm.owner`.
     let cut = crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
         conn,
-        event,
+        &attributed,
         commit.committed_at,
     )
     .await?;
@@ -255,7 +278,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
            AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=m.realm_id) AS present",
     )
     .bind::<Text, _>(event.realm_id.as_str())
-    .bind::<Text, _>(event.actor_id.to_string())
+    .bind::<Text, _>(admitted_actor.to_string())
     .get_result::<PresentRow>(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
@@ -266,12 +289,15 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         conn,
         &event.realm_id,
         &event.scope_ref,
-        &event.actor_id,
+        admitted_actor,
     )
     .await?;
     require_active_discussion_strand(conn, &event.realm_id, &typed.strand_id, &event.scope_ref)
         .await?;
-    crate::message_interactions::require_message_actor(conn, event, commit.committed_at).await?;
+    if mimi.is_none() {
+        crate::message_interactions::require_message_actor(conn, event, commit.committed_at)
+            .await?;
+    }
     crate::message_interactions::require_poll_content_in_connection(conn, event, commit, &typed)
         .await?;
     crate::message_interactions::require_reply_and_mentions_in_connection(

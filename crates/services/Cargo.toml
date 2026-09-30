@@ -33,6 +33,7 @@ chrono = { workspace = true, features = ["serde"] }
 ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
+getrandom.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true

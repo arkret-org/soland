@@ -61,6 +61,13 @@ fn failed_precondition(detail: &str) -> PersistenceError {
     PersistenceError::Conflict(format!("{}: {detail}", ConflictCode::FailedPrecondition))
 }
 
+fn invalid_membership_transition(detail: &str) -> PersistenceError {
+    PersistenceError::Conflict(format!(
+        "{}: {detail}",
+        ConflictCode::InvalidMembershipTransition
+    ))
+}
+
 fn capability_denied(detail: &str) -> PersistenceError {
     PersistenceError::Conflict(format!("{}: {detail}", ConflictCode::CapabilityDenied))
 }
@@ -536,7 +543,7 @@ async fn admit_member_state(
         let to = state_name(payload.membership);
         return match (from.as_str(), to) {
             ("join", "leave") | ("leave", "join") => Ok(()),
-            _ => Err(failed_precondition(
+            _ => Err(invalid_membership_transition(
                 "Direct Conversation membership transition is not self-leave or self-rejoin",
             )),
         };
@@ -550,7 +557,7 @@ async fn admit_member_state(
         require_ordinary_realm(conn, &event.realm_id).await?;
         let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;
         if from != "leave" {
-            return Err(failed_precondition(
+            return Err(invalid_membership_transition(
                 "Agent controller join requires the leave state",
             ));
         }
@@ -559,8 +566,9 @@ async fn admit_member_state(
     require_ordinary_member(conn, &event.realm_id, &payload.member_id).await?;
     let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;
     let to = state_name(payload.membership);
-    let writer = edge_writer(&from, to)
-        .ok_or_else(|| failed_precondition("membership transition is not a listed edge"))?;
+    let writer = edge_writer(&from, to).ok_or_else(|| {
+        invalid_membership_transition("membership transition is not a listed edge")
+    })?;
     let self_authored = event.actor_id == payload.member_id;
     match writer {
         EdgeWriter::SelfEntry => {

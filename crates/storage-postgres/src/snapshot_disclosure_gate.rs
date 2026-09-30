@@ -77,6 +77,25 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::CallCreate,
 ];
 
+/// Registered shared durable kinds are admitted by their canonical contract,
+/// rather than by the subset of writers installed on this Station. Private
+/// source material keeps its kind-specific read boundary.
+pub(crate) fn member_shared_event_kind(kind: &EventKind) -> bool {
+    kind.descriptor().is_some_and(|descriptor| {
+        descriptor.wire_scope == arkret_wire::EventWireScope::DurableEvent
+    }) && !matches!(
+        kind.as_str(),
+        "ak.identity.accountability_grant"
+            | "ak.applet.managed_actor.provision"
+            | "ak.agent.provision"
+            | "ak.agent.key.authorize"
+            | "ak.agent.key.revoke"
+            | "ak.sidecar.create"
+    ) && !kind.as_str().starts_with("ak.device.")
+        && !kind.as_str().starts_with("ak.self.agent.")
+        && !kind.as_str().starts_with("ak.consent.")
+}
+
 /// Every typed-current table this Station installs. A new family could be
 /// written by an admitted Event, so it must be classified here before any
 /// Snapshot is signed again.
@@ -89,6 +108,9 @@ const AUDITED_FAMILIES: &[&str] = &[
     "realm_policy_bundle_current_results",
     // PCR-private Policy documents have no ordinary Realm disclosure rule.
     "policy_current_results",
+    "policy_action_current_results",
+    // Controller-PCR confirmation state has no ordinary Realm disclosure carrier.
+    "agent_action_approval_current_results",
     "mimi_room_binding_current_results",
     "realm_link_current_results",
     "member_state_current_results",
@@ -142,8 +164,13 @@ const AUDITED_FAMILIES: &[&str] = &[
 
 /// A committed kind of the Realm outside [`DISCLOSED_EVENT_KINDS`].
 pub(crate) fn undisclosed_kind_sql() -> String {
-    let disclosed_kinds = DISCLOSED_EVENT_KINDS
+    let disclosed_kinds = EventKind::ALL
         .iter()
+        .filter(|kind| {
+            kind.descriptor().is_some_and(|descriptor| {
+                descriptor.wire_scope == arkret_wire::EventWireScope::DurableEvent
+            })
+        })
         .map(|kind| format!("'{}'", kind.as_str()))
         .collect::<Vec<_>>()
         .join(",");
@@ -192,6 +219,8 @@ pub(crate) struct DisclosureFacts {
     pub(crate) call_creations: std::collections::BTreeMap<arkret_wire::CallId, CallCreationFact>,
     /// Exact current Circle memberships and readable floors at this same cut.
     pub(crate) circle_floors: std::collections::BTreeMap<CircleId, ReadableFloor>,
+    pub(crate) sidecar_floors: std::collections::BTreeMap<arkret_wire::SidecarId, ReadableFloor>,
+    pub(crate) owned_sidecars: std::collections::BTreeSet<arkret_wire::SidecarId>,
     /// Report subjects whose exact scope's moderator grant is proved at this cut.
     pub(crate) report_subjects: std::collections::BTreeSet<arkret_wire::EventId>,
     /// Encrypted target subjects authorized through their actual signed scopes.
@@ -424,8 +453,6 @@ async fn disclosure_facts_in_connection(
 ) -> PersistenceResult<DisclosureFacts> {
     let undisclosed_family_row = sql_query(
         "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM sidecar_context_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM policy_current_results WHERE realm_id=$1) \
@@ -434,8 +461,6 @@ async fn disclosure_facts_in_connection(
             OR EXISTS(SELECT 1 FROM key_backup_active_series_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_generation_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM actor_profile_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM identity_accountability_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM agent_provisioning_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_pcr_genesis_declaration_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_selector_claim_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM pcr_device_authorization_current_results WHERE realm_id=$1) \
@@ -693,10 +718,40 @@ async fn disclosure_facts_in_connection(
             franking_subjects.insert(event_id.clone());
         }
     }
+    let mut sidecar_floors = std::collections::BTreeMap::new();
+    let mut owned_sidecars = std::collections::BTreeSet::new();
+    if caller_floor.is_some() {
+        for row in &material.current_state_entries {
+            if let TypedCurrentResult::Value {
+                selector: CurrentSelector::Sidecar { sidecar_id },
+                value,
+                ..
+            } = row
+            {
+                let floor = crate::sidecar_authority_cut::caller_floor_in_connection(
+                    conn, realm_id, sidecar_id, &caller,
+                )
+                .await?;
+                if floor.is_some()
+                    || serde_json::from_value::<AccountId>(value["controller_account_id"].clone())
+                        .ok()
+                        .as_ref()
+                        == Some(account)
+                {
+                    owned_sidecars.insert(sidecar_id.clone());
+                    if let Some(floor) = floor {
+                        sidecar_floors.insert(sidecar_id.clone(), floor);
+                    }
+                }
+            }
+        }
+    }
     Ok(DisclosureFacts {
         message_streams,
         call_creations,
         circle_floors,
+        sidecar_floors,
+        owned_sidecars,
         report_subjects,
         franking_subjects,
         caller_floor,
@@ -829,15 +884,6 @@ pub(crate) fn disclose_to_account(
     let realm_stream = CommitStreamRef::Realm {
         realm_id: material.realm_id.clone(),
     };
-    if material
-        .visible_stream_heads
-        .iter()
-        .any(|head| matches!(head.stream_ref, CommitStreamRef::Sidecar { .. }))
-    {
-        return Err(rejected(
-            "Sidecar stream visibility is not proved at this cut",
-        ));
-    }
     material
         .visible_stream_heads
         .retain(|head| match &head.stream_ref {
@@ -846,6 +892,10 @@ pub(crate) fn disclose_to_account(
                 realm_id,
                 circle_id,
             } => realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id),
+            CommitStreamRef::Sidecar {
+                realm_id,
+                sidecar_id,
+            } => realm_id == &material.realm_id && facts.sidecar_floors.contains_key(sidecar_id),
             _ => false,
         });
     if !material
@@ -923,6 +973,10 @@ pub(crate) fn disclose_to_account(
             Ok(scope_stream(circle))
         };
         let expected = match selector {
+            CurrentSelector::SidecarContext { sidecar_id, .. } => Some(CommitStreamRef::Sidecar {
+                realm_id: material.realm_id.clone(),
+                sidecar_id: sidecar_id.clone(),
+            }),
             CurrentSelector::CircleMemberState { circle_id, .. } => {
                 Some(scope_stream(Some(circle_id.clone())))
             }
@@ -989,10 +1043,27 @@ pub(crate) fn disclose_to_account(
                     realm_id,
                     circle_id,
                 } => realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id),
+                CommitStreamRef::Sidecar {
+                    realm_id,
+                    sidecar_id,
+                } => {
+                    realm_id == &material.realm_id && facts.sidecar_floors.contains_key(sidecar_id)
+                }
                 _ => false,
             };
             visible_stream
                 && match selector {
+                    // constraint-schema §9.2.6 makes the confirmation nonce
+                    // private. Snapshot §3 and current-results §3 include only
+                    // rows disclosed to the requester, never a redacted value.
+                    CurrentSelector::AgentActionApproval { .. } => false,
+                    CurrentSelector::PolicyAction {
+                        subject: arkret_wire::PolicyActionSelector::PolicyRef { .. },
+                    } => false,
+                    CurrentSelector::Sidecar { sidecar_id }
+                    | CurrentSelector::SidecarContext { sidecar_id, .. } => {
+                        facts.owned_sidecars.contains(sidecar_id)
+                    }
                     CurrentSelector::Circle { circle_id }
                     | CurrentSelector::CircleMemberState { circle_id, .. } => {
                         facts.circle_floors.contains_key(circle_id)
@@ -1036,6 +1107,33 @@ pub(crate) fn disclose_to_account(
             ));
         }
         match selector {
+            CurrentSelector::Sidecar { sidecar_id } => {
+                let sidecar: arkret_models_collaboration::agent_sidecar::AgentSidecar =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if sidecar.id != *sidecar_id
+                    || sidecar.realm_id != material.realm_id
+                    || !facts.owned_sidecars.contains(sidecar_id)
+                    || source_stream_ref != &realm_stream
+                {
+                    return Err(rejected(
+                        "Sidecar metadata differs from its accepted controller and Realm source",
+                    ));
+                }
+            }
+            CurrentSelector::SidecarContext {
+                sidecar_id,
+                source_context_ref,
+            } => {
+                let context: arkret_models_collaboration::events_payloads::sidecar::SidecarContextAttachPayload = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                context
+                    .validate()
+                    .map_err(|error| rejected(&error.to_string()))?;
+                if context.sidecar_id != *sidecar_id
+                    || context.source_context_ref != *source_context_ref
+                {
+                    return Err(rejected("Sidecar context differs from its exact selector"));
+                }
+            }
             CurrentSelector::CallState { call_id } => {
                 let current: arkret_models_collaboration::events_payloads::call::CallStateCurrentValue =
                     serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
@@ -1175,6 +1273,9 @@ pub(crate) fn disclose_to_account(
                 .map_err(PersistenceError::database)?;
             }
             CurrentSelector::RealmGenesis => genesis = true,
+            CurrentSelector::RealmTombstone
+            | CurrentSelector::RealmArchive
+            | CurrentSelector::RealmFreeze => {}
             CurrentSelector::RealmAuthorityRoot => root = true,
             CurrentSelector::RealmHistoryAccess => {
                 history_access = Some(
@@ -1266,6 +1367,10 @@ pub(crate) fn disclose_to_account(
                         .circle_floors
                         .get(circle_id)
                         .ok_or_else(|| rejected("a Circle Message has no readable floor"))?,
+                    CommitStreamRef::Sidecar { sidecar_id, .. } => facts
+                        .sidecar_floors
+                        .get(sidecar_id)
+                        .ok_or_else(|| rejected("a Sidecar Message has no readable floor"))?,
                     _ => return Err(rejected("Message source visibility is not proved")),
                 };
                 if revision.stream_position < source_floor.oldest_position {
@@ -1295,11 +1400,19 @@ pub(crate) fn disclose_to_account(
             | CurrentSelector::InviteLiveTarget { .. }
             | CurrentSelector::InviteDirectedInvitee { .. }
             | CurrentSelector::CapabilityGrant { .. } => {}
+            CurrentSelector::PolicyAction {
+                subject: arkret_wire::PolicyActionSelector::RealmAction { .. },
+            } => {
+                let _: arkret_models_collaboration::events_payloads::PolicyActionDocument =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+            }
             CurrentSelector::MlsGroup { scope_ref } => {
                 if !matches!(scope_ref, arkret_wire::ScopeRef::Realm { realm_id }
                     if realm_id == &material.realm_id)
                     && !matches!(scope_ref, arkret_wire::ScopeRef::Circle { realm_id, circle_id }
                         if realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id))
+                    && !matches!(scope_ref, arkret_wire::ScopeRef::Sidecar { realm_id, sidecar_id }
+                        if realm_id == &material.realm_id && facts.sidecar_floors.contains_key(sidecar_id))
                 {
                     return Err(rejected(
                         "the MLS group's exact scope visibility is not proved",
@@ -1444,6 +1557,15 @@ pub(crate) fn disclose_to_account(
             }),
     );
     stream_floors.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
+    stream_floors.extend(facts.sidecar_floors.iter().map(|(sidecar_id, floor)| {
+        StreamHistoryFloor {
+            stream_ref: CommitStreamRef::Sidecar {
+                realm_id: material.realm_id.clone(),
+                sidecar_id: sidecar_id.clone(),
+            },
+            oldest_position: floor.oldest_position,
+        }
+    }));
     material.retention_and_history_floor = arkret_wire::RetentionAndHistoryFloor {
         history_access,
         stream_floors,
@@ -1654,6 +1776,8 @@ mod tests {
             )]
             .into(),
             circle_floors: Default::default(),
+            sidecar_floors: Default::default(),
+            owned_sidecars: Default::default(),
             report_subjects: Default::default(),
             franking_subjects: Default::default(),
             call_creations: Default::default(),
@@ -1741,6 +1865,8 @@ mod tests {
             ]
             .into(),
             circle_floors: Default::default(),
+            sidecar_floors: Default::default(),
+            owned_sidecars: Default::default(),
             report_subjects: Default::default(),
             franking_subjects: Default::default(),
             call_creations: Default::default(),
@@ -2153,6 +2279,39 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn private_confirmation_rows_are_omitted_without_refusing_shared_snapshot() {
+        let (founder, mut material, facts) = fixture();
+        let shared_count = material.current_state_entries.len();
+        material.current_state_entries.push(row(
+            CurrentSelector::AgentActionApproval {
+                approval_id: "private-controller-confirmation".into(),
+            },
+            9,
+            json!({"approval_nonce":"private-controller-nonce"}),
+        ));
+        let disclosed = disclose_to_account(material, &founder, &facts).unwrap();
+        assert_eq!(disclosed.current_state_entries.len(), shared_count);
+        assert!(
+            !disclosed.current_state_entries.iter().any(|entry| matches!(
+                entry,
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::AgentActionApproval { .. },
+                    ..
+                }
+            ))
+        );
+        assert!(
+            !serde_json::to_string(&disclosed.current_state_entries)
+                .unwrap()
+                .contains("private-controller-nonce")
+        );
+        // Other unproved families still refuse the complete cut.
+        let (founder, material, mut facts) = fixture();
+        facts.undisclosed_family_row = true;
+        assert!(disclose_to_account(material, &founder, &facts).is_err());
     }
 
     #[test]

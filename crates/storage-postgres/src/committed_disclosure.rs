@@ -43,6 +43,15 @@ struct AllowedRow {
     allowed: bool,
 }
 
+/// Complete canonical private sources cannot be redacted in place. Keep the
+/// existing PolicyRef author-only boundary and the controller's private
+/// confirmation nonce out of ordinary member disclosure and peer fanout.
+pub(crate) fn author_private_source(event: &arkret_wire::Event) -> bool {
+    event.kind == arkret_wire::EventKind::AgentActionApprove
+        || (event.kind == arkret_wire::EventKind::PolicyAction
+            && event.payload.contains_key("policy_id"))
+}
+
 /// Decide canonical byte visibility after the caller's stream interval is proved.
 pub(crate) async fn full_event_for_member_in_connection(
     conn: &mut AsyncPgConnection,
@@ -51,6 +60,21 @@ pub(crate) async fn full_event_for_member_in_connection(
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<bool> {
     let event = &row.event;
+    if let arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
+        if !crate::sidecar_access::participant_in_connection(
+            conn,
+            &event.realm_id,
+            sidecar_id,
+            caller,
+        )
+        .await?
+        {
+            return Ok(false);
+        }
+    }
+    if author_private_source(event) {
+        return Ok(&event.actor_id == caller);
+    }
     if matches!(
         event.kind,
         arkret_wire::EventKind::SelfModerationReport
@@ -122,7 +146,7 @@ pub(crate) async fn full_event_for_member_in_connection(
         }
     }
     Ok(&event.actor_id == caller
-        || crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS.contains(&event.kind))
+        || crate::snapshot_disclosure_gate::member_shared_event_kind(&event.kind))
 }
 
 /// Commits among `$1` whose Event this Station withholds.

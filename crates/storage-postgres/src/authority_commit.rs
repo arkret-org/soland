@@ -299,16 +299,42 @@ async fn verify_mimi_migration_in_connection(
     if !mimi_migration_topology_matches(value, expected_topology) {
         return Err(invalid_mimi_migration());
     }
-    if payload.mls_group_id.is_some() {
-        // The accepted `mls_group` current carries no authenticated MIMI
-        // GroupInfo. Until admission can pin that evidence to this
-        // transaction, an encrypted-room migration cannot be finalized.
-        return Err(invalid_mimi_migration());
+    if let Some(group_id) = payload.mls_group_id.as_ref() {
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: payload.binding_scope.realm_id.clone(),
+        };
+        let key = crate::mls_group_current_results::scope_key(&scope)?;
+        let current = crate::mls_group_current_results::locked_group(conn, &key)
+            .await?
+            .ok_or_else(invalid_mimi_migration)?;
+        let derived = scope
+            .canonical_mls_group_id()
+            .map_err(|_| invalid_mimi_migration())?;
+        if current.value.effective_scope != scope || group_id.as_str() != derived.as_str() {
+            return Err(invalid_mimi_migration());
+        }
+        // This tracker was installed only after RFC 9420 GroupInfo/tree or
+        // Commit verification. Lock that accepted state in this transaction.
+        let tracker = arkret_mls::MlsPublicGroupTracker::restore(
+            &current.public_state,
+            derived.as_str(),
+            current.value.epoch,
+        )
+        .map_err(|_| invalid_mimi_migration())?;
+        let binding = tracker
+            .governance_binding()
+            .map_err(|_| invalid_mimi_migration())?;
+        if tracker.group_id() != derived.as_str()
+            || binding.effective_scope() != &scope
+            || binding.next_epoch() != current.value.epoch
+        {
+            return Err(invalid_mimi_migration());
+        }
     }
     Ok(())
 }
 
-async fn commit_mimi_room_binding_current_result_in_connection(
+pub(crate) async fn commit_mimi_room_binding_current_result_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
@@ -316,6 +342,12 @@ async fn commit_mimi_room_binding_current_result_in_connection(
     if event.kind != arkret_wire::EventKind::MimiRoomBinding {
         return Ok(());
     }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
     let value = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
     let payload: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingPayload =
         decode_json(value.clone(), "MIMI room binding Event payload")?;
@@ -687,6 +719,20 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM member_identity_updates_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'sidecar'::text AS selector_kind, to_jsonb(sidecar_id) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM sidecar_current_results WHERE realm_id=$1 \
+         UNION ALL \
+         SELECT 'policy_action'::text AS selector_kind, \
+                CASE subject_kind WHEN 'realm_action' THEN jsonb_build_object('kind','policy_action','branch','realm_action','action_id',subject_id) \
+                  ELSE jsonb_build_object('kind','policy_action','branch','policy_ref','policy_id',subject_id,'action',action_key) END AS selector_subject, \
+                current_commit_id,current_stream_position,value FROM policy_action_current_results WHERE realm_id=$1 \
+         UNION ALL \
+         SELECT 'sidecar_context'::text AS selector_kind, \
+                jsonb_build_object('kind','sidecar_context','sidecar_id',sidecar_id,'source_context_ref',context_ref) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM sidecar_context_current_results WHERE realm_id=$1 \
+         UNION ALL \
          SELECT 'circle'::text AS selector_kind, to_jsonb(circle_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM circle_current_results WHERE realm_id = $1 \
@@ -848,6 +894,9 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         .map(|row| {
             let selector = match (row.selector_kind.as_str(), row.selector_subject) {
                 ("realm_genesis", None) => arkret_wire::CurrentSelector::RealmGenesis,
+                ("realm_tombstone", None) => arkret_wire::CurrentSelector::RealmTombstone,
+                ("realm_archive", None) => arkret_wire::CurrentSelector::RealmArchive,
+                ("realm_freeze", None) => arkret_wire::CurrentSelector::RealmFreeze,
                 ("realm_authority_root", None) => arkret_wire::CurrentSelector::RealmAuthorityRoot,
                 ("realm_profile", None) => arkret_wire::CurrentSelector::RealmProfile,
                 ("realm_policy_bundle", None) => arkret_wire::CurrentSelector::RealmPolicyBundle,
@@ -858,6 +907,11 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         ))
                     })?,
                 },
+                ("sidecar", Some(sidecar_id)) => arkret_wire::CurrentSelector::Sidecar {
+                    sidecar_id: serde_json::from_value(sidecar_id).map_err(PersistenceError::database)?,
+                },
+                ("policy_action", Some(subject)) => serde_json::from_value(subject).map_err(PersistenceError::database)?,
+                ("sidecar_context", Some(selector)) => serde_json::from_value(selector).map_err(PersistenceError::database)?,
                 ("realm_join_rule", None) => arkret_wire::CurrentSelector::RealmJoinRule,
                 ("realm_history_access", None) => arkret_wire::CurrentSelector::RealmHistoryAccess,
                 ("realm_discovery", None) => arkret_wire::CurrentSelector::RealmDiscovery,
@@ -1608,6 +1662,13 @@ async fn commit_transaction_in_connection_with_device_guard(
         .into());
     }
 
+    crate::realm_authorization_cut::require_commit_lifecycle_in_connection(
+        conn,
+        &transaction.event,
+        transaction.commit.committed_at,
+    )
+    .await?;
+
     let previous = sql_query(
         "SELECT commit_json FROM realm_commits \
          WHERE stream_key = $1 ORDER BY stream_position DESC LIMIT 1 FOR UPDATE",
@@ -1674,6 +1735,12 @@ async fn commit_transaction_in_connection_with_device_guard(
     .bind::<Timestamptz, _>(transaction.commit.committed_at)
     .execute(&mut *conn)
     .await?;
+    crate::realm_lifecycle_current_results::commit_in_connection(
+        conn,
+        &transaction.event,
+        &transaction.commit,
+    )
+    .await?;
     Ok(AuthorityCommitWriteOutcome::Committed)
 }
 
@@ -1711,6 +1778,15 @@ pub(crate) async fn check_self_producer_guard_in_connection(
     guard: &SelfProducerCommitGuard,
     committed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
+    if let SelfProducerCommitGuard::MimiFacade { .. } = guard {
+        return crate::mimi_admission::check_facade_producer_in_connection(
+            conn,
+            event,
+            guard,
+            committed_at,
+        )
+        .await;
+    }
     let actor = event.actor_id.as_account_id().ok_or_else(|| {
         PersistenceError::Conflict("self Event producer is not an account".to_owned())
     })?;
@@ -1727,6 +1803,7 @@ pub(crate) async fn check_self_producer_guard_in_connection(
         ));
     }
     match guard {
+        SelfProducerCommitGuard::MimiFacade { .. } => unreachable!("MIMI guard dispatched above"),
         SelfProducerCommitGuard::HumanDevice(selector) => {
             if selector.principal_id != actor.principal_id
                 || selector.station_id != actor.station_id
@@ -3529,12 +3606,41 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn sidecar_participant_authority_cut(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        sidecar_id: &arkret_wire::SidecarId,
+        controller: &arkret_wire::AccountId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::agent_sidecar::SidecarParticipantAuthorityCut>,
+    > {
+        crate::sidecar_authority_cut::read(&self.pool, realm_id, sidecar_id, controller).await
+    }
+
     async fn realm_state_snapshot_material_for_account(
         &self,
         realm_id: &arkret_wire::RealmId,
         account: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
         crate::snapshot_disclosure_gate::account_snapshot_material(&self.pool, realm_id, account)
+            .await
+    }
+
+    async fn sidecar_access_cut(
+        &self,
+        realm: &arkret_wire::RealmId,
+        sidecar: &arkret_wire::SidecarId,
+        controller: &arkret_wire::AccountId,
+        device: &arkret_wire::DeviceId,
+    ) -> PersistenceResult<
+        Option<(
+            arkret_models_collaboration::agent_sidecar::SidecarParticipantAuthorityCut,
+            Vec<arkret_wire::DidCoreId>,
+            Option<arkret_wire::MlsGroupCurrent>,
+            bool,
+        )>,
+    > {
+        crate::sidecar_authority_cut::read_access(&self.pool, realm, sidecar, controller, device)
             .await
     }
 

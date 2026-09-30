@@ -314,6 +314,20 @@ pub struct AuthorityCommitTransaction {
 /// internal persistence guard, never a caller-supplied protocol claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SelfProducerCommitGuard {
+    /// The locally configured MIMI facade authored this Event. The exact
+    /// binding and independently verified reporter/sender are rechecked at cut.
+    MimiFacade {
+        service_id: arkret_wire::DidCoreId,
+        verification_method: arkret_wire::DidUrl,
+        room_uri: arkret_wire::MimiRoomUri,
+        binding_event_id: arkret_wire::EventId,
+        attributed_actor: arkret_wire::ActorId,
+        source_provider_id: arkret_wire::DidCoreId,
+        reporter_authority: Option<serde_json::Value>,
+        submit_request: Option<serde_json::Value>,
+        mapping_receipt: Option<serde_json::Value>,
+        reporter_device_guard: Option<crate::DeviceRevocationGateSelector>,
+    },
     HumanDevice(crate::DeviceRevocationGateSelector),
     Agent {
         pcr_realm_id: arkret_wire::RealmId,
@@ -1767,6 +1781,40 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Option<crate::RealmStreamFrontier>>;
+
+    /// Derive native Sidecar participants from one accepted durable cut.
+    async fn sidecar_participant_authority_cut(
+        &self,
+        _realm_id: &arkret_wire::RealmId,
+        _sidecar_id: &arkret_wire::SidecarId,
+        _controller: &arkret_wire::AccountId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::agent_sidecar::SidecarParticipantAuthorityCut>,
+    > {
+        Err(crate::PersistenceError::Internal(
+            "durable Sidecar participant authority cut is unavailable".to_owned(),
+        ))
+    }
+
+    /// Read the maximal-disclosure snapshot material from one consistent
+    async fn sidecar_access_cut(
+        &self,
+        _realm: &arkret_wire::RealmId,
+        _sidecar: &arkret_wire::SidecarId,
+        _controller: &arkret_wire::AccountId,
+        _device: &arkret_wire::DeviceId,
+    ) -> PersistenceResult<
+        Option<(
+            arkret_models_collaboration::agent_sidecar::SidecarParticipantAuthorityCut,
+            Vec<arkret_wire::DidCoreId>,
+            Option<arkret_wire::MlsGroupCurrent>,
+            bool,
+        )>,
+    > {
+        Err(crate::PersistenceError::Internal(
+            "Sidecar effective authority cut is unavailable".into(),
+        ))
+    }
 
     /// Read the maximal-disclosure snapshot material from one consistent
     /// durable cut. Implementations must sort every repeated field.

@@ -281,6 +281,17 @@ impl RealmAuthorizationCut {
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<ActionAdmission> {
         let evaluation = self.evaluate(actions, target, facts, at);
+        self.admit_evaluation_in_connection(conn, evaluation, owner_covers, identity)
+            .await
+    }
+
+    async fn admit_evaluation_in_connection(
+        &self,
+        conn: &mut AsyncPgConnection,
+        evaluation: GrantEvaluation<'_>,
+        owner_covers: bool,
+        identity: &str,
+    ) -> PersistenceResult<ActionAdmission> {
         match evaluation {
             GrantEvaluation::Denied => Err(capability_denied(
                 "a deny constraint of an effective grant matches the operation",
@@ -486,6 +497,17 @@ impl RealmAuthorizationCut {
         let kind = &event.kind;
         self.require_open_lifecycle(event)?;
         self.require_governed_member(kind)?;
+        let root_only = arkret_schema::capability_actions_for_event_kind(kind.as_str())
+            .any(|descriptor| descriptor.root_control_only);
+        if root_only {
+            return if self.actor_is_root_controller() {
+                Ok(())
+            } else {
+                Err(capability_denied(
+                    "this Event requires the exact current authority-root controller",
+                ))
+            };
+        }
         if self.profile_authorized() {
             return Ok(());
         }
@@ -515,6 +537,35 @@ impl RealmAuthorizationCut {
         }
     }
 
+    /// Revalidate the creator of an already accepted third-party Invite at the
+    /// claim cut. Creation consumed its quota once; consuming that Invite does
+    /// not create another invitation and must not reserve a second quota.
+    pub(crate) fn require_live_invite_creator(
+        &self,
+        create: &arkret_wire::Event,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        self.require_open_lifecycle(create)?;
+        self.require_governed_member(&create.kind)?;
+        let actions = Self::unconditional_actions(&create.kind);
+        let owner =
+            self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER);
+        let (target, facts) = self.event_operation(create);
+        match self.evaluate(&actions, &target, &facts, at) {
+            GrantEvaluation::Allowed(satisfied) if !satisfied.is_empty() => Ok(()),
+            GrantEvaluation::Allowed(_)
+            | GrantEvaluation::Unsatisfied
+            | GrantEvaluation::Unnamed
+                if owner =>
+            {
+                Ok(())
+            }
+            _ => Err(capability_denied(
+                "the Invite creator no longer holds its creating authority",
+            )),
+        }
+    }
+
     /// Evaluate the placement grant against the actual source List resolved
     /// from durable position current, rather than an optional payload hint.
     async fn require_position_in_connection(
@@ -523,12 +574,14 @@ impl RealmAuthorizationCut {
         event: &arkret_wire::Event,
         source: Option<&arkret_wire::SpaceId>,
         destination: &arkret_wire::SpaceId,
-        at: chrono::DateTime<chrono::Utc>,
-    ) -> PersistenceResult<bool> {
+        commit: &arkret_wire::RealmCommit,
+        prepared: Option<&soland_storage::EventApprovalCommit>,
+    ) -> PersistenceResult<(bool, Vec<crate::approval_admission::QualifiedApproval>)> {
+        let at = commit.committed_at;
         self.require_open_lifecycle(event)?;
         self.require_governed_member(&event.kind)?;
         if self.profile_authorized() {
-            return Ok(false);
+            return Ok((false, Vec::new()));
         }
         let actions = Self::unconditional_actions(&event.kind);
         let owner =
@@ -536,8 +589,11 @@ impl RealmAuthorizationCut {
         let (target, mut facts) = self.event_operation(event);
         facts.from_container_id = source.map(ToString::to_string);
         facts.to_container_id = Some(destination.to_string());
-        match self
-            .admit_actions_in_connection(
+        if matches!(
+            self.evaluate(&actions, &target, &facts, at),
+            GrantEvaluation::Denied | GrantEvaluation::Quarantined
+        ) {
+            self.admit_actions_in_connection(
                 conn,
                 &actions,
                 &target,
@@ -546,6 +602,38 @@ impl RealmAuthorizationCut {
                 event.event_id.as_str(),
                 at,
             )
+            .await?;
+        }
+        let action = if event.kind == EventKind::StrandReorder {
+            CapabilityActionId::StrandReorder
+        } else {
+            CapabilityActionId::StrandMove
+        };
+        let (discharges, mut approved) = self
+            .prepare_grant_approvals(conn, event, commit, prepared, action, &target, &facts)
+            .await?;
+        let evaluate = || {
+            soland_storage::evaluate_grants_with_verified_approvals(
+                &AuthorizationOperation {
+                    actor: &self.actor,
+                    actions: &actions,
+                    target: &target,
+                    at,
+                    facts: &facts,
+                },
+                self.effective_grants(at).map(|(_, grant)| grant),
+                &discharges,
+            )
+        };
+        let dependencies = match evaluate() {
+            GrantEvaluation::Allowed(ref grants) => grants
+                .iter()
+                .map(|row| row.grant.id.clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        match self
+            .admit_evaluation_in_connection(conn, evaluate(), owner, event.event_id.as_str())
             .await?
         {
             ActionAdmission::Admitted => {}
@@ -556,11 +644,23 @@ impl RealmAuthorizationCut {
                 )));
             }
         };
+        approved.extend(
+            crate::approval_admission::require_governance(
+                conn,
+                event,
+                commit,
+                prepared,
+                action,
+                &target,
+                &facts,
+                &dependencies,
+            )
+            .await?,
+        );
         // Only a grant that names this action and exact Strand, admits the
         // durable source/target List facts, and owes no quota reservation may
         // override the List policy. Root ownership alone does not imply it.
-        Ok(self
-            .evaluate(&actions, &target, &facts, at)
+        let override_allowed=evaluate()
             .unreserved()
             .iter()
             .any(|grant| {
@@ -578,7 +678,131 @@ impl RealmAuthorizationCut {
                         .iter()
                         .filter(wip_allow)
                         .any(|constraint| constraint.wip_limit_override == Some(false))
-            }))
+            });
+        Ok((override_allowed, approved))
+    }
+
+    async fn prepare_grant_approvals(
+        &self,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        prepared: Option<&soland_storage::EventApprovalCommit>,
+        action: CapabilityActionId,
+        target: &WireResourceSelector,
+        facts: &OperationFacts,
+    ) -> PersistenceResult<(
+        Vec<soland_storage::VerifiedGrantApproval>,
+        Vec<crate::approval_admission::QualifiedApproval>,
+    )> {
+        let mut markers = Vec::new();
+        let mut accepted = Vec::new();
+        for (_, grant) in self
+            .effective_grants(commit.committed_at)
+            .filter(|(_, grant)| {
+                soland_storage::grant_names_target(grant, &[action.as_str()], target)
+            })
+        {
+            for requirement in crate::grant_approval_admission::require_grant_approvals(
+                conn, event, commit, prepared, grant, action, target, facts,
+            )
+            .await?
+            {
+                markers.push(soland_storage::VerifiedGrantApproval {
+                    grant_id: requirement.grant_id,
+                    constraint_digest: requirement.constraint_digest,
+                    action,
+                });
+                accepted.extend(requirement.accepted);
+            }
+        }
+        Ok((markers, accepted))
+    }
+
+    pub(crate) async fn require_policy_with_approvals(
+        &self,
+        conn: &mut AsyncPgConnection,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        prepared: Option<&soland_storage::EventApprovalCommit>,
+        target: &WireResourceSelector,
+    ) -> PersistenceResult<Vec<crate::approval_admission::QualifiedApproval>> {
+        self.require_open_lifecycle(event)?;
+        self.require_governed_member(&event.kind)?;
+        if self.profile_authorized() {
+            return Err(capability_denied(
+                "Policy is not a Direct Conversation profile operation",
+            ));
+        }
+        let action = if event.kind == EventKind::PolicySet {
+            CapabilityActionId::PolicySet
+        } else {
+            CapabilityActionId::PolicyAction
+        };
+        let actions = Self::unconditional_actions(&event.kind);
+        let owner =
+            self.actor_is_root_controller() && actions.contains(&CapabilityActionId::REALM_OWNER);
+        let facts = OperationFacts::default();
+        if matches!(
+            self.evaluate(&actions, target, &facts, commit.committed_at),
+            GrantEvaluation::Denied | GrantEvaluation::Quarantined
+        ) {
+            self.admit_actions_in_connection(
+                conn,
+                &actions,
+                target,
+                &facts,
+                owner,
+                event.event_id.as_str(),
+                commit.committed_at,
+            )
+            .await?;
+        }
+        let (markers, mut accepted) = self
+            .prepare_grant_approvals(conn, event, commit, prepared, action, target, &facts)
+            .await?;
+        let evaluation = soland_storage::evaluate_grants_with_verified_approvals(
+            &AuthorizationOperation {
+                actor: &self.actor,
+                actions: &actions,
+                target,
+                at: commit.committed_at,
+                facts: &facts,
+            },
+            self.effective_grants(commit.committed_at)
+                .map(|(_, grant)| grant),
+            &markers,
+        );
+        let dependencies = match &evaluation {
+            GrantEvaluation::Allowed(grants) => grants
+                .iter()
+                .map(|row| row.grant.id.clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        if self
+            .admit_evaluation_in_connection(conn, evaluation, owner, event.event_id.as_str())
+            .await?
+            != ActionAdmission::Admitted
+        {
+            return Err(capability_denied(
+                "the actor holds no Policy action for this scope",
+            ));
+        }
+        accepted.extend(
+            crate::approval_admission::require_governance(
+                conn,
+                event,
+                commit,
+                prepared,
+                action,
+                target,
+                &facts,
+                &dependencies,
+            )
+            .await?,
+        );
+        Ok(accepted)
     }
 
     /// The capability-gated verdict for an `event` that acts on one authored
@@ -935,6 +1159,58 @@ impl RealmLifecycleGates {
     }
 }
 
+/// Enforce lifecycle fences under the already locked governance authority.
+/// This runs before every fresh Commit, including non-HTTP writers.
+pub(crate) async fn require_commit_lifecycle_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    if event.kind == EventKind::RealmDestroy {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: v1 has no registered destructive confirmation carrier".to_owned(),
+        ));
+    }
+    let gates = RealmLifecycleGates::read(conn, &event.realm_id).await?;
+    if gates.terminal && !arkret_wire::events::kinds::is_audit_kind(&event.kind) {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: the Realm is terminal".to_owned(),
+        ));
+    }
+    let payload = serde_json::Value::Object(event.payload.clone().into_iter().collect());
+    if (gates.archived || gates.frozen)
+        && !arkret_wire::events::kinds::realm_write_gate_exempt(&event.kind, &payload)
+    {
+        return Err(PersistenceError::Conflict(
+            "realm_frozen: the Realm is archived or frozen".to_owned(),
+        ));
+    }
+    if !matches!(
+        event.kind,
+        EventKind::RealmTombstone
+            | EventKind::RealmArchive
+            | EventKind::RealmRestore
+            | EventKind::RealmFreeze
+            | EventKind::RealmUnfreeze
+    ) {
+        return Ok(());
+    }
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    authorize_capability_gated_event_in_connection(conn, event, at).await?;
+    if event.kind == EventKind::RealmTombstone {
+        let typed: arkret_models_collaboration::governance::realm_lifecycle::RealmTombstonePayload =
+            serde_json::from_value(payload)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if typed.successor_realm_id == event.realm_id {
+            return Err(PersistenceError::Conflict(
+                "failed_precondition: successor must differ from the terminating Realm".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The track every Message belongs to (`authz/constraint-schema.md` §6.1).
 const DISCUSSION_TRACK: &str = "discussion";
 
@@ -996,11 +1272,12 @@ pub(crate) async fn authorize_strand_position_in_connection(
     event: &arkret_wire::Event,
     source: Option<&arkret_wire::SpaceId>,
     destination: &arkret_wire::SpaceId,
-    at: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<bool> {
+    commit: &arkret_wire::RealmCommit,
+    prepared: Option<&soland_storage::EventApprovalCommit>,
+) -> PersistenceResult<(bool, Vec<crate::approval_admission::QualifiedApproval>)> {
     lock_realm_authorization_cut(conn, &event.realm_id).await?;
     let cut = RealmAuthorizationCut::read_for_event(conn, event).await?;
-    cut.require_position_in_connection(conn, event, source, destination, at)
+    cut.require_position_in_connection(conn, event, source, destination, commit, prepared)
         .await
 }
 

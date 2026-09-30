@@ -91,6 +91,16 @@ struct HeadRow {
     stream_position: i64,
 }
 
+#[derive(QueryableByName)]
+struct ScopedHeadRow {
+    #[diesel(sql_type = Text)]
+    commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    stream_ref: serde_json::Value,
+}
+
 /// One typed current row with the stream of its covering RealmCommit.
 #[derive(QueryableByName)]
 struct CurrentRow {
@@ -208,25 +218,15 @@ pub(crate) async fn list_realm_streams_for_account(
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         begin_read_cut(conn).await?;
-        let (realm_head, scoped_streams) = match member_cut(conn, realm_id, &caller, issuer).await?
-        {
+        let realm_head = match member_cut(conn, realm_id, &caller, issuer).await? {
             MemberCut::NotVisible => return Ok(AccountRealmStreamList::NotVisible),
             MemberCut::ForeignTenure => {
-                return Ok(AccountRealmStreamList::Unproved(
-                    "this Station does not hold the Realm's governing tenure",
-                ));
+                return Ok(
+                    crate::replica_stream_listing::in_connection(conn, realm_id, &caller).await?,
+                );
             }
-            MemberCut::Member {
-                realm_head,
-                scoped_streams,
-                ..
-            } => (realm_head, scoped_streams),
+            MemberCut::Member { realm_head, .. } => realm_head,
         };
-        if scoped_streams {
-            return Ok(AccountRealmStreamList::Unproved(
-                "Circle and Sidecar stream visibility is not proved at this cut",
-            ));
-        }
         let Some(head) = realm_head else {
             return Ok(AccountRealmStreamList::Listed(Vec::new()));
         };
@@ -238,14 +238,60 @@ pub(crate) async fn list_realm_streams_for_account(
                 "a per-member join or history floor is not proved at this cut",
             ));
         };
-        Ok(AccountRealmStreamList::Listed(vec![RealmStreamRow {
+        let mut visible = vec![RealmStreamRow {
             stream_ref: head.stream_ref,
             head_commit_ref: head.commit_id,
             next_position: head.stream_position.checked_add(1).ok_or_else(|| {
                 PersistenceError::Internal("Realm stream position overflows".to_owned())
             })?,
             readable_floor: Some(floor),
-        }]))
+        }];
+        let heads = sql_query(crate::authority_commit::REALM_STREAM_HEADS_SQL)
+            .bind::<Text, _>(realm_id.as_str())
+            .load::<ScopedHeadRow>(&mut *conn)
+            .await?;
+        for head in heads {
+            let stream: CommitStreamRef =
+                serde_json::from_value(head.stream_ref).map_err(PersistenceError::database)?;
+            let floor = match &stream {
+                CommitStreamRef::Circle { circle_id, .. } => {
+                    crate::account_stream_scan::caller_circle_floor_in_connection(
+                        conn, realm_id, circle_id, &caller,
+                    )
+                    .await?
+                }
+                CommitStreamRef::Realm { .. } => continue,
+                CommitStreamRef::Sidecar { sidecar_id, .. } => {
+                    crate::sidecar_authority_cut::caller_floor_in_connection(
+                        conn, realm_id, sidecar_id, &caller,
+                    )
+                    .await?
+                }
+                _ => None,
+            };
+            let Some(floor) = floor else {
+                continue;
+            };
+            visible.push(RealmStreamRow {
+                stream_ref: stream,
+                head_commit_ref: head.commit_id.parse().map_err(PersistenceError::database)?,
+                next_position: to_u64(head.stream_position, "scoped stream position")?
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt("scoped stream position overflows"))?,
+                readable_floor: Some(floor),
+            });
+        }
+        let mut keyed = visible
+            .into_iter()
+            .map(|row| {
+                let key = arkret_canonical::canonical_json_bytes(&row.stream_ref)
+                    .map_err(PersistenceError::database)?;
+                Ok((key, row))
+            })
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        let visible = keyed.into_iter().map(|(_, row)| row).collect();
+        Ok(AccountRealmStreamList::Listed(visible))
     })
     .await
     .map_err(PgTransactionError::into_persistence)

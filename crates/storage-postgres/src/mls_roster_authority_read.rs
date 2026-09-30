@@ -183,6 +183,20 @@ async fn read_in_connection(
         arkret_wire::ScopeRef::Realm { realm_id } => CommitStreamRef::Realm {
             realm_id: realm_id.clone(),
         },
+        arkret_wire::ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } => CommitStreamRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: circle_id.clone(),
+        },
+        arkret_wire::ScopeRef::Sidecar {
+            realm_id,
+            sidecar_id,
+        } => CommitStreamRef::Sidecar {
+            realm_id: realm_id.clone(),
+            sidecar_id: sidecar_id.clone(),
+        },
         _ => return Ok(MlsRosterAuthorityRead::NotFound),
     };
     if target_commit.stream_ref != expected_stream

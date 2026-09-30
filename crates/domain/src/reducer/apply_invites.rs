@@ -374,7 +374,7 @@ fn validate_binding_proof(
     }
     let method = binding_proof.verification_method.as_str();
     let expected_method = third_party_invite.verification_public_key.trim();
-    if !expected_method.is_empty() && method != expected_method {
+    if expected_method.starts_with("did:") && method != expected_method {
         return Err("binding_proof_method_mismatch");
     }
     Ok(())
@@ -397,6 +397,15 @@ fn validate_subject_proof(
         serde_json::from_value(subject_proof.clone()).map_err(|_| "subject_proof_invalid")?;
     if subject_proof.verification_method.trim().is_empty() {
         return Err("subject_proof_method_required");
+    }
+    let subject_method = subject_proof.verification_method.as_str();
+    let (controller, fragment) = subject_method.rsplit_once('#').ok_or("claim_invalid")?;
+    let subject_did = arkret_wire::Did::new(controller.to_owned()).map_err(|_| "claim_invalid")?;
+    if arkret_wire::DeviceId::new(fragment.to_owned()).is_ok()
+        || arkret_wire::project_did_to_core_id(&subject_did).map_err(|_| "claim_invalid")?
+            != subject_account_id.principal_id
+    {
+        return Err("claim_invalid");
     }
     if subject_proof.signature_algorithm
         != arkret_models_collaboration::governance::membership_invite::INVITE_SUBJECT_PROOF_ALG

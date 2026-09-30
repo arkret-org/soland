@@ -1,8 +1,7 @@
 //! Member MLS public-material authorization at one PostgreSQL read cut.
 //!
-//! Circle remains closed until its parent Realm join generation is durable
-//! and compared at both cuts. Circle and Realm stream positions cannot be
-//! compared directly.
+//! Circle reads require the same parent Realm join generation at the current
+//! and historical Circle cuts. Positions are compared within one stream only.
 
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
@@ -145,11 +144,34 @@ pub(crate) async fn read_in_connection(
     let caller = &request.caller_actor_id;
     let target_ref = &request.target_commit_event_ref;
     let target_epoch = request.target_epoch;
-    let ScopeRef::Realm { realm_id } = &request.effective_scope else {
-        // A Circle scope needs the effective-membership historical-cut
-        // continuity of history-visibility.md section 3.1 on both cuts; that
-        // read is not served here, so it stays closed.
-        return Ok(Read::NotFound);
+    let (realm_id, expected_stream) = match &request.effective_scope {
+        ScopeRef::Realm { realm_id } => (
+            realm_id,
+            CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+        ),
+        ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } => (
+            realm_id,
+            CommitStreamRef::Circle {
+                realm_id: realm_id.clone(),
+                circle_id: circle_id.clone(),
+            },
+        ),
+        ScopeRef::Sidecar {
+            realm_id,
+            sidecar_id,
+        } => (
+            realm_id,
+            CommitStreamRef::Sidecar {
+                realm_id: realm_id.clone(),
+                sidecar_id: sidecar_id.clone(),
+            },
+        ),
+        _ => return Ok(Read::NotFound),
     };
     if realm_id != &request.realm_id {
         return Ok(Read::NotFound);
@@ -158,9 +180,6 @@ pub(crate) async fn read_in_connection(
         return Ok(Read::NotFound);
     };
     let target = decode_commit(&target_row)?;
-    let expected_stream = CommitStreamRef::Realm {
-        realm_id: realm_id.clone(),
-    };
     if target.stream_ref != expected_stream
         || target.realm_id != *realm_id
         || target.event_ref != *target_ref
@@ -196,42 +215,125 @@ pub(crate) async fn read_in_connection(
             return Ok(Read::NotFound);
         }
     }
-    let Some(join) = sql_query(
-        "SELECT membership,current_stream_position,current_commit_id \
+    let (joined_at_target, floor) =
+        if let ScopeRef::Sidecar { sidecar_id, .. } = &request.effective_scope {
+            let floor = crate::sidecar_authority_cut::caller_floor_in_connection(
+                conn, realm_id, sidecar_id, caller,
+            )
+            .await?;
+            (
+                floor
+                    .as_ref()
+                    .is_some_and(|floor| target.stream_position >= floor.oldest_position),
+                floor,
+            )
+        } else if let ScopeRef::Circle { circle_id, .. } = &request.effective_scope {
+            let Some(join) = sql_query(
+                "SELECT membership,current_stream_position,current_commit_id \
+             FROM circle_member_state_current_results WHERE realm_id=$1 AND circle_id=$2 \
+             AND member_id=$3 AND membership='join' AND source_stream_ref=$4 \
+             AND circle_member_parent_join_current(realm_id,member_id,value)",
+            )
+            .bind::<Text, _>(realm_id.as_str())
+            .bind::<Text, _>(circle_id.as_str())
+            .bind::<Text, _>(caller.to_string())
+            .bind::<Jsonb, _>(
+                serde_json::to_value(&expected_stream).map_err(PersistenceError::database)?,
+            )
+            .get_result::<MemberRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            else {
+                return Ok(Read::NotFound);
+            };
+            let joined_at_target = if join.current_stream_position < 0 {
+                false
+            } else if target.stream_position >= join.current_stream_position as u64 {
+                true
+            } else {
+                // The most recent membership at the target cut must itself be
+                // joined and bind the parent's still-current exact revision.
+                let historical = sql_query(
+                    "SELECT circle_member_parent_join_current($1,$2,h.payload) AS present \
+                 FROM (SELECT e.envelope->'payload' AS payload \
+                 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
+                 WHERE c.realm_id=$1 AND c.stream_ref=$3 AND c.stream_position <= $4 \
+                 AND e.state='committed' AND e.envelope->>'kind'='ak.circle.member.state' \
+                 AND e.envelope->'payload'->'member_id'=$5 \
+                 ORDER BY c.stream_position DESC LIMIT 1) h",
+                )
+                .bind::<Text, _>(realm_id.as_str())
+                .bind::<Text, _>(caller.to_string())
+                .bind::<Jsonb, _>(
+                    serde_json::to_value(&expected_stream).map_err(PersistenceError::database)?,
+                )
+                .bind::<BigInt, _>(
+                    i64::try_from(target.stream_position).map_err(PersistenceError::database)?,
+                )
+                .bind::<Jsonb, _>(serde_json::to_value(caller).map_err(PersistenceError::database)?)
+                .get_result::<PresentRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+                historical.is_some_and(|row| row.present)
+            };
+            let floor = if tenure.service_id == issuer.as_str() {
+                crate::account_stream_scan::caller_circle_floor_in_connection(
+                    conn, realm_id, circle_id, caller,
+                )
+                .await?
+            } else {
+                match crate::account_stream_scan::replica_circle_floor_in_connection(
+                    conn, realm_id, circle_id, caller,
+                )
+                .await?
+                {
+                    Ok(floor) => Some(floor),
+                    Err(_) => return Ok(Read::RevisionUnavailable),
+                }
+            };
+            (joined_at_target, floor)
+        } else {
+            let Some(join) = sql_query(
+                "SELECT membership,current_stream_position,current_commit_id \
          FROM member_state_current_results WHERE realm_id=$1 AND member_id=$2",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .bind::<Text, _>(caller.to_string())
-    .get_result::<MemberRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    else {
-        return Ok(Read::NotFound);
-    };
-    if join.membership != "join" || join.current_stream_position < 0 {
-        return Ok(Read::NotFound);
-    }
-    let joined_at_target = target.stream_position
-        >= u64::try_from(join.current_stream_position).map_err(|_| {
-            PersistenceError::Internal("stored member join position is negative".to_owned())
-        })?
-        || (target.stream_position == 0
-            && founding_join(conn, realm_id, &join.current_commit_id).await?);
-    if !joined_at_target {
-        return Ok(Read::NotFound);
-    }
-    let floor = if tenure.service_id == issuer.as_str() {
-        crate::account_stream_scan::caller_realm_floor_in_connection(conn, realm_id, caller).await?
-    } else {
-        match crate::account_stream_scan::replica_realm_floor_in_connection(conn, realm_id, caller)
-            .await?
-        {
-            Ok(floor) => Some(floor),
-            Err(_) => return Ok(Read::RevisionUnavailable),
-        }
-    };
-    if floor.is_none_or(|floor| target.stream_position < floor.oldest_position) {
+            )
+            .bind::<Text, _>(realm_id.as_str())
+            .bind::<Text, _>(caller.to_string())
+            .get_result::<MemberRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            else {
+                return Ok(Read::NotFound);
+            };
+            if join.membership != "join" || join.current_stream_position < 0 {
+                return Ok(Read::NotFound);
+            }
+            let joined_at_target = target.stream_position
+                >= u64::try_from(join.current_stream_position).map_err(|_| {
+                    PersistenceError::Internal("stored member join position is negative".to_owned())
+                })?
+                || (target.stream_position == 0
+                    && founding_join(conn, realm_id, &join.current_commit_id).await?);
+            let floor = if tenure.service_id == issuer.as_str() {
+                crate::account_stream_scan::caller_realm_floor_in_connection(conn, realm_id, caller)
+                    .await?
+            } else {
+                match crate::account_stream_scan::replica_realm_floor_in_connection(
+                    conn, realm_id, caller,
+                )
+                .await?
+                {
+                    Ok(floor) => Some(floor),
+                    Err(_) => return Ok(Read::RevisionUnavailable),
+                }
+            };
+            (joined_at_target, floor)
+        };
+    if !joined_at_target || floor.is_none_or(|floor| target.stream_position < floor.oldest_position)
+    {
         return Ok(Read::NotFound);
     }
     if let Some(peer) = source_peer

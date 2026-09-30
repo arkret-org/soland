@@ -7,11 +7,139 @@
 //! and cross-actor isolation.
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use serde_json::json;
 
 use super::common::*;
 
 fn b64(value: &str) -> String {
     BASE64_STANDARD.encode(value.as_bytes())
+}
+
+#[test]
+fn tus_requires_and_freezes_storage_encryption_until_finalize() {
+    run_on_deep_stack(
+        "tus_requires_and_freezes_storage_encryption_until_finalize",
+        tus_requires_and_freezes_storage_encryption_until_finalize_body,
+    );
+}
+
+async fn tus_requires_and_freezes_storage_encryption_until_finalize_body() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    for metadata in [
+        None,
+        Some(format!("purpose {}", b64("file_transfer"))),
+        Some(format!("encryption {}", b64("{}"))),
+        Some(format!("encryption {}", b64(r#"{"scheme":"unknown"}"#))),
+        Some(format!(
+            "encryption {}",
+            b64(r#"{"scheme":"ak.blob.stream_aead.v1","key_ref":"secret"}"#)
+        )),
+        Some(format!(
+            "encryption {},filename {}",
+            b64("null"),
+            b64("private.txt")
+        )),
+    ] {
+        let mut request = TestClient::post("http://server/_arkret/self/blob/resumable")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("tus-resumable", "1.0.0", true)
+            .add_header("upload-length", "15", true);
+        if let Some(metadata) = metadata {
+            request = request.add_header("upload-metadata", metadata, true);
+        }
+        let response = request.send(&app_from_state(state.clone())).await;
+        assert_eq!(response.status_code.unwrap().as_u16(), 422);
+    }
+    let scheme = r#"{"scheme":"ak.blob.stream_aead.v1"}"#;
+    let create = TestClient::post("http://server/_arkret/self/blob/resumable")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("tus-resumable", "1.0.0", true)
+        .add_header("upload-length", "15", true)
+        .add_header(
+            "upload-metadata",
+            format!("encryption {}", b64(scheme)),
+            true,
+        )
+        .add_header("content-type", "application/offset+octet-stream", true)
+        .body(b"encrypted bytes".to_vec())
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(create.status_code.unwrap().as_u16(), 201);
+    let location = create.headers.get("location").unwrap().to_str().unwrap();
+    let url = format!("http://server{location}");
+    let override_attempt = TestClient::patch(&url)
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("tus-resumable", "1.0.0", true)
+        .add_header("upload-offset", "15", true)
+        .add_header("content-type", "application/offset+octet-stream", true)
+        .add_header(
+            "upload-metadata",
+            format!("encryption {}", b64("null")),
+            true,
+        )
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(override_attempt.status_code.unwrap().as_u16(), 422);
+    let mut finalized = TestClient::post(format!("{url}/finalize"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(finalized.status_code.unwrap().as_u16(), 200);
+    let outcome: Value = finalized.take_json().await.unwrap();
+    let blob = state
+        .test_persistence()
+        .blobs()
+        .get(outcome["blob_ref"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(blob.encryption).unwrap(),
+        serde_json::from_str::<Value>(scheme).unwrap()
+    );
+    let retry = TestClient::post("http://server/_arkret/self/blob/resumable")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("tus-resumable", "1.0.0", true)
+        .add_header("upload-length", "15", true)
+        .add_header(
+            "upload-metadata",
+            format!("encryption {}", b64("null")),
+            true,
+        )
+        .add_header("content-type", "application/offset+octet-stream", true)
+        .body(b"encrypted bytes".to_vec())
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(retry.status_code.unwrap().as_u16(), 201);
+    let retry_location = retry.headers.get("location").unwrap().to_str().unwrap();
+    let mut rejected = TestClient::post(format!("http://server{retry_location}/finalize"))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(rejected.status_code.unwrap().as_u16(), 409);
+    let rejected: Value = rejected.take_json().await.unwrap();
+    assert_eq!(problem_code(&rejected), "failed_precondition");
+    assert_eq!(
+        state
+            .test_persistence()
+            .blobs()
+            .get(outcome["blob_ref"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .encryption,
+        blob.encryption
+    );
+    let mut presign = TestClient::post("http://server/_arkret/self/blob/presign")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(json!({"blob_ref":outcome["blob_ref"],"purpose":"media_inline"}).to_string())
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(presign.status_code.unwrap().as_u16(), 403);
+    let denied: Value = presign.take_json().await.unwrap();
+    assert_eq!(problem_code(&denied), "capability_denied");
 }
 
 #[test]
@@ -91,8 +219,8 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
 
     // Create the upload resource with `blob_upload_request_body` metadata.
     let metadata = format!(
-        "purpose {},content_digest {}",
-        b64("file_transfer"),
+        "encryption {},content_digest {}",
+        b64("null"),
         b64(&expected_digest)
     );
     let create = TestClient::post("http://server/_arkret/self/blob/resumable")
@@ -217,7 +345,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
         .await
         .unwrap()
         .expect("finalized resumable blob metadata is stored");
-    // The upload binding carries no encryption member, so none is invented.
+    // The creation-time null classification is retained through finalize.
     assert!(stored_resumable_blob.encryption.is_none());
     assert!(stored_resumable_blob.filename.is_none());
 
@@ -270,6 +398,11 @@ async fn resumable_upload_is_actor_scoped_and_terminable_body() {
         .add_header("authorization", format!("Bearer {alice}"), true)
         .add_header("tus-resumable", "1.0.0", true)
         .add_header("upload-length", "8", true)
+        .add_header(
+            "upload-metadata",
+            format!("encryption {}", b64("null")),
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(create.status_code.unwrap().as_u16(), 201);

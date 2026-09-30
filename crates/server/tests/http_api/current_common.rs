@@ -293,6 +293,8 @@ pub(crate) fn multipart_blob_upload_body(
     body.extend_from_slice(b"Content-Disposition: form-data; name=\"size_bytes\"\r\n\r\n");
     body.extend_from_slice(content.len().to_string().as_bytes());
     body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(b"Content-Disposition: form-data; name=\"encryption\"\r\nContent-Type: application/json\r\n\r\nnull");
+    body.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
         b"Content-Disposition: form-data; name=\"content\"; filename=\"blob\"\r\n",
     );

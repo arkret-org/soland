@@ -267,18 +267,6 @@ fn typed_agent_ids(agent_ids: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, 
         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))
 }
 
-fn sidecar_mls_binding_for_desired(
-    _record: &AgentSidecarRecord,
-    _desired_agent_ids: &[arkret_wire::DidCoreId],
-    _projection: &soland_domain::reducer::ProjectionState,
-) -> Result<SidecarMlsBinding, AppError> {
-    // The old projection held only the Sidecar create Event. The signed
-    // binding needs all accepted authority refs at the roster's exact cut.
-    Err(AppError::internal(
-        "Sidecar accepted authority cut is unavailable",
-    ))
-}
-
 fn sidecar_controller_account(
     state: &AppState,
     record: &AgentSidecarRecord,
@@ -301,11 +289,21 @@ pub(crate) async fn expected_sidecar_mls_binding(
     state: &AppState,
     record: &AgentSidecarRecord,
 ) -> Result<SidecarMlsBinding, AppError> {
-    let controller = sidecar_controller_account(state, record)?;
-    let desired = derive_sidecar_desired_agent_ids(state, &record.realm_id, &controller).await?;
-    let desired_typed = typed_agent_ids(&desired)?;
-    let projection = state.projections().snapshot();
-    sidecar_mls_binding_for_desired(record, &desired_typed, &projection)
+    let realm =
+        RealmId::new(&record.realm_id).map_err(|error| AppError::internal(error.to_string()))?;
+    let sidecar = SidecarId::new(&record.sidecar_id)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let cut = state
+        .authority_commits()
+        .sidecar_participant_authority_cut(&realm, &sidecar, &record.controller_account_id)
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar accepted authority cut: {error}")))?
+        .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
+    Ok(SidecarMlsBinding {
+        sidecar_id: cut.sidecar_id,
+        participant_authority_digest: cut.participant_authority_digest,
+        authority_stream_head: cut.authority_stream_head,
+    })
 }
 
 /// Admission gate for `ak.agent.sidecar.exchange.control`. The Event is legal
@@ -464,26 +462,6 @@ fn device_coordinates_match(projected: Option<&str>, authenticated: &str) -> boo
         && projected.is_some_and(|projected| !projected.is_empty() && projected == authenticated)
 }
 
-/// The second `current_controller_device_ready` disjunct of
-/// `agent-operations.schema.json#/$defs/agent_sidecar_mls_context`.
-///
-/// A controller device that did not create the accepted Sidecar genesis is
-/// ready once it has completed matching Welcome and KeyPackage consume
-/// evidence for this exact group: a Welcome addressed to that device admitting
-/// it into `group_id`, whose claimed KeyPackage belongs to the same device and
-/// carries a consume record for the same group. Evidence from another Sidecar's
-/// group never satisfies this (`models/sidecar.md` section 5).
-fn controller_device_completed_group_join(
-    _projection: &soland_domain::reducer::ProjectionState,
-    _controller_account_id: &arkret_wire::AccountId,
-    _controller_device_id: &str,
-    _group_id: &str,
-) -> bool {
-    // Formal delivery current/read/ACK is wired by 0366. The legacy Realm
-    // Event projection must never make another controller device ready.
-    false
-}
-
 async fn sidecar_view(
     state: &AppState,
     record: &AgentSidecarRecord,
@@ -495,24 +473,32 @@ async fn sidecar_view(
     if controller_actor.as_account_id() != Some(&controller_account) {
         return Err(AppError::not_found("Sidecar not found"));
     }
-    let controller_device_id = session.require_human_device_id().as_str();
-    let desired =
-        derive_sidecar_desired_agent_ids(state, &record.realm_id, &controller_account).await?;
-    let desired_typed = typed_agent_ids(&desired)?;
-    let projection = state.projections().snapshot();
-    let expected_binding = sidecar_mls_binding_for_desired(record, &desired_typed, &projection)?;
     let sidecar_scope = arkret_wire::ScopeRef::Sidecar {
         realm_id: arkret_wire::RealmId::new(record.realm_id.clone())
             .map_err(|error| AppError::internal(format!("stored Sidecar Realm id: {error}")))?,
         sidecar_id: arkret_wire::SidecarId::new(record.sidecar_id.clone())
             .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
     };
-    let epoch_row = state
-        .mls_groups()
-        .current(&sidecar_scope)
+    let controller_device =
+        arkret_wire::DeviceId::new(session.require_human_device_id().clone())
+            .map_err(|_| AppError::param_invalid("invalid authenticated controller device id"))?;
+    let (cut, effective, epoch_row, controller_device_ready) = state
+        .authority_commits()
+        .sidecar_access_cut(
+            sidecar_scope.realm_id(),
+            sidecar_scope.sidecar_id().expect("native Sidecar id"),
+            &controller_account,
+            &controller_device,
+        )
         .await
-        .map_err(|error| AppError::internal(format!("Sidecar MLS group lookup: {error}")))?
-        .map(|current| current.value);
+        .map_err(|error| AppError::internal(format!("Sidecar accepted access cut: {error}")))?
+        .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
+    let desired_typed = cut.desired_agent_ids;
+    let expected_binding = SidecarMlsBinding {
+        sidecar_id: cut.sidecar_id,
+        participant_authority_digest: cut.participant_authority_digest,
+        authority_stream_head: cut.authority_stream_head,
+    };
     let epoch_binding_current = match &epoch_row {
         Some(row) => {
             crate::routing::mls::current_mls_group_binding(state, row)
@@ -523,64 +509,19 @@ async fn sidecar_view(
         }
         None => false,
     };
-    let genesis = match &epoch_row {
-        Some(row) => state
-            .event_queries()
-            .canonical_event(row.genesis_event_ref.as_str())
-            .await
-            .map_err(|error| AppError::internal(format!("Sidecar genesis lookup: {error}")))?
-            .and_then(|event| serde_json::from_value::<arkret_wire::Event>(event.envelope).ok()),
-        None => None,
-    };
-    let genesis_producer = genesis
-        .as_ref()
-        .and_then(|event| event.human_device_producer().ok().flatten());
-    let controller_device_ready = epoch_binding_current
-        && !controller_device_id.is_empty()
-        && epoch_row.as_ref().is_some_and(|row| {
-            (genesis.as_ref().map(|event| &event.actor_id) == Some(&controller_actor)
-                && device_coordinates_match(
-                    genesis_producer
-                        .as_ref()
-                        .map(|producer| producer.device_id.as_str()),
-                    controller_device_id,
-                ))
-                || row
-                    .effective_scope
-                    .canonical_mls_group_id()
-                    .is_ok_and(|group_id| {
-                        controller_device_completed_group_join(
-                            &projection,
-                            &controller_account,
-                            controller_device_id,
-                            group_id.as_str(),
-                        )
-                    })
-        });
-    let effective = if epoch_binding_current {
-        desired_typed.clone()
-    } else {
-        Vec::new()
-    };
-    let pending = if epoch_binding_current {
-        Vec::new()
-    } else {
-        desired
-            .iter()
-            .cloned()
-            .map(|agent_id| {
-                Ok(PendingSidecarAccessReconciliation {
-                    agent_id: arkret_wire::DidCoreId::new(agent_id)
-                        .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
+    let pending = desired_typed
+            .iter().filter(|agent| !effective.contains(agent))
+            .cloned().map(|agent_id| {
+                PendingSidecarAccessReconciliation {
+                    agent_id,
                     provisioning_phase: if epoch_row.is_some() {
                         arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase::EpochRotation
                     } else {
                         arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase::MlsWelcome
                     },
-                })
+                }
             })
-            .collect::<Result<Vec<_>, AppError>>()?
-    };
+            .collect::<Vec<_>>();
     let access_readiness = sidecar_access_readiness(
         &pending,
         epoch_row.is_some(),

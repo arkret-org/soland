@@ -435,7 +435,9 @@ fn target_info_for_relation_ref(
     if let Some(space) = projection.space_containers.get(target_ref) {
         return (
             Some(space.realm_id.clone()),
-            space.state != SpaceContainerLifecycleState::Tombstoned
+            !space.orphaned
+                && !projection.realm_is_in_terminal_state(&space.realm_id)
+                && space.state != SpaceContainerLifecycleState::Tombstoned
                 && space.scope_circle_id.as_deref().is_none_or(|circle_id| {
                     projection.circle_scope_visible_to_actor_at(
                         circle_id,

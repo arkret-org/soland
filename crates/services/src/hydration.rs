@@ -1487,6 +1487,69 @@ pub async fn hydrate_projections_from_persistence(
     // that its referenced source Relation or Strand already exists.
     hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc, projection_adapter)
         .await?;
+    let mut lifecycle = BTreeMap::new();
+    for record in hydration_replay_records(persistence).await? {
+        if !matches!(
+            arkret_wire::EventKind::from_wire(&record.kind),
+            arkret_wire::EventKind::RealmArchive
+                | arkret_wire::EventKind::RealmRestore
+                | arkret_wire::EventKind::RealmFreeze
+                | arkret_wire::EventKind::RealmUnfreeze
+                | arkret_wire::EventKind::RealmTombstone
+        ) {
+            continue;
+        }
+        let id = arkret_wire::EventId::new(record.event_id.clone())
+            .map_err(soland_storage::PersistenceError::database)?;
+        let accepted = persistence
+            .authority_commits()
+            .committed_event(&id)
+            .await?
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "lifecycle hydration has no accepting Commit".to_owned(),
+                )
+            })?;
+        if serde_json::to_value(&accepted.event)
+            .map_err(soland_storage::PersistenceError::database)?
+            != record.envelope
+            || accepted.commit.event_ref != id
+            || accepted.commit.stream_ref
+                != (CommitStreamRef::Realm {
+                    realm_id: accepted.event.realm_id.clone(),
+                })
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "lifecycle hydration differs from its accepted Realm stream binding".to_owned(),
+            ));
+        }
+        let reference = arkret_wire::CommittedEventRef {
+            event_id: id,
+            commit_id: accepted.commit.commit_id,
+            stream_ref: accepted.commit.stream_ref,
+            stream_position: accepted.commit.stream_position,
+        };
+        let stream = arkret_canonical::canonical_json_bytes(&reference.stream_ref)
+            .map_err(soland_storage::PersistenceError::database)?;
+        if lifecycle
+            .insert((stream, reference.stream_position), (record, reference))
+            .is_some()
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "lifecycle hydration has conflicting stream coordinates".to_owned(),
+            ));
+        }
+    }
+    for (record, reference) in lifecycle.into_values() {
+        replay_hydration_record_with_commit(
+            projection_adapter,
+            proj,
+            record,
+            &hydration_hlc,
+            "accepted-realm-lifecycle",
+            Some(reference),
+        )?;
+    }
     Ok(())
 }
 

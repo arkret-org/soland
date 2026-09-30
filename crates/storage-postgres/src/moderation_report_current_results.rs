@@ -157,9 +157,12 @@ pub(crate) async fn commit_moderation_report_current_result_in_connection(
     let typed: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
         serde_json::from_value(payload.clone())
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    typed
-        .validate_self_endpoint(event.actor_id.signing_principal_id())
-        .map_err(|error| PersistenceError::Conflict(error.to_owned()))?;
+    let mimi = typed.provenance == Some(arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade);
+    if !mimi {
+        typed
+            .validate_self_endpoint(event.actor_id.signing_principal_id())
+            .map_err(|error| PersistenceError::Conflict(error.to_owned()))?;
+    }
     if typed.realm_id != event.realm_id {
         return Err(target_not_found());
     }
@@ -174,7 +177,11 @@ pub(crate) async fn commit_moderation_report_current_result_in_connection(
         return Err(target_not_found());
     }
     let before = position(commit)?;
-    ensure_scope_member(conn, &event.realm_id, &event.scope_ref, &event.actor_id).await?;
+    // The exact full reporter Account and its current membership were checked
+    // by the required MimiFacade producer guard before this writer is called.
+    if !mimi {
+        ensure_scope_member(conn, &event.realm_id, &event.scope_ref, &event.actor_id).await?;
+    }
     ensure_scope_target(
         conn,
         &event.realm_id,
@@ -246,6 +253,17 @@ pub(crate) async fn scope_member_in_connection(
     scope: &arkret_wire::ScopeRef,
     actor: &arkret_wire::ActorId,
 ) -> PersistenceResult<bool> {
+    if let arkret_wire::ScopeRef::Sidecar {
+        realm_id,
+        sidecar_id,
+    } = scope
+    {
+        if realm_id != realm {
+            return Ok(false);
+        }
+        return crate::sidecar_access::participant_in_connection(conn, realm, sidecar_id, actor)
+            .await;
+    }
     if crate::member_state_admission::locked_membership(conn, realm, actor).await? != "join" {
         return Ok(false);
     }

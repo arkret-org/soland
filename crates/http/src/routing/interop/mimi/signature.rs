@@ -138,19 +138,8 @@ pub(super) fn mimi_resolve_verifying_key(
     state: &AppState,
     verification_method: &str,
 ) -> Result<ed25519_dalek::VerifyingKey, AppError> {
-    if let Ok(key) = crate::jws_verify::resolve_ed25519_pubkey(state, verification_method) {
-        return Ok(key);
-    }
-    if state.config().development_mode {
-        let signing = http_signature::deterministic_development_signing_key(
-            b"soland:mimi-provider-key:",
-            verification_method,
-        );
-        return Ok(signing.verifying_key());
-    }
-    Err(mimi_signature_error_invalid(
-        "MIMI provider verification key is unavailable",
-    ))
+    crate::jws_verify::resolve_ed25519_pubkey(state, verification_method)
+        .map_err(|_| mimi_signature_error_invalid("MIMI provider verification key is unavailable"))
 }
 
 /// `mimi-interop.md` §5 shares the per-delivery signature failure codes with
@@ -166,4 +155,35 @@ pub(super) fn mimi_signature_error_invalid(message: impl Into<String>) -> AppErr
 
 pub(super) fn mimi_signature_error_window(message: impl Into<String>) -> AppError {
     crate::app_error!(SignatureWindowInvalid, message)
+}
+
+#[cfg(test)]
+mod signature_boundary_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bearer_does_not_replace_provider_transport_signature() {
+        let mut config = crate::config::AppConfig::test_default();
+        config.development_mode = true;
+        let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+        let mut request = Request::default();
+        request
+            .headers_mut()
+            .insert("authorization", "Bearer arbitrary-session".parse().unwrap());
+        let error = verify_mimi_source_service_signature(&state, &mut request, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, arkret_wire::ErrorCode::HttpSignatureRequired);
+    }
+
+    #[test]
+    fn unavailable_provider_key_is_not_synthesized_in_development() {
+        let mut config = crate::config::AppConfig::test_default();
+        config.development_mode = true;
+        let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+        let error =
+            mimi_resolve_verifying_key(&state, "did:web:unresolved-provider.invalid#provider-key")
+                .unwrap_err();
+        assert_eq!(error.code, arkret_wire::ErrorCode::HttpSignatureInvalid);
+    }
 }

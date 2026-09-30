@@ -794,12 +794,11 @@ pub(super) async fn register_package_install(
                 || package.service_id != initial_package.service_id
                 || package.bot_actor_id != initial_package.bot_actor_id
                 || reference.actor_id != existing.bot_actor_id
-                || reference.managed_actor_provision_ref.event_id
-                    != existing.bot_actor_provision_ref
-                || reference.pcr_genesis_ref.event_id != existing.bot_pcr_genesis_event.event_id
-                || reference.accountability_grant_ref.event_id
+                || reference.managed_actor_provision_ref != existing.bot_actor_provision_ref
+                || reference.pcr_genesis_ref != existing.bot_pcr_genesis_event.event_id
+                || reference.accountability_grant_ref
                     != existing.bot_accountability_grant_event.event_id
-                || reference.profile_event_ref.event_id != existing.bot_profile_event.event_id
+                || reference.profile_event_ref != existing.bot_profile_event.event_id
                 || reference.initial_package_bot_actor_id != existing.bot_actor_id
             {
                 return Err(AppError::conflict(

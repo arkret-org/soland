@@ -75,6 +75,8 @@ fn batch(
     soland_storage::EventBatchCommitRequest {
         events: vec![request],
         realm_organization_proof: Some(proof),
+        invite_claim_proof: None,
+        event_approvals: None,
         franking_replay_nonce: None,
         applet_record: None,
         applet_authoring_preview: None,

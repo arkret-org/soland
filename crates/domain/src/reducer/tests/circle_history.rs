@@ -115,7 +115,7 @@ fn circle_history_uses_current_join_boundary() {
 }
 
 #[test]
-fn realm_leave_cascades_to_circle_history_membership() {
+fn realm_leave_invalidates_circle_visibility_without_synthesizing_membership() {
     let (mut state, hlc, base) = seed_state("since_join");
     let join_at = base + Duration::minutes(5);
     let leave_at = base + Duration::minutes(30);
@@ -159,8 +159,84 @@ fn realm_leave_cascades_to_circle_history_membership() {
         state
             .circle_membership(CIRCLE, &bob)
             .map(|m| m.state.as_str()),
-        Some("leave")
+        Some("join")
     );
+    assert_eq!(
+        state.circle_membership(CIRCLE, &bob).unwrap().updated_at,
+        join_at
+    );
+    assert_eq!(state.circles[CIRCLE].updated_at, Some(join_at));
+    assert_eq!(
+        state
+            .circle_member_join_refs
+            .get(&(CIRCLE.to_owned(), bob.clone())),
+        Some(&join.context.event_id.to_string())
+    );
+
+    let mut rejoin = make_operation(
+        arkret_wire::EventKind::MemberState,
+        REALM,
+        serde_json::json!({"member_id":account_actor(BOB),"membership":"join","sender":BOB}),
+    );
+    rejoin.created_at = leave_at + Duration::minutes(1);
+    assert!(matches!(
+        state.restore_accepted_membership(&rejoin, rejoin.created_at),
+        ProjectionEffect::MembershipChanged { .. }
+    ));
+    assert!(!state.circle_scope_visible_to_actor(CIRCLE, &bob));
+    assert_eq!(state.circle_membership(CIRCLE, &bob).unwrap().state, "join");
+}
+
+#[test]
+fn parent_ban_invalidates_multiple_circles_without_changing_canonical_rows() {
+    let (mut state, hlc, base) = seed_state("all_history_for_current_members");
+    let mut join = make_operation(
+        arkret_wire::EventKind::CircleMemberState,
+        REALM,
+        serde_json::json!({"circle_id":CIRCLE,"member_id":account_actor(BOB),
+            "membership":"join","sender":ALICE,"manage_capability_verified":true}),
+    );
+    join.created_at = base;
+    assert!(matches!(
+        state.apply(&join, &hlc),
+        ProjectionEffect::CircleMemberStateChanged { .. }
+    ));
+    let bob = account_actor_string(BOB);
+    let other_id = arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [0x71; 32],
+    ))
+    .to_string();
+    let mut other = state.circles[CIRCLE].clone();
+    other.circle_id = other_id.clone();
+    state.circles.insert(other_id.clone(), other);
+    let mut canonical = state.circle_membership(CIRCLE, &bob).unwrap().clone();
+    canonical.circle_id = other_id.clone();
+    state
+        .circle_memberships
+        .insert((other_id.clone(), bob.clone()), canonical);
+    let old_rows = state.circle_memberships.clone();
+    let mut ban = make_operation(
+        arkret_wire::EventKind::MemberState,
+        REALM,
+        serde_json::json!({"realm_id":REALM,"member_id":account_actor(BOB),
+            "membership":"ban","sender":ALICE}),
+    );
+    ban.created_at = base + Duration::minutes(1);
+    assert!(matches!(
+        state.restore_accepted_membership(&ban, ban.created_at),
+        ProjectionEffect::MembershipChanged { .. }
+    ));
+    for circle in [CIRCLE, other_id.as_str()] {
+        assert!(!state.circle_scope_visible_to_actor(circle, &bob));
+        assert!(!state.circle_scope_visible_to_actor_at(circle, &bob, base));
+        let old = &old_rows[&(circle.to_owned(), bob.clone())];
+        let current = state.circle_membership(circle, &bob).unwrap();
+        assert_eq!(current.state, old.state);
+        assert_eq!(current.joined_at, old.joined_at);
+        assert_eq!(current.updated_at, old.updated_at);
+        assert_eq!(state.circles[circle].updated_at, Some(base));
+    }
 }
 
 #[test]

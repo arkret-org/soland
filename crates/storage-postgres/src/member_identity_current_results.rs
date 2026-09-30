@@ -121,7 +121,23 @@ pub(crate) async fn commit_in_connection(
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid("invalid member identity assertion set"))?;
     assertions.push(json!({"tag_id": format!("{}:0", event.event_id), "value": raw}));
-    assertions.sort_by(|a, b| a["tag_id"].as_str().cmp(&b["tag_id"].as_str()));
+    let mut sorted = assertions
+        .iter()
+        .map(|entry| {
+            let dot = serde_json::from_value::<
+                arkret_models_collaboration::exact_current_results::CanonicalEventDot,
+            >(entry["tag_id"].clone())
+            .map_err(|_| invalid("member identity current contains an invalid Event dot"))?;
+            Ok((dot, entry.clone()))
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    if sorted.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(invalid(
+            "member identity current contains duplicate Event dots",
+        ));
+    }
+    *assertions = sorted.into_iter().map(|(_, value)| value).collect();
     sql_query("INSERT INTO member_identity_updates_current_results (realm_id,member_id,segment,current_commit_id,current_stream_position,value,updated_at) VALUES ($1,$2,'member_identity',$3,$4,$5,$6) ON CONFLICT (realm_id,member_id,segment) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at")
         .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&member)
         .bind::<Text,_>(commit.commit_id.as_str())

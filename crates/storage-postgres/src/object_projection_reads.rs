@@ -198,6 +198,16 @@ pub(crate) async fn lists_for_actor(
         if joined.as_ref().is_some_and(|row| row.value != serde_json::json!({"membership":"join"})) {
             return Err(corrupt("member current value disagrees with joined state").into());
         }
+        let terminal = diesel::sql_query(
+            "SELECT EXISTS(SELECT 1 FROM realm_bootstrap_current_results \
+             WHERE realm_id=$1 AND result_family IN ('realm_tombstone','realm_destroy')) AS present",
+        ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
+        if terminal.present {
+            return Ok(Some((
+                ProjectionSpaceList { realm_id: realm_id.clone(), total: 0, spaces: Vec::new(), next_cursor: None, has_more: false },
+                ProjectionStrandList { realm_id: realm_id.clone(), total: 0, strands: Vec::new(), next_cursor: None, has_more: false },
+            )));
+        }
         let circle_rows = diesel::sql_query(
             "SELECT m.circle_id FROM circle_member_state_current_results m \
              JOIN circle_current_results c ON c.circle_id=m.circle_id AND c.realm_id=m.realm_id \

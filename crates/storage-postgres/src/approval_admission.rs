@@ -1,0 +1,492 @@
+//! Detached evidence qualification and private consumption at the accepting cut.
+use arkret_wire::{
+    ActorId, ApprovalSignature, CapabilityActionId, Event, RealmCommit, WireResourceSelector,
+};
+use diesel::sql_types::{Jsonb, Text, Timestamptz};
+use diesel::{QueryableByName, sql_query};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use soland_storage::{
+    EventApprovalCommit, GrantEvaluation, OperationFacts, PersistenceError, PersistenceResult,
+};
+
+use crate::realm_authorization_cut::RealmAuthorizationCut;
+
+#[derive(QueryableByName)]
+struct Member {
+    #[diesel(sql_type = Text)]
+    member_id: String,
+    #[diesel(sql_type = Jsonb)]
+    membership_revision: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct QualifiedApproval {
+    pub method: soland_storage::ApprovalHistoricalMethod,
+    pub qualification_basis: serde_json::Value,
+}
+
+fn error(code: &str, detail: impl std::fmt::Display) -> PersistenceError {
+    if code == "schema_violation" {
+        return PersistenceError::SchemaViolation(detail.to_string());
+    }
+    PersistenceError::Conflict(format!("{code}: {detail}"))
+}
+
+/// Verify every submitted evidence object, including evidence not needed by a
+/// requirement. Extra evidence cannot smuggle malformed or unrelated signatures.
+pub(crate) fn validate_candidate<'a>(
+    event: &Event,
+    commit: &RealmCommit,
+    prepared: Option<&'a EventApprovalCommit>,
+) -> PersistenceResult<&'a [soland_storage::ApprovalHistoricalMethod]> {
+    let Some(prepared) = prepared else {
+        return Ok(&[]);
+    };
+    if prepared.event_id != event.event_id
+        || prepared.committed_at != commit.committed_at
+        || prepared.event_digest
+            != arkret_canonical::canonical_sha256(event)
+                .map_err(|e| error("schema_violation", e))?
+    {
+        return Err(error(
+            "signature_invalid",
+            "approval history does not bind this accepting cut",
+        ));
+    }
+    for method in &prepared.methods {
+        let signature = &method.signature;
+        let crypt_code = if matches!(
+            signature.input.approval_context,
+            arkret_wire::ApprovalContext::ListWip { .. }
+        ) {
+            "approval_required"
+        } else {
+            "signature_invalid"
+        };
+        signature
+            .validate()
+            .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+        if signature.input.operation != "ak.self.events.command.submit.v1" {
+            return Err(error(
+                "schema_violation",
+                "approval operation has no registered Event carrier",
+            ));
+        }
+        let did =
+            arkret_identity::verification_method_did(signature.proof.verification_method.as_str())
+                .map_err(|e| error("schema_violation", e))?;
+        if let Some(control) = method.native_control.as_ref() {
+            if control.principal()
+                != &arkret_wire::project_did_to_core_id(&signature.input.approver_did)
+                    .map_err(|e| error(crypt_code, e))?
+                || control.method() != &signature.proof.verification_method
+                || control.public_key() != &method.public_key
+                || method
+                    .control_history
+                    .as_ref()
+                    .and_then(|basis| basis.get("verified_at"))
+                    .and_then(serde_json::Value::as_str)
+                    != Some(
+                        arkret_canonical::format_timestamp_canonical(signature.input.approved_at)
+                            .as_str(),
+                    )
+            {
+                return Err(error(
+                    crypt_code,
+                    "approval native control differs from its signing-time history",
+                ));
+            }
+        } else if did != signature.input.approver_did {
+            return Err(error(crypt_code, "approval method controller differs"));
+        }
+        if did.method() == "key" {
+            use arkret_identity::DidResolver as _;
+            let document = arkret_identity::DidKeyResolver::new()
+                .resolve_did_document(&did)
+                .map_err(|e| error(crypt_code, e))?;
+            let resolved = arkret_identity::jws::resolve_ed25519_pubkey_from_document(
+                &document,
+                signature.proof.verification_method.as_str(),
+            )
+            .map_err(|e| error(crypt_code, e))?;
+            if resolved.to_bytes() != method.public_key {
+                return Err(error(
+                    crypt_code,
+                    "approval key differs from immutable DID authority",
+                ));
+            }
+        } else if did.method() != "webvh" {
+            return Err(error(
+                crypt_code,
+                "approval method has no authenticated history",
+            ));
+        }
+        let key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: method.public_key.to_vec(),
+        };
+        match signature.input.approval_target {
+            arkret_wire::ApprovalTarget::Event { .. } => {
+                if let Some(control) = method.native_control.as_ref() {
+                    arkret_identity::principal_control::verify_native_control_event_approval(
+                        control,
+                        signature,
+                        event,
+                        "ak.self.events.command.submit.v1",
+                        signature.input.action,
+                        commit.committed_at,
+                    )
+                    .map_err(|e| error(crypt_code, e))?;
+                } else {
+                    arkret_signatures::approval_signature::verify_event_approval_signature(
+                        signature,
+                        event,
+                        "ak.self.events.command.submit.v1",
+                        signature.input.action,
+                        commit.committed_at,
+                        &key,
+                    )
+                    .map_err(|e| error(crypt_code, e))?;
+                }
+            }
+            arkret_wire::ApprovalTarget::Operation => {
+                signature
+                    .input
+                    .validate_approved_at(commit.committed_at)
+                    .map_err(|e| error(crypt_code, e))?;
+                let original = arkret_wire::EventAdmissionSubmission {
+                    event: event.clone(),
+                    approval_signatures: None,
+                };
+                let digest = arkret_canonical::canonical_sha256(&original)
+                    .map_err(|e| error("schema_violation", e))?;
+                let controller = arkret_identity::verification_method_did(
+                    signature.proof.verification_method.as_str(),
+                )
+                .map_err(|e| error("schema_violation", e))?;
+                if signature.input.realm_id != event.realm_id
+                    || signature.input.initiating_actor_id != event.actor_id
+                    || signature.input.request_canonical_digest.as_str() != digest
+                    || (method.native_control.is_none()
+                        && controller != signature.input.approver_did)
+                {
+                    return Err(error(
+                        crypt_code,
+                        "operation approval does not bind the original typed request",
+                    ));
+                }
+                let bytes =
+                    arkret_signatures::approval_signature::approval_signature_signing_bytes(
+                        signature,
+                    )
+                    .map_err(|e| error("schema_violation", e))?;
+                arkret_signatures::Ed25519DetachedJwsVerifier::new()
+                    .verify_detached_jws(&signature.proof.jws, &bytes, &key)
+                    .map_err(|e| error(crypt_code, e))?;
+            }
+        }
+    }
+    Ok(&prepared.methods)
+}
+
+/// A DID earns one vote only through a joined complete Actor's current grant,
+/// with the full shared constraint evaluator on the exact action and target.
+/// Governance requires an actual grant; List WIP also recognizes the registry
+/// owner aggregate, without overriding a matching refusal constraint.
+pub(crate) async fn approver_qualifies(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    vote: &ApprovalSignature,
+    action: CapabilityActionId,
+    target: &WireResourceSelector,
+    facts: &OperationFacts,
+    at: chrono::DateTime<chrono::Utc>,
+    allow_owner: bool,
+) -> PersistenceResult<Option<serde_json::Value>> {
+    let principal = arkret_wire::project_did_to_core_id(&vote.input.approver_did)
+        .map_err(|e| error("schema_violation", e))?;
+    qualify_principal(
+        conn,
+        event,
+        &principal,
+        action,
+        target,
+        facts,
+        at,
+        allow_owner,
+    )
+    .await
+}
+
+pub(crate) async fn qualify_principal(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    principal: &arkret_wire::DidCoreId,
+    action: CapabilityActionId,
+    target: &WireResourceSelector,
+    facts: &OperationFacts,
+    at: chrono::DateTime<chrono::Utc>,
+    allow_owner: bool,
+) -> PersistenceResult<Option<serde_json::Value>> {
+    if principal == event.actor_id.signing_principal_id() {
+        return Ok(None);
+    }
+    let members = sql_query("SELECT member_id,jsonb_build_object('commit_id',current_commit_id,'stream_position',current_stream_position) AS membership_revision FROM member_state_current_results WHERE realm_id=$1 AND membership='join'")
+        .bind::<Text,_>(event.realm_id.as_str()).load::<Member>(&mut *conn).await.map_err(PersistenceError::database)?;
+    for member in members {
+        let actor: ActorId = serde_json::from_str(&member.member_id).map_err(|e| {
+            PersistenceError::Database(format!("stored membership ActorId is invalid: {e}"))
+        })?;
+        if actor.signing_principal_id() != principal {
+            continue;
+        }
+        let checks = arkret_schema::capability_action_descriptor(action).required_evaluator_checks;
+        if checks.iter().any(|check| match *check {
+            "actor_eq_target_author" => facts.target_owner.as_ref() != Some(&actor),
+            _ => true,
+        }) {
+            continue;
+        }
+        let cut = RealmAuthorizationCut::read(conn, &event.realm_id, &actor).await?;
+        let actions = [action.as_str()];
+        let owner_covers = allow_owner
+            && cut.actor_is_root_controller()
+            && arkret_schema::capability_action_descriptor(action)
+                .target_event_kinds
+                .iter()
+                .any(|kind| {
+                    arkret_schema::capability_actions_for_event_kind(kind)
+                        .any(|row| row.action == CapabilityActionId::RealmOwner)
+                });
+        let qualified = match cut.evaluate(&actions, target, facts, at) {
+            GrantEvaluation::Allowed(ref satisfied) => !satisfied.is_empty() || owner_covers,
+            GrantEvaluation::Unnamed | GrantEvaluation::Unsatisfied => owner_covers,
+            _ => false,
+        };
+        if qualified {
+            #[derive(QueryableByName)]
+            struct RootBasis {
+                #[diesel(sql_type=Jsonb)]
+                value: serde_json::Value,
+            }
+            let root_basis=sql_query("SELECT to_jsonb(r) AS value FROM realm_authority_root_current_results r WHERE realm_id=$1")
+                .bind::<Text,_>(event.realm_id.as_str()).get_result::<RootBasis>(&mut *conn).await.map_err(PersistenceError::database)?;
+            let authorization = cut.actor_authorization(at)?;
+            let grants = authorization
+                .grants
+                .iter()
+                .map(|grant| {
+                    serde_json::json!({
+                        "value":grant.grant,"current_revision":grant.revision,
+                    })
+                })
+                .collect::<Vec<_>>();
+            return Ok(Some(
+                serde_json::json!({"actor_id":actor,"membership":"join","membership_revision":member.membership_revision,
+                "evaluated_at":arkret_canonical::format_timestamp_canonical(at),
+                "action":action,"target":target,"effective_grants":grants,"owner_aggregate":owner_covers,"realm_authority_root":root_basis.value}),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+/// Called only after all independent requirements and canonical writes succeed
+/// within the same transaction. A uniqueness race rolls back the entire target.
+pub(crate) async fn consume_and_audit(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    commit: &RealmCommit,
+    methods: &[QualifiedApproval],
+    accepted_basis: &serde_json::Value,
+) -> PersistenceResult<()> {
+    // The same grant-context evidence can satisfy independent grant and
+    // governance requirements. Consume its nonce once and retain both bases.
+    let mut grouped = std::collections::BTreeMap::new();
+    for qualified in methods {
+        let vote = &qualified.method.signature;
+        let context = arkret_canonical::canonical_json_string(&vote.input.approval_context)
+            .map_err(|e| error("schema_violation", e))?;
+        let key = (
+            context,
+            vote.input.approver_did.to_string(),
+            vote.input.nonce.clone(),
+        );
+        let entry = grouped
+            .entry(key)
+            .or_insert_with(|| (qualified, Vec::new()));
+        if entry.0.method.signature != qualified.method.signature
+            || entry.0.method.public_key != qualified.method.public_key
+        {
+            return Err(error(
+                "approval_nonce_reused",
+                "distinct evidence shares one approval nonce",
+            ));
+        }
+        if !entry.1.contains(&qualified.qualification_basis) {
+            entry.1.push(qualified.qualification_basis.clone());
+        }
+    }
+    let event_digest =
+        arkret_canonical::canonical_sha256(event).map_err(|e| error("schema_violation", e))?;
+    for ((context, ..), (qualified, qualifications)) in grouped {
+        let method = &qualified.method;
+        let vote = &method.signature;
+        let evidence = serde_json::to_value(vote).map_err(|e| error("schema_violation", e))?;
+        let basis = serde_json::json!({"historical_method":vote.proof.verification_method,
+            "verified_at":arkret_canonical::format_timestamp_canonical(vote.input.approved_at),
+            "public_key":arkret_canonical::ed25519_pubkey_to_did_key_multibase(&method.public_key),
+            "authority_cut":accepted_basis,"qualifications":qualifications,"native_control_history":method.control_history});
+        let inserted = sql_query("INSERT INTO event_approval_private_audit (approval_context,approver_did,nonce,event_id,event_digest,realm_id,accepted_commit_id,evidence,accepted_basis,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(approval_context,approver_did,nonce) DO NOTHING")
+            .bind::<Text,_>(&context).bind::<Text,_>(vote.input.approver_did.as_str())
+            .bind::<Text,_>(&vote.input.nonce).bind::<Text,_>(event.event_id.as_str())
+            .bind::<Text,_>(&event_digest).bind::<Text,_>(event.realm_id.as_str())
+            .bind::<Text,_>(commit.commit_id.as_str()).bind::<Jsonb,_>(&evidence).bind::<Jsonb,_>(&basis)
+            .bind::<Timestamptz,_>(commit.committed_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        if inserted != 1 {
+            return Err(error(
+                "approval_nonce_reused",
+                "approval nonce has already been consumed",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// List WIP is an independent fixed one-vote gate; votes from other contexts
+/// cannot satisfy it. A stale revision never reaches nonce consumption.
+pub(crate) async fn require_list_wip(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    commit: &RealmCommit,
+    prepared: Option<&EventApprovalCommit>,
+    list: &arkret_wire::SpaceId,
+    revision: &arkret_wire::CurrentRevision,
+) -> PersistenceResult<Vec<QualifiedApproval>> {
+    let methods = validate_candidate(event, commit, prepared)?;
+    let target = WireResourceSelector::space(event.realm_id.clone(), list.clone());
+    let facts = OperationFacts {
+        object_kind: Some("space".to_owned()),
+        space_id: Some(list.to_string()),
+        space_kind: Some("list".to_owned()),
+        ..OperationFacts::default()
+    };
+    let mut counted = std::collections::BTreeSet::new();
+    let mut accepted = Vec::new();
+    for method in methods {
+        let vote = &method.signature;
+        if !matches!(
+            vote.input.approval_context,
+            arkret_wire::ApprovalContext::ListWip { .. }
+        ) {
+            continue;
+        }
+        vote.input
+            .validate_list_wip_binding(event, "ak.self.events.command.submit.v1", list, revision)
+            .map_err(|e| error("approval_required", e))?;
+        if let Some(basis) = approver_qualifies(
+            conn,
+            event,
+            vote,
+            CapabilityActionId::SpaceUpdate,
+            &target,
+            &facts,
+            commit.committed_at,
+            true,
+        )
+        .await?
+        {
+            if counted.insert(
+                arkret_wire::project_did_to_core_id(&vote.input.approver_did)
+                    .map_err(|e| error("schema_violation", e))?,
+            ) {
+                accepted.push(QualifiedApproval {
+                    method: method.clone(),
+                    qualification_basis: basis,
+                });
+            }
+        }
+    }
+    if accepted.is_empty() {
+        return Err(error(
+            "approval_required",
+            "action=ak.strand.move effective_approval_quorum=1 counted_approvals=0",
+        ));
+    }
+    Ok(accepted)
+}
+
+/// Governance remains a tightening layer after base capability admission. A
+/// grant-context vote may count here only when it names a satisfied dependency;
+/// realm-context votes cannot satisfy a grant's separate requirement.
+pub(crate) async fn require_governance(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    commit: &RealmCommit,
+    prepared: Option<&EventApprovalCommit>,
+    action: CapabilityActionId,
+    target: &WireResourceSelector,
+    facts: &OperationFacts,
+    dependencies: &[arkret_wire::GrantId],
+) -> PersistenceResult<Vec<QualifiedApproval>> {
+    let Some(quorum) = crate::policy_action_admission::current_quorum(
+        conn,
+        event,
+        action,
+        target,
+        facts,
+        commit.committed_at,
+    )
+    .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let methods = validate_candidate(event, commit, prepared)?;
+    let mut counted = std::collections::BTreeSet::new();
+    let mut accepted = Vec::new();
+    for method in methods {
+        let vote = &method.signature;
+        if vote.input.action != action {
+            continue;
+        }
+        match &vote.input.approval_context {
+            arkret_wire::ApprovalContext::RealmGovernance {} => {}
+            arkret_wire::ApprovalContext::Grant { grant_id } if dependencies.contains(grant_id) => {
+            }
+            _ => continue,
+        }
+        if let Some(basis) = approver_qualifies(
+            conn,
+            event,
+            vote,
+            action,
+            target,
+            facts,
+            commit.committed_at,
+            false,
+        )
+        .await?
+        {
+            if counted.insert(
+                arkret_wire::project_did_to_core_id(&vote.input.approver_did)
+                    .map_err(|e| error("schema_violation", e))?,
+            ) {
+                accepted.push(QualifiedApproval {
+                    method: method.clone(),
+                    qualification_basis: basis,
+                });
+            }
+        }
+    }
+    if (accepted.len() as u64) < quorum {
+        return Err(error(
+            "approval_required",
+            format!(
+                "action={} effective_approval_quorum={} counted_approvals={}",
+                action.as_str(),
+                quorum,
+                accepted.len()
+            ),
+        ));
+    }
+    Ok(accepted)
+}

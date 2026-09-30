@@ -6,7 +6,150 @@
 //! members and schema-invalid values are `schema_violation`
 //! (`sync/service-http-binding.md` §6).
 
+use serde_json::json;
+
 use super::common::*;
+
+#[test]
+fn storage_encryption_is_required_and_ciphertext_cannot_be_presigned() {
+    run_on_deep_stack(
+        "storage_encryption_is_required_and_ciphertext_cannot_be_presigned",
+        storage_encryption_is_required_and_ciphertext_cannot_be_presigned_body,
+    );
+}
+
+async fn storage_encryption_is_required_and_ciphertext_cannot_be_presigned_body() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let content = || Part::Content {
+        filename: None,
+        content_type: Some("application/octet-stream"),
+        bytes: b"encrypted bytes",
+    };
+    let scheme = r#"{"scheme":"ak.blob.stream_aead.v1"}"#;
+    let invalid = vec![
+        vec![content(), Part::Text("size_bytes", "15")],
+        vec![
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", "{}"),
+        ],
+        vec![
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", r#"{"scheme":"unknown"}"#),
+        ],
+        vec![
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text(
+                "encryption",
+                r#"{"scheme":"ak.blob.stream_aead.v1","key_ref":"secret"}"#,
+            ),
+        ],
+        vec![
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", "null"),
+            Part::Text("media_type", "image/png"),
+        ],
+        vec![
+            Part::Content {
+                filename: None,
+                content_type: Some("image/png"),
+                bytes: b"encrypted bytes",
+            },
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", scheme),
+        ],
+        vec![
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", "null"),
+            Part::Text("purpose", "profile_avatar"),
+        ],
+    ];
+    for parts in invalid {
+        let (status, body) = upload(&state, &token, &parts).await;
+        assert_eq!(status, 422, "{body}");
+        assert_eq!(problem_code(&body), "schema_violation");
+        assert!(
+            state
+                .test_persistence()
+                .blobs()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    let (status, body) = upload(
+        &state,
+        &token,
+        &[
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", scheme),
+        ],
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let blob_ref = body["blob_ref"].as_str().unwrap();
+    let stored = state
+        .test_persistence()
+        .blobs()
+        .get(blob_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(stored.encryption).unwrap(),
+        serde_json::from_str::<Value>(scheme).unwrap()
+    );
+    let (status, rejected) = upload(
+        &state,
+        &token,
+        &[
+            content(),
+            Part::Text("size_bytes", "15"),
+            Part::Text("encryption", "null"),
+        ],
+    )
+    .await;
+    assert_eq!(status, 409, "{rejected}");
+    assert_eq!(problem_code(&rejected), "failed_precondition");
+    assert_eq!(
+        state
+            .test_persistence()
+            .blobs()
+            .get(blob_ref)
+            .await
+            .unwrap()
+            .unwrap()
+            .encryption,
+        stored.encryption
+    );
+    let mut read = TestClient::get(format!(
+        "http://server/_arkret/self/blob/get?blob_ref={blob_ref}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    assert_eq!(read.status_code.unwrap().as_u16(), 200);
+    assert_eq!(
+        read.take_bytes(None).await.unwrap().as_ref(),
+        b"encrypted bytes"
+    );
+    let mut presign = TestClient::post("http://server/_arkret/self/blob/presign")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(json!({"blob_ref":blob_ref,"purpose":"media_inline"}).to_string())
+        .send(&app_from_state(state))
+        .await;
+    assert_eq!(presign.status_code.unwrap().as_u16(), 403);
+    let body: Value = presign.take_json().await.unwrap();
+    assert_eq!(problem_code(&body), "capability_denied");
+}
 
 enum Part<'a> {
     Text(&'a str, &'a str),
@@ -88,14 +231,14 @@ async fn canonical_upload_reads_every_member_from_form_parts_body() {
         &[
             Part::Content {
                 filename: None,
-                content_type: Some("text/plain"),
+                content_type: Some("text/markdown"),
                 bytes,
             },
             Part::Text("size_bytes", &size),
+            Part::Text("encryption", "null"),
             Part::Text("media_type", "text/markdown"),
             Part::Text("content_digest", &digest),
             Part::Text("filename", "../notes v1.md"),
-            Part::Text("purpose", "long_text"),
         ],
     )
     .await;
@@ -127,6 +270,7 @@ async fn canonical_upload_reads_every_member_from_form_parts_body() {
                 bytes: other,
             },
             Part::Text("size_bytes", &other_size),
+            Part::Text("encryption", "null"),
         ],
     )
     .await;
@@ -159,6 +303,7 @@ async fn canonical_upload_rejects_bodies_outside_the_closed_schema_body() {
             vec![
                 content(),
                 Part::Text("size_bytes", &size),
+                Part::Text("encryption", "null"),
                 Part::Text("encrypted", "true"),
             ],
         ),
@@ -167,24 +312,33 @@ async fn canonical_upload_rejects_bodies_outside_the_closed_schema_body() {
             vec![
                 content(),
                 Part::Text("size_bytes", &size),
-                Part::Text("purpose", "long_text"),
-                Part::Text("purpose", "long_text"),
+                Part::Text("encryption", "null"),
+                Part::Text("encryption", "null"),
+                Part::Text("encryption", "null"),
             ],
         ),
         ("a missing size_bytes", vec![content()]),
         (
             "a missing content part",
-            vec![Part::Text("size_bytes", &size)],
+            vec![
+                Part::Text("size_bytes", &size),
+                Part::Text("encryption", "null"),
+            ],
         ),
         (
             "a non-integer size_bytes",
-            vec![content(), Part::Text("size_bytes", "-1")],
+            vec![
+                content(),
+                Part::Text("size_bytes", "-1"),
+                Part::Text("encryption", "null"),
+            ],
         ),
         (
-            "a purpose outside its pattern",
+            "retired upload purpose",
             vec![
                 content(),
                 Part::Text("size_bytes", &size),
+                Part::Text("encryption", "null"),
                 Part::Text("purpose", "message.attachment"),
             ],
         ),
@@ -193,6 +347,7 @@ async fn canonical_upload_rejects_bodies_outside_the_closed_schema_body() {
             vec![
                 content(),
                 Part::Text("size_bytes", &size),
+                Part::Text("encryption", "null"),
                 Part::Text("media_type", "text/plain; charset=utf-8"),
             ],
         ),
@@ -201,6 +356,7 @@ async fn canonical_upload_rejects_bodies_outside_the_closed_schema_body() {
             vec![
                 content(),
                 Part::Text("size_bytes", &size),
+                Part::Text("encryption", "null"),
                 Part::Text("realm_id", "realm-1"),
             ],
         ),
@@ -209,6 +365,7 @@ async fn canonical_upload_rejects_bodies_outside_the_closed_schema_body() {
             vec![
                 content(),
                 Part::Text("size_bytes", &size),
+                Part::Text("encryption", "null"),
                 Part::Text("content_digest", "sha-256=abc"),
             ],
         ),
@@ -258,6 +415,7 @@ async fn canonical_upload_checks_declared_size_digest_and_realm_body() {
         &[
             content(),
             Part::Text("size_bytes", &size),
+            Part::Text("encryption", "null"),
             Part::Text("content_digest", &blake3),
         ],
     )
@@ -275,6 +433,7 @@ async fn canonical_upload_checks_declared_size_digest_and_realm_body() {
         &[
             content(),
             Part::Text("size_bytes", &size),
+            Part::Text("encryption", "null"),
             Part::Text("content_digest", &wrong),
         ],
     )
@@ -282,7 +441,16 @@ async fn canonical_upload_checks_declared_size_digest_and_realm_body() {
     assert_eq!(status, 422, "{body}");
     assert_eq!(problem_code(&body), "blob_digest_mismatch");
 
-    let (status, body) = upload(&state, &token, &[content(), Part::Text("size_bytes", "3")]).await;
+    let (status, body) = upload(
+        &state,
+        &token,
+        &[
+            content(),
+            Part::Text("size_bytes", "3"),
+            Part::Text("encryption", "null"),
+        ],
+    )
+    .await;
     assert_eq!(status, 400, "{body}");
     assert_eq!(problem_code(&body), "param_invalid");
 
@@ -293,6 +461,7 @@ async fn canonical_upload_checks_declared_size_digest_and_realm_body() {
         &[
             content(),
             Part::Text("size_bytes", &size),
+            Part::Text("encryption", "null"),
             Part::Text(
                 "realm_id",
                 "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",

@@ -95,7 +95,7 @@ pub struct DeviceRevocationGateLinearizationRequest {
     pub expected_authorization_ref: Option<arkret_wire::CommittedEventRef>,
     /// Receiver-derived current binding; never populated from peer bytes.
     pub origin_current_selector: Option<DeviceRevocationGateSelector>,
-    pub action_class: arkret_wire::DeviceRevocationAdmissionAction,
+    pub action_class: arkret_wire::DeviceRevocationDeniedAction,
     pub intent_digest: String,
     pub requested_at: DateTime<Utc>,
 }
@@ -246,7 +246,7 @@ mod tests {
             device_id: "device-a".to_owned(),
             expected_authorization_ref: None,
             origin_current_selector: None,
-            action_class: arkret_wire::DeviceRevocationAdmissionAction::EventWrite,
+            action_class: arkret_wire::DeviceRevocationDeniedAction::EventWrite,
             intent_digest: "sha256:test".to_owned(),
             requested_at: Utc::now(),
         };

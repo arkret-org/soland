@@ -32,7 +32,10 @@ mod accounts;
 mod actor_private_events;
 mod actor_profiles;
 mod agents;
+mod applet_widget_tokens;
 mod applets;
+pub use applet_widget_tokens::*;
+mod approval_admission;
 mod audit;
 mod authority_commit;
 mod backup_series_erase;
@@ -76,6 +79,7 @@ mod sessions;
 mod sidecars;
 mod signal;
 mod sync_cursor;
+pub use approval_admission::*;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;
@@ -254,6 +258,8 @@ pub enum ConflictCode {
     /// A Realm entry was refused by its join rule or join policy; the
     /// applicant sees one non-enumerating result (`join-policy.md` §4).
     GateCheckFailed,
+    /// A Realm or Circle membership edge is outside its registered FSM.
+    InvalidMembershipTransition,
     /// The candidate durable Realm cut cannot be represented by the bounded
     /// inline v1 snapshot.
     SnapshotCapacityExceeded,
@@ -366,7 +372,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 76] = [
+    pub const ALL: [Self; 77] = [
         Self::ApprovalNonceReused,
         Self::ApprovalRequired,
         Self::AppletRevoked,
@@ -395,6 +401,7 @@ impl ConflictCode {
         Self::SpaceAlreadyTerminal,
         Self::CrossRealmStructuralRelation,
         Self::GateCheckFailed,
+        Self::InvalidMembershipTransition,
         Self::SnapshotCapacityExceeded,
         Self::MlsActivationRequired,
         Self::MlsActivationIrreversible,
@@ -482,6 +489,9 @@ impl ConflictCode {
                 arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION
             }
             Self::GateCheckFailed => arkret_wire::ReasonCode::GATE_CHECK_FAILED,
+            Self::InvalidMembershipTransition => {
+                arkret_wire::ReasonCode::INVALID_MEMBERSHIP_TRANSITION
+            }
             Self::SnapshotCapacityExceeded => "snapshot_capacity_exceeded",
             Self::MlsActivationRequired => arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED,
             Self::MlsActivationIrreversible => arkret_wire::ReasonCode::MLS_ACTIVATION_IRREVERSIBLE,

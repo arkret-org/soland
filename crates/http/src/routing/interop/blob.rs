@@ -18,8 +18,8 @@ use arkret_canonical as canonical;
 use arkret_identifiers::{BlobRef, DidCoreId, RealmId};
 use arkret_models_collaboration::objects::blob::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
-    BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,
-    UploadReceipt,
+    BlobPresignPayload, BlobPresignRequestBody, BlobStorageEncryption, BlobUploadOutcome,
+    BlobVisibility, SignatureValue, UploadReceipt,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -180,8 +180,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
     // `crypto-media/media-and-blob.md` §2: the declared MIME and filename are
-    // untrusted metadata. The `media_type` field wins over the content part's
-    // own `Content-Type`, whose default is `application/octet-stream`.
+    // untrusted metadata. The parser checks any two declarations agree.
     let media_type = upload
         .media_type
         .or(upload.content_part_media_type)
@@ -192,6 +191,9 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         .and_then(|filename| sanitize_blob_filename_value(filename).ok());
     let sha256 = sha256_hex(&bytes);
     let blob_ref = format!("ak:blob:sha256:{sha256}");
+    if !validate_existing_blob_classification(state, &blob_ref, upload.encryption, res).await {
+        return;
+    }
     let storage_key = state.deliveries().object_key_for_sha256(&sha256);
     if let Err(error) = state.deliveries().put_object(&storage_key, bytes).await {
         render_error(
@@ -211,11 +213,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         media_type: media_type.clone(),
         filename: filename.clone(),
         realm_id: realm_id.clone(),
-        // `blob_upload_request_body` has no encryption member: encrypted
-        // attachment metadata travels only in the signed Event or encrypted
-        // descriptor that references the `blob_ref` (`media-and-blob.md` §3),
-        // so the Station stores the bytes it received and learns nothing more.
-        encryption: None,
+        encryption: upload.encryption,
         legal_hold: false,
         redacted: false,
         visibility: if realm_id.is_some() {
@@ -228,8 +226,13 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     };
     if let Err(error) = state.deliveries().store_blob(&blob_ref, record).await {
         tracing::error!(%error, "failed to persist blob");
-        if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
-            tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
+        if matches!(state.deliveries().blob(&blob_ref).await, Ok(None)) {
+            if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
+                tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
+            }
+        }
+        if !validate_existing_blob_classification(state, &blob_ref, upload.encryption, res).await {
+            return;
         }
         render_error(
             res,
@@ -866,6 +869,7 @@ struct BlobUploadRequest {
     content_digest: Option<String>,
     media_type: Option<String>,
     filename: Option<String>,
+    encryption: Option<BlobStorageEncryption>,
 }
 
 struct BlobUploadBodyError {
@@ -902,7 +906,7 @@ const BLOB_UPLOAD_TEXT_FIELDS: [&str; 6] = [
     "content_digest",
     "media_type",
     "filename",
-    "purpose",
+    "encryption",
 ];
 
 async fn read_blob_upload_request(
@@ -1039,11 +1043,27 @@ async fn read_blob_upload_request(
             }
         })
         .transpose()?;
-    if let Some(purpose) = text.remove("purpose")
-        && !is_valid_blob_upload_purpose(&purpose)
+    let encryption_json = text
+        .remove("encryption")
+        .ok_or_else(|| BlobUploadBodyError::schema_violation("multipart encryption is required"))?;
+    let encryption = parse_blob_storage_encryption(&encryption_json)
+        .map_err(BlobUploadBodyError::schema_violation)?;
+    if media_type
+        .as_ref()
+        .zip(content_part_media_type.as_ref())
+        .is_some_and(|(form, part)| form != part)
     {
         return Err(BlobUploadBodyError::schema_violation(
-            "purpose must match ^[a-z][a-z0-9_]{0,63}$",
+            "media_type conflicts with content part Content-Type",
+        ));
+    }
+    let effective_mime = media_type
+        .as_deref()
+        .or(content_part_media_type.as_deref())
+        .unwrap_or("application/octet-stream");
+    if encryption.is_some() && effective_mime != "application/octet-stream" {
+        return Err(BlobUploadBodyError::schema_violation(
+            "ciphertext media_type must be application/octet-stream",
         ));
     }
     Ok(BlobUploadRequest {
@@ -1054,15 +1074,44 @@ async fn read_blob_upload_request(
         content_digest,
         media_type,
         filename,
+        encryption,
     })
 }
 
-/// `blob_upload_request_body.purpose`: `^[a-z][a-z0-9_]{0,63}$`.
-pub(super) fn is_valid_blob_upload_purpose(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    value.len() <= 64
-        && bytes.next().is_some_and(|first| first.is_ascii_lowercase())
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+pub(super) fn parse_blob_storage_encryption(
+    value: &str,
+) -> Result<Option<BlobStorageEncryption>, &'static str> {
+    serde_json::from_str(value)
+        .map_err(|_| "encryption must be null or a closed registered scheme classification")
+}
+
+pub(super) async fn validate_existing_blob_classification(
+    state: &AppState,
+    blob_ref: &str,
+    encryption: Option<BlobStorageEncryption>,
+    res: &mut Response,
+) -> bool {
+    match state.deliveries().blob(blob_ref).await {
+        Ok(Some(existing)) if existing.encryption != encryption => {
+            render_error(
+                res,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                "blob encryption classification is immutable for this content reference",
+            );
+            false
+        }
+        Ok(_) => true,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                &error.to_string(),
+            );
+            false
+        }
+    }
 }
 
 /// `blob_upload_request_body.media_type`: `^[a-z0-9.+-]+/[a-z0-9.+-]+$`.
@@ -1392,7 +1441,7 @@ mod presign_block_tests {
 
     #[test]
     fn presign_blob_e2ee_blocked() {
-        let blob = json!({"encryption": {"encryption_algorithm": "xchacha20poly1305"}, "uploaded_by": "ak:did_core:web:alice.example"});
+        let blob = json!({"encryption": {"scheme": "ak.blob.whole_file_aead.v1"}, "uploaded_by": "ak:did_core:web:alice.example"});
         assert_eq!(
             classify_presign_blob_block(&blob, "ak:did_core:web:alice.example"),
             Some(PresignBlobBlock::E2ee)
@@ -1545,21 +1594,27 @@ mod tests {
     }
 
     #[test]
-    fn upload_purpose_follows_the_request_body_pattern() {
-        assert!(is_valid_blob_upload_purpose("file_transfer"));
-        assert!(is_valid_blob_upload_purpose("long_text"));
-        assert!(is_valid_blob_upload_purpose(&format!(
-            "a{}",
-            "b".repeat(63)
-        )));
-        assert!(!is_valid_blob_upload_purpose(&format!(
-            "a{}",
-            "b".repeat(64)
-        )));
-        assert!(!is_valid_blob_upload_purpose(""));
-        assert!(!is_valid_blob_upload_purpose("1purpose"));
-        assert!(!is_valid_blob_upload_purpose("message.attachment"));
-        assert!(!is_valid_blob_upload_purpose("Attachment"));
+    fn upload_encryption_is_a_closed_registered_classification() {
+        assert!(parse_blob_storage_encryption("null").unwrap().is_none());
+        assert!(
+            parse_blob_storage_encryption(r#"{"scheme":"ak.blob.whole_file_aead.v1"}"#)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            parse_blob_storage_encryption(r#"{"scheme":"ak.blob.stream_aead.v1"}"#)
+                .unwrap()
+                .is_some()
+        );
+        for invalid in [
+            "",
+            "{}",
+            "true",
+            r#"{"scheme":"unknown"}"#,
+            r#"{"scheme":"ak.blob.stream_aead.v1","key_ref":"secret"}"#,
+        ] {
+            assert!(parse_blob_storage_encryption(invalid).is_err(), "{invalid}");
+        }
     }
 
     #[test]

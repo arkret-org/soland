@@ -413,39 +413,4 @@ mod internal_event_admission_tests {
             revoked_at: None,
         }
     }
-
-    fn mimi_session() -> SessionRecord {
-        internal_session("ak:did_core:web:mimi.example", "")
-    }
-
-    #[test]
-    fn mimi_provider_admission_reads_provenance_from_canonical_payload() {
-        let admission = InternalEventAdmission::mimi_provider(
-            "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            arkret_wire::ActorId::service(
-                arkret_wire::DidCoreId::new("ak:did_core:web:mimi.example").unwrap(),
-            ),
-            "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
-        );
-        let object = json!({
-            "actor_id": arkret_wire::ActorId::service(arkret_wire::DidCoreId::new("ak:did_core:web:mimi.example").unwrap()),
-            "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            "kind": "ak.message.create",
-            "payload": {
-                "mimi_provenance": {
-                    "provenance": "mimi_facade",
-                    "source_provider": "ak:did_core:web:mimi-provider.example",
-                    "attributed_sender_actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                        arkret_wire::DidCoreId::new("ak:did_core:web:mimi-provider.example").unwrap(),
-                    )),
-                    "attributed_sender_device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                    "source_envelope_digest": format!("sha256:{}", "1".repeat(64)),
-                    "room_binding_ref": "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7"
-                }
-            }
-        });
-
-        assert!(admission.matches(&mimi_session(), object.as_object().unwrap()));
-    }
 }

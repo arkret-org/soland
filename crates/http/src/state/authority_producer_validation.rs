@@ -235,6 +235,42 @@ pub(crate) async fn verify_account_device_producer(
     })
 }
 
+/// Independently authenticated MIMI transports carry producer-signed Events,
+/// never a fabricated human session. Freeze the verified device's actual PCR gate.
+pub(crate) async fn verify_mimi_binding_producer(
+    state: &AppState,
+    event: &Event,
+) -> ServiceResult<SelfProducerCommitGuard> {
+    let account = event
+        .actor_id
+        .as_account_id()
+        .ok_or_else(|| rejected("MIMI binding producer must be an Account"))?;
+    let proof = event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| rejected("MIMI binding proof missing"))?;
+    let (key, guard) =
+        account_device_producer_key(state, account, &proof.verification_method).await?;
+    let digest_suite =
+        arkret_canonical::canonical::digest_suite(event.event_id.digest_suite_code().as_str())
+            .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
+    event
+        .verify_event_id_matches_content_with_digest_suite(digest_suite)
+        .map_err(|e| rejected(e.to_string()))?;
+    let bytes = arkret_signatures::EventProofBuilder::new()
+        .envelope_bytes(event)
+        .map_err(|e| rejected(e.to_string()))?;
+    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+        proof,
+        &bytes,
+        &event.actor_id,
+        &key,
+        digest_suite,
+    )
+    .map_err(|e| rejected(e.to_string()))?;
+    Ok(guard)
+}
+
 /// Verify a detached-JWS payload proof by one device of `account`, active at
 /// its PCR cut and at its revocation gate: a controller's own proof over a
 /// private object it authorizes (device-lifecycle §8.2.2), never a key read
@@ -282,7 +318,7 @@ async fn human_producer_key(
 
 /// The accepted key of the device of `account` named by `proof`, after its
 /// PCR-cut and revocation-gate admission.
-async fn account_device_producer_key(
+pub(super) async fn account_device_producer_key(
     state: &AppState,
     account: &AccountId,
     verification_method: &arkret_wire::DidUrl,

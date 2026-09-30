@@ -2398,6 +2398,8 @@ async fn commit_one_in_connection(
     request: EventCommitRequest,
     applet_record: Option<&soland_storage::AppletRecordCommit>,
     realm_organization_proof: Option<&soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&soland_storage::InviteClaimProofCommit>,
+    event_approvals: Option<&soland_storage::EventApprovalCommit>,
     outcome: &mut EventCommitOutcome,
 ) -> Result<(), PgTransactionError> {
     if request.event.event_id != request.authority_commit.event.event_id.as_str() {
@@ -2407,6 +2409,22 @@ async fn commit_one_in_connection(
         .into());
     }
     let event = &request.authority_commit.event;
+    let mimi = event.payload.contains_key("mimi_provenance")
+        || event
+            .payload
+            .get("provenance")
+            .is_some_and(|value| value == "mimi_facade");
+    if mimi
+        && !matches!(
+            request.self_producer_guard,
+            Some(soland_storage::SelfProducerCommitGuard::MimiFacade { .. })
+        )
+    {
+        return Err(PersistenceError::Conflict(
+            "capability_denied: MIMI facade requires its verified Service producer guard".into(),
+        )
+        .into());
+    }
     if request.self_producer_guard.is_some() && request.forwarded_producer_evidence.is_some() {
         return Err(PersistenceError::SchemaViolation(
             "an Event producer is either local or forwarded, never both".to_owned(),
@@ -2446,6 +2464,25 @@ async fn commit_one_in_connection(
         .into());
     }
 
+    if let Some(gate) = request.widget_token_gate.as_ref() {
+        if request.self_producer_guard.is_none()
+            && request.applet_producer_guard.is_none()
+            && request.forwarded_producer_evidence.is_none()
+        {
+            return Err(PersistenceError::Conflict(
+                "capability_denied: widget token cannot replace the original producer guard".into(),
+            )
+            .into());
+        }
+        crate::applet_widget_tokens::check_event(
+            conn,
+            event,
+            gate,
+            request.authority_commit.commit.committed_at,
+        )
+        .await?;
+    }
+
     // contact-and-direct-conversation.md section 8.4: the profile table of a
     // Direct Conversation Realm precedes every action authority and writer.
     crate::direct_conversation_admission::admit_direct_conversation_event_in_connection(
@@ -2483,6 +2520,34 @@ async fn commit_one_in_connection(
         ensure_gate_allowed_in_transaction(conn, selector).await?;
     }
     ensure_applet_admission_in_transaction(conn, event, applet_record).await?;
+    crate::agent_confirmation_admission::admit_confirmation(
+        conn,
+        event,
+        &request.authority_commit.commit,
+    )
+    .await?;
+    // The draft publication gate needs its registered draft selection fact.
+    // executed_by alone selects ordinary delegated Agent Events as well, and
+    // must not introduce a confirmation requirement for all such Events.
+
+    let policy_approvals = if let Some(target) =
+        crate::policy_current_results::admit_in_connection(conn, event).await?
+    {
+        crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+        let cut =
+            crate::realm_authorization_cut::RealmAuthorizationCut::read_for_event(conn, event)
+                .await?;
+        cut.require_policy_with_approvals(
+            conn,
+            event,
+            &request.authority_commit.commit,
+            event_approvals,
+            &target,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
 
     queue_event_in_connection(conn, event, request.event.received_at).await?;
     let authority_write = commit_transaction_in_connection(conn, &request.authority_commit).await?;
@@ -2499,10 +2564,32 @@ async fn commit_one_in_connection(
     }
 
     let commit = &request.authority_commit.commit;
+    crate::approval_admission::validate_candidate(event, commit, event_approvals)?;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
+        crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
+        crate::agent_confirmation_admission::commit_confirmation(conn, event, commit).await?;
+        crate::approval_admission::consume_and_audit(
+            conn,
+            event,
+            commit,
+            &policy_approvals,
+            &serde_json::json!({"policy_admission":true}),
+        )
+        .await?;
         if let Some(retained) = request.forwarded_producer_evidence.as_ref() {
             crate::account_device_signer_evidence::retain_forwarded_producer_evidence_in_connection(
                 conn, event, commit, retained,
+            )
+            .await?;
+        }
+        if let Some(guard @ soland_storage::SelfProducerCommitGuard::MimiFacade { .. }) =
+            request.self_producer_guard.as_ref()
+        {
+            crate::mimi_admission::persist_mapping_receipt_in_connection(
+                conn,
+                event,
+                guard,
+                commit.committed_at,
             )
             .await?;
         }
@@ -2521,7 +2608,10 @@ async fn commit_one_in_connection(
         // An accepted Invite decides its accepting actor's `leave -> join`
         // edge against the member row before that row is written.
         crate::invite_current_results::commit_invite_current_results_in_connection(
-            conn, event, commit,
+            conn,
+            event,
+            commit,
+            invite_claim_proof,
         )
         .await?;
         commit_parent_membership_current_results(conn, event, commit).await?;
@@ -2535,6 +2625,10 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::direct_conversation_admission::commit_binding_current_result_in_connection(
+            conn, event, commit,
+        )
+        .await?;
+        crate::authority_commit::commit_mimi_room_binding_current_result_in_connection(
             conn, event, commit,
         )
         .await?;
@@ -2555,7 +2649,10 @@ async fn commit_one_in_connection(
         )
         .await?;
         crate::strand_position_current_results::commit_authority_position_in_connection(
-            conn, event, commit,
+            conn,
+            event,
+            commit,
+            event_approvals,
         )
         .await?;
         crate::space_current_results::commit_space_create_current_results_in_connection(
@@ -2613,6 +2710,8 @@ async fn commit_one_in_connection(
             )
             .await?;
         }
+        crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event)
+            .await?;
         outcome.outbox_inserted += crate::realm_fanout::plan_realm_fanout_in_connection(
             conn,
             event,
@@ -2666,7 +2765,15 @@ async fn commit_one_in_connection(
         }
     }
     if let Some(record) = request.idempotency.as_ref() {
-        record_idempotency_in_connection(conn, record).await?;
+        if matches!(
+            request.self_producer_guard,
+            Some(soland_storage::SelfProducerCommitGuard::MimiFacade { .. })
+        ) && event.kind == arkret_wire::EventKind::SelfModerationReport
+        {
+            crate::mimi_admission::record_report_idempotency_in_connection(conn, record).await?;
+        } else {
+            record_idempotency_in_connection(conn, record).await?;
+        }
     }
     Ok(())
 }
@@ -2717,6 +2824,8 @@ async fn commit_batch_in_connection(
             event,
             request.applet_record.as_ref(),
             request.realm_organization_proof.as_ref(),
+            request.invite_claim_proof.as_ref(),
+            request.event_approvals.as_ref(),
             &mut outcome,
         )
         .await?;
@@ -2763,6 +2872,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
             realm_organization_proof: None,
+            invite_claim_proof: None,
+            event_approvals: None,
             franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,

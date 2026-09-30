@@ -13,8 +13,7 @@ use arkret_models_collaboration::events_payloads::{
     CapabilityGrantCreateBody, CapabilityGrantPayload,
 };
 use arkret_models_collaboration::governance::grant_constraint::{
-    CapabilitySubject, GrantConstraint, GrantConstraintEffect, GrantConstraintKind,
-    IssuerAuthorityRef,
+    CapabilitySubject, GrantConstraint, IssuerAuthorityRef,
 };
 use arkret_models_integration::applet::*;
 use arkret_models_integration::*;
@@ -1463,11 +1462,6 @@ impl Fixture {
         let grants = actions
             .iter()
             .map(|action| {
-                let mut temporal = GrantConstraint::new(
-                    GrantConstraintKind::Temporal,
-                    GrantConstraintEffect::Allow,
-                );
-                temporal.expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
                 let grant = CapabilityGrantCreateBody {
                     schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
                     realm_id: Some(self.realm.clone()),
@@ -1483,14 +1477,11 @@ impl Fixture {
                         serde_json::from_value(json!({"kind":"realm","realm_id":self.realm}))
                             .unwrap(),
                     ],
-                    constraints: vec![
-                        GrantConstraint::applet_authority(
-                            package.applet_id.clone(),
-                            ActorId::service(package.service_id.clone()),
-                            package.registration_epoch.clone(),
-                        ),
-                        temporal,
-                    ],
+                    constraints: vec![GrantConstraint::applet_authority(
+                        package.applet_id.clone(),
+                        ActorId::service(package.service_id.clone()),
+                        package.registration_epoch.clone(),
+                    )],
                     issuer_authority_refs: vec![IssuerAuthorityRef::RealmRoot {
                         realm_id: self.realm.clone(),
                         authority_event_ref: self
@@ -1653,9 +1644,6 @@ async fn managed_actor_action_grant(
     actor: &ActorId,
     actions: Vec<String>,
 ) -> arkret_wire::GrantId {
-    let mut temporal =
-        GrantConstraint::new(GrantConstraintKind::Temporal, GrantConstraintEffect::Allow);
-    temporal.expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
     let event = fixture.admin_event(
         EventKind::CapabilityGrant,
         ScopeRef::Realm {
@@ -1671,14 +1659,11 @@ async fn managed_actor_action_grant(
                 resources: vec![arkret_wire::WireResourceSelector::realm(
                     fixture.realm.clone(),
                 )],
-                constraints: vec![
-                    GrantConstraint::applet_authority(
-                        install.package.applet_id.clone(),
-                        ActorId::service(install.package.service_id.clone()),
-                        install.package.registration_epoch.clone(),
-                    ),
-                    temporal,
-                ],
+                constraints: vec![GrantConstraint::applet_authority(
+                    install.package.applet_id.clone(),
+                    ActorId::service(install.package.service_id.clone()),
+                    install.package.registration_epoch.clone(),
+                )],
                 issuer_authority_refs: vec![IssuerAuthorityRef::RealmRoot {
                     realm_id: fixture.realm.clone(),
                     authority_event_ref: fixture
@@ -2118,3 +2103,6 @@ async fn managed_bot_and_ghost_enter_by_their_exact_invite_acceptance() {
         );
     }
 }
+
+#[path = "applet_widget_inventory/cases.rs"]
+mod widget_inventory_cases;

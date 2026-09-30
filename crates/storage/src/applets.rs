@@ -1,6 +1,44 @@
 use super::{PersistenceResult, Value, async_trait};
 #[async_trait]
 pub trait AppletStore: Send + Sync {
+    /// Host-local issuance; adapters validate the accepted approval and declared
+    /// scope while holding the exact install row lock.
+    async fn issue_widget_token(
+        &self,
+        _record: crate::AppletWidgetTokenRecord,
+    ) -> PersistenceResult<bool> {
+        Err(super::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        ))
+    }
+    async fn widget_tokens(
+        &self,
+        _install: &crate::AppletWidgetInstallSelector,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Vec<crate::AppletWidgetTokenRecord>> {
+        Err(super::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        ))
+    }
+    async fn check_widget_token(
+        &self,
+        _gate: &crate::AppletWidgetTokenGateSelector,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<crate::AppletWidgetTokenRecord> {
+        Err(super::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        ))
+    }
+    async fn invalidate_widget_token(
+        &self,
+        _install: &crate::AppletWidgetInstallSelector,
+        _token_ref: &str,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<crate::AppletWidgetTokenInvalidation> {
+        Err(super::PersistenceError::Internal(
+            "widget token inventory is unavailable".into(),
+        ))
+    }
     /// Admit only the registered local Applet installation/Ghost fixed set.
     /// Both callbacks run inside its transaction, after each actual authority
     /// head has been locked; finalization never receives fabricated refs.

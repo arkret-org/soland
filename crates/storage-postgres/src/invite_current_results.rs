@@ -20,6 +20,8 @@
 //! evaluator in [`crate::realm_authorization_cut`]; the in-process reducer
 //! projection and the retired `realm_invites` mirror are never read.
 
+mod claim_admission;
+
 use arkret_event_draft::EventPayloadExt;
 use arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload;
 use arkret_models_collaboration::governance::membership_invite::{
@@ -657,7 +659,7 @@ async fn commit_invite_cancel(
 /// target Invite, not a Realm grant: the invitee is not yet a member, and
 /// `ak.invite.accept` is `subject_only` (`authz/capabilities.md` §13,
 /// decision 0113). A third-party Invite has no stored directed invitee
-/// and its claim binding is not admitted here, so it fails closed.
+/// and accepts only through the exact accepted claim and its invited member row.
 async fn commit_invite_accept(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -693,11 +695,27 @@ async fn commit_invite_accept(
             "invitee_account_id does not match the stored directed invitee",
         ));
     }
-    let Some(invitee) = stored_invitee else {
-        return Err(coded(
-            ConflictCode::UnsupportedFeature,
-            "a third-party Invite is accepted only through its claim binding",
-        ));
+    let third_party = stored_invitee.is_none();
+    let invitee = match stored_invitee {
+        Some(invitee) => invitee,
+        None if stored == InviteState::Claimed
+            && payload.previous_state == InvitePreviousState::Claimed =>
+        {
+            claim_admission::accepted_claimant(conn, event, commit, &payload.invite_id)
+                .await?
+                .ok_or_else(|| {
+                    coded(
+                        ConflictCode::FailedPrecondition,
+                        "third-party acceptance has no exact accepted claim",
+                    )
+                })?
+        }
+        None => {
+            return Err(coded(
+                ConflictCode::FailedPrecondition,
+                "third-party acceptance requires claimed state",
+            ));
+        }
     };
     if event.actor_id.as_account_id() != Some(&invitee) {
         return Err(coded(
@@ -720,7 +738,7 @@ async fn commit_invite_accept(
     {
         return Err(coded(
             ConflictCode::FailedPrecondition,
-            "invite acceptance moves membership only out of leave",
+            "invite acceptance requires its directed or claimed membership predecessor",
         ));
     }
     set_lifecycle(
@@ -731,7 +749,11 @@ async fn commit_invite_accept(
         commit,
     )
     .await?;
-    release_live_target(conn, realm_id, &payload.invite_id, &invitee, commit).await
+    if third_party {
+        Ok(())
+    } else {
+        release_live_target(conn, realm_id, &payload.invite_id, &invitee, commit).await
+    }
 }
 
 /// Admit and write the registered Invite typed current results of `event`.
@@ -740,6 +762,7 @@ pub(crate) async fn commit_invite_current_results_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
+    claim_proof: Option<&soland_storage::InviteClaimProofCommit>,
 ) -> PersistenceResult<()> {
     if !matches!(
         event.kind,
@@ -756,10 +779,9 @@ pub(crate) async fn commit_invite_current_results_in_connection(
     match event.kind {
         EventKind::InviteCreate => commit_invite_create(conn, event, commit).await,
         EventKind::InviteThirdParty => commit_invite_third_party_create(conn, event, commit).await,
-        EventKind::InviteClaim => Err(coded(
-            ConflictCode::UnsupportedFeature,
-            "third-party claim requires production verification of binding and subject proofs",
-        )),
+        EventKind::InviteClaim => {
+            claim_admission::commit_claim(conn, event, commit, claim_proof).await
+        }
         EventKind::InviteRevoke => commit_invite_revoke(conn, event, commit).await,
         EventKind::InviteCancel => commit_invite_cancel(conn, event, commit).await,
         EventKind::InviteAccept => commit_invite_accept(conn, event, commit).await,

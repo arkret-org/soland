@@ -702,6 +702,29 @@ CREATE TABLE public.applet_authoring_units (
     PRIMARY KEY (actor_key, operation_id, idempotency_key)
 );
 
+-- Host-local widget credentials are independent of runtime authoring and sessions.
+CREATE TABLE public.applet_widget_tokens (
+    token_ref text PRIMARY KEY,
+    token_digest text NOT NULL UNIQUE,
+    applet_id text NOT NULL,
+    effective_scope_key text NOT NULL,
+    registration_event_ref text NOT NULL,
+    registration_epoch text NOT NULL,
+    record jsonb NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    invalidated_at timestamp with time zone,
+    FOREIGN KEY (applet_id,effective_scope_key)
+        REFERENCES public.applet_installations(applet_id,effective_scope_key),
+    CHECK (expires_at > issued_at),
+    CHECK (record->>'token_ref'=token_ref AND record->>'token_digest'=token_digest
+        AND record->'install'->>'applet_id'=applet_id
+        AND record->'install'->>'registration_event_ref'=registration_event_ref
+        AND record->'install'->>'registration_epoch'=registration_epoch)
+);
+CREATE INDEX applet_widget_tokens_install_idx ON public.applet_widget_tokens
+    (applet_id,effective_scope_key,registration_event_ref,registration_epoch);
+
 CREATE TABLE public.audit_logs (
     id uuid PRIMARY KEY,
     actor_id text,
@@ -731,17 +754,39 @@ CREATE TABLE public.blobs (
     size_bytes bigint NOT NULL,
     storage_backend text NOT NULL,
     storage_key text NOT NULL,
-    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    payload jsonb DEFAULT '{"encryption":null}'::jsonb NOT NULL,
     legal_hold boolean DEFAULT false NOT NULL,
     redacted boolean DEFAULT false NOT NULL,
     visibility text DEFAULT 'realm_bound'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT blobs_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'realm_bound'::text, 'actor_private'::text, 'device_bound'::text])))
+    CONSTRAINT blobs_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'realm_bound'::text, 'actor_private'::text, 'device_bound'::text]))),
+    CONSTRAINT blobs_encryption_check CHECK (COALESCE(
+        jsonb_typeof(payload) = 'object' AND payload ? 'encryption' AND
+        (payload->'encryption' = 'null'::jsonb OR
+         (jsonb_typeof(payload->'encryption') = 'object' AND
+          (payload->'encryption') - 'scheme' = '{}'::jsonb AND
+          payload->'encryption'->>'scheme' IN ('ak.blob.whole_file_aead.v1', 'ak.blob.stream_aead.v1') AND
+          media_type = 'application/octet-stream')), false))
 );
 
 CREATE INDEX blobs_sha256_idx ON public.blobs USING btree (sha256);
 
 CREATE INDEX blobs_space_created_idx ON public.blobs USING btree (realm_id, created_at);
+
+CREATE FUNCTION public.enforce_blob_encryption_immutable() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.payload->'encryption' IS DISTINCT FROM OLD.payload->'encryption' THEN
+        RAISE EXCEPTION 'blob encryption classification is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'blobs_encryption_immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER blobs_encryption_immutable
+    BEFORE UPDATE OF payload ON public.blobs
+    FOR EACH ROW EXECUTE FUNCTION public.enforce_blob_encryption_immutable();
 
 -- Live relay for admitted `SignalEnvelope`s (`sync/signal.md` §4). One row per
 -- admitted envelope, retained only until `expires_at`. Presence, typing, call
@@ -4370,6 +4415,41 @@ CREATE TABLE policy_current_results (
 CREATE INDEX policy_current_result_realm
  ON policy_current_results(realm_id,policy_id);
 
+-- Governing Station private evidence and global approval nonce namespace.
+-- This table is excluded from shared current-result snapshots and fanout.
+CREATE TABLE event_approval_private_audit (
+ approval_context TEXT NOT NULL,
+ approver_did TEXT NOT NULL,
+ nonce TEXT NOT NULL,
+ event_id TEXT NOT NULL,
+ event_digest TEXT NOT NULL,
+ realm_id TEXT NOT NULL,
+ accepted_commit_id TEXT NOT NULL,
+ evidence JSONB NOT NULL,
+ accepted_basis JSONB NOT NULL,
+ accepted_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(approval_context,approver_did,nonce),
+ CHECK(jsonb_typeof(evidence)='object'),
+ CHECK(jsonb_typeof(accepted_basis)='object')
+);
+CREATE INDEX event_approval_private_audit_event ON event_approval_private_audit(event_id);
+
+-- Two tagged Policy action namespaces; Realm-local IDs never collide with Policy refs.
+CREATE TABLE policy_action_current_results (
+ realm_id TEXT NOT NULL,
+ subject_kind TEXT NOT NULL CHECK(subject_kind IN ('policy_ref','realm_action')),
+ subject_id TEXT NOT NULL,
+ action_key TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ current_event_id TEXT NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,subject_kind,subject_id,action_key),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK((subject_kind='policy_ref' AND action_key=value->>'action') OR (subject_kind='realm_action' AND action_key=''))
+);
+
 -- URI-keyed MIMI binding current result. The accepting RealmCommit and the
 -- typed value become visible in the same transaction; URI is unique across
 -- Realms so a room cannot resolve to two current Arkret targets.
@@ -4547,6 +4627,10 @@ CREATE TABLE sidecar_context_current_results (
  CHECK(value->'source_context_ref'=context_ref),
  CHECK((version=1 AND predecessor_event_ref IS NULL) OR (version>1 AND predecessor_event_ref IS NOT NULL))
 );
+-- Snapshot material reads all disclosed context currents for one exact Realm.
+-- The Sidecar-leading primary key serves exact context lookups separately.
+CREATE INDEX sidecar_context_current_results_realm
+ ON sidecar_context_current_results(realm_id,sidecar_id,context_ref_digest);
 
 -- Event-derived Strand identity and its complete registered current value.
 CREATE TABLE strand_current_results (
@@ -5404,3 +5488,24 @@ CREATE TABLE forwarded_producer_device_evidence (
  attested_at TIMESTAMPTZ NOT NULL,
  evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
 );
+
+-- Immutable security confirmations. Nonces are global to the complete controller
+-- Actor, distinct from the detached approval_signature private namespace.
+CREATE TABLE agent_action_approval_current_results (
+ realm_id TEXT NOT NULL,
+ approval_id TEXT NOT NULL,
+ controller_actor_key TEXT NOT NULL,
+ approval_nonce TEXT NOT NULL,
+ approved_event_id TEXT NOT NULL,
+ current_event_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL REFERENCES realm_commits(commit_id),
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position > 0),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,approval_id),
+ UNIQUE(controller_actor_key,approval_nonce),
+ CHECK(value->>'approval_id'=approval_id),
+ CHECK(value->>'approved_event_id'=approved_event_id),
+ CHECK(value->>'approval_nonce'=approval_nonce)
+);
+CREATE INDEX agent_action_approval_target_idx ON agent_action_approval_current_results(realm_id,approved_event_id,controller_actor_key);

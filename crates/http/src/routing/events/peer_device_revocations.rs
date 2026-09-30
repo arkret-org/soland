@@ -1,7 +1,7 @@
 use arkret_wire::{
     AcceptedDevicePossessionProof, AccountId, CommittedEventRef, DeviceId,
-    DeviceRevocationAdmissionAction, DeviceRevocationAdmissionDecision,
-    DeviceRevocationAdmissionInput, EventId, Hash, RealmCommitId,
+    DeviceRevocationAdmissionDecision, DeviceRevocationAdmissionInput,
+    DeviceRevocationDeniedAction, EventId, Hash, RealmCommitId,
 };
 use chrono::{DateTime, Utc};
 use salvo::prelude::*;
@@ -87,7 +87,7 @@ pub(super) struct CurrentDeviceCheckRequest {
     device_id: DeviceId,
     expected_device_authorize_event_id: Option<EventId>,
     expected_device_generation_ref: Option<u64>,
-    action_class: DeviceRevocationAdmissionAction,
+    action_class: DeviceRevocationDeniedAction,
     intent_digest: Hash,
     accepted_device_possession_proof: Option<AcceptedDevicePossessionProof>,
     requested_at: DateTime<Utc>,
@@ -117,7 +117,7 @@ fn initial_issue_authorization_ref(
     // derived active authorization for the same durable gate comparison.
     // Returning issues and refreshes carry an accepted-device proof and never
     // adopt it; neither do explicit expectations.
-    if request.action_class == DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
+    if request.action_class == DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh
         && request.accepted_device_possession_proof.is_none()
         && request.expected_device_authorize_event_id.is_none()
         && request.expected_device_generation_ref.is_none()
@@ -136,7 +136,7 @@ fn returning_issue_authorization_ref(
 ) -> Option<CommittedEventRef> {
     // A returning issue has no predecessor grant. Its independently verified
     // durable-device proof supplies the exact current binding for the gate.
-    if request.action_class != DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
+    if request.action_class != DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh
         || !matches!(
             request.accepted_device_possession_proof,
             Some(AcceptedDevicePossessionProof::Issue(_))
@@ -160,7 +160,7 @@ pub(super) struct CurrentDeviceCheckOutcome {
     device_id: DeviceId,
     authorization_event_id: Option<EventId>,
     device_generation_ref: Option<u64>,
-    action_class: DeviceRevocationAdmissionAction,
+    action_class: DeviceRevocationDeniedAction,
     intent_digest: Hash,
     accepted_device_possession_proof_digest: Option<Hash>,
     decision: DeviceRevocationAdmissionDecision,
@@ -172,13 +172,13 @@ pub(super) struct CurrentDeviceCheckOutcome {
 
 fn require_account_authority_request(request: &CurrentDeviceCheckRequest) -> Result<(), AppError> {
     match request.action_class {
-        DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh
-        | DeviceRevocationAdmissionAction::DevicePairingCodeClaim
+        DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh
+        | DeviceRevocationDeniedAction::DevicePairingCodeClaim
         // The Account Authority checks the approver before admitting its exact
         // device-authorize Event. This is eligibility, not Event acceptance.
-        | DeviceRevocationAdmissionAction::EventWrite => {}
-        DeviceRevocationAdmissionAction::KeypackageClaim
-        | DeviceRevocationAdmissionAction::ToDeviceWrite => {
+        | DeviceRevocationDeniedAction::EventWrite => {}
+        DeviceRevocationDeniedAction::KeypackageClaim
+        | DeviceRevocationDeniedAction::ToDeviceWrite => {
             return Err(schema_violation(
                 "private current-device check only admits account-authority device actions",
             ));
@@ -473,7 +473,7 @@ mod tests {
         }
     }
 
-    fn bound_request(action_class: DeviceRevocationAdmissionAction) -> CurrentDeviceCheckRequest {
+    fn bound_request(action_class: DeviceRevocationDeniedAction) -> CurrentDeviceCheckRequest {
         let current = selector();
         CurrentDeviceCheckRequest {
             account_id: AccountId::new(current.principal_id, current.station_id),
@@ -534,15 +534,15 @@ mod tests {
     #[test]
     fn private_check_admits_only_account_authority_device_actions() {
         for action in [
-            DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
-            DeviceRevocationAdmissionAction::DevicePairingCodeClaim,
-            DeviceRevocationAdmissionAction::EventWrite,
+            DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh,
+            DeviceRevocationDeniedAction::DevicePairingCodeClaim,
+            DeviceRevocationDeniedAction::EventWrite,
         ] {
             assert!(require_account_authority_request(&bound_request(action)).is_ok());
         }
         for action in [
-            DeviceRevocationAdmissionAction::KeypackageClaim,
-            DeviceRevocationAdmissionAction::ToDeviceWrite,
+            DeviceRevocationDeniedAction::KeypackageClaim,
+            DeviceRevocationDeniedAction::ToDeviceWrite,
         ] {
             assert!(require_account_authority_request(&bound_request(action)).is_err());
         }
@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn private_code_claim_requires_complete_current_device_binding() {
-        let mut request = bound_request(DeviceRevocationAdmissionAction::DevicePairingCodeClaim);
+        let mut request = bound_request(DeviceRevocationDeniedAction::DevicePairingCodeClaim);
         assert!(require_account_authority_request(&request).is_ok());
         request.accepted_device_possession_proof = Some(issue_proof(&request));
         assert!(require_account_authority_request(&request).is_err());
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn session_grant_issue_or_refresh_is_told_apart_by_its_proof() {
         let mut registration =
-            bound_request(DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh);
+            bound_request(DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh);
         registration.expected_device_authorize_event_id = None;
         registration.expected_device_generation_ref = None;
         assert!(require_account_authority_request(&registration).is_ok());
@@ -579,12 +579,12 @@ mod tests {
             require_account_authority_request(&refresh).is_err(),
             "a refresh must carry its predecessor grant's exact device binding"
         );
-        let bound = bound_request(DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh);
+        let bound = bound_request(DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh);
         refresh.expected_device_authorize_event_id = bound.expected_device_authorize_event_id;
         refresh.expected_device_generation_ref = bound.expected_device_generation_ref;
         assert!(require_account_authority_request(&refresh).is_ok());
 
-        let mut code_claim = bound_request(DeviceRevocationAdmissionAction::DevicePairingCodeClaim);
+        let mut code_claim = bound_request(DeviceRevocationDeniedAction::DevicePairingCodeClaim);
         code_claim.accepted_device_possession_proof = Some(issue_proof(&code_claim));
         assert!(require_account_authority_request(&code_claim).is_err());
     }
@@ -597,7 +597,7 @@ mod tests {
             device_id: DeviceId::new(DEVICE).unwrap(),
             expected_device_authorize_event_id: None,
             expected_device_generation_ref: None,
-            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
+            action_class: DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),
             accepted_device_possession_proof: None,
             requested_at: Utc::now(),
@@ -621,7 +621,7 @@ mod tests {
             device_id: current.device_id.clone(),
             expected_authorization_ref: adopted,
             origin_current_selector: Some(current.clone()),
-            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
+            action_class: DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh,
             intent_digest: request.intent_digest.to_string(),
             requested_at: request.requested_at,
         };
@@ -657,7 +657,7 @@ mod tests {
         request.accepted_device_possession_proof = Some(refresh_proof(&request));
         assert!(resolve(&request, Some(&verified)).is_none());
         request.accepted_device_possession_proof = issue;
-        request.action_class = DeviceRevocationAdmissionAction::DevicePairingCodeClaim;
+        request.action_class = DeviceRevocationDeniedAction::DevicePairingCodeClaim;
         assert!(resolve(&request, Some(&verified)).is_none());
     }
 
@@ -669,7 +669,7 @@ mod tests {
             device_id: DeviceId::new(DEVICE).unwrap(),
             expected_device_authorize_event_id: None,
             expected_device_generation_ref: None,
-            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
+            action_class: DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             accepted_device_possession_proof: None,
             requested_at: Utc::now(),
@@ -682,7 +682,7 @@ mod tests {
             device_id: current.device_id.clone(),
             expected_authorization_ref: adopted,
             origin_current_selector: Some(current.clone()),
-            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
+            action_class: DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh,
             intent_digest: request.intent_digest.to_string(),
             requested_at: request.requested_at,
         };
@@ -696,7 +696,7 @@ mod tests {
         let mut refresh = request.clone();
         refresh.accepted_device_possession_proof = Some(refresh_proof(&refresh));
         let mut code_claim = request.clone();
-        code_claim.action_class = DeviceRevocationAdmissionAction::DevicePairingCodeClaim;
+        code_claim.action_class = DeviceRevocationDeniedAction::DevicePairingCodeClaim;
         for not_initial in [returning, refresh, code_claim] {
             gate.expected_authorization_ref =
                 initial_issue_authorization_ref(&not_initial, Some(&current));
@@ -723,7 +723,7 @@ mod tests {
             device_id: arkret_wire::DeviceId::new(DEVICE).unwrap(),
             authorization_event_id: Some(arkret_wire::EventId::new(AUTHORIZE_EVENT).unwrap()),
             device_generation_ref: Some(1),
-            action_class: DeviceRevocationAdmissionAction::SessionGrantIssueOrRefresh,
+            action_class: DeviceRevocationDeniedAction::SessionGrantIssueOrRefresh,
             intent_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
             accepted_device_possession_proof_digest: Some(
                 Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap(),

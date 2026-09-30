@@ -470,6 +470,7 @@ pub fn request_for_event(
         },
         self_producer_guard: None,
         applet_producer_guard: None,
+        widget_token_gate: None,
         forwarded_producer_evidence: None,
         event: record,
         parent_membership_admission: None,

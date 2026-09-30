@@ -24,7 +24,7 @@
 //! - `DELETE  /{id}`          — terminate an in-progress upload
 //!
 //! Upload-Metadata keys understood at completion time are the
-//! `blob_upload_request_body` members `purpose`, `realm_id` and
+//! `blob_upload_request_body` members `encryption`, `realm_id` and
 //! `content_digest`, validated exactly as on the canonical upload. Per spec
 //! §2.1 privacy rules, plaintext filenames and MIME types of private/E2EE
 //! blobs MUST NOT appear in `Upload-Metadata`, so the completion path stores
@@ -47,7 +47,7 @@ use tokio::io::AsyncReadExt as _;
 use super::blob::{
     MAX_BLOB_UPLOAD_BYTES, blob_content_digest_matches, blob_session_has_realm_membership,
     blob_upload_outcome, enforce_blob_quota, is_valid_blob_upload_content_digest,
-    is_valid_blob_upload_purpose,
+    parse_blob_storage_encryption, validate_existing_blob_classification,
 };
 use super::{auth_or_render, now, render_error};
 use crate::state::AppState;
@@ -236,6 +236,9 @@ fn parse_upload_metadata(raw: &str) -> Result<HashMap<String, Option<String>>, &
                 let decoded = BASE64_STANDARD
                     .decode(value.trim())
                     .map_err(|_| "Upload-Metadata value must be base64")?;
+                if BASE64_STANDARD.encode(&decoded) != value.trim() {
+                    return Err("Upload-Metadata value must use standard base64");
+                }
                 let decoded = String::from_utf8(decoded)
                     .map_err(|_| "Upload-Metadata value must be UTF-8")?;
                 if decoded.len() > 512 {
@@ -266,6 +269,52 @@ async fn tus_options(res: &mut Response) {
         HeaderValue::from_str(&MAX_BLOB_UPLOAD_BYTES.to_string()).expect("numeric header"),
     );
     res.status_code(StatusCode::NO_CONTENT);
+}
+
+fn validate_upload_metadata(
+    metadata: &HashMap<String, Option<String>>,
+) -> Result<(), &'static str> {
+    if metadata.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "encryption" | "realm_id" | "content_digest" | "size_bytes"
+        )
+    }) {
+        return Err("unknown or private Upload-Metadata member");
+    }
+    let encryption = metadata
+        .get("encryption")
+        .and_then(Option::as_deref)
+        .ok_or("Upload-Metadata encryption is required")?;
+    let classification = parse_blob_storage_encryption(encryption)?;
+    let canonical = arkret_canonical::canonical_json_bytes(&classification)
+        .map_err(|_| "invalid encryption classification")?;
+    if canonical != encryption.as_bytes() {
+        return Err("Upload-Metadata encryption must be canonical JSON");
+    }
+    for (key, value) in metadata {
+        let value = value
+            .as_deref()
+            .ok_or("Upload-Metadata fields require a value")?;
+        match key.as_str() {
+            "realm_id" if arkret_identifiers::RealmId::new(value.to_owned()).is_err() => {
+                return Err("invalid Upload-Metadata realm_id");
+            }
+            "content_digest" if !is_valid_blob_upload_content_digest(value) => {
+                return Err("invalid Upload-Metadata content_digest");
+            }
+            "size_bytes"
+                if value
+                    .parse::<u64>()
+                    .ok()
+                    .is_none_or(|size| size.to_string() != value) =>
+            {
+                return Err("invalid Upload-Metadata size_bytes");
+            }
+            _ => (),
+        }
+    }
+    Ok(())
 }
 
 #[handler]
@@ -324,13 +373,40 @@ async fn tus_create(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         Some(raw) => match parse_upload_metadata(raw) {
             Ok(metadata) => metadata,
             Err(message) => {
-                render_error(res, StatusCode::BAD_REQUEST, "param_invalid", message);
+                render_error(
+                    res,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "schema_violation",
+                    message,
+                );
                 return;
             }
         },
         None => HashMap::new(),
     };
 
+    if let Err(message) = validate_upload_metadata(&upload_metadata) {
+        render_error(
+            res,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            message,
+        );
+        return;
+    }
+    if upload_metadata
+        .get("size_bytes")
+        .and_then(Option::as_deref)
+        .is_some_and(|value| value.parse::<u64>().ok() != Some(declared_size))
+    {
+        render_error(
+            res,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            "Upload-Metadata size_bytes disagrees with Upload-Length",
+        );
+        return;
+    }
     let dir = state.config().resumable_upload_dir.clone();
     if let Err(error) = tokio::fs::create_dir_all(&dir).await {
         render_error(
@@ -519,6 +595,15 @@ async fn tus_patch(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
     set_tus_header(res);
+    if req.headers().contains_key(H_UPLOAD_METADATA) {
+        render_error(
+            res,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "schema_violation",
+            "Upload-Metadata is frozen at creation and cannot be supplied on PATCH",
+        );
+        return;
+    }
     let content_type_ok = req
         .headers()
         .get("content-type")
@@ -698,18 +783,19 @@ async fn complete_resumable_upload(
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
     };
-    let purpose = meta_value("purpose");
-    if let Some(purpose) = purpose.as_deref()
-        && !is_valid_blob_upload_purpose(purpose)
-    {
+    if let Err(message) = validate_upload_metadata(&meta.upload_metadata) {
         render_error(
             res,
             StatusCode::UNPROCESSABLE_ENTITY,
             "schema_violation",
-            "purpose must match ^[a-z][a-z0-9_]{0,63}$",
+            message,
         );
         return;
     }
+    let encryption = parse_blob_storage_encryption(
+        &meta_value("encryption").expect("validated encryption metadata"),
+    )
+    .expect("validated encryption classification");
     let realm_id = match meta_value("realm_id") {
         Some(realm_id) => {
             if arkret_identifiers::RealmId::new(realm_id.clone()).is_err() {
@@ -855,6 +941,9 @@ async fn complete_resumable_upload(
     // invariant).
     let media_type = "application/octet-stream".to_owned();
     let blob_ref = format!("ak:blob:sha256:{sha256}");
+    if !validate_existing_blob_classification(state, &blob_ref, encryption, res).await {
+        return;
+    }
     let storage_key = state.deliveries().object_key_for_sha256(&sha256);
     if let Err(error) = state
         .deliveries()
@@ -878,9 +967,7 @@ async fn complete_resumable_upload(
         media_type: media_type.clone(),
         filename: None,
         realm_id: realm_id.clone(),
-        // Same as the canonical upload: the request carries no encryption
-        // member, so the Station records none.
-        encryption: None,
+        encryption,
         legal_hold: false,
         redacted: false,
         visibility: if realm_id.is_some() {
@@ -893,8 +980,13 @@ async fn complete_resumable_upload(
     };
     if let Err(error) = state.deliveries().store_blob(&blob_ref, record).await {
         tracing::error!(%error, "failed to persist blob");
-        if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
-            tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
+        if matches!(state.deliveries().blob(&blob_ref).await, Ok(None)) {
+            if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
+                tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
+            }
+        }
+        if !validate_existing_blob_classification(state, &blob_ref, encryption, res).await {
+            return;
         }
         render_error(
             res,
@@ -1014,14 +1106,10 @@ mod tests {
     #[test]
     fn upload_metadata_parses_tus_pairs() {
         let parsed =
-            parse_upload_metadata("purpose ZmlsZV90cmFuc2Zlcg==,filename dHJ1ZQ==,is_confidential")
-                .expect("valid metadata");
-        assert_eq!(
-            parsed.get("purpose"),
-            Some(&Some("file_transfer".to_owned()))
-        );
-        assert_eq!(parsed.get("filename"), Some(&Some("true".to_owned())));
-        assert_eq!(parsed.get("is_confidential"), Some(&None));
+            parse_upload_metadata("encryption bnVsbA==,size_bytes NA==").expect("valid metadata");
+        assert_eq!(parsed.get("encryption"), Some(&Some("null".to_owned())));
+        assert_eq!(parsed.get("size_bytes"), Some(&Some("4".to_owned())));
+        validate_upload_metadata(&parsed).expect("public metadata is valid");
     }
 
     #[test]
@@ -1029,6 +1117,29 @@ mod tests {
         assert!(parse_upload_metadata("a Zg==,a Zg==").is_err());
         assert!(parse_upload_metadata("key not-base64!!").is_err());
         assert!(parse_upload_metadata("").is_err());
+    }
+
+    #[test]
+    fn upload_metadata_requires_closed_canonical_public_encryption() {
+        for raw in [
+            "encryption bnVsbA==",
+            "encryption eyJzY2hlbWUiOiJhay5ibG9iLnN0cmVhbV9hZWFkLnYxIn0=",
+        ] {
+            validate_upload_metadata(&parse_upload_metadata(raw).unwrap()).unwrap();
+        }
+        for value in [
+            " null ",
+            "{}",
+            r#"{"scheme":"unknown"}"#,
+            r#"{"scheme":"ak.blob.whole_file_aead.v1","key_ref":"secret"}"#,
+        ] {
+            let raw = format!("encryption {}", BASE64_STANDARD.encode(value));
+            assert!(validate_upload_metadata(&parse_upload_metadata(&raw).unwrap()).is_err());
+        }
+        assert!(validate_upload_metadata(&HashMap::new()).is_err());
+        let retired =
+            parse_upload_metadata("encryption bnVsbA==,purpose ZmlsZV90cmFuc2Zlcg==").unwrap();
+        assert!(validate_upload_metadata(&retired).is_err());
     }
 
     #[test]

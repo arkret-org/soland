@@ -94,7 +94,7 @@ fn binding_mismatch(detail: impl std::fmt::Display) -> PersistenceError {
 }
 
 /// The primary key of one scope: the canonical JSON of its `ScopeRef`.
-fn scope_key(scope: &ScopeRef) -> PersistenceResult<String> {
+pub(crate) fn scope_key(scope: &ScopeRef) -> PersistenceResult<String> {
     String::from_utf8(
         arkret_canonical::canonical_json_bytes(scope).map_err(PersistenceError::database)?,
     )
@@ -123,7 +123,7 @@ fn decode_row(row: GroupRow) -> PersistenceResult<MlsGroupCurrentRecord> {
     })
 }
 
-async fn locked_group(
+pub(crate) async fn locked_group(
     conn: &mut AsyncPgConnection,
     key: &str,
 ) -> PersistenceResult<Option<MlsGroupCurrentRecord>> {
@@ -192,7 +192,7 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             "an MLS Event commits only with its verified public transition".to_owned(),
         )
     })?;
-    if !matches!(&event.scope_ref, ScopeRef::Realm { realm_id } | ScopeRef::Circle { realm_id, .. } if realm_id == &event.realm_id)
+    if !matches!(&event.scope_ref, ScopeRef::Realm { realm_id } | ScopeRef::Circle { realm_id, .. } | ScopeRef::Sidecar { realm_id, .. } if realm_id == &event.realm_id)
     {
         return Err(PersistenceError::Internal(
             "the MLS effective scope has no supported authority cut".to_owned(),
@@ -211,15 +211,46 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             "MLS author is not joined to the exact scope",
         ));
     }
-    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
-        conn,
-        event,
-        commit.committed_at,
-    )
-    .await?;
+    let controller_reconciliation = if let ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
+        crate::sidecar_access::cut_in_connection(conn, &event.realm_id, sidecar_id)
+            .await?
+            .is_some_and(|cut| event.actor_id.as_account_id() == Some(&cut.controller_account_id))
+    } else {
+        false
+    };
+    if !controller_reconciliation {
+        crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
     let key = scope_key(&event.scope_ref)?;
     let current = locked_group(conn, &key).await?;
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    if let ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
+        let cut = crate::sidecar_access::cut_in_connection(conn, &event.realm_id, sidecar_id)
+            .await?
+            .ok_or_else(|| failed_precondition("Sidecar participant authority is unavailable"))?;
+        let binding = match event.kind {
+            EventKind::MlsGenesis => {
+                serde_json::from_value::<MlsGenesisPayload>(payload.clone())
+                    .map_err(PersistenceError::database)?
+                    .governance_binding
+            }
+            _ => serde_json::from_value::<MlsCommitPayload>(payload.clone())
+                .map_err(PersistenceError::database)?
+                .governance_binding()
+                .clone(),
+        };
+        crate::sidecar_authority_cut::validate_mls_binding_in_connection(
+            conn,
+            &binding,
+            &cut.controller_account_id,
+        )
+        .await?;
+    }
     let next = match event.kind {
         EventKind::MlsGenesis => {
             if current.is_some() {
@@ -875,6 +906,11 @@ async fn require_since_join_history(
     conn: &mut AsyncPgConnection,
     scope: &ScopeRef,
 ) -> PersistenceResult<()> {
+    // Sidecar has no editable history_access facet. Its independent MLS and
+    // consumed endpoint admission establish its private security boundary.
+    if matches!(scope, ScopeRef::Sidecar { .. }) {
+        return Ok(());
+    }
     let history = match scope {
         ScopeRef::Realm { realm_id } => sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_history_access' FOR SHARE")
             .bind::<Text, _>(realm_id.as_str()).get_result::<HistoryAccessRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?,
@@ -897,6 +933,25 @@ async fn require_joined_recipient(
     scope: &ScopeRef,
     recipient: &arkret_wire::ActorId,
 ) -> PersistenceResult<()> {
+    if let ScopeRef::Sidecar { sidecar_id, .. } = scope {
+        let Some(cut) =
+            crate::sidecar_access::cut_in_connection(conn, realm_id, sidecar_id).await?
+        else {
+            return Err(failed_precondition(
+                "Sidecar Welcome recipient authority is unavailable",
+            ));
+        };
+        if recipient.as_account_id().is_some_and(|account| {
+            account == &cut.controller_account_id
+                || (account.station_id == cut.controller_account_id.station_id
+                    && cut.desired_agent_ids.contains(&account.principal_id))
+        }) {
+            return Ok(());
+        }
+        return Err(failed_precondition(
+            "Sidecar Welcome recipient is outside the desired roster",
+        ));
+    }
     if crate::moderation_report_current_results::scope_member_in_connection(
         conn, realm_id, scope, recipient,
     )
@@ -985,6 +1040,50 @@ pub(crate) async fn require_mls_send_gate_in_connection(
     .map_err(PersistenceError::database)?
     .map(decode_row)
     .transpose()?;
+    if let ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
+        let Some(current) = &current else {
+            return Err(soland_storage::MlsSendGateRefusal::EpochUpdateRequired.into_conflict());
+        };
+        let cut = crate::sidecar_access::cut_in_connection(conn, &event.realm_id, sidecar_id)
+            .await?
+            .ok_or_else(|| failed_precondition("Sidecar current authority is unavailable"))?;
+        let current_cut = crate::sidecar_authority_cut::locked_in_connection(
+            conn,
+            &event.realm_id,
+            sidecar_id,
+            &cut.controller_account_id,
+        )
+        .await?
+        .ok_or_else(|| failed_precondition("Sidecar current authority is unavailable"))?;
+        let source = sql_query("SELECT e.envelope AS payload FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+            WHERE e.envelope->>'event_id'=$1 AND e.state='committed' AND c.commit_id=$2")
+            .bind::<Text,_>(current.value.current_mls_commit_event_ref.as_str())
+            .bind::<Text,_>(current.current_commit_id.as_str())
+            .get_result::<super::JsonPayloadRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        let source: arkret_wire::Event =
+            serde_json::from_value(source.payload).map_err(PersistenceError::database)?;
+        let binding = match source.kind {
+            EventKind::MlsGenesis => {
+                serde_json::from_value::<MlsGenesisPayload>(
+                    serde_json::to_value(source.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(PersistenceError::database)?
+                .governance_binding
+            }
+            _ => serde_json::from_value::<MlsCommitPayload>(
+                serde_json::to_value(source.payload).map_err(PersistenceError::database)?,
+            )
+            .map_err(PersistenceError::database)?
+            .governance_binding()
+            .clone(),
+        };
+        if binding.sidecar_binding().is_none_or(|binding| {
+            binding.participant_authority_digest != current_cut.participant_authority_digest
+                || binding.authority_stream_head != current_cut.authority_stream_head
+        }) {
+            return Err(soland_storage::MlsSendGateRefusal::EpochUpdateRequired.into_conflict());
+        }
+    }
     if envelopes.is_some()
         && let Some(current) = &current
         && circle_tree_holds_invalid_leaf(conn, &event.scope_ref, current).await?

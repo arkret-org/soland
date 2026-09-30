@@ -488,7 +488,7 @@ async fn authority_transaction_admits_grants_without_subject_kind_branches() {
             "issuer_id": actor,
             "subject": subject,
             "actions": [action],
-            "resources": [{"kind":"realm", "realm_id":realm_id}],
+            "resources": [{"kind":"realm", "realm_id":realm_id,"match_scope":"realm_wide"}],
             "issuer_authority_refs": [{
                 "kind":"realm_root",
                 "realm_id":realm_id,
@@ -616,6 +616,14 @@ async fn authority_transaction_admits_grants_without_subject_kind_branches() {
         (
             "service_high",
             grant_body(service_subject, "ak.realm.admin"),
+        ),
+        (
+            "account_low",
+            grant_body(unclassified_subject.clone(), "ak.event.read"),
+        ),
+        (
+            "account_medium",
+            grant_body(unclassified_subject.clone(), "ak.message.create"),
         ),
         (
             "account_high",

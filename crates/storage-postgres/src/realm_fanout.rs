@@ -414,6 +414,46 @@ async fn remote_targets(
     authority_station: &arkret_wire::DidCoreId,
     commit_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<BTreeMap<arkret_wire::DidCoreId, Vec<RealmFanoutAuthorityWitness>>> {
+    // A joined-member witness cannot authorize private controller nonce or
+    // PolicyRef source bytes. This carrier has no withheld Event branch.
+    // RealmAction configuration and ordinary shared PolicySet remain shared.
+    if crate::committed_disclosure::author_private_source(event) {
+        return Ok(BTreeMap::new());
+    }
+    let sidecar = match &event.scope_ref {
+        arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } => Some(sidecar_id.clone()),
+        _ if event.kind == arkret_wire::EventKind::SidecarCreate => {
+            Some(arkret_wire::SidecarId::from_event_id(&event.event_id))
+        }
+        _ => None,
+    };
+    if let Some(sidecar) = sidecar {
+        let recipients =
+            crate::sidecar_access::recipients_in_connection(conn, &event.realm_id, &sidecar)
+                .await?;
+        let mut targets: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for recipient in recipients {
+            if &recipient.station_id == authority_station {
+                continue;
+            }
+            let actor = arkret_wire::ActorId::account(recipient.clone());
+            let Some(join) = sql_query("SELECT m.member_id,e.envelope->>'event_id' AS membership_event_id \
+                FROM member_state_current_results m JOIN realm_commits c ON c.realm_id=m.realm_id AND c.commit_id=m.current_commit_id \
+                AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
+                WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join'")
+                .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(actor.to_string())
+                .get_result::<JoinedMemberRow>(&mut *conn).await.optional().map_err(PersistenceError::database)? else { continue; };
+            targets
+                .entry(recipient.station_id)
+                .or_default()
+                .push(RealmFanoutAuthorityWitness {
+                    member_id: actor,
+                    membership_event_ref: join.membership_event_id,
+                    circle_membership_event_ref: None,
+                });
+        }
+        return Ok(targets);
+    }
     // A Circle is empty at create. Its Realm-stream authorization shell is
     // visible, but the signed object contains private directory fields. The
     // committed-replication carrier below contains a complete Event and has
@@ -639,7 +679,8 @@ pub(crate) async fn plan_realm_fanout_in_connection(
                     | arkret_wire::EventKind::ModerationDecision
                     | arkret_wire::EventKind::ModerationDecisionLift
             );
-        if !supported_circle {
+        let supported_sidecar = matches!(&event.scope_ref, arkret_wire::ScopeRef::Sidecar { .. });
+        if !supported_circle && !supported_sidecar {
             if source.is_some() {
                 return Err(PersistenceError::Conflict(
                     "Circle and Sidecar fanout target planning is unavailable".to_owned(),

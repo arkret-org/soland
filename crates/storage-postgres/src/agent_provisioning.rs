@@ -222,6 +222,7 @@ pub(crate) async fn admit_agent_provision_in_connection(
             "an accepted provision already declares this Agent PCR id",
         ));
     }
+    crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event).await?;
     Ok(AgentProvisionAdmissionOutcome::Committed(values))
 }
 

@@ -1,4 +1,4 @@
-use arkret_event_draft::ProjectedEventOperation as Operation;
+//! Transcript and signature primitive tests; production uses invite_claim_admission.
 #[cfg(test)]
 use arkret_identity::DidResolver;
 use arkret_models_collaboration::governance::membership_invite::{
@@ -9,9 +9,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
-use soland_services::projection::{InviteClaimProofContext, ProjectionService};
-
-use crate::state::AppState;
 
 #[derive(Clone, Debug)]
 pub(crate) struct InviteClaimProofVerification<'a> {
@@ -27,59 +24,6 @@ pub(crate) struct InviteClaimProofVerification<'a> {
     pub invite_digest: &'a str,
 }
 
-pub(crate) fn invite_claim_proof_context_from_projection(
-    projection: &ProjectionService,
-    operation: &Operation,
-) -> Result<Option<InviteClaimProofContext>, &'static str> {
-    projection.invite_claim_proof_context(operation)
-}
-
-pub(crate) async fn verify_invite_claim_proofs_for_operation(
-    state: &AppState,
-    operation: &Operation,
-    context: &InviteClaimProofContext,
-) -> Result<(), &'static str> {
-    let Some(payload) = operation.payload.as_object() else {
-        return Err("invite_claim_payload_not_object");
-    };
-    let Some(invite_id) = trimmed_string(payload.get("invite_id")) else {
-        return Err("invite_id_required");
-    };
-    let subject_account_id: arkret_wire::AccountId = serde_json::from_value(
-        payload
-            .get("subject_account_id")
-            .cloned()
-            .ok_or("subject_account_id_required")?,
-    )
-    .map_err(|_| "subject_account_id_invalid")?;
-    let Some(token_commitment) = trimmed_string(payload.get("token_commitment")) else {
-        return Err("token_commitment_required");
-    };
-    let Some(claim_nonce) = trimmed_string(payload.get("claim_nonce")) else {
-        return Err("claim_nonce_required");
-    };
-    let Some(binding_proof) = payload.get("binding_proof") else {
-        return Err("binding_proof_required");
-    };
-    let Some(subject_proof) = payload.get("subject_proof") else {
-        return Err("subject_proof_required");
-    };
-
-    let verification = InviteClaimProofVerification {
-        invite_id,
-        realm_id: operation.realm_id.as_str(),
-        subject_account_id,
-        token_commitment,
-        claim_nonce,
-        binding_proof,
-        subject_proof,
-        expected_verification_public_key: &context.expected_verification_public_key,
-        expected_verification_id: &context.expected_verification_id,
-        invite_digest: &context.invite_digest,
-    };
-    verify_invite_claim_proofs_for_state(state, &verification).await
-}
-
 #[cfg(test)]
 pub(crate) fn verify_invite_claim_proofs(
     resolver: &dyn DidResolver,
@@ -87,14 +31,6 @@ pub(crate) fn verify_invite_claim_proofs(
 ) -> Result<(), &'static str> {
     let binding_service_id = verify_binding_proof_signature(resolver, verification)?;
     verify_subject_proof_signature(resolver, verification, &binding_service_id)
-}
-
-async fn verify_invite_claim_proofs_for_state(
-    state: &AppState,
-    verification: &InviteClaimProofVerification<'_>,
-) -> Result<(), &'static str> {
-    let binding_service_id = verify_binding_proof_signature_for_state(state, verification).await?;
-    verify_subject_proof_signature_for_state(state, verification, &binding_service_id).await
 }
 
 #[cfg(test)]
@@ -131,61 +67,6 @@ fn verify_binding_proof_signature(
             return Err("binding_proof_method_mismatch");
         }
         resolve_current_ed25519_key(resolver, service_id, method)
-            .map_err(|_| "binding_proof_method_invalid")?
-    } else {
-        decode_ed25519_multibase_key(verification.expected_verification_public_key)
-            .map_err(|_| "binding_proof_public_key_invalid")?
-    };
-
-    let signature = decode_signature(Some(binding_proof.signature.as_str()))
-        .map_err(|_| "binding_proof_signature_invalid")?;
-    let transcript = invite_binding_proof_transcript_bytes(
-        &binding_proof,
-        verification.invite_id,
-        verification.token_commitment,
-        verification.invite_digest,
-    )
-    .map_err(|_| "binding_proof_transcript_invalid")?;
-    public_key
-        .verify_strict(&transcript, &signature)
-        .map_err(|_| "binding_proof_signature_invalid")?;
-    Ok(service_id.to_owned())
-}
-
-async fn verify_binding_proof_signature_for_state(
-    state: &AppState,
-    verification: &InviteClaimProofVerification<'_>,
-) -> Result<String, &'static str> {
-    let binding_proof = parse_binding_proof(verification.binding_proof)?;
-    let service_id = binding_proof.verification_id.as_str();
-    if service_id != verification.expected_verification_id {
-        return Err("verification_service_not_authorized");
-    }
-    let method = binding_proof.verification_method.as_str();
-    crate::jws_verify::validate_verification_method_controller(service_id, method)
-        .map_err(|_| "binding_proof_method_invalid")?;
-    if binding_proof.subject_account_id != verification.subject_account_id {
-        return Err("binding_proof_subject_mismatch");
-    }
-    if binding_proof.realm_id.as_str() != verification.realm_id {
-        return Err("binding_proof_realm_mismatch");
-    }
-    if binding_proof.audience != INVITE_CLAIM_AUDIENCE {
-        return Err("binding_proof_audience_mismatch");
-    }
-    if binding_proof.claim_nonce != verification.claim_nonce {
-        return Err("binding_proof_nonce_mismatch");
-    }
-
-    let public_key = if verification
-        .expected_verification_public_key
-        .starts_with("did:")
-    {
-        if method != verification.expected_verification_public_key {
-            return Err("binding_proof_method_mismatch");
-        }
-        resolve_current_ed25519_key_for_state(state, service_id, method)
-            .await
             .map_err(|_| "binding_proof_method_invalid")?
     } else {
         decode_ed25519_multibase_key(verification.expected_verification_public_key)
@@ -265,64 +146,6 @@ fn verify_subject_proof_signature(
         .map_err(|_| "subject_proof_signature_invalid")
 }
 
-async fn verify_subject_proof_signature_for_state(
-    state: &AppState,
-    verification: &InviteClaimProofVerification<'_>,
-    binding_service_id: &str,
-) -> Result<(), &'static str> {
-    if !verification.subject_proof.is_object() {
-        return Err("subject_proof_not_object");
-    }
-    let subject_proof: InviteSubjectProof =
-        serde_json::from_value(verification.subject_proof.clone())
-            .map_err(|_| "subject_proof_invalid")?;
-    if subject_proof.verification_method.trim().is_empty() {
-        return Err("subject_proof_method_required");
-    }
-    if subject_proof.signature_algorithm != INVITE_SUBJECT_PROOF_ALG {
-        return Err("subject_proof_alg_unsupported");
-    }
-    subject_proof
-        .validate()
-        .map_err(|_| "subject_proof_invalid")?;
-    let binding_proof = parse_binding_proof(verification.binding_proof)?;
-    let binding_digest = binding_proof
-        .canonical_digest()
-        .map_err(|_| "binding_proof_digest_invalid")?;
-    let transcript_body = InviteSubjectProofBody::from_wire_parts(
-        binding_proof.subject_account_id,
-        verification.invite_id,
-        verification.realm_id,
-        verification.token_commitment,
-        verification.claim_nonce,
-        binding_service_id,
-        binding_digest.as_str(),
-    )
-    .map_err(|_| "subject_proof_transcript_invalid")?;
-    let expected_digest = transcript_body
-        .transcript_digest()
-        .map_err(|_| "subject_proof_transcript_invalid")?;
-    if subject_proof.transcript_digest != expected_digest {
-        return Err("subject_proof_transcript_mismatch");
-    }
-
-    let public_key = resolve_current_subject_ed25519_key_for_state(
-        state,
-        &verification.subject_account_id,
-        subject_proof.verification_method.as_str(),
-    )
-    .await
-    .map_err(|_| "subject_proof_method_not_current")?;
-    let signature = decode_signature(Some(subject_proof.signature.as_str()))
-        .map_err(|_| "subject_proof_signature_invalid")?;
-    let transcript = transcript_body
-        .canonical_bytes()
-        .map_err(|_| "subject_proof_transcript_invalid")?;
-    public_key
-        .verify_strict(&transcript, &signature)
-        .map_err(|_| "subject_proof_signature_invalid")
-}
-
 fn parse_binding_proof(value: &Value) -> Result<InviteClaimBindingProof, &'static str> {
     let proof: InviteClaimBindingProof =
         serde_json::from_value(value.clone()).map_err(|_| "binding_proof_invalid")?;
@@ -356,60 +179,6 @@ fn resolve_current_ed25519_key(
     crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
     arkret_identity::jws::resolve_ed25519_pubkey(resolver, verification_method)
         .map_err(|error| error.to_string())
-}
-
-async fn resolve_current_ed25519_key_for_state(
-    state: &AppState,
-    method_controller_principal_id: &str,
-    verification_method: &str,
-) -> Result<VerifyingKey, String> {
-    let controller = verification_method
-        .rsplit_once('#')
-        .map(|(controller, _)| controller)
-        .ok_or_else(|| "verification method has no fragment".to_owned())?;
-    let did = arkret_identifiers::Did::new(controller.to_owned())
-        .map_err(|error| format!("verification method controller is invalid: {error}"))?;
-    let core = arkret_wire::project_did_to_core_id(&did)
-        .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
-    if core.as_str() != method_controller_principal_id {
-        return Err("verification method controller does not match core identity".to_owned());
-    }
-    let document = crate::jws_verify::resolve_did_document_async(state, &did).await?;
-    crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
-    crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method).await
-}
-
-/// Resolve the claimant's current proof key from the authority that owns it.
-///
-/// A device is not a DID actor and therefore does not appear as an independent
-/// DID Document verification method. Its current authority is the accepted
-/// device authorization in the subject Account's PCR. Non-device DID methods
-/// remain resolved from the current DID Document.
-async fn resolve_current_subject_ed25519_key_for_state(
-    state: &AppState,
-    subject_account_id: &arkret_wire::AccountId,
-    verification_method: &str,
-) -> Result<VerifyingKey, String> {
-    let fragment = verification_method
-        .rsplit_once('#')
-        .map(|(_, fragment)| fragment)
-        .ok_or_else(|| "verification method has no fragment".to_owned())?;
-    if let Ok(device_id) = arkret_identifiers::DeviceId::new(fragment.to_owned()) {
-        return crate::jws_verify::resolve_principal_authorized_device_key_with_account_authority_async(
-            verification_method,
-            subject_account_id,
-            &device_id,
-            state,
-        )
-        .await
-        .map_err(|error| error.to_string());
-    }
-    resolve_current_ed25519_key_for_state(
-        state,
-        subject_account_id.principal_id.as_str(),
-        verification_method,
-    )
-    .await
 }
 
 fn decode_ed25519_multibase_key(value: &str) -> Result<VerifyingKey, String> {

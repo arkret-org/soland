@@ -33,6 +33,8 @@ fn jwk(key: &[u8; 32]) -> PersistenceResult<NonEmptyJsonObject> {
 struct ProjectionRow {
     #[diesel(sql_type = Jsonb)]
     projection: Value,
+    #[diesel(sql_type = Jsonb)]
+    commit_json: Value,
 }
 
 #[derive(QueryableByName)]
@@ -98,11 +100,16 @@ pub(crate) async fn materialize_context_in_connection(
             "Applet completion portal head is not the locked accepted head",
         ));
     }
-    let row = sql_query("SELECT p.projection FROM principal_resolutions p JOIN canonical_events e ON e.envelope->>'event_id'=p.current_event_id JOIN realm_commits c ON c.event_pk=e.pk AND c.realm_id=p.pcr_realm_id WHERE p.principal_id=$1 AND p.station_id=$2")
+    let row = sql_query("SELECT p.projection,c.commit_json FROM principal_resolutions p JOIN canonical_events e ON e.envelope->>'event_id'=p.current_event_id JOIN realm_commits c ON c.event_pk=e.pk AND c.realm_id=p.pcr_realm_id WHERE p.principal_id=$1 AND p.station_id=$2 AND c.stream_ref->>'kind'='realm' FOR SHARE OF p,c")
         .bind::<Text,_>(provision.actor_id.signing_principal_id().as_str())
         .bind::<Text,_>(provision.actor_id.route_service_id().as_str())
         .get_result::<ProjectionRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(|| corrupt("Applet principal has no accepted local resolution"))?;
+    let principal_control_commit: arkret_wire::RealmCommit =
+        serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
+    principal_control_commit
+        .validate_shape()
+        .map_err(PersistenceError::database)?;
     let projection: PrincipalResolutionProjection =
         serde_json::from_value(row.projection).map_err(PersistenceError::database)?;
     if projection.did != provision.initial_resolution.did
@@ -161,31 +168,53 @@ pub(crate) async fn materialize_context_in_connection(
         at,
     )
     .map_err(PersistenceError::database)?;
+    let service_root = if let Some(prior) = &input.prior_service_signer_evidence {
+        prior.validate().map_err(PersistenceError::database)?;
+        let evidence = &prior.authenticated_signer_evidence;
+        let prior_key = arkret_signatures::PublicKeyMaterial::Jwk {
+            value: serde_json::to_value(&evidence.public_key_jwk)
+                .map_err(PersistenceError::database)?,
+        }
+        .ed25519_bytes()
+        .map_err(PersistenceError::database)?;
+        if evidence.subject_id != input.package.service_id
+            || evidence.verification_method != input.package.webhook_auth.key_ref
+            || prior_key != *service_key.as_bytes()
+        {
+            return Err(corrupt(
+                "reused Applet root differs from the exact original Service material",
+            ));
+        }
+        prior.clone()
+    } else {
+        AppletServiceSignerEvidence {
+            signer_resolution_evidence_ref: service
+                .signer_evidence_ref()
+                .map_err(PersistenceError::database)?,
+            authenticated_signer_evidence: service,
+        }
+    };
     let principal = build_principal_signer_evidence(
         account.principal_id.clone(),
         managed_verification_method.clone(),
         jwk(managed_public_key)?,
-        portal_head.commit_id.clone(),
-        at,
+        principal_control_commit.commit_id.clone(),
+        principal_control_commit.committed_at,
     )
     .map_err(PersistenceError::database)?;
     let station = build_service_signer_evidence(
         account.station_id.clone(),
         input.station_verification_method.clone(),
         jwk(&input.station_public_key)?,
-        portal_head.commit_id.clone(),
-        at,
+        principal_control_commit.commit_id.clone(),
+        principal_control_commit.committed_at,
     )
     .map_err(PersistenceError::database)?;
     let context = AppletManagedActorAuthoringContext {
         committed_request: input.request.clone(),
         realm_stream_head: portal_head.clone(),
-        applet_service_signer_evidence: AppletServiceSignerEvidence {
-            signer_resolution_evidence_ref: service
-                .signer_evidence_ref()
-                .map_err(PersistenceError::database)?,
-            authenticated_signer_evidence: service,
-        },
+        principal_control_commit,
+        applet_service_signer_evidence: service_root,
         managed_actor_signer_evidence: ManagedActorPrincipalSignerEvidence {
             signer_resolution_evidence_ref: principal
                 .signer_evidence_ref()
@@ -193,6 +222,7 @@ pub(crate) async fn materialize_context_in_connection(
             authenticated_signer_evidence: principal,
             attester_signer_evidence: station,
         },
+        resolution_update: None,
     };
     context.validate().map_err(PersistenceError::database)?;
     let context_json = serde_json::to_value(&context).map_err(PersistenceError::database)?;

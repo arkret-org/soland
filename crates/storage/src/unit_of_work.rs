@@ -85,6 +85,7 @@ pub struct EventCommitRequest {
     /// projection and CAS transaction for self submissions.
     pub self_producer_guard: Option<crate::SelfProducerCommitGuard>,
     pub applet_producer_guard: Option<AppletEventProducerGuard>,
+    pub widget_token_gate: Option<crate::AppletWidgetTokenGateSelector>,
     /// Cross-Station human-device producer evidence verified from an
     /// `authority_forward`; retained only with the Event's first Commit.
     pub forwarded_producer_evidence: Option<crate::ForwardedProducerDeviceEvidence>,
@@ -406,6 +407,21 @@ pub struct RealmOrganizationProofCommit {
     pub public_key: [u8; 32],
 }
 
+/// Independently resolved historical keys for one exact Invite claim cut.
+/// Prepared by the service, never deserialized from a caller's wire request.
+#[derive(Clone, Debug)]
+pub struct InviteClaimProofCommit {
+    pub event_id: arkret_wire::EventId,
+    pub event_digest: String,
+    pub create_ref: arkret_wire::CommittedEventRef,
+    pub committed_at: DateTime<Utc>,
+    pub subject_public_key: [u8; 32],
+    pub subject_native_control:
+        Option<arkret_identity::principal_control::NativeIdentityControlKey>,
+    pub subject_control_history: Option<serde_json::Value>,
+    pub binding_public_key: [u8; 32],
+}
+
 #[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
@@ -415,6 +431,8 @@ pub struct EventBatchCommitRequest {
     /// once across processes.
     pub franking_replay_nonce: Option<FrankingReplayNonceCommit>,
     pub realm_organization_proof: Option<RealmOrganizationProofCommit>,
+    pub invite_claim_proof: Option<InviteClaimProofCommit>,
+    pub event_approvals: Option<crate::EventApprovalCommit>,
     pub applet_record: Option<AppletRecordCommit>,
     pub applet_authoring_preview: Option<AppletAuthoringPreviewCommit>,
     pub agent_membership_cascade: Option<crate::AgentMembershipCascadeCommit>,

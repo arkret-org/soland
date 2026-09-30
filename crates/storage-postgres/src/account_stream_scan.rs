@@ -95,6 +95,15 @@ pub(crate) async fn scan_stream_for_account(
                 caller_circle_floor_in_connection(conn, &request.realm_id, circle_id, &caller_actor)
                     .await?
             }
+            (CommitStreamRef::Sidecar { sidecar_id, .. }, true) => {
+                crate::sidecar_authority_cut::caller_floor_in_connection(
+                    conn,
+                    &request.realm_id,
+                    sidecar_id,
+                    &caller_actor,
+                )
+                .await?
+            }
             (CommitStreamRef::Realm { .. }, false) => {
                 match replica_realm_floor_in_connection(conn, &request.realm_id, &caller_actor)
                     .await?
@@ -116,6 +125,19 @@ pub(crate) async fn scan_stream_for_account(
                     Err(reason) => return Ok(AccountStreamScan::Unproved(reason)),
                 }
             }
+            (CommitStreamRef::Sidecar { sidecar_id, .. }, false) => {
+                match crate::sidecar_replica_authority::floor_in_connection(
+                    conn,
+                    &request.realm_id,
+                    sidecar_id,
+                    &caller_actor,
+                )
+                .await?
+                {
+                    Ok(floor) => floor,
+                    Err(reason) => return Ok(AccountStreamScan::Unproved(reason)),
+                }
+            }
             _ => {
                 return Ok(AccountStreamScan::Unproved(
                     "the requested stream has no proved disclosure rule",
@@ -123,7 +145,10 @@ pub(crate) async fn scan_stream_for_account(
             }
         };
         let Some(floor) = floor else {
-            if matches!(request.stream_ref, CommitStreamRef::Circle { .. }) {
+            if matches!(
+                request.stream_ref,
+                CommitStreamRef::Circle { .. } | CommitStreamRef::Sidecar { .. }
+            ) {
                 return Ok(AccountStreamScan::NotAuthorized);
             }
             return Ok(AccountStreamScan::Unproved(
@@ -498,7 +523,7 @@ pub(crate) async fn caller_circle_floor_in_connection(
     circle_join_floor(conn, &stream, &join, history).await
 }
 
-async fn replica_circle_floor_in_connection(
+pub(crate) async fn replica_circle_floor_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
     circle_id: &arkret_wire::CircleId,
@@ -856,6 +881,36 @@ async fn peer_stream_intervals(
             realm_id,
             circle_id,
         } => peer_circle_intervals(conn, realm_id, circle_id, peer).await,
+        CommitStreamRef::Sidecar {
+            realm_id,
+            sidecar_id,
+        } => {
+            #[derive(QueryableByName)]
+            struct Owner {
+                #[diesel(sql_type = Jsonb)]
+                controller_account_id: serde_json::Value,
+            }
+            let owner = sql_query("SELECT controller_account_id FROM sidecar_current_results WHERE realm_id=$1 AND sidecar_id=$2")
+                .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(sidecar_id.as_str())
+                .get_result::<Owner>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            let Some(owner) = owner else {
+                return Ok((Vec::new(), Vec::new()));
+            };
+            let account: AccountId = serde_json::from_value(owner.controller_account_id)
+                .map_err(PersistenceError::database)?;
+            if &account.station_id != peer {
+                return Ok((Vec::new(), Vec::new()));
+            }
+            let actor = ActorId::account(account);
+            let Some(floor) = crate::sidecar_authority_cut::controller_floor_in_connection(
+                conn, realm_id, sidecar_id, &actor,
+            )
+            .await?
+            else {
+                return Ok((Vec::new(), Vec::new()));
+            };
+            Ok((vec![PeerInterval { floor, last: None }], vec![actor]))
+        }
         _ => Ok((Vec::new(), Vec::new())),
     }
 }
@@ -925,7 +980,7 @@ async fn peer_holds_full_event(
                 | arkret_wire::EventKind::SelfModerationReport
                 | arkret_wire::EventKind::ModerationFrankingProof
         )
-        && crate::snapshot_disclosure_gate::DISCLOSED_EVENT_KINDS.contains(&event.kind)
+        && crate::snapshot_disclosure_gate::member_shared_event_kind(&event.kind)
     {
         return Ok(true);
     }

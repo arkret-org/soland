@@ -530,6 +530,15 @@ fn apply_strand_narrative_patch(
     strand: &StrandProjection,
     patch: &serde_json::Map<String, Value>,
 ) -> Result<StrandNarrativePost, &'static str> {
+    if patch.keys().any(|path| {
+        (path == "tracks" || path.starts_with("tracks."))
+            && !matches!(
+                path.as_str(),
+                "tracks.synthesis.content" | "tracks.synthesis.encrypted_content"
+            )
+    }) {
+        return Err("strand_patch_invalid");
+    }
     let mut metadata = serde_json::Map::new();
     metadata.insert("title".to_owned(), Value::String(strand.title.clone()));
     if let Some(summary) = &strand.summary {
@@ -637,11 +646,9 @@ fn strand_track_content_snapshot(
 ) -> BTreeMap<String, (Option<Value>, Option<Value>)> {
     tracks
         .keys()
-        .map(|name| {
-            (
-                name.clone(),
-                strand_track_content_snapshot_for(tracks, name),
-            )
+        .filter_map(|name| {
+            let body = strand_track_content_snapshot_for(tracks, name);
+            (body.0.is_some() || body.1.is_some()).then(|| (name.clone(), body))
         })
         .collect()
 }
@@ -673,156 +680,93 @@ fn apply_strand_tracks_update_to_map(
     BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
     &'static str,
 > {
-    let mut tracks = current.clone();
-    let mut changed = false;
-    if let Some(patch) = payload.get("patch").and_then(Value::as_object) {
-        for (path, patch_value) in patch {
-            if path == "tracks" {
-                match parse_patch_operation(patch_value)? {
-                    TrackPatchOperation::Set(value) => {
-                        tracks = parse_track_update_map(value)?;
-                    }
-                    TrackPatchOperation::Remove => tracks.clear(),
-                }
-                changed = true;
-                continue;
+    let patch = payload
+        .get("patch")
+        .and_then(Value::as_object)
+        .filter(|patch| !patch.is_empty())
+        .ok_or("strand_tracks_update_requires_patch")?;
+    for path in patch.keys() {
+        if matches!(
+            path.as_str(),
+            "tracks.synthesis.content"
+                | "tracks.synthesis.encrypted_content"
+                | "tracks.discussion.content"
+                | "tracks.discussion.encrypted_content"
+        ) {
+            return Err("strand_tracks_content_forbidden");
+        }
+        let segments = path.split('.').collect::<Vec<_>>();
+        let allowed = match segments.as_slice() {
+            [
+                "tracks",
+                "discussion" | "synthesis",
+                "enabled" | "is_primary" | "profile",
+            ] => true,
+            ["tracks", "discussion" | "synthesis", "metadata", rest @ ..] => {
+                rest.iter().all(|part| {
+                    !part.is_empty()
+                        && part.len() <= 64
+                        && part.as_bytes()[0].is_ascii_lowercase()
+                        && part.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                        })
+                })
             }
-            let Some(rest) = path.strip_prefix("tracks.") else {
-                continue;
-            };
-            let segments = rest.split('.').collect::<Vec<_>>();
-            match segments.as_slice() {
-                [track_id] => {
-                    apply_whole_track_patch(&mut tracks, track_id, patch_value)?;
-                    changed = true;
-                }
-                [track_id, field] => {
-                    apply_track_field_patch(&mut tracks, track_id, field, patch_value)?;
-                    changed = true;
-                }
-                _ => return Err("strand_tracks_patch_invalid"),
-            }
+            _ => false,
+        };
+        if !allowed {
+            return Err("strand_tracks_patch_invalid");
         }
     }
-    if !changed {
-        return Err("strand_tracks_update_requires_patch");
-    }
+    let typed_patch =
+        serde_json::from_value::<arkret_wire::patch::Patch>(Value::Object(patch.clone()))
+            .map_err(|_| "strand_tracks_patch_invalid")?;
+    let pre = serde_json::json!({"tracks": current});
+    let post = typed_patch
+        .apply(&pre)
+        .map_err(|_| "strand_tracks_patch_invalid")?;
+    let tracks = serde_json::from_value::<
+        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
+    >(post.get("tracks").cloned().ok_or("strand_tracks_empty")?)
+    .map_err(|_| "strand_tracks_invalid")?;
     validate_strand_tracks(&tracks)?;
-    // `ak.strand.tracks.update` configures tracks; content moves through the
-    // content-carrying events. Comparing the whole snapshot map would also
-    // reject adding or removing a track, which is exactly what this event is
-    // for — so compare content per track name over the union, with an absent
-    // track contributing no content. Adding a contentless track passes;
-    // adding, changing or dropping any content does not.
-    let before = strand_track_content_snapshot(current);
-    let after = strand_track_content_snapshot(&tracks);
-    let no_content = (None, None);
-    if before.keys().chain(after.keys()).any(|name| {
-        before.get(name).unwrap_or(&no_content) != after.get(name).unwrap_or(&no_content)
-    }) {
+    if strand_track_content_snapshot(current) != strand_track_content_snapshot(&tracks) {
         return Err("strand_tracks_content_forbidden");
     }
     Ok(tracks)
 }
 
-fn parse_track_update_map(
-    value: &Value,
-) -> Result<
-    BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
-    &'static str,
-> {
-    serde_json::from_value::<
-        BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
-    >(value.clone())
-    .map_err(|_| "strand_tracks_invalid")
-}
+#[cfg(test)]
+mod track_configuration_tests {
+    use super::*;
 
-fn apply_whole_track_patch(
-    tracks: &mut BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
-    track_id: &str,
-    patch_value: &Value,
-) -> Result<(), &'static str> {
-    arkret_models_collaboration::objects::profiles::validate_strand_track_name(track_id)
-        .map_err(|_| "strand_track_name_invalid")?;
-    let patch = parse_patch_operation(patch_value)?;
-    match patch {
-        TrackPatchOperation::Set(value) => {
-            let track = serde_json::from_value::<
-                arkret_models_collaboration::objects::profiles::StrandTrack,
-            >(value.clone())
-            .map_err(|_| "strand_tracks_invalid")?;
-            tracks.insert(track_id.to_owned(), track);
+    #[test]
+    fn configuration_rejects_ancestor_replacement_and_preserves_body() {
+        let current = serde_json::from_value(serde_json::json!({
+            "discussion": {"enabled": true, "is_primary": true, "profile": "discussion"},
+            "synthesis": {"enabled": true, "is_primary": false, "profile": "synthesis", "content": {"kind": "ak.content.text", "body": "Protected"}}
+        })).unwrap();
+        for path in [
+            "tracks",
+            "tracks.synthesis",
+            "tracks.synthesis.template",
+            "tracks.synthesis.metadata.Bad",
+        ] {
+            let payload = serde_json::json!({"patch": {path: {"$op": "set", "value": {}}}});
+            assert_eq!(
+                apply_strand_tracks_update_to_map(&current, &payload),
+                Err("strand_tracks_patch_invalid")
+            );
         }
-        TrackPatchOperation::Remove => {
-            tracks.remove(track_id);
-        }
-    }
-    Ok(())
-}
-
-fn apply_track_field_patch(
-    tracks: &mut BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
-    track_id: &str,
-    field: &str,
-    patch_value: &Value,
-) -> Result<(), &'static str> {
-    arkret_models_collaboration::objects::profiles::validate_strand_track_name(track_id)
-        .map_err(|_| "strand_track_name_invalid")?;
-    let patch = parse_patch_operation(patch_value)?;
-    let mut track_value = tracks
-        .get(track_id)
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|_| "strand_tracks_invalid")?
-        .unwrap_or_else(|| serde_json::json!({}));
-    let Some(track_object) = track_value.as_object_mut() else {
-        return Err("strand_tracks_invalid");
-    };
-    if matches!(field, "content" | "encrypted_content") {
-        return Err("strand_tracks_content_forbidden");
-    }
-    if !matches!(
-        field,
-        "enabled" | "is_primary" | "profile" | "template" | "metadata"
-    ) {
-        return Err("strand_tracks_patch_invalid");
-    }
-    match patch {
-        TrackPatchOperation::Set(value) => {
-            track_object.insert(field.to_owned(), value.clone());
-        }
-        TrackPatchOperation::Remove => {
-            track_object.remove(field);
-        }
-    }
-    let track =
-        serde_json::from_value::<arkret_models_collaboration::objects::profiles::StrandTrack>(
-            track_value,
-        )
-        .map_err(|_| "strand_tracks_invalid")?;
-    tracks.insert(track_id.to_owned(), track);
-    Ok(())
-}
-
-enum TrackPatchOperation<'a> {
-    Set(&'a Value),
-    Remove,
-}
-
-fn parse_patch_operation(value: &Value) -> Result<TrackPatchOperation<'_>, &'static str> {
-    let Some(object) = value.as_object() else {
-        return Ok(TrackPatchOperation::Set(value));
-    };
-    let Some(op) = object.get("$op").and_then(Value::as_str) else {
-        return Ok(TrackPatchOperation::Set(value));
-    };
-    match op {
-        "set" | "replace" => object
-            .get("value")
-            .map(TrackPatchOperation::Set)
-            .ok_or("strand_tracks_patch_invalid"),
-        "remove" | "unset" | "delete" => Ok(TrackPatchOperation::Remove),
-        _ => Err("strand_tracks_patch_invalid"),
+        let next = apply_strand_tracks_update_to_map(&current, &serde_json::json!({"patch": {"tracks.synthesis.metadata.label": {"$op": "set", "value": "Summary"}}})).unwrap();
+        assert_eq!(
+            strand_track_content_snapshot(&current),
+            strand_track_content_snapshot(&next)
+        );
+        assert_eq!(
+            serde_json::to_value(&next).unwrap()["synthesis"]["metadata"]["label"],
+            "Summary"
+        );
     }
 }
 

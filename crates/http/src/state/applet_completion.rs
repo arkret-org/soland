@@ -98,7 +98,7 @@ async fn deliver_one(
                 .authenticated_signer_evidence
                 .subject_id
         || evidence.subject_id != completion.source_id
-        || evidence.authority_commit_id != completion.context.realm_stream_head.commit_id
+        || evidence.authority_commit_id != completion.context.principal_control_commit.commit_id
         || attestation.proof.verification_method != evidence.verification_method
         || attestation.proof.created_at != attestation.attestation.issued_at
         || attestation.attestation.issued_at >= attestation.attestation.expires_at

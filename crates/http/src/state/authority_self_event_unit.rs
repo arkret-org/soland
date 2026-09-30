@@ -109,14 +109,25 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     matches!(
         kind,
         arkret_wire::EventKind::CircleCreate
+            | arkret_wire::EventKind::SidecarCreate
+            | arkret_wire::EventKind::SidecarContextAttach
             | arkret_wire::EventKind::CircleMemberState
             | arkret_wire::EventKind::RealmOrganization
             | arkret_wire::EventKind::SelfModerationReport
             | arkret_wire::EventKind::ModerationDecision
             | arkret_wire::EventKind::ModerationDecisionLift
             | arkret_wire::EventKind::SpaceCreate
+            | arkret_wire::EventKind::PolicySet
+            | arkret_wire::EventKind::PolicyAction
+            | arkret_wire::EventKind::AgentActionApprove
             | arkret_wire::EventKind::StrandCreate
             | arkret_wire::EventKind::RealmProfile
+            | arkret_wire::EventKind::RealmTombstone
+            | arkret_wire::EventKind::RealmDestroy
+            | arkret_wire::EventKind::RealmArchive
+            | arkret_wire::EventKind::RealmRestore
+            | arkret_wire::EventKind::RealmFreeze
+            | arkret_wire::EventKind::RealmUnfreeze
             | arkret_wire::EventKind::StrandUpdate
             | arkret_wire::EventKind::StrandTracksUpdate
             | arkret_wire::EventKind::RsvpSet
@@ -128,6 +139,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::StrandWatchSet
             | arkret_wire::EventKind::InviteCreate
             | arkret_wire::EventKind::InviteThirdParty
+            | arkret_wire::EventKind::InviteClaim
             | arkret_wire::EventKind::InviteRevoke
             | arkret_wire::EventKind::InviteCancel
             | arkret_wire::EventKind::InviteAccept
@@ -149,6 +161,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::SpaceRestore
             | arkret_wire::EventKind::ReactionAdd
             | arkret_wire::EventKind::ReactionRemove
+            | arkret_wire::EventKind::MimiRoomBinding
     )
 }
 
@@ -187,6 +200,44 @@ pub(super) async fn commit_event_unit(
     submission: &EventAdmissionSubmission,
     producer: AdmittedProducer,
     effects: SelfEventUnitEffects,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    commit_event_unit_with_idempotency(state, submission, producer, effects, None).await
+}
+
+pub(super) async fn commit_event_unit_with_idempotency(
+    state: &AppState,
+    submission: &EventAdmissionSubmission,
+    producer: AdmittedProducer,
+    effects: SelfEventUnitEffects,
+    idempotency: Option<soland_services::events::IdempotentResponse>,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    let claim = submission.event.kind == arkret_wire::EventKind::InviteClaim;
+    let result =
+        commit_event_unit_with_idempotency_impl(state, submission, producer, effects, idempotency)
+            .await;
+    match result {
+        Err(error)
+            if claim
+                && matches!(
+                    &error,
+                    ServiceError::Conflict(_) | ServiceError::NotFound(_)
+                ) =>
+        {
+            tracing::info!(reason = %error, "third-party invite claim refused");
+            Err(ServiceError::Conflict(
+                "capability_denied: invite claim is invalid".to_owned(),
+            ))
+        }
+        other => other,
+    }
+}
+
+async fn commit_event_unit_with_idempotency_impl(
+    state: &AppState,
+    submission: &EventAdmissionSubmission,
+    producer: AdmittedProducer,
+    effects: SelfEventUnitEffects,
+    idempotency: Option<soland_services::events::IdempotentResponse>,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     let event = &submission.event;
     if let Some(outcome) = exact_replay(state, event).await? {
@@ -338,6 +389,7 @@ pub(super) async fn commit_event_unit(
         authority_commit: transaction.clone(),
         self_producer_guard,
         applet_producer_guard,
+        widget_token_gate: None,
         forwarded_producer_evidence,
         event: record,
         parent_membership_admission: None,
@@ -357,10 +409,16 @@ pub(super) async fn commit_event_unit(
             created_at: event.created_at,
             received_at: committed_at,
         }],
-        idempotency: None,
+        idempotency,
         deliveries: Vec::new(),
-        realm_fanout_source: Some(submission.clone()),
+        realm_fanout_source: Some(EventAdmissionSubmission::new(submission.event.clone())),
     };
+    let invite_claim_proof = crate::invite_claim_admission::prepare_invite_claim_proof(
+        state,
+        event,
+        transaction.commit.committed_at,
+    )
+    .await?;
     let realm_organization_proof =
         crate::routing::organizations::prepare_realm_organization_proof(state, event)
             .await
@@ -369,13 +427,25 @@ pub(super) async fn commit_event_unit(
         nonce.consumed_at = committed_at;
         nonce
     });
-    let committed = if franking_replay_nonce.is_some() || realm_organization_proof.is_some() {
+    let event_approvals = crate::approval_admission::prepare_event_approvals(
+        state,
+        submission,
+        transaction.commit.committed_at,
+    )
+    .await?;
+    let committed = if franking_replay_nonce.is_some()
+        || realm_organization_proof.is_some()
+        || invite_claim_proof.is_some()
+        || event_approvals.is_some()
+    {
         state
             .events()
             .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
                 events: vec![command],
                 franking_replay_nonce,
                 realm_organization_proof,
+                invite_claim_proof,
+                event_approvals,
                 applet_record: None,
                 applet_authoring_preview: None,
                 agent_membership_cascade: None,
@@ -533,6 +603,27 @@ pub(crate) async fn submit_applet_event(
         AdmittedProducer::Applet(soland_storage::AppletEventProducerGuard {
             service_did_document,
         }),
+        SelfEventUnitEffects::default(),
+    )
+    .await
+}
+
+/// MIMI room binding: HTTP provider authentication and the independent native
+/// Account/device producer proof authorize separate identities.
+pub(crate) async fn submit_mimi_binding_event(
+    state: &AppState,
+    submission: &EventAdmissionSubmission,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    if submission.event.kind != arkret_wire::EventKind::MimiRoomBinding {
+        return Err(ServiceError::SchemaViolation(
+            "MIMI binding ingress only accepts room bindings".into(),
+        ));
+    }
+    let guard = super::verify_mimi_binding_producer(state, &submission.event).await?;
+    commit_event_unit(
+        state,
+        submission,
+        AdmittedProducer::Local(guard),
         SelfEventUnitEffects::default(),
     )
     .await

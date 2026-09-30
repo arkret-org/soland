@@ -5,6 +5,7 @@
 extern crate self as soland_http;
 
 pub mod account_erasure_worker;
+mod approval_admission;
 pub mod authz;
 pub mod canonical_body;
 pub mod config;
@@ -14,11 +15,14 @@ pub mod error;
 pub mod failpoints;
 pub mod http_signature;
 pub mod ids;
+mod invite_claim_admission;
+#[cfg(test)]
 mod invite_claim_proofs;
 pub mod jws_verify;
 pub mod metrics;
 pub mod openapi;
 pub mod openapi_routes;
+mod principal_control;
 pub mod push_gateway_registry;
 pub mod ratelimit;
 pub mod result;

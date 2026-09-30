@@ -6001,6 +6001,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek 3.0.0",
  "futures-util",
+ "getrandom 0.4.3",
  "hex",
  "parking_lot",
  "serde",

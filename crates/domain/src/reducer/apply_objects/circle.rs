@@ -44,9 +44,9 @@ impl ProjectionState {
         // Parent Realm MUST exist and not be in a terminal state — both
         // checks rely on the same projection cache the Strand create path
         // uses.
-        if self.realm_is_destroyed(&realm_id) {
+        if self.realm_is_in_terminal_state(&realm_id) {
             return ProjectionEffect::Rejected {
-                reason: "realm_terminal_state".to_owned(),
+                reason: arkret_wire::ErrorCode::FAILED_PRECONDITION.to_owned(),
             };
         }
         if !self.realm_states.contains_key(&realm_id) && self.realm_create_log(&realm_id).is_none()

@@ -243,9 +243,6 @@ pub(in crate::routing) struct InternalEventAdmission {
 
 #[derive(Debug, Clone)]
 enum InternalEventBinding {
-    MimiProvider {
-        binding_ref: String,
-    },
     AppletFormal {
         event_id: String,
         applet_id: arkret_wire::AppletId,
@@ -287,23 +284,6 @@ impl InternalEventAdmission {
     pub(in crate::routing::events::event_log) fn is_applet_formal(&self) -> bool {
         matches!(self.binding, InternalEventBinding::AppletFormal { .. })
     }
-    pub(in crate::routing) fn mimi_provider(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        binding_ref: impl Into<String>,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
-            device_id: String::new(),
-            binding: InternalEventBinding::MimiProvider {
-                binding_ref: binding_ref.into(),
-            },
-        }
-    }
-
     pub(in crate::routing) fn applet_formal(
         realm_id: impl Into<String>,
         actor_id: arkret_wire::ActorId,
@@ -461,14 +441,6 @@ impl InternalEventAdmission {
             && (self.kind.is_empty()
                 || object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str()))
             && match &self.binding {
-                InternalEventBinding::MimiProvider { binding_ref } => {
-                    object
-                        .get("payload")
-                        .and_then(|payload| payload.get("mimi_provenance"))
-                        .and_then(|provenance| provenance.get("room_binding_ref"))
-                        .and_then(Value::as_str)
-                        == Some(binding_ref.as_str())
-                }
                 InternalEventBinding::AppletFormal {
                     event_id,
                     applet_id,
@@ -593,31 +565,6 @@ impl InternalEventAdmission {
             }
             _ => None,
         }
-    }
-
-    pub(in crate::routing::events::event_log) fn authorizes_mimi_facade_write(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-    ) -> bool {
-        matches!(self.binding, InternalEventBinding::MimiProvider { .. })
-            && self.matches(session, object)
-    }
-
-    /// Return whether this is one of the closed internal adapters whose
-    /// producer is the local service principal itself.
-    ///
-    /// This is deliberately an exact binding allowlist, not a session-shape
-    /// shortcut: service-authored Events use the service DID's notary method
-    /// as their producer proof authority, while user/device, Applet, Agent and
-    /// federated Events must continue through their own proof branches.
-    pub(in crate::routing::events::event_log) fn is_local_service_producer(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-    ) -> bool {
-        matches!(self.binding, InternalEventBinding::MimiProvider { .. })
-            && self.matches(session, object)
     }
 
     pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(

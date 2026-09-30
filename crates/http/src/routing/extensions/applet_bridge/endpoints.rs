@@ -692,6 +692,19 @@ async fn revoke_install_endpoint(
                 )
             }))
             .collect::<Vec<_>>();
+        if let Some(plan) = revoke_plan.as_ref() {
+            for token_ref in &plan.widget_token_refs {
+                steps.push(AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
+                    effect_kind: AppletRevokeLocalEffectKind::WidgetTokenInvalidation,
+                    effect_ref: arkret_models_integration::AppletRevokeLocalEffectRef::new(
+                        token_ref.clone(),
+                    )
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                    status: AppletRevokeLocalEffectStatus::Pending,
+                    reason_code: None,
+                }));
+            }
+        }
         if revoke_mode_fences_runtime(revoke.revoke_mode) {
             steps.push(AppletRevokeStep::LocalEffect(AppletRevokeLocalEffectStep {
                 effect_kind: AppletRevokeLocalEffectKind::LocalAppletFence,
@@ -860,6 +873,56 @@ async fn revoke_install_endpoint(
         if outcome.status == AppletRevokeSagaStatus::Complete {
             return json_ok(outcome);
         }
+    }
+
+    for index in 0..outcome.steps.len() {
+        let AppletRevokeStep::LocalEffect(local) = &outcome.steps[index] else {
+            continue;
+        };
+        if local.effect_kind != AppletRevokeLocalEffectKind::WidgetTokenInvalidation
+            || local.status == AppletRevokeLocalEffectStatus::Accepted
+        {
+            continue;
+        }
+        if outcome
+            .steps
+            .iter()
+            .any(|step| matches!(step, AppletRevokeStep::SubmittedEvent(_)))
+        {
+            return Err(AppError::internal(
+                "widget invalidation requires every Event effect committed",
+            ));
+        }
+        let token_ref = local.effect_ref.clone();
+        state
+            .event_queries()
+            .invalidate_widget_token(
+                &widget_install_selector(&record),
+                token_ref.as_str(),
+                chrono::Utc::now(),
+            )
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("cannot invalidate widget token: {error}"))
+            })?;
+        let AppletRevokeStep::LocalEffect(local) = &mut outcome.steps[index] else {
+            unreachable!()
+        };
+        local.status = AppletRevokeLocalEffectStatus::Accepted;
+        outcome
+            .revoked_refs
+            .push(AppletRevokeEffectRef::TypedResource(token_ref));
+        persist_revoke_execution(
+            state,
+            &mut record,
+            &admin_actor_key,
+            &idempotency_key,
+            &request_digest,
+            &request_value,
+            revoke_plan.as_ref(),
+            &mut outcome,
+        )
+        .await?;
     }
 
     if revoke_mode_fences_runtime(revoke.revoke_mode) {
@@ -1120,6 +1183,15 @@ fn deduplicate_revoke_effect_refs(refs: &mut Vec<AppletRevokeEffectRef>) -> Resu
     Ok(())
 }
 
+fn widget_install_selector(record: &AppletRecord) -> soland_storage::AppletWidgetInstallSelector {
+    soland_storage::AppletWidgetInstallSelector {
+        applet_id: record.applet_id.clone(),
+        effective_scope: record.effective_scope.clone(),
+        registration_event_ref: record.install_response.registration_event_ref.clone(),
+        registration_epoch: record.package.registration_epoch.clone(),
+    }
+}
+
 async fn build_revoke_plan(
     state: &AppState,
     record: &AppletRecord,
@@ -1127,16 +1199,23 @@ async fn build_revoke_plan(
 ) -> Result<AppletRevokePreviewOutcome, AppError> {
     ensure_not_revoked(record)?;
     let response = &record.install_response;
-    if matches!(
+    let widget_token_refs = if matches!(
         preview.revoke_mode,
         AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeWidgetOnly
-    ) && response.widget_policy_ref.is_some()
-    {
-        return Err(crate::app_error!(
-            FailedPrecondition,
-            "widget-token revoke preview requires the durable token inventory",
-        ));
-    }
+    ) {
+        state
+            .event_queries()
+            .widget_tokens(&widget_install_selector(record), chrono::Utc::now())
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("cannot read widget token inventory: {error}"))
+            })?
+            .into_iter()
+            .map(|token| token.token_ref)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let package = &record.package;
     let mut capability_revocations = Vec::new();
     let mut membership_removals = Vec::new();
@@ -1186,7 +1265,7 @@ async fn build_revoke_plan(
         revoke_mode: preview.revoke_mode,
         capability_revocations,
         membership_removals,
-        widget_token_refs: Vec::new(),
+        widget_token_refs,
     };
     Ok(AppletRevokePreviewOutcome { revoke_plan: plan })
 }
@@ -1470,7 +1549,6 @@ fn validate_revoke_submissions(
                 intent.member_id.clone(),
                 match intent.membership {
                     AppletManagedMembershipRemoval::Leave => "leave",
-                    AppletManagedMembershipRemoval::Remove => "remove",
                 }
                 .to_owned(),
             )
@@ -1499,7 +1577,7 @@ fn validate_revoke_submissions(
             .get("membership")
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::param_invalid("membership payload lacks membership"))?;
-        if !matches!(membership, "leave" | "remove")
+        if membership != "leave"
             || payload.get("reason").and_then(Value::as_str) != Some(plan.reason_code.as_str())
         {
             return Err(AppError::param_invalid(
@@ -1638,6 +1716,9 @@ fn revoke_outcome_ready_for_local_effect(outcome: &AppletRevokeOutcome) -> bool 
                 }
                 local_fence_pending = true;
             }
+            AppletRevokeStep::LocalEffect(local)
+                if local.effect_kind == AppletRevokeLocalEffectKind::WidgetTokenInvalidation
+                    && local.status == AppletRevokeLocalEffectStatus::Accepted => {}
             AppletRevokeStep::LocalEffect(_) => return false,
         }
     }

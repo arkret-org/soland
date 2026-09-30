@@ -150,6 +150,16 @@ struct ExistingFrankingProofCurrent {
     value: Value,
 }
 
+#[derive(diesel::QueryableByName)]
+struct ExistingTerminalCurrent {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+}
+
 /// Snapshot replacement removes rows from the old disclosed source before
 /// inserting the new subset. Check retained selectors while their old rows
 /// are still locked, so that replacement cannot hide a revision fork.
@@ -159,6 +169,32 @@ async fn guard_snapshot_revisions(
     entries: &[arkret_wire::TypedCurrentResult],
 ) -> PersistenceResult<()> {
     use arkret_wire::CurrentSelector as S;
+    let terminal = diesel::sql_query(
+        "SELECT current_commit_id,current_stream_position,value \
+         FROM realm_bootstrap_current_results \
+         WHERE realm_id=$1 AND result_family='realm_tombstone' FOR UPDATE",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<ExistingTerminalCurrent>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if let Some(terminal) = terminal {
+        let retained = entries.iter().any(|entry| matches!(entry,
+            arkret_wire::TypedCurrentResult::Value {
+                selector: S::RealmTombstone, source_stream_ref, revision, value,
+            } if source_stream_ref == &arkret_wire::CommitStreamRef::Realm {realm_id: realm_id.clone()}
+                && revision.commit_id.as_str() == terminal.current_commit_id
+                && position(revision.stream_position).ok() == Some(terminal.current_stream_position)
+                && value == &terminal.value
+        ));
+        if !retained {
+            return Err(PersistenceError::Conflict(
+                "failed_precondition: snapshot cannot remove or rewrite the terminal fence"
+                    .to_owned(),
+            ));
+        }
+    }
     for entry in entries {
         let arkret_wire::TypedCurrentResult::Value {
             selector,
@@ -573,6 +609,9 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             S::RealmDiscovery => Some("realm_discovery"),
             S::RealmAlias => Some("realm_alias"),
             S::RealmPlaintextVisibleServices => Some("realm_plaintext_visible_services"),
+            S::RealmTombstone => Some("realm_tombstone"),
+            S::RealmArchive => Some("realm_archive"),
+            S::RealmFreeze => Some("realm_freeze"),
             _ => None,
         };
         if let Some(family) = singleton {
@@ -580,6 +619,15 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             continue;
         }
         match selector {
+            S::Sidecar { .. } | S::SidecarContext { .. } => {
+                crate::sidecar_replica_current::install_in_connection(
+                    conn,
+                    realm_id,
+                    entry,
+                    installed_at,
+                )
+                .await?;
+            }
             S::CallState { call_id } => {
                 upsert_call_genesis(conn, realm_id, call_id, source_stream_ref, &row, value)
                     .await?;
@@ -833,6 +881,14 @@ pub(crate) async fn advance_in_connection(
     }
 
     match event.kind {
+        arkret_wire::EventKind::RealmTombstone
+        | arkret_wire::EventKind::RealmArchive
+        | arkret_wire::EventKind::RealmRestore
+        | arkret_wire::EventKind::RealmFreeze
+        | arkret_wire::EventKind::RealmUnfreeze => {
+            crate::realm_lifecycle_current_results::commit_in_connection(conn, event, commit)
+                .await?;
+        }
         arkret_wire::EventKind::CallCreate => {
             use arkret_models_collaboration::events_payloads::call::{
                 CallCreatePayload, CallStateCurrentValue,
@@ -882,6 +938,14 @@ pub(crate) async fn advance_in_connection(
         }
         arkret_wire::EventKind::CircleCreate | arkret_wire::EventKind::CircleMemberState => {
             crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
+        }
+        arkret_wire::EventKind::SidecarCreate | arkret_wire::EventKind::SidecarContextAttach => {
+            // The source authority accepted the immutable Event; project its
+            // result without rerunning the source Station's admission policy.
+            crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
+        }
+        arkret_wire::EventKind::PolicySet | arkret_wire::EventKind::PolicyAction => {
+            crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
         }
         arkret_wire::EventKind::SelfModerationReport => {
             upsert_keyed(
@@ -1427,6 +1491,74 @@ mod tests {
     struct ValueRow {
         #[diesel(sql_type = Jsonb)]
         value: Value,
+    }
+
+    #[tokio::test]
+    async fn terminal_snapshot_is_sticky_and_blocks_fresh_child_effects() {
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let realm =
+            arkret_wire::RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 9,
+            commit_id: arkret_wire::RealmCommitId::from_digest([42; 32]),
+        };
+        let value = json!({"reason":"migration", "successor_realm_id":
+            "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW"});
+        let entry = arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::RealmTombstone,
+            source_stream_ref: stream,
+            revision: arkret_wire::CurrentRevision {
+                commit_id: head.commit_id.clone(),
+                stream_position: 9,
+            },
+            value: value.clone(),
+        };
+        let at = chrono::Utc::now();
+        for _ in 0..2 {
+            install_snapshot_in_connection(
+                &mut conn,
+                &realm,
+                &head,
+                std::slice::from_ref(&entry),
+                at,
+            )
+            .await
+            .unwrap();
+        }
+        let error = install_snapshot_in_connection(&mut conn, &realm, &head, &[], at)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("failed_precondition"), "{error}");
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.space.update",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            actor,
+            json!({}),
+            at,
+        )
+        .unwrap();
+        let error = crate::realm_lifecycle_current_results::require_replica_live_in_connection(
+            &mut conn, &event,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("failed_precondition"), "{error}");
+        let retained = diesel::sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_tombstone'")
+            .bind::<Text, _>(realm.as_str()).get_result::<ValueRow>(&mut *conn).await.unwrap();
+        assert_eq!(retained.value, value);
     }
 
     #[tokio::test]

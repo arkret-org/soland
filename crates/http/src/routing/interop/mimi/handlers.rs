@@ -266,12 +266,28 @@ pub(super) async fn mimi_room_message(
     if !valid_mimi_room_id(&room_id) {
         return Err(AppError::param_invalid("invalid MIMI room id"));
     }
+    let room_binding = latest_mimi_room_binding(state, &room_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::not_found("MIMI room is not bound to any Arkret Realm")
+                .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
+        })?;
+    enforce_mimi_writable_binding(&room_binding.binding)?;
     let message = decode_mimi_ciphertext_payload(&body.ciphertext)?;
     let associated_data = decode_mimi_associated_data(body.associated_data.as_ref())?;
     let source_format = body.ciphertext.content_type.as_str().to_owned();
     if !valid_mimi_content_type(&source_format) {
         return Err(AppError::param_invalid("unsupported MIMI content type"));
     }
+    enforce_mimi_submit_binding(
+        state,
+        &source_provider,
+        &room_binding,
+        &body,
+        &message,
+        associated_data.as_ref(),
+    )
+    .await?;
     let operation_id = ids::generate_operation_id();
     let mimi_message_id = message
         .get("mimi_message_id")
@@ -293,21 +309,6 @@ pub(super) async fn mimi_room_message(
     // MIMI provenance is bound in the closed top-level payload branch so
     // admission and audit consumers can verify service authorship separately
     // from external sender attribution.
-    let room_binding = latest_mimi_room_binding(state, &room_id)
-        .await?
-        .ok_or_else(|| {
-            AppError::not_found("MIMI room is not bound to any Arkret Realm")
-                .with_reason_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
-        })?;
-    enforce_mimi_submit_binding(
-        state,
-        &source_provider,
-        &room_binding,
-        &body,
-        &message,
-        associated_data.as_ref(),
-    )
-    .await?;
     let realm_id = room_binding.realm_id.clone();
     let sender = body.sender_actor_id.to_string();
     let mapped_content = map_mimi_message_content(&message, &source_format)?;
@@ -317,8 +318,7 @@ pub(super) async fn mimi_room_message(
         .map(str::to_owned)
         .or_else(|| crate::routing::events::strand::strand_id_from_realm_id(&realm_id))
         .ok_or_else(|| AppError::param_invalid("MIMI binding carries a non-canonical realm_id"))?;
-    let created_at = chrono::Utc::now();
-    let event_payload = json!({
+    let mut event_payload = json!({
         "strand_id": thread_id.clone(),
         "track_name": "discussion",
         "content": mapped_content.content.clone(),
@@ -335,32 +335,30 @@ pub(super) async fn mimi_room_message(
             "room_binding_ref": room_binding.event_id.clone(),
         },
     });
-    let event_id =
-        persist_mimi_canonical_message_event(state, &realm_id, created_at, event_payload).await?;
-
-    let body_value = typed_body_value(&body, "mimi submit message")?;
-    let _receipt = mimi_receipt(
+    if let Some(encrypted) = message.get("encrypted_content") {
+        let object = event_payload
+            .as_object_mut()
+            .expect("message payload object");
+        object.remove("content");
+        object.remove("metadata");
+        object.insert("encrypted_content".into(), encrypted.clone());
+        if let Some(metadata) = message.get("encrypted_metadata") {
+            object.insert("encrypted_metadata".into(), metadata.clone());
+        }
+    }
+    let event_id = persist_mimi_canonical_message_event(
         state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_SUBMIT_MESSAGE_V1,
-        &body_value,
-        json!({
-            "schema": arkret_wire::SchemaId::MIMI_INTEROP_V1,
-            "receipt_kind": "content_mapping_receipt",
-            "profile": arkret_wire::ProfileId::MIMI_INTEROP_V1,
-            "mimi_room_uri": mimi_room_uri(state, &room_id)?,
-            "source_format": source_format,
-            "target_format": arkret_wire::event_kind_str::MESSAGE_CREATE,
-            "original_envelope_hash": original_hash,
-            "mapped_operation_id": operation_id,
-            "arkret_event_id": event_id,
-            "mimi_message_id": mimi_message_id,
-            "truth_source": "arkret_signed_event_reducer",
-            "reducer_chain": "wired",
-            "status": mapped_content.status,
-            "mimi_policy": mapped_content.policy.clone(),
-            "quarantine": mapped_content.quarantine.clone(),
-        }),
-    );
+        &realm_id,
+        room_uri,
+        EventId::new(room_binding.event_id.clone())
+            .map_err(|e| AppError::internal(e.to_string()))?,
+        arkret_wire::DidCoreId::new(source_provider)
+            .map_err(|e| AppError::internal(e.to_string()))?,
+        &body,
+        event_payload,
+    )
+    .await?;
+
     append_audit_log(
         state,
         Some(&sender),
@@ -507,6 +505,7 @@ pub(super) async fn verify_mimi_consent_write_authority(
     ),
     AppError,
 > {
+    let source_id = verify_mimi_source_service_signature(state, req, None).await?;
     if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
         if crate::routing::identity::session_actor::validated_session_actor(state, &session).await?
@@ -516,11 +515,9 @@ pub(super) async fn verify_mimi_consent_write_authority(
                 "MIMI consent user session must match the consent actor",
             ));
         }
-        return Ok((None, Some(session)));
+        return Ok((Some(source_id), Some(session)));
     }
-    verify_mimi_source_service_signature(state, req, None)
-        .await
-        .map(|source| (Some(source), None))
+    Ok((Some(source_id), None))
 }
 
 const MIMI_OPERATION_PROOF_WINDOW_SECONDS: i64 = 300;
@@ -873,7 +870,8 @@ async fn verify_mimi_consent_update_authority(
     ),
     AppError,
 > {
-    let (session, source_id) = if request_has_bearer_session(req) {
+    let source_id = verify_mimi_source_service_signature(state, req, None).await?;
+    let session = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
         if crate::routing::identity::session_actor::validated_session_actor(state, &session).await?
             != body.actor_id
@@ -882,9 +880,8 @@ async fn verify_mimi_consent_update_authority(
                 "MIMI consent user session must match the consent actor",
             ));
         }
-        (session, None)
+        session
     } else {
-        let source_id = verify_mimi_source_service_signature(state, req, None).await?;
         let device_id = body
             .consent_event
             .event
@@ -896,27 +893,22 @@ async fn verify_mimi_consent_update_authority(
                 AppError::param_invalid("MIMI consent Event requires a DID URL proof key")
                     .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
             })?;
-        (
-            soland_services::identity::SessionIdentityState {
-                account_pk: None,
-                token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
-                actor: body.actor_id.to_string(),
-                endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
-                    device_id,
-                },
-                audience: state.service_id().to_string(),
-                session_public_key: None,
-                session_grant: None,
-                expires_at: now() + chrono::Duration::minutes(5),
-                created_at: now(),
-                revoked_at: None,
-            },
-            Some(source_id),
-        )
+        soland_services::identity::SessionIdentityState {
+            account_pk: None,
+            token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
+            actor: body.actor_id.to_string(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice { device_id },
+            audience: state.service_id().to_string(),
+            session_public_key: None,
+            session_grant: None,
+            expires_at: now() + chrono::Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        }
     };
 
     verify_mimi_consent_actor_proof(state, body).await?;
-    Ok((session, source_id))
+    Ok((session, Some(source_id)))
 }
 
 fn mimi_consent_purpose(purpose: MimiConsentPurpose) -> &'static str {
@@ -1164,13 +1156,144 @@ pub(super) async fn mimi_report_abuse(
     let body = body.into_inner();
     body.validate()
         .map_err(|_| mimi_reporter_resolution_required())?;
-    verify_mimi_source_service_signature(state, req, None).await?;
-    body.reporter_authority_binding_bytes()
+    let source = verify_mimi_source_service_signature(state, req, None).await?;
+    let provider_uri = mimi_required_header(req, "provider-id")?;
+    let binding = current_mimi_room_binding_for_event_id(
+        state,
+        &body.reporter_authority.room_binding_ref.event_id,
+    )
+    .await?
+    .ok_or_else(mimi_reporter_resolution_required)?;
+    enforce_mimi_writable_binding(&binding.binding)?;
+    let authenticated_actor = arkret_wire::ActorId::service(
+        arkret_wire::DidCoreId::new(source.clone())
+            .map_err(|_| mimi_reporter_resolution_required())?,
+    );
+    let operation = arkret_wire::ServiceOperationId::OPEN_MIMI_COMMAND_REPORT_ABUSE_V1;
+    let canonical_body = arkret_canonical::canonical_json_bytes(&body)
         .map_err(|_| mimi_reporter_resolution_required())?;
-    // The service-authored Event, its RealmCommit, report current result and
-    // request idempotency row must land in one authority transaction. The
-    // former caller-authored submit path cannot implement that contract.
-    Err(mimi_reporter_resolution_required())
+    let request_hash = arkret_canonical::sha256_digest(&canonical_body);
+    let key = arkret_canonical::sha256_digest(
+        &arkret_canonical::canonical_json_bytes(
+            &json!({"provider_id":provider_uri,"request_hash":request_hash}),
+        )
+        .map_err(|e| AppError::internal(e.to_string()))?,
+    );
+    if let Some(record) = state
+        .jobs()
+        .scoped_idempotency_record(&authenticated_actor, operation, &key)
+        .await
+        .map_err(mimi_admission_error)?
+    {
+        return json_ok(
+            serde_json::from_value(record.response_body)
+                .map_err(|e| AppError::internal(e.to_string()))?,
+        );
+    }
+    let selector = crate::state::mimi_reporter_device_guard(state, &body)
+        .await
+        .map_err(|_| mimi_reporter_resolution_required())?;
+    let claim = &body.report_claim;
+    let reason = serde_json::to_value(claim.report_reason_code)
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let mut payload = json!({
+        "realm_id":claim.realm_id,"effective_scope":claim.scope_ref,"target_ref":claim.target_ref,
+        "report_reason_code":reason,"reporter_id":body.reporter_authority.actor_id.signing_principal_id(),
+        "provenance":"mimi_facade","source_provider_id":source,
+    });
+    let object = payload.as_object_mut().expect("report object");
+    for (field, value) in [
+        ("description", serde_json::to_value(&claim.description)),
+        (
+            "evidence_package",
+            serde_json::to_value(&claim.evidence_package),
+        ),
+        (
+            "franking_proof",
+            serde_json::to_value(&claim.franking_proof),
+        ),
+    ] {
+        let value = value.map_err(|e| AppError::internal(e.to_string()))?;
+        if !value.is_null() {
+            object.insert(field.into(), value);
+        }
+    }
+    if !claim.evidence_refs.is_empty() {
+        object.insert(
+            "evidence_refs".into(),
+            serde_json::to_value(&claim.evidence_refs)
+                .map_err(|e| AppError::internal(e.to_string()))?,
+        );
+    }
+    let event = crate::state::author_mimi_event(
+        state,
+        arkret_wire::EventKind::SelfModerationReport,
+        claim.scope_ref.clone(),
+        payload,
+    )
+    .await
+    .map_err(mimi_admission_error)?;
+    let response = MimiReportAbuseOutcome {
+        report_id: arkret_wire::ReportId::new(ids::generate("report"))
+            .map_err(|e| AppError::internal(e.to_string()))?,
+        routed_to_ids: Vec::new(),
+    };
+    let at = chrono::Utc::now();
+    let guard = soland_storage::SelfProducerCommitGuard::MimiFacade {
+        service_id: state.service_core_id(),
+        verification_method: event
+            .producer_proof
+            .as_ref()
+            .expect("authored proof")
+            .verification_method
+            .clone(),
+        room_uri: MimiRoomUri::new(
+            binding
+                .binding
+                .get("mimi_room_uri")
+                .and_then(Value::as_str)
+                .ok_or_else(mimi_reporter_resolution_required)?
+                .to_owned(),
+        )
+        .map_err(|_| mimi_reporter_resolution_required())?,
+        binding_event_id: body.reporter_authority.room_binding_ref.event_id.clone(),
+        attributed_actor: body.reporter_authority.actor_id.clone(),
+        source_provider_id: arkret_wire::DidCoreId::new(source)
+            .map_err(|_| mimi_reporter_resolution_required())?,
+        reporter_authority: Some(
+            serde_json::to_value(&body).map_err(|e| AppError::internal(e.to_string()))?,
+        ),
+        submit_request: None,
+        mapping_receipt: None,
+        reporter_device_guard: Some(selector),
+    };
+    let idempotency = soland_services::events::IdempotentResponse {
+        authenticated_actor: authenticated_actor.clone(),
+        operation_id: operation.into(),
+        key: key.clone(),
+        request_hash,
+        status: 200,
+        body: serde_json::to_value(&response).map_err(|e| AppError::internal(e.to_string()))?,
+        created_at: at,
+        expires_at: at + chrono::Duration::days(30),
+    };
+    if let Err(error) =
+        crate::state::commit_mimi_event(state, event, guard, Some(idempotency)).await
+    {
+        if let Some(record) = state
+            .jobs()
+            .scoped_idempotency_record(&authenticated_actor, operation, &key)
+            .await
+            .map_err(mimi_admission_error)?
+        {
+            return json_ok(
+                serde_json::from_value(record.response_body)
+                    .map_err(|e| AppError::internal(e.to_string()))?,
+            );
+        }
+        return Err(mimi_admission_error(error));
+    }
+    json_ok(response)
 }
 
 fn mimi_reporter_resolution_required() -> AppError {
