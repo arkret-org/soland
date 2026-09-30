@@ -126,7 +126,13 @@ async fn converge(state: &AppState, stream: &CommitStreamRef) -> Result<(), Stri
     )
     .await
     .map_err(|error| error.message)?;
-    let anchored = anchor_stream(state, &anchor, &governance, &mut located).await?;
+    // An installed anchor is verified durable prefix evidence. Requiring a
+    // new join bootstrap for every gap would prevent consuming the terminal
+    // membership Commit after that member's current join has ended.
+    let anchored = match &anchor.anchored_head {
+        Some(head) => head.clone(),
+        None => anchor_stream(state, &anchor, &governance, &mut located).await?,
+    };
     fill_to_head(state, realm_id, &governance, &anchored, &mut located).await
 }
 

@@ -145,6 +145,29 @@ pub(crate) async fn full_event_for_member_in_connection(
             return Ok(false);
         }
     }
+    if event.kind == arkret_wire::EventKind::StrandWatchSet {
+        let watch: arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload =
+            serde_json::from_value(
+                serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+            )
+            .map_err(PersistenceError::database)?;
+        // Ordinary scans carry no accepted watch-audit read pairing. A public
+        // new value does not publish a private CAS preimage in canonical bytes.
+        use arkret_models_collaboration::events_payloads::strand::StrandWatchLevel;
+        let public = |level, level_public| {
+            matches!(
+                level,
+                Some(StrandWatchLevel::All | StrandWatchLevel::Participating)
+            ) && level_public == Some(true)
+        };
+        return Ok(&watch.watcher_actor_id == caller
+            || (public(watch.level, watch.level_public)
+                && watch.expected_value.as_ref().is_none_or(|previous| {
+                    previous
+                        .as_option()
+                        .is_some_and(|value| public(Some(value.level), value.level_public))
+                })));
+    }
     Ok(&event.actor_id == caller
         || crate::snapshot_disclosure_gate::member_shared_event_kind(&event.kind))
 }

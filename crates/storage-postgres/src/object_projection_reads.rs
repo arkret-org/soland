@@ -73,6 +73,27 @@ pub struct PgObjectCurrentSnapshotStore {
     pub pool: PgPool,
 }
 
+/// A verified snapshot can cover a current row without its original Commit.
+/// Match selector, revision, value and source stream against the durable cut.
+fn current_source_sql(row: &str, selector: &str) -> String {
+    format!(
+        "COALESCE(\
+         (SELECT proof_commit.stream_ref FROM realm_commits proof_commit \
+          WHERE proof_commit.commit_id={row}.current_commit_id AND proof_commit.realm_id={row}.realm_id \
+            AND proof_commit.stream_position={row}.current_stream_position), \
+         (SELECT r.source_stream_ref FROM replica_authorization_rows r \
+          JOIN replica_authorization_cuts cut ON cut.realm_id=r.realm_id \
+            AND cut.source_stream_ref=r.source_stream_ref \
+          WHERE r.realm_id={row}.realm_id AND r.selector={selector} \
+            AND r.current_commit_id={row}.current_commit_id \
+            AND r.current_stream_position={row}.current_stream_position \
+            AND r.value={row}.value AND r.source_stream_ref->>'realm_id'=r.realm_id \
+            AND r.current_stream_position<=cut.head_stream_position \
+            AND (r.current_stream_position<cut.head_stream_position \
+                 OR r.current_commit_id=cut.head_commit_id)))"
+    )
+}
+
 #[async_trait::async_trait]
 impl ObjectCurrentSnapshotStore for PgObjectCurrentSnapshotStore {
     async fn snapshot(&self) -> PersistenceResult<ObjectCurrentSnapshot> {
@@ -90,35 +111,31 @@ impl ObjectCurrentSnapshotStore for PgObjectCurrentSnapshotStore {
             if orphan_sibling.present {
                 return Err(corrupt("Space current has orphan sibling family").into());
             }
-            let spaces = diesel::sql_query(
+            let realm_source = "jsonb_build_object('kind','realm','realm_id',s.realm_id)";
+            let space_source = current_source_sql("s", "jsonb_build_object('kind','space','space_id',s.space_id)");
+            let parent_source = current_source_sql("p", "jsonb_build_object('kind','space_parent','space_id',p.space_id)");
+            let policy_source = current_source_sql("c", "jsonb_build_object('kind','space_child_scope_policy','space_id',c.space_id)");
+            let spaces = diesel::sql_query(format!(
                 "SELECT s.space_id AS id,s.realm_id, \
                  s.value || jsonb_build_object('parent_space_id',p.value->'parent_space_id', \
                  'child_scope_policy',c.value) AS value, \
-                 (sc.commit_id IS NOT NULL AND pc.commit_id IS NOT NULL AND cc.commit_id IS NOT NULL \
+                 (COALESCE({space_source}={realm_source},false) \
+                   AND COALESCE({parent_source}={realm_source},false) \
+                   AND COALESCE({policy_source}={realm_source},false) \
                    AND NOT (s.value ? 'parent_space_id') AND NOT (s.value ? 'child_scope_policy') \
                    AND jsonb_typeof(p.value)='object' AND p.value ? 'parent_space_id' \
-                   AND p.value - 'parent_space_id'='{}'::jsonb) AS proved \
+                   AND p.value - 'parent_space_id'='{{}}'::jsonb) AS proved \
                  FROM space_current_results s \
                  LEFT JOIN space_parent_current_results p ON p.realm_id=s.realm_id AND p.space_id=s.space_id \
                  LEFT JOIN space_child_scope_policy_current_results c ON c.realm_id=s.realm_id AND c.space_id=s.space_id \
-                 LEFT JOIN realm_commits sc ON sc.commit_id=s.current_commit_id AND sc.realm_id=s.realm_id \
-                   AND sc.stream_position=s.current_stream_position \
-                   AND sc.stream_ref=jsonb_build_object('kind','realm','realm_id',s.realm_id) \
-                 LEFT JOIN realm_commits pc ON pc.commit_id=p.current_commit_id AND pc.realm_id=p.realm_id \
-                   AND pc.stream_position=p.current_stream_position \
-                   AND pc.stream_ref=jsonb_build_object('kind','realm','realm_id',p.realm_id) \
-                 LEFT JOIN realm_commits cc ON cc.commit_id=c.current_commit_id AND cc.realm_id=c.realm_id \
-                   AND cc.stream_position=c.current_stream_position \
-                   AND cc.stream_ref=jsonb_build_object('kind','realm','realm_id',c.realm_id) \
                  ORDER BY s.realm_id,s.space_id",
-            ).load::<CurrentObjectRow>(&mut *conn).await?;
-            let strands = diesel::sql_query(
+            )).load::<CurrentObjectRow>(&mut *conn).await?;
+            let strand_source = current_source_sql("s", "jsonb_build_object('kind','strand','strand_id',s.strand_id)");
+            let strands = diesel::sql_query(format!(
                 "SELECT s.strand_id AS id,s.realm_id,s.value, \
-                 rc.stream_ref AS source_stream_ref FROM strand_current_results s \
-                 LEFT JOIN realm_commits rc ON rc.commit_id=s.current_commit_id AND rc.realm_id=s.realm_id \
-                   AND rc.stream_position=s.current_stream_position \
+                 {strand_source} AS source_stream_ref FROM strand_current_results s \
                  ORDER BY s.realm_id,s.strand_id",
-            ).load::<StrandSnapshotRow>(&mut *conn).await?;
+            )).load::<StrandSnapshotRow>(&mut *conn).await?;
             Ok((spaces,strands))
         }).await.map_err(PgTransactionError::into_persistence)?;
         let spaces = space_rows
@@ -291,13 +308,12 @@ pub(crate) async fn lists_for_actor(
                 actor_id: relation.to_ref.as_actor_id().ok_or_else(|| corrupt("assignment target is not an Actor"))?.clone(),
             });
         }
-        let unproved_position = diesel::sql_query(
+        let position_source = current_source_sql("p", "jsonb_build_object('kind','strand_position','board_space_id',p.board_space_id,'strand_id',p.strand_id)");
+        let unproved_position = diesel::sql_query(format!(
             "SELECT EXISTS(SELECT 1 FROM strand_position_current_results p \
-             LEFT JOIN realm_commits c ON c.commit_id=p.current_commit_id \
-               AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position \
-               AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',p.realm_id) \
-             WHERE p.realm_id=$1 AND c.commit_id IS NULL) AS present",
-        ).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
+             WHERE p.realm_id=$1 AND NOT COALESCE(\
+               {position_source}=jsonb_build_object('kind','realm','realm_id',p.realm_id),false)) AS present",
+        )).bind::<Text,_>(realm_id.as_str()).get_result::<crate::ExistsRow>(&mut *conn).await?;
         if unproved_position.present {
             return Err(corrupt("position current has no covering RealmCommit").into());
         }
@@ -442,3 +458,103 @@ pub(crate) async fn visible_strand_scope_for_actor(
 }
 
 use diesel::OptionalExtension as _;
+
+#[cfg(test)]
+mod tests {
+    use arkret_wire::{
+        CommitStreamHead, CurrentRevision, CurrentSelector, RealmCommitId, TypedCurrentResult,
+    };
+    use diesel::sql_types::{BigInt, Timestamptz};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn snapshot_restore_requires_exact_verified_current_without_local_commit() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let realm = RealmId::new("ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir").unwrap();
+        let id = StrandId::new("ak:strand:AT3ARBdH1FM6GjXK9ulTx-YMvQOXys39dlUzZV6KyID9").unwrap();
+        let actor = ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:watcher.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let strand = Strand::new(id.clone(), realm.clone(), "verified replica", actor);
+        let value = serde_json::to_value(&strand).unwrap();
+        let revision = CurrentRevision {
+            commit_id: RealmCommitId::from_digest([7; 32]),
+            stream_position: 3,
+        };
+        let head = CommitStreamHead {
+            stream_ref: CommitStreamRef::Realm {
+                realm_id: realm.clone(),
+            },
+            commit_id: revision.commit_id.clone(),
+            stream_position: revision.stream_position,
+        };
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("INSERT INTO strand_current_results(realm_id,strand_id,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(id.as_str())
+            .bind::<Text,_>(revision.commit_id.as_str()).bind::<BigInt,_>(revision.stream_position as i64)
+            .bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(chrono::Utc::now())
+            .execute(&mut *conn).await.unwrap();
+        let store = PgObjectCurrentSnapshotStore { pool: pool.clone() };
+        assert!(
+            store.snapshot().await.is_err(),
+            "a row alone is not verified provenance"
+        );
+        crate::replica_authorization::install_verified_head(&mut conn, &head, chrono::Utc::now())
+            .await
+            .unwrap();
+        assert!(
+            store.snapshot().await.is_err(),
+            "a head alone does not prove the current value"
+        );
+        let entry = TypedCurrentResult::Value {
+            selector: CurrentSelector::Strand {
+                strand_id: id.clone(),
+            },
+            source_stream_ref: head.stream_ref.clone(),
+            revision: revision.clone(),
+            value: value.clone(),
+        };
+        crate::replica_authorization::save_row(&mut conn, &realm, &entry, chrono::Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(
+            store.snapshot().await.unwrap().strands[0].id.as_ref(),
+            Some(&id)
+        );
+
+        diesel::sql_query("UPDATE strand_current_results SET value=jsonb_set(value,'{metadata,title}','\"forged\"') WHERE strand_id=$1")
+            .bind::<Text,_>(id.as_str()).execute(&mut *conn).await.unwrap();
+        assert!(
+            store.snapshot().await.is_err(),
+            "verified evidence cannot cover another value"
+        );
+        diesel::sql_query("UPDATE strand_current_results SET value=$2 WHERE strand_id=$1")
+            .bind::<Text, _>(id.as_str())
+            .bind::<Jsonb, _>(&value)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "UPDATE replica_authorization_cuts SET head_commit_id=$2 WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .bind::<Text, _>(RealmCommitId::from_digest([8; 32]).as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        assert!(
+            store.snapshot().await.is_err(),
+            "equal-position evidence must bind the exact cut Commit"
+        );
+        diesel::sql_query("UPDATE replica_authorization_cuts SET head_commit_id=$2,head_stream_position=2 WHERE realm_id=$1")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(head.commit_id.as_str())
+            .execute(&mut *conn).await.unwrap();
+        assert!(
+            store.snapshot().await.is_err(),
+            "a current revision above the cut is unproved"
+        );
+    }
+}
