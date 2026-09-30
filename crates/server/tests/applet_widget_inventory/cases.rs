@@ -273,6 +273,10 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
                 "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
                 "metadata":{"title":"Widget accepted write"},"state":"active",
                 "created_by":ActorId::account(fixture.pcr.history.account.clone()),"created_at":at}}));
+        // admin_event supplies its own wall-clock timestamp. The original
+        // Strand object must use the exact Event creation time; finalize both
+        // before recomputing the real Device proof and EventId below.
+        event.created_at = at;
         event.authorization_ref =
             Some(arkret_wire::AuthorizationRef::new(gate.authorization_ref.to_string()).unwrap());
         event = fixture.sign_admin(event);
