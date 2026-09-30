@@ -9,9 +9,9 @@ use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use ordinary_realm::{founder, next_request, open_discussion};
 use serde_json::{Value, json};
-use soland_storage::{ConflictCode, EventCommitUnitOfWork};
+use soland_storage::{AuthorityCommitStore, ConflictCode, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
-use soland_storage_postgres::{PgEventCommitUnitOfWork, PgPool};
+use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
 #[derive(diesel::QueryableByName)]
 struct Count {
@@ -706,3 +706,140 @@ async fn wip_override_requires_a_current_grant_matching_the_strand_and_destinati
 mod approval_wip_cases;
 #[path = "support/grant_approval_cases.rs"]
 mod grant_approval_cases;
+
+#[tokio::test]
+async fn terminal_target_keeps_canonical_position_without_breaking_the_joined_read() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let opened = open_discussion(&pool, "strand-position-joined-view").await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let realm = opened.head.authority_commit.event.realm_id.clone();
+    let actor = opened.head.authority_commit.event.actor_id.clone();
+    let at = opened.head.authority_commit.commit.committed_at;
+    let board = next_request(
+        &opened.head.authority_commit,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        space_payload(&realm, &actor, at, "board", "Board", None, json!({})),
+        at,
+    );
+    let board_id = arkret_wire::SpaceId::from_event_id(&board.authority_commit.event.event_id);
+    uow.commit_event(board.clone()).await.unwrap();
+    let list_a = next_request(
+        &board.authority_commit,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        space_payload(
+            &realm,
+            &actor,
+            at,
+            "list",
+            "A",
+            Some(&board_id),
+            json!({"wip_limit":1,"wip_limit_enforcement":"reject"}),
+        ),
+        at,
+    );
+    let list_a_id = arkret_wire::SpaceId::from_event_id(&list_a.authority_commit.event.event_id);
+    uow.commit_event(list_a.clone()).await.unwrap();
+    let list_b = next_request(
+        &list_a.authority_commit,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        space_payload(&realm, &actor, at, "list", "B", Some(&board_id), json!({})),
+        at,
+    );
+    let list_b_id = arkret_wire::SpaceId::from_event_id(&list_b.authority_commit.event.event_id);
+    uow.commit_event(list_b.clone()).await.unwrap();
+
+    let first = next_request(
+        &list_b.authority_commit,
+        arkret_wire::EventKind::StrandMove,
+        &founder(),
+        json!({"board_space_id":board_id,"strand_id":opened.strand_id,
+            "target_space_id":list_a_id,"rank":"a"}),
+        at,
+    );
+    uow.commit_event(first.clone()).await.unwrap();
+    let initial = position(&pool, &board_id, &opened.strand_id).await;
+    assert_eq!(initial.value, json!({"list_space_id":list_a_id,"rank":"a"}));
+    assert_eq!(
+        initial.current_stream_position,
+        first.authority_commit.commit.stream_position as i64
+    );
+
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let caller = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        founder(),
+        ordinary_realm::station(),
+    ));
+    let events_before = count(&pool, &realm, "canonical_events").await;
+    let commits_before = count(&pool, &realm, "realm_commits").await;
+    for target in [&list_a_id, &board_id] {
+        // Assemble a joined-current read fixture; this does not claim that a
+        // latest-cut tombstone with observed dependents is admissible.
+        let mut conn = pool.get().await.unwrap();
+        let metadata: Position = diesel::sql_query(
+            "SELECT value,current_stream_position FROM space_current_results WHERE space_id=$1",
+        )
+        .bind::<Text, _>(target.as_str())
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        let mut terminal = metadata.value.clone();
+        terminal["state"] = json!("tombstoned");
+        terminal["state_changed_at"] = json!(arkret_canonical::format_timestamp_canonical(at));
+        diesel::sql_query("UPDATE space_current_results SET value=$2 WHERE space_id=$1")
+            .bind::<Text, _>(target.as_str())
+            .bind::<Jsonb, _>(&terminal)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        drop(conn);
+        for include_terminal in [false, true] {
+            let (_, strands) = store
+                .object_projection_lists_for_actor(&realm, &caller, include_terminal)
+                .await
+                .expect("terminal placement targets leave the remaining joined read available")
+                .unwrap();
+            let strand = strands
+                .strands
+                .iter()
+                .find(|row| row.strand_id == opened.strand_id)
+                .unwrap();
+            assert!(strand.board_space_id.is_none());
+            assert!(strand.list_space_id.is_none());
+            assert!(strand.rank.is_none());
+        }
+        let unchanged = position(&pool, &board_id, &opened.strand_id).await;
+        assert_eq!(unchanged.value, initial.value);
+        assert_eq!(
+            unchanged.current_stream_position,
+            initial.current_stream_position
+        );
+        assert_eq!(
+            count(&pool, &realm, "canonical_events").await,
+            events_before
+        );
+        assert_eq!(count(&pool, &realm, "realm_commits").await, commits_before);
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("UPDATE space_current_results SET value=$2 WHERE space_id=$1")
+            .bind::<Text, _>(target.as_str())
+            .bind::<Jsonb, _>(&metadata.value)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+    }
+    let (_, strands) = store
+        .object_projection_lists_for_actor(&realm, &caller, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let strand = strands
+        .strands
+        .iter()
+        .find(|row| row.strand_id == opened.strand_id)
+        .unwrap();
+    assert_eq!(strand.board_space_id.as_ref(), Some(&board_id));
+    assert_eq!(strand.list_space_id.as_ref(), Some(&list_a_id));
+}

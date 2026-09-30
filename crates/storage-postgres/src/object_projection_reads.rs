@@ -329,10 +329,16 @@ pub(crate) async fn lists_for_actor(
                 let list = space_objects.get(&position.list_space_id).ok_or_else(|| corrupt("position List metadata absent"))?;
                 if !visible(board.scope_circle_id.as_ref(), &circles) || !visible(list.scope_circle_id.as_ref(), &circles) { continue; }
                 if board.kind != "board" || list.kind != "list"
-                    || board.state == Some(SpaceState::Tombstoned) || list.state == Some(SpaceState::Tombstoned)
-                    || list.parent_space_id.as_ref() != Some(&board_id)
                     || strand.scope_circle_id != board.scope_circle_id || strand.scope_circle_id != list.scope_circle_id {
                     return Err(corrupt("position cannot form an available structural placement").into());
+                }
+                // Canonical position survives independently of target lifecycle.
+                // A terminal target suppresses the derived edge, never the row.
+                if board.state == Some(SpaceState::Tombstoned) || list.state == Some(SpaceState::Tombstoned) {
+                    continue;
+                }
+                if list.parent_space_id.as_ref() != Some(&board_id) {
+                    return Err(corrupt("position List is not a child of its Board").into());
                 }
                 if placement.is_some() {
                     return Err(corrupt("Strand has multiple visible Board placements; this row cannot select one").into());
