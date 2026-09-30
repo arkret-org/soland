@@ -267,24 +267,6 @@ fn typed_agent_ids(agent_ids: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, 
         .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))
 }
 
-fn sidecar_controller_account(
-    state: &AppState,
-    record: &AgentSidecarRecord,
-) -> Result<arkret_wire::AccountId, AppError> {
-    let projection = state.projections().snapshot();
-    let sidecar = projection
-        .sidecars
-        .get(&record.sidecar_id)
-        .filter(|sidecar| sidecar.realm_id == record.realm_id)
-        .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
-    if sidecar.controller_account_id != record.controller_account_id {
-        return Err(AppError::internal(
-            "Sidecar controller Account binding is invalid",
-        ));
-    }
-    Ok(record.controller_account_id.clone())
-}
-
 pub(crate) async fn expected_sidecar_mls_binding(
     state: &AppState,
     record: &AgentSidecarRecord,
@@ -469,7 +451,7 @@ async fn sidecar_view(
 ) -> Result<AgentSidecarView, AppError> {
     let controller_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
-    let controller_account = sidecar_controller_account(state, record)?;
+    let controller_account = record.controller_account_id.clone();
     if controller_actor.as_account_id() != Some(&controller_account) {
         return Err(AppError::not_found("Sidecar not found"));
     }
