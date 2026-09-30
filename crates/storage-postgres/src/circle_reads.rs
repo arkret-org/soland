@@ -5,7 +5,7 @@ use arkret_models_collaboration::governance::circle::{
     CirclePreviewDisplay, CirclePreviewVisibility, CircleReadView, CircleState, CircleView,
 };
 use arkret_wire::{ActorId, CircleId, RealmId};
-use diesel::sql_types::{Jsonb, Text};
+use diesel::sql_types::{Bool, Jsonb, Nullable, Text};
 use diesel_async::{AsyncConnection as _, AsyncPgConnection, RunQueryDsl};
 use sha2::{Digest, Sha256};
 use soland_storage::{PersistenceError, PersistenceResult};
@@ -16,10 +16,12 @@ use crate::{PgPool, PgTransactionError, pg_conn};
 struct CircleRow {
     #[diesel(sql_type=Jsonb)]
     value: serde_json::Value,
-    #[diesel(sql_type=Jsonb)]
-    envelope: serde_json::Value,
-    #[diesel(sql_type=Jsonb)]
-    commit_json: serde_json::Value,
+    #[diesel(sql_type=Nullable<Jsonb>)]
+    envelope: Option<serde_json::Value>,
+    #[diesel(sql_type=Nullable<Jsonb>)]
+    commit_json: Option<serde_json::Value>,
+    #[diesel(sql_type=Bool)]
+    verified_current: bool,
     #[diesel(sql_type=Text)]
     circle_id: String,
 }
@@ -30,20 +32,24 @@ struct MemberRow {
     member_id: String,
     #[diesel(sql_type=Jsonb)]
     value: serde_json::Value,
-    #[diesel(sql_type=Jsonb)]
-    envelope: serde_json::Value,
-    #[diesel(sql_type=Jsonb)]
-    commit_json: serde_json::Value,
+    #[diesel(sql_type=Nullable<Jsonb>)]
+    envelope: Option<serde_json::Value>,
+    #[diesel(sql_type=Nullable<Jsonb>)]
+    commit_json: Option<serde_json::Value>,
+    #[diesel(sql_type=Bool)]
+    verified_current: bool,
 }
 
 #[derive(diesel::QueryableByName)]
 struct AcceptedGroupRow {
     #[diesel(sql_type=Jsonb)]
     value: serde_json::Value,
-    #[diesel(sql_type=Jsonb)]
-    envelope: serde_json::Value,
-    #[diesel(sql_type=Jsonb)]
-    commit_json: serde_json::Value,
+    #[diesel(sql_type=Nullable<Jsonb>)]
+    envelope: Option<serde_json::Value>,
+    #[diesel(sql_type=Nullable<Jsonb>)]
+    commit_json: Option<serde_json::Value>,
+    #[diesel(sql_type=Bool)]
+    verified_current: bool,
 }
 
 fn corrupt(detail: impl std::fmt::Display) -> PersistenceError {
@@ -64,15 +70,41 @@ fn preview_commitment(realm: &RealmId, circle: &CircleId) -> String {
 }
 
 fn covering_event(
-    envelope: serde_json::Value,
-    commit: serde_json::Value,
-) -> PersistenceResult<arkret_wire::Event> {
+    envelope: Option<serde_json::Value>,
+    commit: Option<serde_json::Value>,
+    verified_current: bool,
+) -> PersistenceResult<Option<arkret_wire::Event>> {
+    // A verified Snapshot can disclose current without disclosing its Event.
+    let (envelope, commit) = match (envelope, commit) {
+        (Some(envelope), Some(commit)) => (envelope, commit),
+        (None, None) if verified_current => return Ok(None),
+        (None, Some(commit)) if verified_current => {
+            let _: arkret_wire::RealmCommit = serde_json::from_value(commit).map_err(corrupt)?;
+            return Ok(None);
+        }
+        _ => return Err(corrupt("current has no complete accepted provenance")),
+    };
     let event: arkret_wire::Event = serde_json::from_value(envelope).map_err(corrupt)?;
     let commit: arkret_wire::RealmCommit = serde_json::from_value(commit).map_err(corrupt)?;
     if commit.event_ref != event.event_id || commit.realm_id != event.realm_id {
         return Err(corrupt("Commit does not cover its canonical Event"));
     }
-    Ok(event)
+    Ok(Some(event))
+}
+
+fn verified_current_sql(alias: &str, selector: &str) -> String {
+    format!(
+        "EXISTS(SELECT 1 FROM replica_authorization_rows v \
+         JOIN replica_authorization_cuts h ON h.realm_id=v.realm_id \
+           AND h.source_stream_ref=v.source_stream_ref \
+         WHERE v.realm_id={alias}.realm_id AND v.selector={selector} \
+           AND v.source_stream_ref={alias}.source_stream_ref \
+           AND v.current_commit_id={alias}.current_commit_id \
+           AND v.current_stream_position={alias}.current_stream_position \
+           AND v.value={alias}.value AND v.current_stream_position<=h.head_stream_position \
+           AND (v.current_stream_position<h.head_stream_position \
+                OR v.current_commit_id=h.head_commit_id)) AS verified_current"
+    )
 }
 
 async fn views(
@@ -81,38 +113,42 @@ async fn views(
     circle_id: Option<&CircleId>,
     actor: &ActorId,
 ) -> PersistenceResult<Vec<CircleReadView>> {
-    use diesel::sql_types::Nullable;
-    let circles = diesel::sql_query(
-        "SELECT r.value,e.envelope,c.commit_json,r.circle_id FROM circle_current_results r \
+    let circles = diesel::sql_query(format!(
+        "SELECT r.value,e.envelope,c.commit_json,r.circle_id,{} FROM circle_current_results r \
          LEFT JOIN realm_commits c ON c.commit_id=r.current_commit_id AND c.realm_id=r.realm_id \
              AND c.stream_position=r.current_stream_position AND c.stream_ref=r.source_stream_ref \
          LEFT JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
          WHERE ($1::text IS NULL OR r.realm_id=$1) AND ($2::text IS NULL OR r.circle_id=$2) ORDER BY r.circle_id",
-    ).bind::<Nullable<Text>,_>(realm.map(RealmId::as_str)).bind::<Nullable<Text>,_>(circle_id.map(CircleId::as_str))
+        verified_current_sql("r", "jsonb_build_object('kind','circle','circle_id',r.circle_id)"),
+    )).bind::<Nullable<Text>,_>(realm.map(RealmId::as_str)).bind::<Nullable<Text>,_>(circle_id.map(CircleId::as_str))
         .load::<CircleRow>(&mut *conn).await.map_err(PersistenceError::database)?;
     let mut result = Vec::new();
     let at = chrono::Utc::now();
     for row in circles {
         let circle: Circle = serde_json::from_value(row.value).map_err(corrupt)?;
         let id: CircleId = row.circle_id.parse().map_err(corrupt)?;
-        let create = covering_event(row.envelope, row.commit_json)?;
-        let mut payload: arkret_models_collaboration::events_payloads::circle::CircleCreatePayload =
+        if circle.id.as_ref() != Some(&id) {
+            return Err(corrupt("Circle current differs from its selector"));
+        }
+        if let Some(create) = covering_event(row.envelope, row.commit_json, row.verified_current)? {
+            let mut payload: arkret_models_collaboration::events_payloads::circle::CircleCreatePayload =
             serde_json::from_value(serde_json::json!(&create.payload)).map_err(corrupt)?;
-        payload.object.id = Some(id.clone());
-        let object = serde_json::to_value(payload.object).map_err(corrupt)?;
-        if create.kind != arkret_wire::EventKind::CircleCreate
-            || CircleId::from_event_id(&create.event_id) != id
-            || circle.id.as_ref() != Some(&id)
-            || circle.realm_id != create.realm_id
-            || create.scope_ref
-                != (arkret_wire::ScopeRef::Realm {
-                    realm_id: circle.realm_id.clone(),
-                })
-            || serde_json::to_value(&circle).map_err(corrupt)? != object
-        {
-            return Err(corrupt(
-                "profile does not match its covering accepted create",
-            ));
+            payload.object.id = Some(id.clone());
+            let object = serde_json::to_value(payload.object).map_err(corrupt)?;
+            if create.kind != arkret_wire::EventKind::CircleCreate
+                || CircleId::from_event_id(&create.event_id) != id
+                || circle.id.as_ref() != Some(&id)
+                || circle.realm_id != create.realm_id
+                || create.scope_ref
+                    != (arkret_wire::ScopeRef::Realm {
+                        realm_id: circle.realm_id.clone(),
+                    })
+                || serde_json::to_value(&circle).map_err(corrupt)? != object
+            {
+                return Err(corrupt(
+                    "profile does not match its covering accepted create",
+                ));
+            }
         }
         if circle.profile_ref.is_some()
             || circle.title == "Agent Sidecar Scope"
@@ -139,13 +175,14 @@ async fn views(
         .is_some();
         let mut member_ids = Vec::new();
         let mut viewer_membership = None;
-        let members = diesel::sql_query(
-            "SELECT m.member_id,m.value,e.envelope,c.commit_json FROM circle_member_state_current_results m \
+        let members = diesel::sql_query(format!(
+            "SELECT m.member_id,m.value,e.envelope,c.commit_json,{} FROM circle_member_state_current_results m \
              LEFT JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id \
                 AND c.stream_position=m.current_stream_position AND c.stream_ref=m.source_stream_ref \
              LEFT JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
              WHERE m.realm_id=$1 AND m.circle_id=$2 ORDER BY m.member_id",
-        ).bind::<Text,_>(circle.realm_id.as_str()).bind::<Text,_>(id.as_str())
+            verified_current_sql("m", "jsonb_build_object('kind','circle_member_state','circle_id',m.circle_id,'member_actor_id',m.member_id::jsonb)"),
+        )).bind::<Text,_>(circle.realm_id.as_str()).bind::<Text,_>(id.as_str())
             .load::<MemberRow>(&mut *conn).await.map_err(PersistenceError::database)?;
         if joined {
             joined = members
@@ -167,28 +204,31 @@ async fn views(
             let who: ActorId = serde_json::from_str(&member.member_id).map_err(corrupt)?;
             let current: arkret_wire::CircleMemberStateCurrent =
                 serde_json::from_value(member.value).map_err(corrupt)?;
-            let event = covering_event(member.envelope, member.commit_json)?;
-            if event.kind != arkret_wire::EventKind::CircleMemberState
-                || event.scope_ref
-                    != (arkret_wire::ScopeRef::Circle {
-                        realm_id: circle.realm_id.clone(),
-                        circle_id: id.clone(),
-                    })
-                || serde_json::from_value::<ActorId>(
-                    event
-                        .payload
-                        .get("member_id")
-                        .cloned()
-                        .ok_or_else(|| corrupt("member absent"))?,
-                )
-                .map_err(corrupt)?
-                    != who
-                || event.payload.get("membership")
-                    != Some(&serde_json::to_value(current.membership).map_err(corrupt)?)
+            if let Some(event) =
+                covering_event(member.envelope, member.commit_json, member.verified_current)?
             {
-                return Err(corrupt(
-                    "membership does not match its covering accepted Event",
-                ));
+                if event.kind != arkret_wire::EventKind::CircleMemberState
+                    || event.scope_ref
+                        != (arkret_wire::ScopeRef::Circle {
+                            realm_id: circle.realm_id.clone(),
+                            circle_id: id.clone(),
+                        })
+                    || serde_json::from_value::<ActorId>(
+                        event
+                            .payload
+                            .get("member_id")
+                            .cloned()
+                            .ok_or_else(|| corrupt("member absent"))?,
+                    )
+                    .map_err(corrupt)?
+                        != who
+                    || event.payload.get("membership")
+                        != Some(&serde_json::to_value(current.membership).map_err(corrupt)?)
+                {
+                    return Err(corrupt(
+                        "membership does not match its covering accepted Event",
+                    ));
+                }
             }
             let membership: CircleMembership =
                 serde_json::from_value(serde_json::json!(current.membership)).map_err(corrupt)?;
@@ -236,26 +276,40 @@ async fn views(
             String::from_utf8(arkret_canonical::canonical_json_bytes(&scope).map_err(corrupt)?)
                 .map_err(corrupt)?;
         let groups = diesel::sql_query(
-            "SELECT g.value,e.envelope,c.commit_json FROM mls_group_current_results g \
+            "SELECT g.value,e.envelope,c.commit_json,false AS verified_current FROM mls_group_current_results g \
              LEFT JOIN realm_commits c ON c.commit_id=g.current_commit_id AND c.realm_id=g.realm_id \
-               AND c.stream_position=g.current_stream_position \
+               AND c.stream_position=g.current_stream_position AND c.stream_ref=$3 \
              LEFT JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
-             WHERE g.scope_key=$1",
-        ).bind::<Text,_>(&key).load::<AcceptedGroupRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+             WHERE g.scope_key=$1 \
+             UNION ALL SELECT v.value,NULL::jsonb,NULL::jsonb,true FROM replica_authorization_rows v \
+             JOIN replica_authorization_cuts h ON h.realm_id=v.realm_id AND h.source_stream_ref=v.source_stream_ref \
+             WHERE v.selector=$2 AND v.source_stream_ref=$3 \
+               AND v.current_stream_position<=h.head_stream_position \
+               AND (v.current_stream_position<h.head_stream_position OR v.current_commit_id=h.head_commit_id) \
+               AND NOT EXISTS(SELECT 1 FROM mls_group_current_results g WHERE g.scope_key=$1)",
+        ).bind::<Text,_>(&key)
+            .bind::<Jsonb,_>(serde_json::to_value(arkret_wire::CurrentSelector::MlsGroup { scope_ref: scope.clone() }).map_err(corrupt)?)
+            .bind::<Jsonb,_>(serde_json::to_value(arkret_wire::CommitStreamRef::from_scope(&scope, None).map_err(corrupt)?).map_err(corrupt)?)
+            .load::<AcceptedGroupRow>(&mut *conn).await.map_err(PersistenceError::database)?;
         let mls_group_id = if let Some(group) = groups.into_iter().next() {
             let current: arkret_wire::MlsGroupCurrent =
                 serde_json::from_value(group.value).map_err(corrupt)?;
-            let event = covering_event(group.envelope, group.commit_json)?;
-            if current.effective_scope != scope
-                || event.scope_ref != scope
-                || !matches!(
-                    event.kind,
-                    arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
-                )
+            if current.effective_scope != scope {
+                return Err(corrupt("MLS current differs from its scope"));
+            }
+            if let Some(event) =
+                covering_event(group.envelope, group.commit_json, group.verified_current)?
             {
-                return Err(corrupt(
-                    "MLS current has no matching covering accepted transition",
-                ));
+                if event.scope_ref != scope
+                    || !matches!(
+                        event.kind,
+                        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+                    )
+                {
+                    return Err(corrupt(
+                        "MLS current has no matching covering accepted transition",
+                    ));
+                }
             }
             Some(scope.canonical_mls_group_id().map_err(corrupt)?.to_string())
         } else {
