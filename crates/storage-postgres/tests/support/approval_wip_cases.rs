@@ -181,6 +181,52 @@ async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success
         at,
     );
     uow.commit_event(grant.clone()).await.unwrap();
+    // A joined approver's exact-resource grant still needs the action's
+    // registered allowed_space_kinds constraint before it can earn a vote.
+    let incomplete_review = next_request(
+        &grant.authority_commit,
+        arkret_wire::EventKind::StrandMove,
+        &founder(),
+        json!({"board_space_id":board_id,"strand_id":second_id,"target_space_id":list_id,"rank":"b"}),
+        at,
+    );
+    let incomplete_proof = vote(
+        &incomplete_review,
+        &list_id,
+        revision.clone(),
+        "wip-nonce-128-bit-fixture-approval",
+    );
+    let before_incomplete = (
+        count(&pool, &realm, "canonical_events").await,
+        count(&pool, &realm, "realm_commits").await,
+    );
+    let incomplete = uow
+        .commit_event_batch(batch(incomplete_review, incomplete_proof))
+        .await
+        .unwrap_err();
+    assert!(
+        incomplete.to_string().contains("approval_required"),
+        "unexpected incomplete-grant failure: {incomplete:?}"
+    );
+    assert_eq!(
+        before_incomplete,
+        (
+            count(&pool, &realm, "canonical_events").await,
+            count(&pool, &realm, "realm_commits").await,
+        )
+    );
+    assert_eq!(
+        count(&pool, &realm, "event_approval_private_audit").await,
+        0
+    );
+    let grant = next_request(
+        &grant.authority_commit,
+        arkret_wire::EventKind::CapabilityGrant,
+        &founder(),
+        json!({"grant":{"schema":"ak.schema.capability.v1","realm_id":realm,"issuer_id":actor,"subject":approver,"actions":["ak.space.update"],"resources":[arkret_wire::WireResourceSelector::space(realm.clone(),list_id.clone())],"constraints":[{"constraint_kind":"kind_restriction","effect":"allow","allowed_space_kinds":["list"]}],"issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,"authority_event_ref":opened.unit.transactions[0].event.event_id,"authority_generation":0}],"issued_at":arkret_canonical::format_timestamp_canonical(at)}}),
+        at,
+    );
+    uow.commit_event(grant.clone()).await.unwrap();
     review = next_request(
         &grant.authority_commit,
         arkret_wire::EventKind::StrandMove,
