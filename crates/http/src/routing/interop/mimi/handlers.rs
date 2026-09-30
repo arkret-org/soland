@@ -1234,8 +1234,7 @@ pub(super) async fn mimi_report_abuse(
     .await
     .map_err(mimi_admission_error)?;
     let response = MimiReportAbuseOutcome {
-        report_id: arkret_wire::ReportId::new(ids::generate("report"))
-            .map_err(|e| AppError::internal(e.to_string()))?,
+        report_id: arkret_wire::ReportId::from_event_id(&event.event_id),
         routed_to_ids: Vec::new(),
     };
     let at = chrono::Utc::now();
