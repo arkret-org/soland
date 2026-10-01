@@ -133,7 +133,23 @@ async fn converge(state: &AppState, stream: &CommitStreamRef) -> Result<(), Stri
         Some(head) => head.clone(),
         None => anchor_stream(state, &anchor, &governance, &mut located).await?,
     };
-    fill_to_head(state, realm_id, &governance, &anchored, &mut located).await
+    fill_to_head(state, realm_id, &governance, &anchored, &mut located).await?;
+    // Grant and policy replicas invalidate the previous authorization cut.
+    // Holding their Commit chain cannot reconstruct the governing inputs
+    // deliberately omitted from a member bootstrap. Refresh the signed cut
+    // through the same nonce-bound, exact-opening-join bootstrap verifier.
+    // Fill first so a terminal membership Commit is still held even when a
+    // fresh bootstrap correctly refuses the no-longer-current opening join.
+    if commits
+        .replica_authorization_head(stream)
+        .await
+        .map_err(temporary)?
+        .is_none()
+    {
+        let refreshed = anchor_stream(state, &anchor, &governance, &mut located).await?;
+        fill_to_head(state, realm_id, &governance, &refreshed, &mut located).await?;
+    }
+    Ok(())
 }
 
 fn temporary(detail: impl std::fmt::Display) -> String {
