@@ -125,6 +125,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::AgentActionApprove
             | arkret_wire::EventKind::StrandCreate
             | arkret_wire::EventKind::RealmProfile
+            | arkret_wire::EventKind::RealmReadReceiptPolicy
             | arkret_wire::EventKind::RealmTombstone
             | arkret_wire::EventKind::RealmDestroy
             | arkret_wire::EventKind::RealmArchive

@@ -8,9 +8,9 @@ use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
 use ordinary_realm::{founder, next_request, open_discussion};
 use serde_json::{Value, json};
-use soland_storage::EventCommitUnitOfWork;
-use soland_storage_postgres::PgEventCommitUnitOfWork;
+use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
+use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork};
 
 #[derive(diesel::QueryableByName, Debug, PartialEq)]
 struct Current {
@@ -28,16 +28,25 @@ struct Count {
     count: i64,
 }
 
-async fn current(pool: &soland_storage_postgres::PgPool, realm: &arkret_wire::RealmId) -> Current {
+async fn family_current(
+    pool: &soland_storage_postgres::PgPool,
+    realm: &arkret_wire::RealmId,
+    family: &str,
+) -> Current {
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "SELECT current_commit_id,current_stream_position,value \
-         FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_profile'",
+         FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family=$2",
     )
     .bind::<Text, _>(realm.as_str())
+    .bind::<Text, _>(family)
     .get_result(&mut conn)
     .await
     .unwrap()
+}
+
+async fn current(pool: &soland_storage_postgres::PgPool, realm: &arkret_wire::RealmId) -> Current {
+    family_current(pool, realm, "realm_profile").await
 }
 
 async fn commits(pool: &soland_storage_postgres::PgPool, realm: &arkret_wire::RealmId) -> i64 {
@@ -109,4 +118,130 @@ async fn profile_replacement_unset_replay_and_denial_share_the_pg_cut() {
     assert!(uow.commit_event(denied).await.is_err());
     assert_eq!(current(&pool, &realm).await, before);
     assert_eq!(commits(&pool, &realm).await, count);
+}
+
+#[tokio::test]
+async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg_cut() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let discussion = open_discussion(&pool, "read-receipt-policy-current").await;
+    let realm = discussion.realm_id();
+    let mut head = discussion.head.authority_commit;
+    for payload in [
+        json!({"disclosure":"required","visibility":"private","scope_overrides_allowed":false}),
+        json!({"disclosure":"disabled"}),
+    ] {
+        let request = next_request(
+            &head,
+            arkret_wire::EventKind::RealmReadReceiptPolicy,
+            &founder(),
+            payload.clone(),
+            head.commit.committed_at,
+        );
+        assert!(
+            uow.commit_event(request.clone())
+                .await
+                .unwrap()
+                .event_inserted
+        );
+        let row = family_current(&pool, &realm, "realm_read_receipt_policy").await;
+        assert_eq!(row.value, payload);
+        assert_eq!(
+            row.current_commit_id,
+            request.authority_commit.commit.commit_id.as_str()
+        );
+        assert_eq!(
+            row.current_stream_position,
+            request.authority_commit.commit.stream_position as i64
+        );
+        let snapshot = PgAuthorityCommitStore { pool: pool.clone() }
+            .realm_state_snapshot_material_for_account(
+                &realm,
+                request
+                    .authority_commit
+                    .event
+                    .actor_id
+                    .as_account_id()
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let policies = snapshot
+            .current_state_entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    arkret_wire::TypedCurrentResult::Value {
+                        selector: arkret_wire::CurrentSelector::RealmReadReceiptPolicy,
+                        ..
+                    }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(policies.len(), 1);
+        assert!(
+            matches!(policies[0], arkret_wire::TypedCurrentResult::Value {source_stream_ref,revision,value,..}
+            if *source_stream_ref == request.authority_commit.commit.stream_ref && revision.commit_id == request.authority_commit.commit.commit_id && revision.stream_position == request.authority_commit.commit.stream_position && *value == payload)
+        );
+        let count = commits(&pool, &realm).await;
+        assert!(
+            !uow.commit_event(request.clone())
+                .await
+                .unwrap()
+                .event_inserted
+        );
+        assert_eq!(
+            family_current(&pool, &realm, "realm_read_receipt_policy").await,
+            row
+        );
+        assert_eq!(commits(&pool, &realm).await, count);
+        head = request.authority_commit;
+    }
+    let before = family_current(&pool, &realm, "realm_read_receipt_policy").await;
+    let count = commits(&pool, &realm).await;
+    let outsider =
+        arkret_wire::DidCoreId::new("ak:did_core:web:receipt-policy-outsider.example").unwrap();
+    for (actor, payload) in [
+        (outsider, json!({"disclosure":"optional"})),
+        (founder(), json!({})),
+        (founder(), json!({"disclosure":"sometimes"})),
+        (founder(), json!({"visibility":"anonymous"})),
+        (
+            founder(),
+            json!({"disclosure":"optional","visibility":null}),
+        ),
+        (
+            founder(),
+            json!({"visibility":"members","scope_overrides_allowed":null}),
+        ),
+        (
+            founder(),
+            json!({"disclosure":"optional","child_privacy_tightening_against_required":true}),
+        ),
+    ] {
+        let request = next_request(
+            &head,
+            arkret_wire::EventKind::RealmReadReceiptPolicy,
+            &actor,
+            payload,
+            head.commit.committed_at,
+        );
+        let event_id = request.authority_commit.event.event_id.clone();
+        assert!(uow.commit_event(request).await.is_err());
+        assert!(
+            PgAuthorityCommitStore { pool: pool.clone() }
+                .committed_event(&event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            family_current(&pool, &realm, "realm_read_receipt_policy").await,
+            before
+        );
+        assert_eq!(commits(&pool, &realm).await, count);
+    }
 }

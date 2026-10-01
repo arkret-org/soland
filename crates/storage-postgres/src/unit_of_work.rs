@@ -2663,6 +2663,7 @@ async fn commit_one_in_connection(
             conn, event, commit,
         )
         .await?;
+        crate::realm_bootstrap_current_results::commit_read_receipt_policy_authority_current_result_in_connection(conn, event, commit).await?;
         crate::organization_moderation_gate::commit_realm_organization_current_result_in_connection(conn, event, commit, realm_organization_proof).await?;
         crate::call_state_current_results::commit_in_connection(conn, event, commit).await?;
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;

@@ -60,6 +60,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::CircleMemberState
         | EventKind::StrandCreate
         | EventKind::RealmProfile
+        | EventKind::RealmReadReceiptPolicy
         | EventKind::RealmTombstone
         | EventKind::RealmDestroy
         | EventKind::RealmArchive
@@ -596,6 +597,7 @@ mod tests {
             EventKind::RealmOrganization,
             EventKind::StrandCreate,
             EventKind::RealmProfile,
+            EventKind::RealmReadReceiptPolicy,
             EventKind::RealmTombstone,
             EventKind::RealmDestroy,
             EventKind::RealmArchive,
@@ -658,6 +660,7 @@ mod tests {
             EventKind::RealmOrganization,
             EventKind::StrandCreate,
             EventKind::RealmProfile,
+            EventKind::RealmReadReceiptPolicy,
             EventKind::RealmTombstone,
             EventKind::RealmDestroy,
             EventKind::RealmArchive,
@@ -698,6 +701,16 @@ mod tests {
             EventKind::SpaceRestore,
             EventKind::ReactionAdd,
             EventKind::ReactionRemove,
+            EventKind::InviteClaim,
+            EventKind::MimiRoomBinding,
+            EventKind::PinAdd,
+            EventKind::PinRemove,
+            EventKind::PinReorder,
+            EventKind::RealmPolicyBundle,
+            EventKind::SchemaDefine,
+            EventKind::SidecarContextAttach,
+            EventKind::SidecarCreate,
+            EventKind::SpaceUpdate,
         ];
         let mut refused = 0;
         for kind in EventKind::ALL.iter().filter(|kind| !routed.contains(kind)) {

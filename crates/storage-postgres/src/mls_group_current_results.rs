@@ -1372,6 +1372,12 @@ mod tests {
             .unwrap();
         assert_eq!(store.current(&scope).await.unwrap().unwrap(), seeded);
 
+        let policy = event(EventKind::RealmReadReceiptPolicy);
+        advance_key_access_revision_in_connection(&mut conn, &policy, &commit(&policy, 6))
+            .await
+            .unwrap();
+        assert_eq!(store.current(&scope).await.unwrap().unwrap(), seeded);
+
         let membership = event(EventKind::MemberState);
         let membership_commit = commit(&membership, 7);
         advance_key_access_revision_in_connection(&mut conn, &membership, &membership_commit)

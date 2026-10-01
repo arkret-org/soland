@@ -633,6 +633,21 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
         let singleton = match selector {
             S::RealmGenesis => Some("realm_genesis"),
             S::RealmProfile => Some("realm_profile"),
+            S::RealmReadReceiptPolicy => {
+                if source_stream_ref
+                    != &(arkret_wire::CommitStreamRef::Realm {
+                        realm_id: realm_id.clone(),
+                    })
+                {
+                    return Err(malformed(
+                        "read receipt policy requires the exact Realm source stream",
+                    ));
+                }
+                let policy: arkret_models_collaboration::events_payloads::ReadReceiptPolicyPayload =
+                    serde_json::from_value(value.clone()).map_err(malformed)?;
+                policy.validate().map_err(malformed)?;
+                Some("realm_read_receipt_policy")
+            }
             S::RealmJoinRule => Some("realm_join_rule"),
             S::RealmHistoryAccess => Some("realm_history_access"),
             S::RealmDiscovery => Some("realm_discovery"),
@@ -1068,6 +1083,9 @@ pub(crate) async fn advance_in_connection(
                 &serde_json::json!({"assertions":assertions}),
             )
             .await?;
+        }
+        arkret_wire::EventKind::RealmReadReceiptPolicy => {
+            crate::realm_bootstrap_current_results::commit_read_receipt_policy_current_result_in_connection(conn, event, commit).await?;
         }
         arkret_wire::EventKind::RealmProfile => {
             crate::realm_bootstrap_current_results::commit_realm_profile_current_result_in_connection(
@@ -2843,5 +2861,149 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(unchanged.value, current.value);
+    }
+    #[tokio::test]
+    async fn receipt_policy_snapshot_and_tail_preserve_exact_values_and_reject_invalid_scope() {
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x78; 32],
+        ));
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let commit_id = arkret_wire::RealmCommitId::from_digest([7; 32]);
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            stream_position: 7,
+            commit_id: commit_id.clone(),
+        };
+        let policy =
+            json!({"disclosure":"required","visibility":"private","scope_overrides_allowed":false});
+        let entry = arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::RealmReadReceiptPolicy,
+            source_stream_ref: stream.clone(),
+            revision: arkret_wire::CurrentRevision {
+                commit_id,
+                stream_position: 7,
+            },
+            value: policy.clone(),
+        };
+        for _ in 0..2 {
+            install_snapshot_in_connection(
+                &mut conn,
+                &realm,
+                &head,
+                std::slice::from_ref(&entry),
+                at,
+            )
+            .await
+            .unwrap();
+        }
+        let actual:ValueRow = diesel::sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_read_receipt_policy'")
+            .bind::<Text,_>(realm.as_str()).get_result(&mut conn).await.unwrap();
+        assert_eq!(actual.value, policy);
+        for invalid in [
+            json!({}),
+            json!({"disclosure":"sometimes"}),
+            json!({"disclosure":"optional","visibility":null}),
+            json!({"disclosure":"optional","extra":true}),
+        ] {
+            let mut malformed_entry = entry.clone();
+            let arkret_wire::TypedCurrentResult::Value {
+                value, revision, ..
+            } = &mut malformed_entry;
+            *value = invalid;
+            revision.commit_id = arkret_wire::RealmCommitId::from_digest([8; 32]);
+            revision.stream_position = 8;
+            let malformed_head = arkret_wire::CommitStreamHead {
+                commit_id: revision.commit_id.clone(),
+                stream_position: 8,
+                ..head.clone()
+            };
+            diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+            assert!(
+                install_snapshot_in_connection(&mut conn, &realm, &head, &[malformed_entry], at)
+                    .await
+                    .is_err()
+            );
+            diesel::sql_query("ROLLBACK")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        let mut foreign = entry.clone();
+        let arkret_wire::TypedCurrentResult::Value {
+            source_stream_ref, ..
+        } = &mut foreign;
+        *source_stream_ref = arkret_wire::CommitStreamRef::Circle {
+            realm_id: realm.clone(),
+            circle_id: arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0x79; 32],
+            )),
+        };
+        let foreign_head = arkret_wire::CommitStreamHead {
+            stream_ref: source_stream_ref.clone(),
+            ..head.clone()
+        };
+        diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        assert!(
+            install_snapshot_in_connection(&mut conn, &realm, &foreign_head, &[foreign], at)
+                .await
+                .is_err()
+        );
+        diesel::sql_query("ROLLBACK")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:receipt-replica-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:receipt-replica-station.example").unwrap(),
+        ));
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.realm.read_receipt_policy",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            actor,
+            json!({"disclosure":"disabled"}),
+            at,
+        )
+        .unwrap();
+        let commit = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest([8; 32]),
+            realm_id: realm.clone(),
+            stream_ref: stream,
+            stream_position: 8,
+            previous_commit_ref: Some(head.commit_id),
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                event.event_id.clone(),
+            ),
+            committed_at: at,
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:receipt-replica-station.example#authority",
+                )
+                .unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                    .unwrap(),
+                created_at: at,
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+            },
+        };
+        advance_in_connection(&mut conn, &event, &commit)
+            .await
+            .unwrap();
+        let actual:ValueRow = diesel::sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_read_receipt_policy'")
+            .bind::<Text,_>(realm.as_str()).get_result(&mut conn).await.unwrap();
+        assert_eq!(actual.value, json!({"disclosure":"disabled"}));
     }
 }

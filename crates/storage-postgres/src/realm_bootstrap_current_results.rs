@@ -125,13 +125,70 @@ pub(crate) async fn commit_realm_profile_current_result_in_connection(
     let value = profile.to_value().map_err(|error| {
         PersistenceError::SchemaViolation(format!("invalid Realm profile: {error}"))
     })?;
+    advance_singleton(conn, event, commit, "realm_profile", &value).await
+}
+
+/// Admit policy authorization at the same transaction cut as its replacement.
+pub(crate) async fn commit_read_receipt_policy_authority_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RealmReadReceiptPolicy {
+        return Ok(());
+    }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
+    commit_read_receipt_policy_current_result_in_connection(conn, event, commit).await
+}
+
+/// Apply one verified policy Commit without retaining omitted old fields.
+pub(crate) async fn commit_read_receipt_policy_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RealmReadReceiptPolicy {
+        return Ok(());
+    }
+    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm {realm_id} if realm_id == &event.realm_id)
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.realm_id != event.realm_id
+        || commit.event_ref != event.event_id
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "read receipt policy requires its exact Realm Event and covering Commit".to_owned(),
+        ));
+    }
+    let policy = typed_payload(event, EventPayloadExt::as_realm_read_receipt_policy)?;
+    policy
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let value = result_value(&policy)?;
+    advance_singleton(conn, event, commit, "realm_read_receipt_policy", &value).await
+}
+
+async fn advance_singleton(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    family: &str,
+    value: &serde_json::Value,
+) -> PersistenceResult<()> {
     let position = i64::try_from(commit.stream_position).map_err(|_| {
         PersistenceError::SchemaViolation("Realm profile position exceeds BIGINT".to_owned())
     })?;
     let changed = diesel::sql_query(
         "INSERT INTO realm_bootstrap_current_results \
          (realm_id,result_family,current_commit_id,current_stream_position,value,updated_at) \
-         VALUES($1,'realm_profile',$2,$3,$4,$5) \
+         VALUES($1,$6,$2,$3,$4,$5) \
          ON CONFLICT(realm_id,result_family) DO UPDATE SET \
          current_commit_id=EXCLUDED.current_commit_id, \
          current_stream_position=EXCLUDED.current_stream_position, \
@@ -143,13 +200,14 @@ pub(crate) async fn commit_realm_profile_current_result_in_connection(
     .bind::<BigInt, _>(position)
     .bind::<Jsonb, _>(&value)
     .bind::<Timestamptz, _>(commit.committed_at)
+    .bind::<Text, _>(family)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
     if changed != 1 {
-        return Err(PersistenceError::Conflict(
-            "Realm profile current result cannot advance from this Commit".to_owned(),
-        ));
+        return Err(PersistenceError::Conflict(format!(
+            "{family} current result cannot advance from this Commit"
+        )));
     }
     Ok(())
 }
