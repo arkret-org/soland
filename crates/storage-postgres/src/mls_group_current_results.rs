@@ -305,6 +305,13 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
                 current_mls_commit_event_ref: event.event_id.clone(),
                 epoch: payload.next_epoch(),
                 covered_key_access_revision: payload.covers_key_access_revision(),
+                public_tree_ref: installation
+                    .public_blobs
+                    .as_slice()
+                    .first()
+                    .ok_or_else(|| binding_mismatch("the Commit has no post-transition tree"))?
+                    .blob_ref
+                    .clone(),
                 ..group.clone()
             }
         }
@@ -340,7 +347,7 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
     if event.kind == EventKind::MlsCommit {
         freeze_consumed_proposals(conn, transaction, installation, &key).await?;
     }
-    store_genesis_blobs(conn, event, &installation.genesis_blobs, commit).await?;
+    store_public_blobs(conn, event, &installation.public_blobs, commit).await?;
     crate::direct_conversation_admission::record_group_state_in_connection(
         conn,
         event,
@@ -870,10 +877,10 @@ pub(crate) async fn bind_claim_welcome_in_connection(
 /// Blobs at the Genesis Commit, so `ak.peer.mls.read.group_state_material.v1`
 /// serves them. The bytes are content-addressed, so a Blob row already
 /// present under the same ref names the same bytes and is kept.
-async fn store_genesis_blobs(
+async fn store_public_blobs(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
-    blobs: &[soland_storage::MlsGenesisBlob],
+    blobs: &[soland_storage::MlsPublicBlob],
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<()> {
     for blob in blobs {

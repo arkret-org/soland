@@ -142,7 +142,7 @@ async fn fixture() -> Fixture {
                 public_state: tracker.export_state().unwrap(),
                 member_principals: group.member_actor_ids().unwrap().into_iter().collect(),
                 consumed_proposals: Vec::new(),
-                genesis_blobs: Vec::new(),
+                public_blobs: Vec::new(),
             },
             Vec::new(),
             &state.service_core_id(),

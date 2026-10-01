@@ -595,15 +595,25 @@ async fn mls_lifecycle_body() {
     let bob_identity = bob.mls_identity();
     let first = bob_identity.key_package_record().unwrap();
     let second = bob_identity.key_package_record().unwrap();
-    let mut mislabeled = bob_identity.key_package_record().unwrap();
-    mislabeled.cipher_suites = vec![RESERVED_SUITE.to_owned()];
-    let upload = bob_identity
+    let third = bob_identity.key_package_record().unwrap();
+    let mut unsigned = bob_identity
         .signed_key_packages_upload_request(
-            &[first.clone(), second.clone(), mislabeled],
+            &[first.clone(), second.clone(), third],
             bob.method.as_str(),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .unsigned();
+    // Sign the adversarial outer label with the generated SDK preimage so the
+    // HTTP refusal exercises the receiver, not the producer's own validator.
+    unsigned.keypackages[2].cipher_suites = vec![RESERVED_SUITE.to_owned()];
+    let signing_input = arkret_models_crypto::keypackages_upload_signing_input(&unsigned).unwrap();
+    let signature = arkret_signatures::keypackages::keypackage_signature_from_bytes(
+        bob.method.as_str(),
+        &bob.key.sign(&signing_input).to_bytes(),
+    )
+    .unwrap();
+    let upload = unsigned.into_signed(signature);
     let uploaded = bob
         .post(
             &state,
@@ -721,6 +731,15 @@ async fn mls_lifecycle_body() {
             "cipher_suite": ACTIVE_SUITE,
             "group_info_ref": blob_ref(&group_info),
             "ratchet_tree_ref": blob_ref(&tree),
+            "creator_leaf_authority": arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority {
+                leaf_signature_key_b64u: arkret_wire::Base64UrlString::new(
+                    arkret_canonical::base64url_encode(alice.key.verifying_key().as_bytes()),
+                ).unwrap(),
+                endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+                    device_id: alice.device.clone(),
+                },
+                authorization_event_ref: alice.authorize_event_id.clone(),
+            },
             "governance_binding": genesis_binding,
             "created_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         }),
@@ -731,7 +750,7 @@ async fn mls_lifecycle_body() {
             public_state: genesis_state.clone(),
             member_principals: Default::default(),
             consumed_proposals: Vec::new(),
-            genesis_blobs: Vec::new(),
+            public_blobs: Vec::new(),
         }),
         Vec::new(),
     )
@@ -821,6 +840,11 @@ async fn mls_lifecycle_body() {
     commit_request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
         commit_event.clone(),
     ));
+    let current_tree = public.ratchet_tree_bytes().unwrap();
+    let current_tree_sha256 = arkret_canonical::sha256_digest(&current_tree)
+        .strip_prefix("sha256:")
+        .unwrap()
+        .to_owned();
     commit_request.authority_commit.mls_state = Some(MlsStateInstallation {
         effective_scope: scope.clone(),
         base: Some(MlsInstalledBase {
@@ -831,7 +855,13 @@ async fn mls_lifecycle_body() {
         public_state: public.export_state().unwrap(),
         member_principals: Default::default(),
         consumed_proposals: Vec::new(),
-        genesis_blobs: Vec::new(),
+        public_blobs: vec![soland_storage::MlsPublicBlob {
+            blob_ref: blob_ref(&current_tree),
+            sha256: current_tree_sha256.clone(),
+            size_bytes: current_tree.len() as i64,
+            storage_backend: "local".to_owned(),
+            storage_key: format!("sha256/{current_tree_sha256}"),
+        }],
     });
     commit_request.authority_commit.welcomes = vec![VerifiedMlsWelcome {
         delivery: welcome.clone(),

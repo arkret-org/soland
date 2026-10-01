@@ -72,6 +72,8 @@ struct Pair {
     founder: AccountId,
     founder_method: DidUrl,
     founder_guard: SelfProducerCommitGuard,
+    founder_leaf_authority:
+        arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority,
     peer: AccountId,
     contact_round_id: Hash,
 }
@@ -458,6 +460,7 @@ async fn pair(pool: &PgPool) -> Pair {
         station,
         founder,
         founder_method: pcr.history.device_verification_method.clone(),
+        founder_leaf_authority: founder_leaf_authority(&pcr, &selector),
         founder_guard: SelfProducerCommitGuard::HumanDevice(selector),
         peer,
         contact_round_id,
@@ -1392,6 +1395,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         station: station.clone(),
         founder: controller.clone(),
         founder_method: controller_method.clone(),
+        founder_leaf_authority: founder_leaf_authority(&controller_fixture, &selector),
         founder_guard: SelfProducerCommitGuard::HumanDevice(selector),
         peer: agent.clone(),
         contact_round_id: fixture_hash('a'),
@@ -1727,16 +1731,54 @@ fn with_group(
         public_state: format!("public-state-{epoch}").into_bytes(),
         member_principals: principals.iter().map(|actor| (*actor).clone()).collect(),
         consumed_proposals: Vec::new(),
-        genesis_blobs: Vec::new(),
+        public_blobs: if base.is_some() {
+            let sha256 = format!("{epoch:064x}");
+            vec![soland_storage::MlsPublicBlob {
+                blob_ref: arkret_wire::BlobRef::new(format!("ak:blob:sha256:{sha256}")).unwrap(),
+                sha256: sha256.clone(),
+                size_bytes: 11,
+                storage_backend: "local".to_owned(),
+                storage_key: format!("sha256/{sha256}"),
+            }]
+        } else {
+            Vec::new()
+        },
     });
     request
 }
 
-fn mls_genesis_payload(realm_id: &RealmId, at: chrono::DateTime<chrono::Utc>) -> serde_json::Value {
+fn founder_leaf_authority(
+    fixture: &pcr_genesis::PcrGenesisFixture,
+    selector: &soland_storage::DeviceRevocationGateSelector,
+) -> arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority {
+    arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority {
+        leaf_signature_key_b64u: arkret_wire::Base64UrlString::new(
+            arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(
+                    &fixture.history.founding_device_signing_seed,
+                )
+                .verifying_key()
+                .as_bytes(),
+            ),
+        )
+        .unwrap(),
+        endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+            device_id: fixture.history.founding_device_id.clone(),
+        },
+        authorization_event_ref: selector.authorization_ref.event_id.clone(),
+    }
+}
+
+fn mls_genesis_payload(
+    pair: &Pair,
+    realm_id: &RealmId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
     serde_json::json!({
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
         "group_info_ref": format!("ak:blob:sha256:{}", "3".repeat(64)),
         "ratchet_tree_ref": format!("ak:blob:sha256:{}", "4".repeat(64)),
+        "creator_leaf_authority": pair.founder_leaf_authority,
         "governance_binding":
             arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm_id.clone(), None, 0, 0, 0)
                 .unwrap(),
@@ -1976,7 +2018,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
             &unit.transactions[3],
             EventKind::MlsGenesis,
             founder.clone(),
-            mls_genesis_payload(&realm_id, at),
+            mls_genesis_payload(&pair, &realm_id, at),
             Cites::Nothing,
         ),
         None,
@@ -2295,7 +2337,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
             &head,
             EventKind::MlsGenesis,
             founder.clone(),
-            mls_genesis_payload(&realm_id, at),
+            mls_genesis_payload(&pair, &realm_id, at),
             Cites::Nothing,
         ),
         None,

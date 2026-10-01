@@ -44,8 +44,8 @@ use arkret_wire::{
 };
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
-    ConflictCode, MlsConsumedProposalInstallation, MlsGenesisBlob, MlsInstalledBase,
-    MlsProposalLeafProvenance, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
+    ConflictCode, MlsConsumedProposalInstallation, MlsInstalledBase, MlsProposalLeafProvenance,
+    MlsPublicBlob, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
     VerifiedMlsRecipientRosterWitness, VerifiedMlsWelcome,
 };
 
@@ -370,10 +370,10 @@ async fn verify_genesis(
     let public_state = tracker
         .export_state()
         .map_err(|error| ServiceError::Internal(error.to_string()))?;
-    let genesis_blobs = match genesis_material {
+    let public_blobs = match genesis_material {
         Some(_) => vec![
-            stage_genesis_blob(state, &payload.group_info_ref, group_info).await?,
-            stage_genesis_blob(state, &payload.ratchet_tree_ref, tree).await?,
+            stage_mls_public_blob(state, &payload.group_info_ref, group_info).await?,
+            stage_mls_public_blob(state, &payload.ratchet_tree_ref, tree).await?,
         ],
         None => Vec::new(),
     };
@@ -384,7 +384,7 @@ async fn verify_genesis(
         public_state,
         member_principals,
         consumed_proposals: Vec::new(),
-        genesis_blobs,
+        public_blobs,
     })
 }
 
@@ -403,13 +403,13 @@ fn carried_blob_addresses(blob_ref: &arkret_wire::BlobRef, bytes: &[u8]) -> Serv
     })
 }
 
-/// Put one verified carried Blob into the content-addressed object store
+/// Put verified carried or post-transition public bytes into the object store
 /// ahead of the accepting transaction, which writes the Blob row serving it.
-async fn stage_genesis_blob(
+async fn stage_mls_public_blob(
     state: &AppState,
     blob_ref: &arkret_wire::BlobRef,
     bytes: Vec<u8>,
-) -> ServiceResult<MlsGenesisBlob> {
+) -> ServiceResult<MlsPublicBlob> {
     let sha256 = arkret_canonical::sha256_digest(&bytes)
         .strip_prefix("sha256:")
         .map(ToOwned::to_owned)
@@ -417,17 +417,17 @@ async fn stage_genesis_blob(
     let deliveries = state.deliveries();
     let storage_key = deliveries.object_key_for_sha256(&sha256);
     let size_bytes = i64::try_from(bytes.len())
-        .map_err(|_| ServiceError::Internal("Genesis Blob size exceeds BIGINT".to_owned()))?;
+        .map_err(|_| ServiceError::Internal("MLS public Blob size exceeds BIGINT".to_owned()))?;
     deliveries
         .put_object(&storage_key, bytes)
         .await
         .map_err(|error| {
             ServiceError::Conflict(format!(
-                "{}: Genesis Blob object store: {error}",
+                "{}: MLS public Blob object store: {error}",
                 ConflictCode::TemporarilyUnavailable
             ))
         })?;
-    Ok(MlsGenesisBlob {
+    Ok(MlsPublicBlob {
         blob_ref: blob_ref.clone(),
         sha256,
         size_bytes,
@@ -538,6 +538,20 @@ async fn verify_commit(
             target_after: proposal.target_after.map(installed_leaf),
         })
         .collect();
+    let tree = tracker.ratchet_tree_bytes().map_err(schema)?;
+    let tree_digest_suite =
+        arkret_models_collaboration::mls_group_state_material::material_digest_from_ref(
+            &group.public_tree_ref,
+        )
+        .map_err(schema)?
+        .digest_suite()
+        .map_err(schema)?;
+    let tree_ref = arkret_wire::BlobRef::new(format!(
+        "ak:blob:{}",
+        arkret_canonical::digest(tree_digest_suite, &tree)
+    ))
+    .map_err(schema)?;
+    let public_blobs = vec![stage_mls_public_blob(state, &tree_ref, tree).await?];
     Ok((
         MlsStateInstallation {
             effective_scope: event.scope_ref.clone(),
@@ -551,7 +565,7 @@ async fn verify_commit(
                 .map_err(|error| ServiceError::Internal(error.to_string()))?,
             member_principals,
             consumed_proposals,
-            genesis_blobs: Vec::new(),
+            public_blobs,
         },
         added_leaves,
     ))
@@ -902,8 +916,8 @@ mod tests {
                     current_key_access_revision: 0,
                     covered_key_access_revision: 0,
                     public_tree_ref: arkret_wire::BlobRef::new(format!(
-                        "ak:blob:sha256:{}",
-                        "4".repeat(64)
+                        "ak:blob:{}",
+                        arkret_canonical::sha256_digest(&tree)
                     ))
                     .unwrap(),
                 },
@@ -988,8 +1002,28 @@ mod tests {
         );
         assert_eq!(added.len(), 1);
         assert_eq!(added[0].actor_id, actor(MEMBER));
-        MlsPublicGroupTracker::restore(&installation.public_state, group.group_id().as_str(), 1)
-            .expect("the installed public state is the tracker at the new epoch");
+        let tracker = MlsPublicGroupTracker::restore(
+            &installation.public_state,
+            group.group_id().as_str(),
+            1,
+        )
+        .expect("the installed public state is the tracker at the new epoch");
+        let tree = tracker.ratchet_tree_bytes().unwrap();
+        assert_eq!(installation.public_blobs.len(), 1);
+        let blob = &installation.public_blobs[0];
+        carried_blob_addresses(&blob.blob_ref, &tree).unwrap();
+        assert_eq!(blob.size_bytes, tree.len() as i64);
+        assert_eq!(
+            format!("sha256:{}", blob.sha256),
+            arkret_canonical::sha256_digest(&tree)
+        );
+        let previous = state
+            .mls_groups()
+            .current(&installation.effective_scope)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(blob.blob_ref, previous.value.public_tree_ref);
 
         let error = verify_commit(&state, &commit_event(actor(MEMBER), &payload))
             .await

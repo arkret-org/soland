@@ -769,11 +769,10 @@ pub struct MlsStateInstallation {
     /// signed PublicMessage wire order. Empty for Genesis or self-update.
     /// The accepting PG transaction freezes these with the winning Commit.
     pub consumed_proposals: Vec<MlsConsumedProposalInstallation>,
-    /// The GroupInfo and ratchet tree Blobs a forwarded `ak.mls.genesis`
-    /// carried (encryption-and-audit.md §5.1.2), stored with its Commit;
-    /// empty for a same-Station Genesis, whose Blobs are already local, and
-    /// for every Commit.
-    pub genesis_blobs: Vec<MlsGenesisBlob>,
+    /// Forwarded Genesis carries GroupInfo and tree (§5.1.2); local Genesis
+    /// already has both Blobs. Every Commit carries the post-transition tree
+    /// derived from its verified public tracker, installed at the same cut.
+    pub public_blobs: Vec<MlsPublicBlob>,
 }
 
 /// Station-private historical leaf coordinates derived only from verified RFC
@@ -798,13 +797,13 @@ pub struct MlsConsumedProposalInstallation {
     pub target_after: Option<MlsProposalLeafProvenance>,
 }
 
-/// One content-addressed public Blob of a forwarded Genesis. Its exact bytes
+/// One content-addressed public Blob of Genesis or a post-Commit tree. Its exact bytes
 /// are already in the object store under `storage_key`; the accepting
 /// transaction writes the Blob row that serves them to
 /// `ak.peer.mls.read.group_state_material.v1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MlsGenesisBlob {
-    /// The Genesis payload ref the bytes were verified against.
+pub struct MlsPublicBlob {
+    /// The content address of verified public MLS material.
     pub blob_ref: arkret_wire::BlobRef,
     /// Lower-case hex SHA-256 of the bytes, the object store's key input.
     pub sha256: String,
@@ -1091,7 +1090,7 @@ fn validate_mls_installation(
                 return Err(mismatch());
             }
             let carried = state
-                .genesis_blobs
+                .public_blobs
                 .iter()
                 .map(|blob| &blob.blob_ref)
                 .collect::<Vec<_>>();
@@ -1115,7 +1114,7 @@ fn validate_mls_installation(
             let Some(base) = &state.base else {
                 return Err(mismatch());
             };
-            if !state.genesis_blobs.is_empty() {
+            if state.public_blobs.len() != 1 {
                 return Err(mismatch());
             }
             for (ordinal, proposal) in state.consumed_proposals.iter().enumerate() {
@@ -2070,7 +2069,7 @@ mod mls_installation_tests {
     use arkret_models_crypto::{MlsCommitEnvelope, MlsCommitPayload, MlsGovernanceBindingPayload};
     use arkret_wire::{EventId, Hash, RealmId, ScopeRef};
 
-    use super::{MlsInstalledBase, MlsStateInstallation, validate_mls_installation};
+    use super::{MlsInstalledBase, MlsPublicBlob, MlsStateInstallation, validate_mls_installation};
 
     fn commit_event(scope: &ScopeRef, payload: &MlsCommitPayload) -> arkret_wire::Event {
         arkret_wire::test_support::raw_event_for_actor_at(
@@ -2117,9 +2116,25 @@ mod mls_installation_tests {
             public_state: vec![1],
             member_principals: Default::default(),
             consumed_proposals: Vec::new(),
-            genesis_blobs: Vec::new(),
+            public_blobs: vec![MlsPublicBlob {
+                blob_ref: arkret_wire::BlobRef::new(format!("ak:blob:sha256:{}", "5".repeat(64)))
+                    .unwrap(),
+                sha256: "5".repeat(64),
+                size_bytes: 11,
+                storage_backend: "local".to_owned(),
+                storage_key: format!("sha256/{}", "5".repeat(64)),
+            }],
         };
         assert!(validate_mls_installation(&event, &installed).is_ok());
+
+        let mut missing_tree = installed.clone();
+        missing_tree.public_blobs.clear();
+        assert!(validate_mls_installation(&event, &missing_tree).is_err());
+        let mut duplicated_tree = installed.clone();
+        duplicated_tree
+            .public_blobs
+            .push(installed.public_blobs[0].clone());
+        assert!(validate_mls_installation(&event, &duplicated_tree).is_err());
 
         let mut wrong_base = installed.clone();
         wrong_base

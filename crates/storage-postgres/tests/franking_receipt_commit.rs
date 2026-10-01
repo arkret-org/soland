@@ -191,7 +191,7 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
                 public_state: tracker.export_state().unwrap(),
                 member_principals: group.member_actor_ids().unwrap().into_iter().collect(),
                 consumed_proposals: Vec::new(),
-                genesis_blobs: Vec::new(),
+                public_blobs: Vec::new(),
             },
             Vec::new(),
             &ordinary_realm::station(),

@@ -107,7 +107,18 @@ fn with_installation(
         public_state: format!("public-state-{epoch}").into_bytes(),
         member_principals: Default::default(),
         consumed_proposals: Vec::new(),
-        genesis_blobs: Vec::new(),
+        public_blobs: if base.is_some() {
+            let sha256 = format!("{epoch:064x}");
+            vec![soland_storage::MlsPublicBlob {
+                blob_ref: arkret_wire::BlobRef::new(format!("ak:blob:sha256:{sha256}")).unwrap(),
+                sha256: sha256.clone(),
+                size_bytes: 11,
+                storage_backend: "local".to_owned(),
+                storage_key: format!("sha256/{sha256}"),
+            }]
+        } else {
+            Vec::new()
+        },
     });
     request
 }
@@ -285,6 +296,17 @@ async fn assert_zero_write_refusal(
     let before = groups.current(scope).await.unwrap();
     let welcomes = welcome_count(pool).await;
     let provenance = provenance_count(pool).await;
+    let blobs = soland_storage_postgres::PgBlobStore { pool: pool.clone() };
+    let mut public_blobs_before = Vec::new();
+    if let Some(installation) = &request.authority_commit.mls_state {
+        for blob in &installation.public_blobs {
+            let before = soland_storage::BlobStore::get(&blobs, blob.blob_ref.as_str())
+                .await
+                .unwrap()
+                .map(|row| row.storage_key);
+            public_blobs_before.push((blob.blob_ref.clone(), before));
+        }
+    }
     let error = uow.commit_event(request.clone()).await.unwrap_err();
     assert_eq!(error.conflict_code(), Some(code), "{error}");
     assert!(
@@ -297,6 +319,13 @@ async fn assert_zero_write_refusal(
     assert_eq!(groups.current(scope).await.unwrap(), before);
     assert_eq!(welcome_count(pool).await, welcomes);
     assert_eq!(provenance_count(pool).await, provenance);
+    for (reference, before) in public_blobs_before {
+        let after = soland_storage::BlobStore::get(&blobs, reference.as_str())
+            .await
+            .unwrap()
+            .map(|row| row.storage_key);
+        assert_eq!(after, before, "refusal must not register public Blob rows");
+    }
 }
 
 /// Genesis creates the `mls_group` current at its Commit; a second Genesis
@@ -329,7 +358,7 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
     );
     // encryption-and-audit.md §5.1.2: a forwarded Genesis stores the two
     // Blobs it carried with its Commit.
-    let carried = |seed: char| soland_storage::MlsGenesisBlob {
+    let carried = |seed: char| soland_storage::MlsPublicBlob {
         blob_ref: arkret_wire::BlobRef::new(blob(seed)).unwrap(),
         sha256: seed.to_string().repeat(64),
         size_bytes: 11,
@@ -341,7 +370,7 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
         .mls_state
         .as_mut()
         .unwrap()
-        .genesis_blobs = vec![carried('3'), carried('4')];
+        .public_blobs = vec![carried('3'), carried('4')];
     uow.commit_event(genesis.clone()).await.unwrap();
     let blobs = soland_storage_postgres::PgBlobStore { pool: pool.clone() };
     for seed in ['3', '4'] {
@@ -431,6 +460,23 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
     uow.commit_event(commit.clone()).await.unwrap();
     let advanced = groups.current(&scope).await.unwrap().unwrap();
     assert_eq!(advanced.value.epoch, 1);
+    let tree = &commit
+        .authority_commit
+        .mls_state
+        .as_ref()
+        .unwrap()
+        .public_blobs[0];
+    assert_eq!(advanced.value.public_tree_ref, tree.blob_ref);
+    assert_ne!(
+        advanced.value.public_tree_ref,
+        installed.value.public_tree_ref
+    );
+    let stored_tree = soland_storage::BlobStore::get(&blobs, tree.blob_ref.as_str())
+        .await
+        .unwrap()
+        .expect("the post-Commit tree row is committed with the current cut");
+    assert_eq!(stored_tree.storage_key, tree.storage_key);
+    assert_eq!(stored_tree.realm_id.as_deref(), Some(realm_id.as_str()));
     assert_eq!(
         advanced.value.current_mls_commit_event_ref,
         commit.authority_commit.event.event_id
@@ -454,6 +500,7 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
         1,
     );
     assert_zero_write_refusal(&pool, &stale, ConflictCode::GovernanceBindingMismatch).await;
+    assert_eq!(groups.current(&scope).await.unwrap().unwrap(), advanced);
 }
 
 /// The PG unit consumes facts already verified by the serving layer. It does

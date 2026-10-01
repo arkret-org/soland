@@ -383,7 +383,7 @@ async fn parent_revision_matrix(history: &str) {
         public_state: b"circle-public-state".to_vec(),
         member_principals: Default::default(),
         consumed_proposals: Vec::new(),
-        genesis_blobs: Vec::new(),
+        public_blobs: Vec::new(),
     });
     let activated = history == "since_join";
     if activated {
