@@ -15,6 +15,13 @@ use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
+#[tokio::test]
+async fn pin_grants_are_explicit_and_assertions_preserve_removals_with_atomic_cas() {
+    let cases = soland_storage_postgres::pin_conformance::run_pin_admission_fixture().await;
+    assert_eq!(cases.len(), 6);
+    assert!(cases.iter().all(|(_, assertions)| *assertions > 0));
+}
+
 #[derive(diesel::QueryableByName)]
 struct Count {
     #[diesel(sql_type = BigInt)]
@@ -416,4 +423,190 @@ async fn reactions_join_one_keyed_set_per_target_message() {
     let typed: arkret_models_collaboration::events_payloads::reaction::MessageReactionsCurrentValue =
         serde_json::from_value(disclosed.1.clone()).unwrap();
     typed.validate_for_target(message_id.as_str()).unwrap();
+}
+
+#[tokio::test]
+async fn space_update_preserves_scope_and_rolls_back_both_branches_on_rejection() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = bootstrap_unit("space-update-current");
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let boot = unit.transactions.last().unwrap();
+    let realm = boot.event.realm_id.clone();
+    let at = boot.commit.committed_at;
+    let create = next_request(
+        boot,
+        arkret_wire::EventKind::SpaceCreate,
+        &founder(),
+        board(&realm, at, "board", None),
+        at,
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let id = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
+    let query = "SELECT value FROM space_current_results WHERE space_id=$1";
+    let before = value(&pool, query, id.as_str()).await;
+    let digest =
+        arkret_canonical::sha256_digest(arkret_canonical::canonical_json_bytes(&before).unwrap());
+    let update = next_request(
+        &create.authority_commit,
+        arkret_wire::EventKind::SpaceUpdate,
+        &founder(),
+        json!({"space_id":id,"expected_state_digest":digest,"patch":{
+            "title":{"$op":"set","value":"Updated board"},
+            "rank":{"$op":"set","value":"b"}
+        }}),
+        at,
+    );
+    uow.commit_event(update.clone()).await.unwrap();
+    let after = value(&pool, query, id.as_str()).await;
+    assert_eq!(after["title"], "Updated board");
+    assert_eq!(after["rank"], "b");
+    for retained in [
+        "id",
+        "realm_id",
+        "schema",
+        "state",
+        "created_by",
+        "created_at",
+    ] {
+        assert_eq!(after[retained], before[retained]);
+    }
+    let policy_query =
+        "SELECT value FROM space_child_scope_policy_current_results WHERE space_id=$1";
+    let policy = value(&pool, policy_query, id.as_str()).await;
+    let count_before = count(&pool, "realm_commits", &realm).await;
+    for (actor, payload, reason) in [
+        (
+            intruder(),
+            json!({"space_id":id,"patch":{"title":{"$op":"set","value":"Unauthorized"}}}),
+            "capability_denied",
+        ),
+        (
+            founder(),
+            json!({"space_id":id,"expected_state_digest":digest,"patch":{"title":{"$op":"set","value":"Stale"}}}),
+            "expected_state_digest",
+        ),
+        (
+            founder(),
+            json!({"space_id":id,"child_scope_policy":{"kind":"allow_any"},"patch":{"realm_id":{"$op":"set","value":realm}}}),
+            "schema violation",
+        ),
+    ] {
+        let request = next_request(
+            &update.authority_commit,
+            arkret_wire::EventKind::SpaceUpdate,
+            &actor,
+            payload,
+            at,
+        );
+        let error = uow.commit_event(request).await.unwrap_err().to_string();
+        assert!(error.contains(reason), "{error}");
+        assert_eq!(value(&pool, query, id.as_str()).await, after);
+        assert_eq!(value(&pool, policy_query, id.as_str()).await, policy);
+        assert_eq!(count(&pool, "realm_commits", &realm).await, count_before);
+    }
+}
+
+#[tokio::test]
+async fn schema_subjects_are_immutable_and_policy_revisions_are_contiguous() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let unit = bootstrap_unit("schema-and-policy-current");
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let boot = unit.transactions.last().unwrap();
+    let realm = boot.event.realm_id.clone();
+    let at = boot.commit.committed_at;
+    let document = json!({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"ak.schema.local_test.v1","type":"object"});
+    let define = next_request(
+        boot,
+        arkret_wire::EventKind::SchemaDefine,
+        &founder(),
+        json!({"value":document}),
+        at,
+    );
+    uow.commit_event(define.clone()).await.unwrap();
+    let query = "SELECT value FROM schema_definition_current_results WHERE schema_id=$1";
+    assert_eq!(
+        value(&pool, query, "ak.schema.local_test.v1").await,
+        document
+    );
+    let changed = next_request(
+        &define.authority_commit,
+        arkret_wire::EventKind::SchemaDefine,
+        &founder(),
+        json!({"value":{
+            "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"ak.schema.local_test.v1","type":"string"
+        }}),
+        at,
+    );
+    let baseline = count(&pool, "realm_commits", &realm).await;
+    assert!(
+        uow.commit_event(changed)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("already occupied")
+    );
+    assert_eq!(count(&pool, "realm_commits", &realm).await, baseline);
+    let snapshot = PgAuthorityCommitStore { pool: pool.clone() }
+        .realm_state_snapshot_material(&realm)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(entry,
+        arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::SchemaDefinition { schema_id },value,.. }
+            if schema_id=="ak.schema.local_test.v1" && value==&document)));
+    let policy = next_request(
+        &define.authority_commit,
+        arkret_wire::EventKind::RealmPolicyBundle,
+        &founder(),
+        json!({"policy_revision":2,"media_service_decrypts":false,"federation_policy":"closed"}),
+        at,
+    );
+    uow.commit_event(policy.clone()).await.unwrap();
+    let next = next_request(
+        &policy.authority_commit,
+        arkret_wire::EventKind::RealmPolicyBundle,
+        &founder(),
+        json!({"policy_revision":3,"media_service_decrypts":true,"federation_policy":"closed"}),
+        at,
+    );
+    uow.commit_event(next.clone()).await.unwrap();
+    let baseline = count(&pool, "realm_commits", &realm).await;
+    for (actor, payload, reason) in [
+        (
+            founder(),
+            json!({"policy_revision":1,"media_service_decrypts":false,"federation_policy":"closed"}),
+            "policy_revision_rollback",
+        ),
+        (
+            founder(),
+            json!({"policy_revision":5,"media_service_decrypts":false,"federation_policy":"closed"}),
+            "policy_revision_gap",
+        ),
+        (
+            intruder(),
+            json!({"policy_revision":4,"media_service_decrypts":false,"federation_policy":"closed"}),
+            "capability_denied",
+        ),
+    ] {
+        let request = next_request(
+            &next.authority_commit,
+            arkret_wire::EventKind::RealmPolicyBundle,
+            &actor,
+            payload,
+            at,
+        );
+        let error = uow.commit_event(request).await.unwrap_err().to_string();
+        assert!(error.contains(reason), "{error}");
+        assert_eq!(count(&pool, "realm_commits", &realm).await, baseline);
+    }
 }

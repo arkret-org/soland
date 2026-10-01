@@ -524,12 +524,12 @@ async fn service_bridge_relinquishes_real_installed_grant_and_replays_durable_co
     assert_eq!(status, StatusCode::OK, "Service bridge: {outcome}");
     let typed: AppletTransactionOutcome = serde_json::from_value(outcome.clone()).unwrap();
     assert_eq!(
-        typed.status,
+        typed.status(),
         AppletTransactionStatus::Accepted,
         "Service Event: {outcome}"
     );
-    assert_eq!(typed.committed_event_refs.len(), 1);
-    assert_eq!(typed.committed_event_refs[0].event_id, event.event_id);
+    assert_eq!(typed.committed_event_refs().len(), 1);
+    assert_eq!(typed.committed_event_refs()[0].event_id, event.event_id);
     assert_accepted_event(&fixture, &event).await;
     let current = fixture
         .state
@@ -1752,8 +1752,8 @@ async fn assert_managed_accepted(fixture: &Fixture, install: &Installed, event: 
     let (status, value) = managed_http_event(fixture, install, event).await;
     assert_eq!(status, StatusCode::OK, "managed transaction: {value}");
     let outcome: AppletTransactionOutcome = serde_json::from_value(value).unwrap();
-    assert_eq!(outcome.status, AppletTransactionStatus::Accepted);
-    assert_eq!(outcome.committed_event_refs[0].event_id, event.event_id);
+    assert_eq!(outcome.status(), AppletTransactionStatus::Accepted);
+    assert_eq!(outcome.committed_event_refs()[0].event_id, event.event_id);
     assert_accepted_event(fixture, event).await;
 }
 
@@ -1761,11 +1761,11 @@ async fn managed_rejected_event(fixture: &Fixture, install: &Installed, event: &
     let (status, value) = managed_http_event(fixture, install, event).await;
     assert_eq!(status, StatusCode::OK, "authenticated delivery: {value}");
     let outcome: AppletTransactionOutcome = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(outcome.status, AppletTransactionStatus::Rejected);
-    assert!(outcome.committed_event_refs.is_empty());
-    assert_eq!(outcome.rejections.len(), 1);
+    assert_eq!(outcome.status(), AppletTransactionStatus::Rejected);
+    assert!(outcome.committed_event_refs().is_empty());
+    assert_eq!(outcome.rejections().len(), 1);
     assert_eq!(
-        outcome.rejections[0].event_id.as_ref(),
+        outcome.rejections()[0].event_id.as_ref(),
         Some(&event.event_id)
     );
     value

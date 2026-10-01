@@ -1,5 +1,11 @@
 #![recursion_limit = "256"]
 
+#[cfg(feature = "test-support")]
+extern crate self as soland_storage_postgres;
+
+#[cfg(feature = "test-support")]
+pub mod pin_conformance;
+
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) use arkret_event_draft::ProjectedEventOperation;
@@ -115,6 +121,7 @@ mod pcr_device_status_reader;
 #[allow(dead_code)]
 mod pcr_genesis;
 mod pcr_recovery_policy_unit;
+mod pin_current_results;
 mod policy;
 mod poll_state;
 mod principal_resolution;

@@ -163,9 +163,9 @@ async fn deliver_one(
         )
         .await
         .map_err(|error| error.to_string())?;
-    if outcome.status != AppletTransactionStatus::Accepted
-        || !outcome.rejections.is_empty()
-        || outcome.retry_after_ms.is_some()
+    if outcome.status() != AppletTransactionStatus::Accepted
+        || !outcome.rejections().is_empty()
+        || outcome.retry_after_ms().is_some()
     {
         return Err(
             "Applet did not acknowledge the complete accepted authoring context".to_owned(),

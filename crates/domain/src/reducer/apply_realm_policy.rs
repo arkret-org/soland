@@ -767,7 +767,7 @@ fn remove_call_entry(
 /// A policy carrying only `principal_admission` / `cooldown` hard gates admits
 /// exactly the set `public` admits, so the pair is a contradictory declaration
 /// and neither facet may be written under it.
-fn join_policy_declares_an_automatic_gate(join_policy: Option<&Value>) -> bool {
+pub fn join_policy_declares_an_automatic_gate(join_policy: Option<&Value>) -> bool {
     join_policy
         .and_then(|policy| policy.get("gates"))
         .and_then(Value::as_array)
@@ -781,6 +781,6 @@ fn join_policy_declares_an_automatic_gate(join_policy: Option<&Value>) -> bool {
         })
 }
 
-fn join_rule_requires_an_automatic_gate(join_rule: &str) -> bool {
+pub fn join_rule_requires_an_automatic_gate(join_rule: &str) -> bool {
     matches!(join_rule, "restricted" | "knock_restricted")
 }

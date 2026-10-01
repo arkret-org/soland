@@ -69,6 +69,81 @@ fn digest(value: &Value) -> String {
 }
 
 #[tokio::test]
+async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_tracks_atomically()
+{
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let discussion = open_discussion(&pool, "synthesis-content-current").await;
+    let realm = discussion.head.authority_commit.event.realm_id.clone();
+    let at = discussion.head.authority_commit.commit.committed_at;
+    let update = |head: &soland_storage::AuthorityCommitTransaction, body: &str| {
+        next_request(
+            head,
+            arkret_wire::EventKind::StrandUpdate,
+            &founder(),
+            json!({"target_ref": discussion.strand_id, "patch": {
+                "tracks.synthesis.content": {"$op":"set", "value": {
+                    "kind":"ak.content.text", "body":body
+                }}
+            }}),
+            at,
+        )
+    };
+    let before = current(&pool, &discussion.strand_id).await;
+    let counts = realm_counts(&pool, &realm).await;
+    assert!(
+        uow.commit_event(update(&discussion.head.authority_commit, "Absent track"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("track_disabled")
+    );
+    assert_eq!(current(&pool, &discussion.strand_id).await, before);
+    assert_eq!(realm_counts(&pool, &realm).await, counts);
+    let enable = next_request(
+        &discussion.head.authority_commit,
+        arkret_wire::EventKind::StrandTracksUpdate,
+        &founder(),
+        json!({"target_ref": discussion.strand_id, "patch": {
+            "tracks.synthesis.enabled": {"$op":"set", "value":true},
+            "tracks.synthesis.is_primary": {"$op":"set", "value":false}
+        }}),
+        at,
+    );
+    uow.commit_event(enable.clone()).await.unwrap();
+    let write = update(&enable.authority_commit, "Accepted synthesis");
+    uow.commit_event(write.clone()).await.unwrap();
+    let accepted = current(&pool, &discussion.strand_id).await;
+    assert_eq!(
+        accepted.value["tracks"]["synthesis"]["content"]["body"],
+        "Accepted synthesis"
+    );
+    assert_eq!(accepted.value["tracks"]["synthesis"]["is_primary"], false);
+    let disable = next_request(
+        &write.authority_commit,
+        arkret_wire::EventKind::StrandTracksUpdate,
+        &founder(),
+        json!({"target_ref": discussion.strand_id, "patch": {
+            "tracks.synthesis.enabled": {"$op":"set", "value":false}
+        }}),
+        at,
+    );
+    uow.commit_event(disable.clone()).await.unwrap();
+    let before = current(&pool, &discussion.strand_id).await;
+    let counts = realm_counts(&pool, &realm).await;
+    assert!(
+        uow.commit_event(update(&disable.authority_commit, "Disabled track"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("track_disabled")
+    );
+    assert_eq!(current(&pool, &discussion.strand_id).await, before);
+    assert_eq!(realm_counts(&pool, &realm).await, counts);
+}
+
+#[tokio::test]
 async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();

@@ -345,6 +345,14 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
         uow.commit_event(request).await.unwrap();
         assert_accepted_event(&fixture, &event).await;
         let native_before = authority_snapshot(&fixture.pool).await;
+        let install_before = store
+            .get(
+                install.package.applet_id.as_str(),
+                &soland_storage::applet_effective_scope_key(&selector.effective_scope).unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         let outcome = fixture.revoke_with_mode(&install, mode).await;
         let widget_steps=outcome.steps.iter().filter(|step|matches!(step,AppletRevokeStep::LocalEffect(local) if local.effect_kind==AppletRevokeLocalEffectKind::WidgetTokenInvalidation)).count();
         assert_eq!(
@@ -403,8 +411,8 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(current["revoked_at"].is_null());
-            assert_eq!(current["status"], "installed");
+            assert_eq!(current["revoked_at"], install_before["revoked_at"]);
+            assert_eq!(current["status"], install_before["status"]);
         }
     }
 }

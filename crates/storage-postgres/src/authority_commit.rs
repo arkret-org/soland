@@ -698,6 +698,14 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM realm_policy_bundle_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'schema_definition'::text AS selector_kind, to_jsonb(schema_id) AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM schema_definition_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'pin'::text AS selector_kind, pin_scope AS selector_subject, \
+                current_commit_id, current_stream_position, value \
+           FROM pin_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'policy'::text AS selector_kind, to_jsonb(policy_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM policy_current_results WHERE realm_id = $1 \
@@ -900,6 +908,12 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 ("realm_authority_root", None) => arkret_wire::CurrentSelector::RealmAuthorityRoot,
                 ("realm_profile", None) => arkret_wire::CurrentSelector::RealmProfile,
                 ("realm_policy_bundle", None) => arkret_wire::CurrentSelector::RealmPolicyBundle,
+                ("schema_definition", Some(schema_id)) => arkret_wire::CurrentSelector::SchemaDefinition {
+                    schema_id: serde_json::from_value(schema_id).map_err(PersistenceError::database)?,
+                },
+                ("pin", Some(pin_scope)) => arkret_wire::CurrentSelector::Pin {
+                    pin_scope: serde_json::from_value(pin_scope).map_err(PersistenceError::database)?,
+                },
                 ("policy", Some(policy_id)) => arkret_wire::CurrentSelector::Policy {
                     policy_id: serde_json::from_value(policy_id).map_err(|error| {
                         PersistenceError::Internal(format!(

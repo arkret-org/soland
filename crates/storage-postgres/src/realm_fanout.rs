@@ -678,6 +678,12 @@ pub(crate) async fn plan_realm_fanout_in_connection(
                     | arkret_wire::EventKind::SelfModerationReport
                     | arkret_wire::EventKind::ModerationDecision
                     | arkret_wire::EventKind::ModerationDecisionLift
+                    | arkret_wire::EventKind::RelationCreate
+                    | arkret_wire::EventKind::RelationUpdate
+                    | arkret_wire::EventKind::RelationTombstone
+                    | arkret_wire::EventKind::PinAdd
+                    | arkret_wire::EventKind::PinRemove
+                    | arkret_wire::EventKind::PinReorder
             );
         let supported_sidecar = matches!(&event.scope_ref, arkret_wire::ScopeRef::Sidecar { .. });
         if !supported_circle && !supported_sidecar {

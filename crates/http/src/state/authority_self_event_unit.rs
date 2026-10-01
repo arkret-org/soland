@@ -117,6 +117,9 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::ModerationDecision
             | arkret_wire::EventKind::ModerationDecisionLift
             | arkret_wire::EventKind::SpaceCreate
+            | arkret_wire::EventKind::SpaceUpdate
+            | arkret_wire::EventKind::SchemaDefine
+            | arkret_wire::EventKind::RealmPolicyBundle
             | arkret_wire::EventKind::PolicySet
             | arkret_wire::EventKind::PolicyAction
             | arkret_wire::EventKind::AgentActionApprove
@@ -160,6 +163,9 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::SpaceArchive
             | arkret_wire::EventKind::SpaceRestore
             | arkret_wire::EventKind::ReactionAdd
+            | arkret_wire::EventKind::PinAdd
+            | arkret_wire::EventKind::PinRemove
+            | arkret_wire::EventKind::PinReorder
             | arkret_wire::EventKind::ReactionRemove
             | arkret_wire::EventKind::MimiRoomBinding
     )

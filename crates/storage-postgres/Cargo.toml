@@ -14,10 +14,12 @@ default = []
 # Leased test databases (`test_database`). Soland has one storage
 # implementation, so every test that needs storage takes a real database from
 # this module instead of a second in-memory adapter.
-test-support = ["soland-storage/test-support"]
+test-support = ["soland-storage/test-support", "arkret-wire/test-support", "arkret-signatures/signer", "dep:arkret-bootstrap", "dep:ed25519-dalek"]
 
 [dependencies]
 arkret.workspace = true
+arkret-bootstrap = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true, optional = true }
 anyhow = { workspace = true }
 arkret-canonical.workspace = true
 arkret-event-draft.workspace = true
@@ -44,6 +46,7 @@ parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2.workspace = true
+soland-domain = { workspace = true }
 soland-storage = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 tracing = { workspace = true }

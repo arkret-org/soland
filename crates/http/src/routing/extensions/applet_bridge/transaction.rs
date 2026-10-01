@@ -116,17 +116,23 @@ pub(super) async fn process_verified_transaction(
         }
     }
 
-    let outcome = AppletTransactionOutcome {
-        status: if rejected.is_empty() {
-            AppletTransactionStatus::Accepted
-        } else if rejected.len() == event_count {
-            AppletTransactionStatus::Rejected
-        } else {
-            AppletTransactionStatus::Partial
-        },
-        committed_event_refs,
-        rejections: rejected,
-        retry_after_ms: None,
+    let outcome = if rejected.is_empty() {
+        AppletTransactionOutcome::Accepted {
+            committed_event_refs,
+            rejections: rejected,
+            retry_after_ms: None,
+        }
+    } else if rejected.len() == event_count {
+        AppletTransactionOutcome::Rejected {
+            rejections: rejected,
+            retry_after_ms: None,
+        }
+    } else {
+        AppletTransactionOutcome::Partial {
+            committed_event_refs,
+            rejections: rejected,
+            retry_after_ms: None,
+        }
     };
     let outcome_value = serde_json::to_value(&outcome).map_err(|error| {
         AppError::internal(format!("applet transaction outcome serialize: {error}"))
@@ -294,9 +300,7 @@ const QUEUE_FULL_RETRY_AFTER_MS: u64 = 1_000;
 /// Reject every event in the delivery for inbound backpressure, without
 /// consuming the idempotency identity.
 fn queue_full_outcome(transaction: &AppletEventTransactionRequestBody) -> AppletTransactionOutcome {
-    AppletTransactionOutcome {
-        status: AppletTransactionStatus::Rejected,
-        committed_event_refs: Vec::new(),
+    AppletTransactionOutcome::Rejected {
         rejections: transaction
             .events
             .iter()
@@ -397,11 +401,17 @@ mod backpressure_tests {
         };
 
         let outcome = queue_full_outcome(&transaction);
-        assert_eq!(outcome.status, AppletTransactionStatus::Rejected);
-        assert!(outcome.committed_event_refs.is_empty());
-        assert_eq!(outcome.retry_after_ms, Some(QUEUE_FULL_RETRY_AFTER_MS));
-        assert_eq!(outcome.rejections.len(), event_ids.len());
-        for (rejection, event_id) in outcome.rejections.iter().zip(event_ids) {
+        assert_eq!(outcome.status(), AppletTransactionStatus::Rejected);
+        assert!(outcome.committed_event_refs().is_empty());
+        assert!(
+            serde_json::to_value(&outcome)
+                .unwrap()
+                .get("committed_event_refs")
+                .is_none()
+        );
+        assert_eq!(outcome.retry_after_ms(), Some(QUEUE_FULL_RETRY_AFTER_MS));
+        assert_eq!(outcome.rejections().len(), event_ids.len());
+        for (rejection, event_id) in outcome.rejections().iter().zip(event_ids) {
             assert_eq!(
                 rejection.event_id.as_ref().map(EventId::as_str),
                 Some(event_id)

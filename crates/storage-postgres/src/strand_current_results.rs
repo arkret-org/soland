@@ -418,7 +418,7 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
         .validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     for (path, _) in payload.patch.iter() {
-        // event-kind-registry.json: ak.strand.update owns these six roots.
+        // The narrative paths are distinct from track configuration.
         // scope_circle_id is listed by the generic projection vocabulary but
         // strand-and-message.md §5 explicitly forbids rebinding it.
         let root = path.split('.').next().unwrap_or(path);
@@ -430,6 +430,9 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
                 | "encrypted_metadata"
                 | "content"
                 | "encrypted_content"
+        ) && !matches!(
+            path.as_str(),
+            "tracks.synthesis.content" | "tracks.synthesis.encrypted_content"
         ) || arkret_wire::patch::reducer_managed_patch_reason("strand", path).is_some()
             || arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject(
                 "strand_patch_payload",
@@ -442,6 +445,22 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
         }
     }
     let (row, current, position) = lock_active_patch_target(conn, event, commit, &payload).await?;
+    let writes_synthesis = payload.patch.iter().any(|(path, _)| {
+        matches!(
+            path.as_str(),
+            "tracks.synthesis.content" | "tracks.synthesis.encrypted_content"
+        )
+    });
+    if writes_synthesis
+        && !current
+            .tracks
+            .get("synthesis")
+            .is_some_and(|track| track.enabled.unwrap_or(true))
+    {
+        return Err(PersistenceError::Conflict(
+            "track_disabled: Synthesis content requires an existing active track".to_owned(),
+        ));
+    }
     let mut post = payload
         .patch
         .apply_for_typed_target(&row.value, payload.target_ref.as_str())
@@ -476,10 +495,29 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
                 "Strand post-patch value is invalid: {error}"
             ))
         })?;
+    let mut retained_tracks = next.tracks.clone();
+    if let Some(track) = retained_tracks.get_mut("synthesis") {
+        if let Some(previous) = current.tracks.get("synthesis") {
+            track.content = previous.content.clone();
+            track.encrypted_content = previous.encrypted_content.clone();
+        }
+    }
+    if writes_synthesis
+        && [&current, &next].into_iter().any(|strand| {
+            !strand
+                .tracks
+                .get("synthesis")
+                .is_some_and(|track| track.enabled.unwrap_or(true))
+        })
+    {
+        return Err(PersistenceError::Conflict(
+            "track_disabled: Synthesis content requires an existing active track".to_owned(),
+        ));
+    }
     if next.id != current.id
         || next.realm_id != current.realm_id
         || next.scope_circle_id != current.scope_circle_id
-        || next.tracks != current.tracks
+        || retained_tracks != current.tracks
         || next.state != current.state
         || next.state_changed_at != current.state_changed_at
         || next.stage != current.stage

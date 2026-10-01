@@ -13,6 +13,29 @@ pub(crate) async fn submit(
     session: &SessionIdentityState,
     request: &EventAdmissionSubmission,
 ) -> ServiceResult<ConsentAdmissionOutcome> {
+    validate_submission(request)?;
+    super::authority_producer_validation::verify_self_event_producer_key(
+        state,
+        session,
+        &request.event,
+    )
+    .await?;
+    commit(state, request).await
+}
+
+/// The independently authenticated MIMI transport carries the exact holder
+/// Event. Its accepted device is verified directly; no session is fabricated.
+pub(crate) async fn submit_mimi(
+    state: &AppState,
+    request: &EventAdmissionSubmission,
+) -> ServiceResult<ConsentAdmissionOutcome> {
+    validate_submission(request)?;
+    super::authority_producer_validation::verify_mimi_binding_producer(state, &request.event)
+        .await?;
+    commit(state, request).await
+}
+
+fn validate_submission(request: &EventAdmissionSubmission) -> ServiceResult<()> {
     request
         .validate()
         .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
@@ -26,12 +49,13 @@ pub(crate) async fn submit(
             "invalid Consent submission".into(),
         ));
     }
-    super::authority_producer_validation::verify_self_event_producer_key(
-        state,
-        session,
-        &request.event,
-    )
-    .await?;
+    Ok(())
+}
+
+async fn commit(
+    state: &AppState,
+    request: &EventAdmissionSubmission,
+) -> ServiceResult<ConsentAdmissionOutcome> {
     let method = arkret_wire::DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
             state.service_did().as_str(),

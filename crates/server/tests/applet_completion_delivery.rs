@@ -6,9 +6,7 @@
 #[allow(dead_code)]
 mod admission;
 
-use arkret_models_integration::{
-    AppletTransactionOutcome, AppletTransactionRequestBody, AppletTransactionStatus,
-};
+use arkret_models_integration::{AppletTransactionOutcome, AppletTransactionRequestBody};
 use arkret_signatures::http_signature::{
     HttpSignatureScenario, SignatureVerificationPolicy, verify_signed_http_message,
 };
@@ -152,8 +150,7 @@ async fn durable_completion_retries_real_signed_delivery_before_ack() {
             } else {
                 (
                     "200 OK",
-                    serde_json::to_string(&AppletTransactionOutcome {
-                        status: AppletTransactionStatus::Accepted,
+                    serde_json::to_string(&AppletTransactionOutcome::Accepted {
                         committed_event_refs: vec![],
                         rejections: vec![],
                         retry_after_ms: None,

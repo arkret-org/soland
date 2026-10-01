@@ -209,6 +209,13 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                     detail,
                 );
             }
+            Some(soland_storage::ConflictCode::PolicyRevisionRollback) => {
+                return crate::error::render_error_code(
+                    arkret_wire::ErrorCode::PolicyRevisionRollback,
+                    res,
+                    detail,
+                );
+            }
             // constraint-schema.md section 8.1: an exhausted hard quota is
             // refused before any business effect, as `rate_limited`.
             Some(soland_storage::ConflictCode::RateLimited) => {
@@ -258,6 +265,8 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::MlsActivationIrreversible
                 | soland_storage::ConflictCode::GovernanceBindingMismatch
                 | soland_storage::ConflictCode::JoinRulePolicyMismatch
+                | soland_storage::ConflictCode::PolicyRevisionGap
+                | soland_storage::ConflictCode::PinTargetNotPinned
                 | soland_storage::ConflictCode::MimiRoomBindingMigrationProofInvalid
                 | soland_storage::ConflictCode::InviteDirectedInviteeMismatch
                 | soland_storage::ConflictCode::InviteKindRequiresRevoke

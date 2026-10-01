@@ -273,6 +273,9 @@ pub enum ConflictCode {
     /// A `restricted` / `knock_restricted` join rule has no automatic gate in
     /// the Realm's join policy (`join-policy.md` §2).
     JoinRulePolicyMismatch,
+    PolicyRevisionRollback,
+    PolicyRevisionGap,
+    PinTargetNotPinned,
     /// Membership compensation evidence changed, expired, or was consumed.
     MembershipCompensationConflict,
     /// MIMI migration lineage, selected topology, or current MLS binding fails.
@@ -372,7 +375,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 80] = [
         Self::ApprovalNonceReused,
         Self::ApprovalRequired,
         Self::AppletRevoked,
@@ -407,6 +410,9 @@ impl ConflictCode {
         Self::MlsActivationIrreversible,
         Self::GovernanceBindingMismatch,
         Self::JoinRulePolicyMismatch,
+        Self::PolicyRevisionRollback,
+        Self::PolicyRevisionGap,
+        Self::PinTargetNotPinned,
         Self::MembershipCompensationConflict,
         Self::MimiRoomBindingMigrationProofInvalid,
         Self::RecipientQueueAtCapacity,
@@ -497,6 +503,9 @@ impl ConflictCode {
             Self::MlsActivationIrreversible => arkret_wire::ReasonCode::MLS_ACTIVATION_IRREVERSIBLE,
             Self::GovernanceBindingMismatch => arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH,
             Self::JoinRulePolicyMismatch => arkret_wire::ReasonCode::JOIN_RULE_POLICY_MISMATCH,
+            Self::PolicyRevisionRollback => arkret_wire::ErrorCode::POLICY_REVISION_ROLLBACK,
+            Self::PolicyRevisionGap => arkret_wire::ReasonCode::POLICY_REVISION_GAP,
+            Self::PinTargetNotPinned => arkret_wire::ReasonCode::PIN_TARGET_NOT_PINNED,
             Self::MembershipCompensationConflict => "membership_compensation_conflict",
             Self::MimiRoomBindingMigrationProofInvalid => {
                 arkret_wire::ReasonCode::MIMI_ROOM_BINDING_MIGRATION_PROOF_INVALID

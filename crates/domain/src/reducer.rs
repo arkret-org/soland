@@ -46,6 +46,9 @@ mod projections;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use apply_objects::DeferredParentMembershipAdmission;
+pub use apply_realm_policy::{
+    join_policy_declares_an_automatic_gate, join_rule_requires_an_automatic_gate,
+};
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 pub(crate) use capability_helpers::*;

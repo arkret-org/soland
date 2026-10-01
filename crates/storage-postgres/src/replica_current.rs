@@ -43,6 +43,8 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "message_revision_current_results",
     "object_redaction_current_results",
     "message_reactions_current_results",
+    "pin_current_results",
+    "schema_definition_current_results",
     "circle_member_state_current_results",
     "circle_current_results",
     "call_state_current_results",
@@ -205,6 +207,33 @@ async fn guard_snapshot_revisions(
         let source = serde_json::to_value(source_stream_ref).map_err(malformed)?;
         let incoming_position = position(revision.stream_position)?;
         match selector {
+            S::Pin { pin_scope } => {
+                use arkret_models_collaboration::objects::productivity::PinCurrentValue;
+                let incoming: PinCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(malformed)?;
+                incoming.validate_for_scope(pin_scope).map_err(malformed)?;
+                let subject =
+                    arkret_canonical::canonical_json_string(pin_scope).map_err(malformed)?;
+                let old = diesel::sql_query("SELECT current_commit_id,current_stream_position,source_stream_ref,value FROM pin_current_results WHERE realm_id=$1 AND pin_scope_key=$2 FOR UPDATE")
+                    .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(&subject)
+                    .get_result::<ExistingFrankingProofCurrent>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+                if let Some(old) = old {
+                    let retained: PinCurrentValue =
+                        serde_json::from_value(old.value.clone()).map_err(malformed)?;
+                    if old.source_stream_ref != source
+                        || old.current_stream_position > incoming_position
+                        || retained
+                            .assertions()
+                            .iter()
+                            .any(|assertion| !incoming.assertions().contains(assertion))
+                        || (old.current_stream_position == incoming_position
+                            && (old.current_commit_id != revision.commit_id.as_str()
+                                || old.value != *value))
+                    {
+                        return Err(PersistenceError::Conflict("failed_precondition: Pin snapshot changes its source, revision or retained assertions".into()));
+                    }
+                }
+            }
             S::Circle { circle_id } => {
                 if *source_stream_ref
                     != (arkret_wire::CommitStreamRef::Realm {
@@ -699,6 +728,35 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
                 )
                 .await?;
             }
+            S::Pin { pin_scope } => {
+                let set: arkret_models_collaboration::objects::productivity::PinCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(malformed)?;
+                set.validate_for_scope(pin_scope).map_err(malformed)?;
+                let subject =
+                    arkret_canonical::canonical_json_string(pin_scope).map_err(malformed)?;
+                let changed = diesel::sql_query("INSERT INTO pin_current_results (realm_id,pin_scope_key,pin_scope,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$8,$4,$5,$6,$7) ON CONFLICT(realm_id,pin_scope_key) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE pin_current_results.source_stream_ref=EXCLUDED.source_stream_ref AND EXCLUDED.value->'assertions' @> pin_current_results.value->'assertions' AND (pin_current_results.current_stream_position<EXCLUDED.current_stream_position OR (pin_current_results.current_stream_position=EXCLUDED.current_stream_position AND pin_current_results.current_commit_id=EXCLUDED.current_commit_id AND pin_current_results.value=EXCLUDED.value))")
+                    .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(&subject)
+                    .bind::<Jsonb,_>(serde_json::to_value(pin_scope).map_err(malformed)?)
+                    .bind::<Text,_>(row.commit_id).bind::<BigInt,_>(row.stream_position)
+                    .bind::<Jsonb,_>(value).bind::<Timestamptz,_>(installed_at)
+                    .bind::<Jsonb,_>(serde_json::to_value(source_stream_ref).map_err(malformed)?)
+                    .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                require_one_current_write(changed)?;
+            }
+            S::SchemaDefinition { schema_id } => {
+                let payload = serde_json::json!({"value":value});
+                arkret_schema::validate_schema_definition_payload(&payload).map_err(malformed)?;
+                if value.get("$id").and_then(serde_json::Value::as_str) != Some(schema_id.as_str())
+                {
+                    return Err(malformed("schema definition subject differs from its $id"));
+                }
+                let changed = diesel::sql_query("INSERT INTO schema_definition_current_results (realm_id,schema_id,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(realm_id,schema_id) DO UPDATE SET updated_at=schema_definition_current_results.updated_at WHERE schema_definition_current_results.value=EXCLUDED.value AND schema_definition_current_results.current_commit_id=EXCLUDED.current_commit_id AND schema_definition_current_results.current_stream_position=EXCLUDED.current_stream_position")
+                    .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(schema_id)
+                    .bind::<Text,_>(row.commit_id).bind::<BigInt,_>(row.stream_position)
+                    .bind::<Jsonb,_>(value).bind::<Timestamptz,_>(installed_at)
+                    .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                require_one_current_write(changed)?;
+            }
             S::MemberState { actor_id } => {
                 upsert_member_state(conn, realm_id, actor_id, &row, value).await?;
             }
@@ -1017,6 +1075,10 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::SchemaDefine => {
+            crate::unit_of_work::commit_schema_definition_in_connection(conn, event, commit, false)
+                .await?;
+        }
         arkret_wire::EventKind::MemberState
         | arkret_wire::EventKind::InviteAccept
         | arkret_wire::EventKind::RealmPolicyBundle
@@ -1092,6 +1154,12 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::SpaceUpdate => {
+            crate::space_current_results::commit_space_update_in_connection(
+                conn, event, commit, false,
+            )
+            .await?;
+        }
         arkret_wire::EventKind::RelationCreate
         | arkret_wire::EventKind::RelationUpdate
         | arkret_wire::EventKind::RelationTombstone => {
@@ -1105,6 +1173,12 @@ pub(crate) async fn advance_in_connection(
                 conn, event, commit, false,
             )
             .await?;
+        }
+        arkret_wire::EventKind::PinAdd
+        | arkret_wire::EventKind::PinRemove
+        | arkret_wire::EventKind::PinReorder => {
+            crate::pin_current_results::commit_pin_in_connection(conn, event, commit, false)
+                .await?;
         }
         arkret_wire::EventKind::SpaceCreate => {
             let values = crate::space_current_results::space_create_current_values(event)?;
@@ -1202,6 +1276,87 @@ mod circle_revision_tests;
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn pin_snapshot_guard_keeps_assertions_and_exact_stream_before_replacement() {
+        use arkret_models_collaboration::exact_current_results::CanonicalEventDot;
+        use arkret_models_collaboration::objects::productivity::{
+            PinAddPayload, PinAssertionEntry, PinAssertionPayload, PinCurrentValue,
+        };
+        use arkret_wire::{
+            CommitStreamRef, CurrentRevision, CurrentSelector, EventId, PinScope, RealmCommitId,
+            RealmId, TypedCurrentResult,
+        };
+        let database = TestDatabase::lease().await;
+        let mut conn = database.pool().get().await.unwrap();
+        let event = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x21; 32]);
+        let realm = RealmId::from_event_id(&event);
+        let home = PinScope::Realm { id: realm.clone() };
+        let source = CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let commit = RealmCommitId::from_digest([0x42; 32]);
+        let set = PinCurrentValue::new(vec![PinAssertionEntry {
+            tag_id: CanonicalEventDot::new(event.clone(), 0).unwrap(),
+            value: PinAssertionPayload::Add(PinAddPayload {
+                pin_scope: home.clone(),
+                target_ref: arkret_wire::MessageId::from_event_id(&event).to_string(),
+                rank: "a0".into(),
+                note: None,
+            }),
+        }])
+        .unwrap();
+        let value = serde_json::to_value(set).unwrap();
+        diesel::sql_query("INSERT INTO pin_current_results (realm_id,pin_scope_key,pin_scope,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,7,$6,now())")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(arkret_canonical::canonical_json_string(&home).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(&home).unwrap()).bind::<Jsonb,_>(serde_json::to_value(&source).unwrap())
+            .bind::<Text,_>(commit.as_str()).bind::<Jsonb,_>(&value).execute(&mut *conn).await.unwrap();
+        let entry = TypedCurrentResult::Value {
+            selector: CurrentSelector::Pin { pin_scope: home },
+            source_stream_ref: source,
+            revision: CurrentRevision {
+                commit_id: commit,
+                stream_position: 7,
+            },
+            value,
+        };
+        guard_snapshot_revisions(&mut conn, &realm, std::slice::from_ref(&entry))
+            .await
+            .unwrap();
+        for mutation in 0..4 {
+            let mut changed = entry.clone();
+            let TypedCurrentResult::Value {
+                source_stream_ref,
+                revision,
+                value,
+                ..
+            } = &mut changed;
+            match mutation {
+                0 => {
+                    revision.stream_position = 8;
+                    value["assertions"] = serde_json::json!([]);
+                }
+                1 => {
+                    revision.stream_position = 8;
+                    *source_stream_ref = CommitStreamRef::Realm {
+                        realm_id: RealmId::from_event_id(&EventId::from_digest(
+                            arkret_canonical::DigestSuite::Sha256,
+                            [0x43; 32],
+                        )),
+                    };
+                }
+                2 => revision.stream_position = 6,
+                _ => revision.commit_id = RealmCommitId::from_digest([0x44; 32]),
+            }
+            assert!(matches!(
+                guard_snapshot_revisions(&mut conn, &realm, &[changed]).await,
+                Err(PersistenceError::Conflict(_))
+            ));
+        }
+        guard_snapshot_revisions(&mut conn, &realm, &[entry])
+            .await
+            .unwrap();
+    }
+
     #[derive(Clone)]
     enum FixtureWriter {
         Singleton(&'static str),

@@ -482,9 +482,13 @@ pub(super) async fn mimi_consent_update(
     // mimi-interop.md section 10: the facade hands the exact submission to
     // the same holder-private Consent admission as the self Consent routes;
     // it never re-signs, rebuilds or synthesizes the Event.
-    crate::state::authority_consent::submit(state, &session, &body.consent_event)
-        .await
-        .map_err(crate::routing::identity::consent::consent_error)?;
+    match session {
+        Some(session) => {
+            crate::state::authority_consent::submit(state, &session, &body.consent_event).await
+        }
+        None => crate::state::authority_consent::submit_mimi(state, &body.consent_event).await,
+    }
+    .map_err(crate::routing::identity::consent::consent_error)?;
     json_ok(MimiUpdateConsentOutcome {
         consent_id: body.consent_id,
         decision: body.decision,
@@ -865,50 +869,15 @@ async fn verify_mimi_consent_update_authority(
     body: &MimiUpdateConsentRequestBody,
 ) -> Result<
     (
-        soland_services::identity::SessionIdentityState,
+        Option<soland_services::identity::SessionIdentityState>,
         Option<String>,
     ),
     AppError,
 > {
-    let source_id = verify_mimi_source_service_signature(state, req, None).await?;
-    let session = if request_has_bearer_session(req) {
-        let session = aa.authenticated_session(state, req).await?;
-        if crate::routing::identity::session_actor::validated_session_actor(state, &session).await?
-            != body.actor_id
-        {
-            return Err(AppError::capability_denied(
-                "MIMI consent user session must match the consent actor",
-            ));
-        }
-        session
-    } else {
-        let device_id = body
-            .consent_event
-            .event
-            .producer_proof
-            .as_ref()
-            .and_then(|proof| proof.verification_method.as_str().rsplit_once('#'))
-            .map(|(_, fragment)| fragment.to_owned())
-            .ok_or_else(|| {
-                AppError::param_invalid("MIMI consent Event requires a DID URL proof key")
-                    .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
-            })?;
-        soland_services::identity::SessionIdentityState {
-            account_pk: None,
-            token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
-            actor: body.actor_id.to_string(),
-            endpoint: soland_services::identity::SessionEndpointState::HumanDevice { device_id },
-            audience: state.service_id().to_string(),
-            session_public_key: None,
-            session_grant: None,
-            expires_at: now() + chrono::Duration::minutes(5),
-            created_at: now(),
-            revoked_at: None,
-        }
-    };
-
+    let (source_id, session) =
+        verify_mimi_consent_write_authority(state, req, aa, &body.actor_id).await?;
     verify_mimi_consent_actor_proof(state, body).await?;
-    Ok((session, Some(source_id)))
+    Ok((session, source_id))
 }
 
 fn mimi_consent_purpose(purpose: MimiConsentPurpose) -> &'static str {

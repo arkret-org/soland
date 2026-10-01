@@ -1060,6 +1060,71 @@ pub(crate) async fn commit_parent_membership_current_results(
                 format!("parent-membership:policy:{}", event.realm_id.as_str()),
             )
             .await?;
+            let bundle: arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload =
+                serde_json::from_value(payload_value.clone())
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            bundle
+                .validate()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let previous = sql_query("SELECT value FROM realm_policy_bundle_current_results WHERE realm_id=$1 FOR UPDATE")
+                .bind::<Text,_>(event.realm_id.as_str()).get_result::<ParentMembershipPolicyRow>(&mut *conn)
+                .await.optional().map_err(PersistenceError::database)?;
+            let previous = previous.map(|row| serde_json::from_value::<arkret_models_collaboration::events_payloads::realm::RealmPolicyBundlePayload>(row.value))
+                .transpose().map_err(PersistenceError::database)?.map_or(0, |bundle| bundle.policy_revision);
+            let expected = previous.checked_add(1).ok_or_else(|| {
+                PersistenceError::Conflict(
+                    "policy_revision_rollback: policy revision is exhausted".to_owned(),
+                )
+            })?;
+            if bundle.policy_revision < expected {
+                return Err(PersistenceError::Conflict(
+                    "policy_revision_rollback: policy revision must advance by one".to_owned(),
+                ));
+            }
+            if bundle.policy_revision > expected {
+                return Err(PersistenceError::Conflict(
+                    "policy_revision_gap: policy revision must advance by one".to_owned(),
+                ));
+            }
+            let join_rule = sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_join_rule' FOR SHARE")
+                .bind::<Text,_>(event.realm_id.as_str()).get_result::<ParentMembershipPolicyRow>(&mut *conn)
+                .await.optional().map_err(PersistenceError::database)?;
+            if let Some(policy) = payload_value.get("join_policy") {
+                soland_domain::reducer::validate_join_policy_payload(policy)
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_owned()))?;
+            }
+            if join_rule
+                .as_ref()
+                .and_then(|row| row.value.as_str())
+                .is_some_and(soland_domain::reducer::join_rule_requires_an_automatic_gate)
+                && !soland_domain::reducer::join_policy_declares_an_automatic_gate(
+                    payload_value.get("join_policy"),
+                )
+            {
+                return Err(PersistenceError::Conflict(
+                    "join_rule_policy_mismatch: restricted join rule requires an automatic gate"
+                        .to_owned(),
+                ));
+            }
+            let genesis = sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_genesis' FOR SHARE")
+                .bind::<Text,_>(event.realm_id.as_str()).get_result::<ParentMembershipPolicyRow>(&mut *conn)
+                .await.optional().map_err(PersistenceError::database)?;
+            if genesis
+                .as_ref()
+                .and_then(|row| row.value.get("security_class"))
+                .and_then(serde_json::Value::as_str)
+                == Some("high_assurance")
+                && !matches!(
+                    payload_value
+                        .get("federation_policy")
+                        .and_then(serde_json::Value::as_str),
+                    Some("closed" | "restricted" | "quarantine")
+                )
+            {
+                return Err(PersistenceError::Conflict(
+                    "failed_precondition: high assurance federation policy is invalid".to_owned(),
+                ));
+            }
             sql_query(
                 "INSERT INTO realm_policy_bundle_current_results \
                  (realm_id,current_commit_id,current_stream_position,value,updated_at) \
@@ -2614,7 +2679,16 @@ async fn commit_one_in_connection(
             invite_claim_proof,
         )
         .await?;
+        if event.kind == arkret_wire::EventKind::RealmPolicyBundle {
+            crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+                conn,
+                event,
+                commit.committed_at,
+            )
+            .await?;
+        }
         commit_parent_membership_current_results(conn, event, commit).await?;
+        commit_schema_definition_in_connection(conn, event, commit, true).await?;
         crate::mls_group_current_results::advance_key_access_revision_in_connection(
             conn, event, commit,
         )
@@ -2663,6 +2737,8 @@ async fn commit_one_in_connection(
             conn, event, commit, true,
         )
         .await?;
+        crate::space_current_results::commit_space_update_in_connection(conn, event, commit, true)
+            .await?;
         crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit)
             .await?;
         crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
@@ -2687,6 +2763,7 @@ async fn commit_one_in_connection(
             conn, event, commit, true,
         )
         .await?;
+        crate::pin_current_results::commit_pin_in_connection(conn, event, commit, true).await?;
         crate::moderation_report_current_results::commit_moderation_report_current_result_in_connection(
             conn, event, commit,
         )
@@ -3379,4 +3456,63 @@ mod agent_draft_consumption_tests {
                 .is_none()
         );
     }
+}
+
+/// A schema subject is immutable after its first accepted definition.
+pub(crate) async fn commit_schema_definition_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    authorize: bool,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::SchemaDefine {
+        return Ok(());
+    }
+    let value = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    arkret_schema::validate_schema_definition_payload(&value)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let payload: arkret_models_collaboration::events_payloads::registry_state::SchemaDefineStatePayload =
+        serde_json::from_value(value).map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let subject = payload
+        .schema_id()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if event.scope_ref
+        != (arkret_wire::ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        })
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.event_ref != event.event_id
+    {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: schema definition requires its Realm authority cut".to_owned(),
+        ));
+    }
+    if authorize {
+        crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
+    let document = serde_json::Value::Object(payload.value.clone());
+    let previous = sql_query("SELECT value FROM schema_definition_current_results WHERE realm_id=$1 AND schema_id=$2 FOR UPDATE")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(subject)
+        .get_result::<ParentMembershipPolicyRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if let Some(previous) = previous {
+        if previous.value != document {
+            return Err(PersistenceError::Conflict("failed_precondition: schema definition subject is already occupied by different bytes".to_owned()));
+        }
+        return Ok(());
+    }
+    let position = i64::try_from(commit.stream_position).map_err(PersistenceError::database)?;
+    sql_query("INSERT INTO schema_definition_current_results (realm_id,schema_id,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6)")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(subject)
+        .bind::<Text,_>(commit.commit_id.as_str()).bind::<BigInt,_>(position)
+        .bind::<Jsonb,_>(&document).bind::<Timestamptz,_>(commit.committed_at)
+        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+    Ok(())
 }

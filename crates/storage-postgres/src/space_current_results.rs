@@ -425,3 +425,139 @@ pub(crate) async fn commit_space_transition_in_connection(
     }
     Ok(())
 }
+/// Update metadata and its independent child-policy cell atomically.
+pub(crate) async fn commit_space_update_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    authorize: bool,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::space::SpacePatchPayload;
+    use arkret_models_collaboration::objects::space::{ChildScopePolicy, Space};
+    if event.kind != arkret_wire::EventKind::SpaceUpdate {
+        return Ok(());
+    }
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let payload: SpacePatchPayload = serde_json::from_value(
+        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+    )
+    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if event.scope_ref
+        != (arkret_wire::ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        })
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.event_ref != event.event_id
+    {
+        return Err(reject("Space update requires the Realm authority cut"));
+    }
+    if authorize {
+        crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+            conn,
+            event,
+            commit.committed_at,
+        )
+        .await?;
+    }
+    let row = diesel::sql_query("SELECT current_commit_id,current_stream_position,value FROM space_current_results WHERE realm_id=$1 AND space_id=$2 FOR UPDATE")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(payload.space_id.as_str())
+        .get_result::<SpaceCurrentRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(|| reject("Space update target is absent"))?;
+    let current: Space =
+        serde_json::from_value(row.value.clone()).map_err(PersistenceError::database)?;
+    let position = i64::try_from(commit.stream_position)
+        .map_err(|_| reject("invalid Space stream position"))?;
+    if current.id.as_ref() != Some(&payload.space_id)
+        || current.realm_id != event.realm_id
+        || current.scope_circle_id.is_some()
+        || row.current_stream_position >= position
+    {
+        return Err(reject(
+            "Space update target has inconsistent scope or revision",
+        ));
+    }
+    if current.state != Some(arkret_wire::SpaceState::Active) {
+        return Err(reject_lifecycle(
+            soland_storage::ConflictCode::SpaceNotActive,
+            "Space update target is not active",
+        ));
+    }
+    if let Some(expected) = &payload.expected_state_digest {
+        let actual = arkret_canonical::sha256_digest(
+            arkret_canonical::canonical_json_bytes(&row.value)
+                .map_err(PersistenceError::database)?,
+        );
+        if expected.as_str() != actual {
+            return Err(reject("Space expected_state_digest differs from current"));
+        }
+    }
+    if let Some(policy) = &payload.child_scope_policy {
+        if let ChildScopePolicy::RequireScopeCircleId { scope_circle_id } = policy {
+            let circle = diesel::sql_query("SELECT current_commit_id,current_stream_position,value FROM circle_current_results WHERE realm_id=$1 AND circle_id=$2 FOR SHARE")
+                .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(scope_circle_id.as_str())
+                .get_result::<SpaceCurrentRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            if !circle.is_some_and(|row| row.value.get("state") == Some(&json!("active"))) {
+                return Err(reject("child scope policy Circle is absent or inactive"));
+            }
+        }
+        let value = serde_json::to_value(policy).map_err(PersistenceError::database)?;
+        let changed = diesel::sql_query("UPDATE space_child_scope_policy_current_results SET current_commit_id=$3,current_stream_position=$4,value=$5,updated_at=$6 WHERE realm_id=$1 AND space_id=$2 AND current_stream_position<$4")
+            .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(payload.space_id.as_str())
+            .bind::<Text,_>(commit.commit_id.as_str()).bind::<BigInt,_>(position)
+            .bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(commit.committed_at)
+            .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        if changed != 1 {
+            return Err(reject("Space policy current is missing or not earlier"));
+        }
+    }
+    if let Some(patch) = &payload.patch {
+        for (path, _) in patch.iter() {
+            let root = path.split('.').next().unwrap_or(path);
+            if !matches!(
+                root,
+                "kind"
+                    | "rank"
+                    | "schema_refs"
+                    | "title"
+                    | "summary"
+                    | "labels"
+                    | "fields"
+                    | "avatar_blob_ref"
+            ) || arkret_wire::patch::reducer_managed_patch_reason("space", path).is_some()
+                || arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject(
+                    "space_patch_payload",
+                    path,
+                )
+            {
+                return Err(PersistenceError::SchemaViolation(format!(
+                    "Space update patch path is forbidden: {path}"
+                )));
+            }
+        }
+        let mut post = patch
+            .apply_for_typed_target(&row.value, payload.space_id.as_str())
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        post["updated_by"] =
+            serde_json::to_value(&event.actor_id).map_err(PersistenceError::database)?;
+        post["updated_at"] = json!(arkret_canonical::format_timestamp_canonical(
+            event.created_at.max(commit.committed_at)
+        ));
+        let next: Space = serde_json::from_value(post.clone())
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        next.validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let changed = diesel::sql_query("UPDATE space_current_results SET current_commit_id=$3,current_stream_position=$4,value=$5,updated_at=$6 WHERE realm_id=$1 AND space_id=$2 AND current_commit_id=$7")
+            .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(payload.space_id.as_str())
+            .bind::<Text,_>(commit.commit_id.as_str()).bind::<BigInt,_>(position)
+            .bind::<Jsonb,_>(&post).bind::<Timestamptz,_>(commit.committed_at)
+            .bind::<Text,_>(&row.current_commit_id).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        if changed != 1 {
+            return Err(reject("Space current changed before update"));
+        }
+    }
+    Ok(())
+}

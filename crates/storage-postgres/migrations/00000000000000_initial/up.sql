@@ -5509,3 +5509,28 @@ CREATE TABLE agent_action_approval_current_results (
  CHECK(value->>'approval_nonce'=approval_nonce)
 );
 CREATE INDEX agent_action_approval_target_idx ON agent_action_approval_current_results(realm_id,approved_event_id,controller_actor_key);
+
+-- Every Pin home keeps its exact accepting stream and immutable assertion set.
+CREATE TABLE pin_current_results (
+    realm_id TEXT NOT NULL,
+    pin_scope_key TEXT NOT NULL,
+    pin_scope JSONB NOT NULL,
+    source_stream_ref JSONB NOT NULL,
+    current_commit_id TEXT NOT NULL,
+    current_stream_position BIGINT NOT NULL CHECK (current_stream_position > 0),
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (realm_id, pin_scope_key)
+);
+
+-- The first accepted JSON Schema document permanently occupies its subject.
+CREATE TABLE schema_definition_current_results (
+ realm_id TEXT NOT NULL,
+ schema_id TEXT NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position > 0),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,schema_id),
+ CHECK(value->>'$id'=schema_id)
+);

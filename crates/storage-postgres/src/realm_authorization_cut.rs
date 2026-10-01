@@ -902,6 +902,28 @@ impl RealmAuthorizationCut {
         event: &arkret_wire::Event,
         facts: &mut OperationFacts,
     ) -> PersistenceResult<()> {
+        if event.kind == EventKind::SpaceUpdate {
+            let payload: arkret_models_collaboration::events_payloads::space::SpacePatchPayload =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let row = diesel::sql_query("SELECT value FROM space_current_results WHERE realm_id=$1 AND space_id=$2 FOR SHARE")
+                .bind::<Text, _>(event.realm_id.as_str())
+                .bind::<Text, _>(payload.space_id.as_str())
+                .get_result::<PolicyBundleRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+                .ok_or_else(|| PersistenceError::Conflict("failed_precondition: Space update target is absent".to_owned()))?;
+            let post = match &payload.patch {
+                Some(patch) => patch
+                    .apply_for_typed_target(&row.value, payload.space_id.as_str())
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+                None => row.value,
+            };
+            facts.space_kind = post
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+        }
         if event.applet_id.is_some() {
             let registration = crate::managed_message_actor::registration(conn, event).await?;
             facts.applet_id = Some(registration.applet_id.to_string());
@@ -986,6 +1008,32 @@ impl RealmAuthorizationCut {
         };
         if matches!(
             event.kind,
+            EventKind::PinAdd | EventKind::PinRemove | EventKind::PinReorder
+        ) {
+            if let Ok(payload) =
+                arkret_models_collaboration::objects::productivity::PinAssertionPayload::from_event(
+                    event,
+                )
+            {
+                let target = match payload.pin_scope() {
+                    arkret_wire::PinScope::Strand { id } => {
+                        facts.strand_id = Some(id.to_string());
+                        WireResourceSelector::strand(self.realm_id.clone(), id.clone())
+                    }
+                    arkret_wire::PinScope::Space { id } => {
+                        facts.space_id = Some(id.to_string());
+                        WireResourceSelector::space(self.realm_id.clone(), id.clone())
+                    }
+                    arkret_wire::PinScope::Circle { id } => {
+                        WireResourceSelector::circle(self.realm_id.clone(), id.clone())
+                    }
+                    arkret_wire::PinScope::Realm { .. } => realm,
+                };
+                return (target, facts);
+            }
+        }
+        if matches!(
+            event.kind,
             EventKind::StrandArchive | EventKind::StrandRestore | EventKind::StrandStageSet
         ) {
             let field = if event.kind == EventKind::StrandStageSet {
@@ -1023,6 +1071,15 @@ impl RealmAuthorizationCut {
                     facts,
                 );
             }
+        }
+        if event.kind == EventKind::SpaceUpdate
+            && let Some(space) =
+                payload_id("space_id").and_then(|id| arkret_wire::SpaceId::new(id).ok())
+        {
+            return (
+                WireResourceSelector::space(self.realm_id.clone(), space),
+                facts,
+            );
         }
         if event.kind == EventKind::StrandTracksUpdate {
             // event-kind-registry.json: the tracks writer selects its Strand

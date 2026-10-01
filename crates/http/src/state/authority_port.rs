@@ -76,6 +76,9 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::StrandReorder
         | EventKind::StrandWatchSet
         | EventKind::SpaceCreate
+        | EventKind::SpaceUpdate
+        | EventKind::SchemaDefine
+        | EventKind::RealmPolicyBundle
         | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
         | EventKind::MemberIdentityUpdate
@@ -102,6 +105,9 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::SpaceRestore
         | EventKind::ReactionAdd
         | EventKind::ReactionRemove
+        | EventKind::PinAdd
+        | EventKind::PinRemove
+        | EventKind::PinReorder
         | EventKind::MimiRoomBinding => Ok(SelfEventRoute::GuardedUnit),
         EventKind::Unknown(raw) => Err(ServiceError::SchemaViolation(format!(
             "self Event kind {raw} is not registered"
@@ -170,6 +176,9 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
                     | arkret_wire::EventKind::RelationTombstone
                     | arkret_wire::EventKind::ReactionAdd
                     | arkret_wire::EventKind::ReactionRemove
+                    | arkret_wire::EventKind::PinAdd
+                    | arkret_wire::EventKind::PinRemove
+                    | arkret_wire::EventKind::PinReorder
             ))
     {
         return Err(ServiceError::Conflict(

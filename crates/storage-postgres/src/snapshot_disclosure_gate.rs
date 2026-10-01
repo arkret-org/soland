@@ -57,6 +57,8 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::StrandMove,
     EventKind::StrandReorder,
     EventKind::SpaceCreate,
+    EventKind::SpaceUpdate,
+    EventKind::SchemaDefine,
     EventKind::SpaceArchive,
     EventKind::SpaceRestore,
     EventKind::RealmSetDefaultStrand,
@@ -65,6 +67,9 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::MessageRedact,
     EventKind::ReactionAdd,
     EventKind::ReactionRemove,
+    EventKind::PinAdd,
+    EventKind::PinRemove,
+    EventKind::PinReorder,
     EventKind::MlsGenesis,
     EventKind::MlsCommit,
     EventKind::CircleCreate,
@@ -103,9 +108,11 @@ const AUDITED_FAMILIES: &[&str] = &[
     "relation_current_results",
     // A reaction set is state disclosed with its target Message's exact scope.
     "message_reactions_current_results",
+    "pin_current_results",
     "realm_authority_root_current_results",
     "capability_grant_current_results",
     "realm_policy_bundle_current_results",
+    "schema_definition_current_results",
     // PCR-private Policy documents have no ordinary Realm disclosure rule.
     "policy_current_results",
     "policy_action_current_results",
@@ -973,6 +980,33 @@ pub(crate) fn disclose_to_account(
             Ok(scope_stream(circle))
         };
         let expected = match selector {
+            CurrentSelector::Pin { pin_scope } => Some(match pin_scope {
+                arkret_wire::PinScope::Realm { id } if id == &material.realm_id => {
+                    realm_stream.clone()
+                }
+                arkret_wire::PinScope::Circle { id } => scope_stream(Some(id.clone())),
+                arkret_wire::PinScope::Strand { id } => object_scope(
+                    strands
+                        .get(id)
+                        .ok_or_else(|| rejected("Pin home has no Strand current"))?,
+                )?,
+                arkret_wire::PinScope::Space { id } => {
+                    let space = material
+                        .current_state_entries
+                        .iter()
+                        .find_map(|row| match row {
+                            TypedCurrentResult::Value {
+                                selector: CurrentSelector::Space { space_id },
+                                value,
+                                ..
+                            } if space_id == id => Some(value),
+                            _ => None,
+                        })
+                        .ok_or_else(|| rejected("Pin home has no Space current"))?;
+                    object_scope(space)?
+                }
+                _ => return Err(rejected("Pin home differs from its Realm")),
+            }),
             CurrentSelector::SidecarContext { sidecar_id, .. } => Some(CommitStreamRef::Sidecar {
                 realm_id: material.realm_id.clone(),
                 sidecar_id: sidecar_id.clone(),
@@ -1324,6 +1358,23 @@ pub(crate) fn disclose_to_account(
                     arkret_models_collaboration::objects::strand::StrandPositionCurrent,
                 > = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
                 position_subjects.push((board_space_id, strand_id, position));
+            }
+            CurrentSelector::Pin { pin_scope } => {
+                let set: arkret_models_collaboration::objects::productivity::PinCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                set.validate_for_scope(pin_scope)
+                    .map_err(PersistenceError::database)?;
+            }
+            CurrentSelector::SchemaDefinition { schema_id } => {
+                arkret_schema::validate_schema_definition_payload(
+                    &serde_json::json!({"value":value}),
+                )
+                .map_err(PersistenceError::database)?;
+                if value.get("$id").and_then(serde_json::Value::as_str) != Some(schema_id.as_str())
+                    || source_stream_ref != &realm_stream
+                {
+                    return Err(rejected("Schema definition differs from its Realm subject"));
+                }
             }
             CurrentSelector::Space { space_id } => {
                 let space: arkret_models_collaboration::objects::space::Space =

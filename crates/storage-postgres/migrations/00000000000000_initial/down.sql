@@ -288,3 +288,5 @@ DROP TABLE IF EXISTS device_inventory_station CASCADE;
 DROP VIEW IF EXISTS poll_state_current_votes;
 DROP TABLE IF EXISTS strand_watch_current_results;
 DROP TABLE IF EXISTS poll_response_inputs;
+DROP TABLE IF EXISTS schema_definition_current_results;
+DROP TABLE IF EXISTS pin_current_results;
