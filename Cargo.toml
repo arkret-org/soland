@@ -23,6 +23,11 @@ repository = "https://github.com/arkret-org/soland"
 homepage = "https://github.com/arkret-org/soland"
 authors = ["Arkret contributors"]
 
+# Full type debug information can push this crate's COFF archive past the
+# 32-bit member-offset limit. Keep source locations for development backtraces.
+[profile.dev.package.soland-storage-postgres]
+debug = "line-tables-only"
+
 # Workspace lint baseline. Every member opts in with `[lints] workspace = true`.
 #
 # The entries below are all at zero occurrences today, so this is a ratchet
