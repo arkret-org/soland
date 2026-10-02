@@ -414,12 +414,22 @@ pub(crate) async fn binding_current_in_connection(
     .transpose()
 }
 
-/// Both directional Contact heads of the pair are current, non-terminal and
-/// grant `direct_message` (`current_signed_directional_contact_heads_gate`).
-async fn contact_grants_direct_message(
+/// The pair's current branch-specific authority: Contact consent or the
+/// exact current controller/provision and accepted Agent runtime binding.
+async fn pair_grants_direct_message(
     conn: &mut AsyncPgConnection,
     founding: &FoundingFacts,
 ) -> PersistenceResult<bool> {
+    use arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind;
+    if founding.authorization_basis.kind == DirectConversationAuthorizationKind::AgentController {
+        return crate::direct_conversation_founding::agent_controller_pair_current(
+            conn,
+            &founding.founder,
+            &founding.peer,
+            &founding.authorization_basis,
+        )
+        .await;
+    }
     let contact = crate::direct_conversation_founding::current_contact(
         crate::contacts::pair_contacts_in_connection(conn, &founding.founder, &founding.peer)
             .await?,
@@ -612,7 +622,7 @@ async fn participant_authority_admits(
         return Ok(false);
     }
     if (send_like(&event.kind) || repair_action(event))
-        && !contact_grants_direct_message(conn, founding).await?
+        && !pair_grants_direct_message(conn, founding).await?
     {
         return Ok(false);
     }

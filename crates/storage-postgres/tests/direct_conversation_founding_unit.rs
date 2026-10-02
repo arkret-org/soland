@@ -1498,6 +1498,81 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
             .into_iter()
             .collect()
     );
+    drop(conn);
+
+    // An owned Agent never needs a Contact round. Its provisional Message
+    // and peer Add use the current controller/provision branch at the cut.
+    let realm_id = realm_of(&unit);
+    let founder = pair.founder_actor();
+    let facts = unit.facts().unwrap();
+    let create_ref = unit.transactions[0].event.event_id.clone();
+    let genesis = with_group(
+        cited(
+            &unit.transactions[3],
+            EventKind::MlsGenesis,
+            founder.clone(),
+            mls_genesis_payload(&pair, &realm_id, unit_at),
+            Cites::Nothing,
+        ),
+        None,
+        0,
+        &[&founder],
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(genesis.clone())
+        .await
+        .unwrap();
+    let message = cited(
+        &genesis.authority_commit,
+        EventKind::MessageCreate,
+        founder.clone(),
+        ciphertext(
+            &facts.main_strand_id,
+            0,
+            &genesis.authority_commit.event.event_id,
+        ),
+        Cites::Bootstrap(&create_ref),
+    );
+    let add = cited(
+        &genesis.authority_commit,
+        EventKind::MlsCommit,
+        founder.clone(),
+        mls_commit_payload(
+            &realm_id,
+            &genesis.authority_commit.event.event_id,
+            0,
+            b"add-agent",
+        ),
+        Cites::Bootstrap(&create_ref),
+    );
+    for request in [&message, &add] {
+        assert_eq!(
+            store
+                .direct_conversation_admission(&request.authority_commit.event)
+                .await
+                .unwrap(),
+            soland_storage::DirectConversationAdmissionCut::Passed
+        );
+    }
+    // Accepted founding coordinates do not bypass a current Agent pause.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE agent_status_current_results SET value='\"paused\"'::jsonb WHERE agent_id=$1",
+    )
+    .bind::<Text, _>(agent_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert_eq!(
+        store
+            .direct_conversation_admission(&message.authority_commit.event)
+            .await
+            .unwrap(),
+        soland_storage::DirectConversationAdmissionCut::Refused(
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        )
+    );
 }
 
 #[tokio::test]

@@ -186,7 +186,8 @@ fn verify_agent_founding_join_binding(
 /// the complete provision payload through the shared SDK derivation.
 async fn verify_agent_founding_authority(
     conn: &mut diesel_async::AsyncPgConnection,
-    facts: &DirectConversationFoundingFacts,
+    founder_id: &arkret_wire::ActorId,
+    peer_id: &arkret_wire::ActorId,
     provision_ref: &EventId,
     at: chrono::DateTime<chrono::Utc>,
     missing_code: ConflictCode,
@@ -199,12 +200,10 @@ async fn verify_agent_founding_authority(
     };
 
     let stale = |detail: &str| conflict(ConflictCode::FailedPrecondition, detail);
-    let founder = facts
-        .founder_id
+    let founder = founder_id
         .as_account_id()
         .ok_or_else(|| stale("the Agent controller must be an account"))?;
-    let agent = facts
-        .peer_id
+    let agent = peer_id
         .as_account_id()
         .ok_or_else(|| stale("the owned Agent must use an account ActorId"))?;
     if founder.station_id != agent.station_id {
@@ -257,7 +256,7 @@ async fn verify_agent_founding_authority(
         })?;
     if payload.controller_principal_id != founder.principal_id
         || payload.agent_id != agent.principal_id
-        || provision_event.actor_id != facts.founder_id
+        || &provision_event.actor_id != founder_id
     {
         return Err(stale(
             "the accepted provision does not bind the founding controller/Agent pair",
@@ -415,6 +414,60 @@ async fn verify_agent_founding_authority(
         .validate_shape()
         .map_err(|error| stale(&format!("the Agent controller basis is invalid: {error}")))?;
     Ok((basis, evidence))
+}
+
+/// Current authority for the immutable controller/Agent pair. A runtime-key
+/// replacement does not rewrite the founding basis or binding digest.
+pub(crate) async fn agent_controller_pair_current(
+    conn: &mut diesel_async::AsyncPgConnection,
+    founder: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
+    basis: &DirectConversationAuthorizationBasis,
+) -> PersistenceResult<bool> {
+    basis
+        .validate_shape()
+        .map_err(|error| PersistenceError::Database(error.to_string()))?;
+    let mut provision_refs = Vec::new();
+    for reference in &basis.event_refs {
+        let Some(token) = crate::ids::parse_event_id(reference.as_str()) else {
+            return Ok(false);
+        };
+        let accepted = sql_query(
+            "SELECT e.envelope,c.commit_json FROM canonical_events e \
+             JOIN realm_commits c ON c.event_pk=e.pk \
+             WHERE e.id=$1 AND e.state='committed'",
+        )
+        .bind::<Binary, _>(token.to_vec())
+        .get_result::<AcceptedEventRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        let Some(accepted) = accepted else {
+            return Ok(false);
+        };
+        let event: arkret_wire::Event =
+            serde_json::from_value(accepted.envelope).map_err(PersistenceError::database)?;
+        if event.kind == arkret_wire::EventKind::AgentProvision {
+            provision_refs.push(reference);
+        }
+    }
+    let [provision_ref] = provision_refs.as_slice() else {
+        return Ok(false);
+    };
+    match verify_agent_founding_authority(
+        conn,
+        founder,
+        peer,
+        provision_ref,
+        chrono::Utc::now(),
+        ConflictCode::FailedPrecondition,
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(PersistenceError::Conflict(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// The scope both directions of the pair must grant.
@@ -723,7 +776,8 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                 verify_agent_founding_join_binding(unit, &facts)?;
                 verify_agent_founding_authority(
                     conn,
-                    &facts,
+                    &facts.founder_id,
+                    &facts.peer_id,
                     provision_ref,
                     committed_at,
                     ConflictCode::FailedPrecondition,
@@ -1000,7 +1054,8 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
                 verify_agent_founding_join_binding(unit, &facts)?;
                 verify_agent_founding_authority(
                     conn,
-                    &facts,
+                    &facts.founder_id,
+                    &facts.peer_id,
                     provision_ref,
                     commits[3].committed_at,
                     ConflictCode::DependencyMissing,

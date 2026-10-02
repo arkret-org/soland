@@ -422,11 +422,25 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
 fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
     use arkret_wire::ServiceOperationId;
     match (method, path) {
+        ("POST", "/_arkret/self/streams/scan") => {
+            Some(ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
+        }
+        ("POST", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1),
+        ("POST", "/_arkret/self/signal") => Some(ServiceOperationId::SELF_SIGNAL_COMMAND_SEND_V1),
         ("GET", "/_arkret/self/device_messages") => {
             Some(ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1)
         }
         ("POST", "/_arkret/self/device_messages/ack") => {
             Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_ACK_V1)
+        }
+        ("GET", "/_arkret/self/realm-state-snapshot/head") => {
+            Some(ServiceOperationId::SELF_REALM_STATE_SNAPSHOT_READ_MANIFEST_HEAD_V1)
+        }
+        ("POST", "/_arkret/self/mls/group-state-material/query") => {
+            Some(ServiceOperationId::SELF_MLS_READ_GROUP_STATE_MATERIAL_V1)
+        }
+        ("POST", "/_arkret/self/mls/roster-authority/query") => {
+            Some(ServiceOperationId::SELF_MLS_READ_ROSTER_AUTHORITY_V1)
         }
         ("POST", "/_arkret/self/device_messages") => {
             Some(ServiceOperationId::SELF_DEVICE_MESSAGES_COMMAND_SEND_V1)
@@ -892,6 +906,36 @@ mod tests {
         use arkret_wire::ServiceOperationId;
         for (method, path, operation) in [
             (
+                "POST",
+                "/_arkret/self/streams/scan",
+                ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
+            ),
+            (
+                "GET",
+                "/_arkret/self/realm-state-snapshot/head",
+                ServiceOperationId::SELF_REALM_STATE_SNAPSHOT_READ_MANIFEST_HEAD_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/mls/group-state-material/query",
+                ServiceOperationId::SELF_MLS_READ_GROUP_STATE_MATERIAL_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/mls/roster-authority/query",
+                ServiceOperationId::SELF_MLS_READ_ROSTER_AUTHORITY_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/events",
+                ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/signal",
+                ServiceOperationId::SELF_SIGNAL_COMMAND_SEND_V1,
+            ),
+            (
                 "GET",
                 "/_arkret/self/device_messages",
                 ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
@@ -936,7 +980,7 @@ mod tests {
         }
         for (method, path) in [
             ("GET", "/_arkret/self/account/stream"),
-            ("POST", "/_arkret/self/events"),
+            ("GET", "/_arkret/self/account/subscribe"),
             ("GET", "/_arkret/self/keys/backups"),
         ] {
             assert!(agent_recipient_operation(method, path).is_none());
