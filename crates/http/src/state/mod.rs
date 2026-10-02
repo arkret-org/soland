@@ -56,7 +56,8 @@ pub(crate) use authority_producer_validation::{
     verify_mimi_binding_producer, verify_self_event_producer,
 };
 pub(crate) use authority_self_event_unit::{
-    submit_applet_event, submit_mimi_binding_event, submit_self_moderation_report,
+    refresh_direct_conversation_peer_claim, submit_applet_event, submit_mimi_binding_event,
+    submit_self_moderation_report,
 };
 pub(crate) use member_identity::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,

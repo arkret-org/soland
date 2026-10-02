@@ -1644,13 +1644,28 @@ async fn direct_conversation_resolve(
     // Existing coordinates and their state come from the accepted durable
     // founding/current-result cut.  In particular, a live binding no longer
     // depends on process hydration having replayed it into ContactService.
-    let durable = state
+    let mut durable = state
         .event_queries()
         .direct_conversation_durable_state(state.config().trust_domain.as_str(), &pair_key)
         .await
         .map_err(|error| {
             AppError::internal(format!("direct durable-state lookup failed: {error}"))
         })?;
+    if let Some(facts) = &durable
+        && facts.peer_mls_admission
+            == arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission::Pending
+    {
+        let realm_id = RealmId::new(facts.founding_slot.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("Direct Realm id: {error}")))?;
+        crate::state::refresh_direct_conversation_peer_claim(state, &realm_id)
+            .await
+            .map_err(|error| AppError::internal(format!("Direct peer claim refresh: {error}")))?;
+        durable = state
+            .event_queries()
+            .direct_conversation_durable_state(state.config().trust_domain.as_str(), &pair_key)
+            .await
+            .map_err(|error| AppError::internal(format!("Direct refreshed state: {error}")))?;
+    }
     let raw_binding = durable
         .as_ref()
         .and_then(|facts| facts.binding.as_ref())

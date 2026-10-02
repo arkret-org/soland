@@ -27,13 +27,13 @@ use super::AppState;
 /// Refresh the already registered remote claim's durable consume receipt
 /// before evaluating a Direct Conversation completion cut. The peer read and
 /// signature checks happen before the accepting database transaction.
-async fn refresh_direct_conversation_peer_claim(
+pub(crate) async fn refresh_direct_conversation_peer_claim(
     state: &AppState,
-    event: &Event,
+    realm_id: &arkret_wire::RealmId,
 ) -> ServiceResult<()> {
     let Some(pending) = state
         .authority_commits()
-        .direct_conversation_pending_peer_claim_query(&event.realm_id)
+        .direct_conversation_pending_peer_claim_query(realm_id)
         .await?
     else {
         return Ok(());
@@ -276,7 +276,7 @@ async fn commit_event_unit_with_idempotency_impl(
         arkret_canonical::DigestSuite::Sha256,
     )
     .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    refresh_direct_conversation_peer_claim(state, event).await?;
+    refresh_direct_conversation_peer_claim(state, &event.realm_id).await?;
     // contact-and-direct-conversation.md section 8.4: a Direct Conversation
     // Realm's profile table precedes every other authority, so its Events
     // skip the reducer preflight; the accepting transaction evaluates the
