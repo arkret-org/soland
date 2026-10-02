@@ -1276,5 +1276,7 @@ pub struct DirectConversationDurableState {
     pub binding: Option<arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingCurrentValue>,
     pub group_state_ref: Option<arkret_wire::EventId>,
     pub group_current_exact_pair: Option<bool>,
+    pub initial_exact_pair_group_state_ref: Option<arkret_wire::EventId>,
+    pub peer_mls_admission: arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission,
     pub members: Vec<DirectConversationMemberCurrent>,
 }

@@ -2018,6 +2018,24 @@ async fn consume_peer_welcome(
     commit: &soland_storage::EventCommitRequest,
     peer: &ActorId,
 ) {
+    let mut conn = pool.get().await.unwrap();
+    let changed=diesel::sql_query("UPDATE peer_keypackage_claims c SET state='consumed' FROM keypackage_claim_welcome_bindings b \
+        WHERE b.commit_event_ref=$1 AND c.source_id=b.source_id AND c.claim_request_id=b.claim_request_id")
+        .bind::<Text,_>(commit.authority_commit.event.event_id.as_str()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    if changed == 0 {
+        record_peer_welcome(pool, station, commit, peer, "consumed", 0).await;
+    }
+}
+
+async fn record_peer_welcome(
+    pool: &PgPool,
+    station: &DidCoreId,
+    commit: &soland_storage::EventCommitRequest,
+    peer: &ActorId,
+    state: &str,
+    ordinal: i64,
+) {
     let claim_id = format!("ak:keypackage_claim:{}", uuid::Uuid::now_v7());
     let welcome_id = format!("ak:mls_welcome_delivery:{}", uuid::Uuid::now_v7());
     let request_id = uuid::Uuid::now_v7().simple().to_string();
@@ -2027,7 +2045,7 @@ async fn consume_peer_welcome(
         "INSERT INTO peer_keypackage_claims \
          (source_id,claim_request_id,request_digest,key_package_use,keypackage_id,outcome, \
           terminal_receipt,consume_receipt,claim_expires_at_unix_ms,expires_at,state,updated_at) \
-         VALUES ($1,$2,$3,'single_use',NULL,'{}'::jsonb,NULL,'{}'::jsonb,$4,$5,'consumed',$6)",
+         VALUES ($1,$2,$3,'single_use',NULL,'{}'::jsonb,NULL,'{}'::jsonb,$4,$5,$7,$6)",
     )
     .bind::<Text, _>(station.as_str())
     .bind::<Text, _>(&request_id)
@@ -2035,6 +2053,7 @@ async fn consume_peer_welcome(
     .bind::<BigInt, _>(now.timestamp_millis() + 3_600_000)
     .bind::<BigInt, _>(now.timestamp() + 86_400)
     .bind::<BigInt, _>(now.timestamp())
+    .bind::<Text, _>(state)
     .execute(&mut *conn)
     .await
     .unwrap();
@@ -2070,6 +2089,40 @@ async fn consume_peer_welcome(
     .execute(&mut *conn)
     .await
     .unwrap();
+
+    // These admission-cut fixtures seed the storage projection left by the
+    // separately verified MLS processor, not synthetic protocol acceptance.
+    let event = &commit.authority_commit.event;
+    let scope_key =
+        String::from_utf8(arkret_canonical::canonical_json_bytes(&event.scope_ref).unwrap())
+            .unwrap();
+    let epoch = commit.authority_commit.mls_state.as_ref().unwrap().epoch;
+    diesel::sql_query(
+        "INSERT INTO mls_consumed_proposal_provenance \
+         (realm_id,scope_key,commit_event_ref,commit_stream_position,epoch,consumed_proposal_ordinal, \
+          proposal_type,proposal_wire,proposal_ref,sender_actor_id,sender_leaf_index,sender_signature_key, \
+          target_after_actor_id,target_after_leaf_index,target_after_signature_key,created_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,1,decode('01','hex'),decode('01','hex'),$7,0,repeat('a',43),$8,1,repeat('b',43),now())",
+    ).bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
+     .bind::<Text,_>(event.event_id.as_str())
+     .bind::<BigInt,_>(commit.authority_commit.commit.stream_position as i64)
+     .bind::<BigInt,_>(epoch as i64).bind::<BigInt,_>(ordinal)
+     .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(&event.actor_id).unwrap())
+     .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(peer).unwrap())
+     .execute(&mut *conn).await.unwrap();
+    diesel::sql_query(
+        "INSERT INTO mls_add_authority_attestations \
+         (attestor_station_id,realm_id,scope_key,mls_group_id,genesis_event_ref,commit_event_ref, \
+          commit_stream_position,epoch,welcome_id,claim_id,consumed_proposal_ordinal,attestation_digest, \
+          request_json,attestor_resolution_canonical_json,installed_at) \
+         VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,'{}'::jsonb,decode('01','hex'),now())",
+    ).bind::<Text,_>(station.as_str()).bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
+     .bind::<Text,_>(event.scope_ref.canonical_mls_group_id().unwrap().as_str())
+     .bind::<Text,_>(event.event_id.as_str())
+     .bind::<BigInt,_>(commit.authority_commit.commit.stream_position as i64)
+     .bind::<BigInt,_>(epoch as i64).bind::<Text,_>(&welcome_id).bind::<Text,_>(&claim_id)
+     .bind::<BigInt,_>(ordinal).bind::<Text,_>(format!("sha256:{}", "8".repeat(64)))
+     .execute(&mut *conn).await.unwrap();
 }
 
 /// Every row an admitted Direct Conversation Event can leave for `realm_id`.
@@ -2298,6 +2351,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         })
     };
 
+    record_peer_welcome(&pool, &pair.station, &add, &peer, "claimed", 0).await;
     // Until the peer's Welcome is durable the Realm stays provisional: no
     // endorsement, while the founder still sends at the new epoch.
     let early_binding = cited(
@@ -2599,4 +2653,176 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
+}
+
+#[tokio::test]
+async fn terminal_founding_claim_repairs_the_same_group_and_keeps_the_first_binding_ref() {
+    use arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission as Admission;
+    let pool = contract_pool().await;
+    let pair = pair(&pool).await;
+    let store = pair.store();
+    let at = now();
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    store
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await
+        .unwrap();
+    let realm = realm_of(&unit);
+    let facts = unit.facts().unwrap();
+    let create_ref = unit.transactions[0].event.event_id.clone();
+    let founder = pair.founder_actor();
+    let peer = pair.peer_actor();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let genesis = with_group(
+        cited(
+            &unit.transactions[3],
+            EventKind::MlsGenesis,
+            founder.clone(),
+            mls_genesis_payload(&pair, &realm, at),
+            Cites::Nothing,
+        ),
+        None,
+        0,
+        &[&founder],
+    );
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let genesis_ref = genesis.authority_commit.event.event_id.clone();
+    let initial = with_group(
+        cited(
+            &genesis.authority_commit,
+            EventKind::MlsCommit,
+            founder.clone(),
+            mls_commit_payload(&realm, &genesis_ref, 0, b"first-add"),
+            Cites::Bootstrap(&create_ref),
+        ),
+        Some((&genesis_ref, 0)),
+        1,
+        &[&founder, &peer],
+    );
+    uow.commit_event(initial.clone()).await.unwrap();
+    record_peer_welcome(&pool, &pair.station, &initial, &peer, "revoked", 0).await;
+    let initial_ref = initial.authority_commit.event.event_id.clone();
+    let read = async || {
+        PgEventStore { pool: pool.clone() }
+            .direct_conversation_durable_state_for_realm(realm.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let first = read().await;
+    assert_eq!(first.peer_mls_admission, Admission::RepairRequired);
+    assert_eq!(
+        first.initial_exact_pair_group_state_ref,
+        Some(initial_ref.clone())
+    );
+    let repaired = with_group(
+        cited(
+            &initial.authority_commit,
+            EventKind::MlsCommit,
+            founder.clone(),
+            mls_commit_payload(&realm, &initial_ref, 1, b"remove-and-add-peer"),
+            Cites::Bootstrap(&create_ref),
+        ),
+        Some((&initial_ref, 1)),
+        2,
+        &[&founder, &peer],
+    );
+    uow.commit_event(repaired.clone()).await.unwrap();
+    seed_peer_remove(&pool, &repaired, &peer).await;
+    record_peer_welcome(&pool, &pair.station, &repaired, &peer, "claimed", 0).await;
+    let repaired_ref = repaired.authority_commit.event.event_id.clone();
+    assert_eq!(read().await.peer_mls_admission, Admission::Pending);
+    let payload = |reference: &arkret_wire::EventId| {
+        serde_json::json!({
+            "pair_key": facts.pair_key, "unordered_participant_ids":[founder,peer],
+            "realm_id":realm, "main_strand_id":facts.main_strand_id,
+            "founding_unit_digest":facts.founding_unit_digest,
+            "authorization_basis": first.founding_slot.authorization_basis,
+            "initial_exact_pair_group_state_ref": reference,
+            "created_at": arkret_canonical::format_timestamp_canonical(at),
+        })
+    };
+    let bound = cited(
+        &repaired.authority_commit,
+        EventKind::DirectConversationBound,
+        founder.clone(),
+        payload(&initial_ref),
+        Cites::Bootstrap(&create_ref),
+    );
+    let before = dc_footprint(&pool, &realm).await;
+    assert_eq!(
+        refusal_code(uow.commit_event(bound.clone()).await),
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    assert_eq!(dc_footprint(&pool, &realm).await, before);
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE peer_keypackage_claims c SET state='consumed' FROM keypackage_claim_welcome_bindings b \
+        WHERE b.commit_event_ref=$1 AND c.source_id=b.source_id AND c.claim_request_id=b.claim_request_id")
+        .bind::<Text,_>(repaired_ref.as_str()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    let current = read().await;
+    assert_eq!(current.peer_mls_admission, Admission::Durable);
+    assert_eq!(current.group_state_ref, Some(repaired_ref.clone()));
+    assert_eq!(
+        current.initial_exact_pair_group_state_ref,
+        Some(initial_ref.clone())
+    );
+    let wrong = cited(
+        &repaired.authority_commit,
+        EventKind::DirectConversationBound,
+        founder.clone(),
+        payload(&repaired_ref),
+        Cites::Bootstrap(&create_ref),
+    );
+    assert_eq!(
+        refusal_code(uow.commit_event(wrong).await),
+        ConflictCode::DirectConversationBindingInvalid
+    );
+    uow.commit_event(bound.clone()).await.unwrap();
+    let binding_ref = bound.authority_commit.event.event_id.clone();
+    // A later replacement must not inherit the prior occupied leaf's consumed
+    // receipt, even though actor, leaf index and signature key are identical.
+    let later = with_group(
+        cited(
+            &bound.authority_commit,
+            EventKind::MlsCommit,
+            founder.clone(),
+            mls_commit_payload(&realm, &repaired_ref, 2, b"second-replacement"),
+            Cites::Participant(&binding_ref),
+        ),
+        Some((&repaired_ref, 2)),
+        3,
+        &[&founder, &peer],
+    );
+    uow.commit_event(later.clone()).await.unwrap();
+    seed_peer_remove(&pool, &later, &peer).await;
+    record_peer_welcome(&pool, &pair.station, &later, &peer, "claimed", 0).await;
+    assert_eq!(read().await.peer_mls_admission, Admission::Pending);
+    assert_eq!(
+        read().await.initial_exact_pair_group_state_ref,
+        Some(initial_ref)
+    );
+}
+
+async fn seed_peer_remove(
+    pool: &PgPool,
+    commit: &soland_storage::EventCommitRequest,
+    peer: &ActorId,
+) {
+    let event = &commit.authority_commit.event;
+    let scope_key =
+        String::from_utf8(arkret_canonical::canonical_json_bytes(&event.scope_ref).unwrap())
+            .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO mls_consumed_proposal_provenance \
+        (realm_id,scope_key,commit_event_ref,commit_stream_position,epoch,consumed_proposal_ordinal,proposal_type, \
+         proposal_wire,proposal_ref,sender_actor_id,sender_leaf_index,sender_signature_key, \
+         target_before_actor_id,target_before_leaf_index,target_before_signature_key,created_at) \
+        VALUES ($1,$2,$3,$4,$5,2,3,decode('01','hex'),decode('01','hex'),$6,0,repeat('a',43),$7,1,repeat('b',43),now())")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key).bind::<Text,_>(event.event_id.as_str())
+        .bind::<BigInt,_>(commit.authority_commit.commit.stream_position as i64)
+        .bind::<BigInt,_>(commit.authority_commit.mls_state.as_ref().unwrap().epoch as i64)
+        .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(&event.actor_id).unwrap())
+        .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(peer).unwrap())
+        .execute(&mut *conn).await.unwrap();
 }

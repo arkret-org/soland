@@ -9,6 +9,7 @@ use super::{
     sql_query, sql_types,
 };
 use crate::federation::{FederationOutboxRow, qualified_outbox_columns};
+use crate::{AsyncConnection, PgTransactionError};
 
 /// Read model for producer-signed Events. Event admission and ordering are
 /// owned by `PgAuthorityCommitStore`; this store deliberately has no write API.
@@ -69,6 +70,8 @@ struct DirectConversationDurableStateRow {
     group_state_ref: Option<String>,
     #[diesel(sql_type = Nullable<Bool>)]
     group_current_exact_pair: Option<bool>,
+    #[diesel(sql_type = Nullable<Text>)]
+    initial_exact_pair_group_state_ref: Option<String>,
     #[diesel(sql_type = Jsonb)]
     members: Value,
 }
@@ -128,6 +131,10 @@ impl TryFrom<DirectConversationDurableStateRow> for DirectConversationDurableSta
                 .transpose()
                 .map_err(|error| PersistenceError::Database(error.to_string()))?,
             group_current_exact_pair: row.group_current_exact_pair,
+            initial_exact_pair_group_state_ref: row.initial_exact_pair_group_state_ref
+                .map(arkret_wire::EventId::new).transpose()
+                .map_err(|error| PersistenceError::Database(error.to_string()))?,
+            peer_mls_admission: arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission::Missing,
             members,
         })
     }
@@ -289,12 +296,16 @@ impl EventStore for PgEventStore {
         pair_key: &str,
     ) -> PersistenceResult<Option<DirectConversationDurableState>> {
         let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn).await?;
         let row = sql_query(
             "SELECT s.founder_id,s.trust_domain_id,s.pair_key,s.founding_unit_digest,\
                     s.realm_id,s.main_strand_id,s.authorization_basis,s.event_ids,s.idempotency_key,s.accepted_at,\
                     b.value AS binding,\
                     m.value->>'current_mls_commit_event_ref' AS group_state_ref,\
                     g.current_exact_pair AS group_current_exact_pair,\
+                    g.initial_exact_pair_group_state_ref,\
                     COALESCE((SELECT jsonb_agg(jsonb_build_object(\
                         'member_id',ms.member_id,'membership',ms.membership) ORDER BY ms.member_id)\
                       FROM member_state_current_results ms WHERE ms.realm_id=s.realm_id),\
@@ -312,8 +323,15 @@ impl EventStore for PgEventStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        row.map(DirectConversationDurableState::try_from)
-            .transpose()
+        let mut facts = row.map(DirectConversationDurableState::try_from).transpose()?;
+        if let Some(facts) = &mut facts {
+            facts.peer_mls_admission = crate::direct_conversation_admission::peer_mls_admission_snapshot(
+                conn, &arkret_wire::RealmId::new(facts.founding_slot.realm_id.clone())
+                    .map_err(|error| PersistenceError::Database(error.to_string()))?,
+            ).await?;
+        }
+        Ok(facts)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn direct_conversation_durable_state_for_realm(
@@ -321,12 +339,16 @@ impl EventStore for PgEventStore {
         realm_id: &str,
     ) -> PersistenceResult<Option<DirectConversationDurableState>> {
         let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn).await?;
         let row = sql_query(
             "SELECT s.founder_id,s.trust_domain_id,s.pair_key,s.founding_unit_digest,\
                     s.realm_id,s.main_strand_id,s.authorization_basis,s.event_ids,s.idempotency_key,s.accepted_at,\
                     b.value AS binding,\
                     m.value->>'current_mls_commit_event_ref' AS group_state_ref,\
                     g.current_exact_pair AS group_current_exact_pair,\
+                    g.initial_exact_pair_group_state_ref,\
                     COALESCE((SELECT jsonb_agg(jsonb_build_object(\
                         'member_id',ms.member_id,'membership',ms.membership) ORDER BY ms.member_id)\
                       FROM member_state_current_results ms WHERE ms.realm_id=s.realm_id),\
@@ -343,8 +365,15 @@ impl EventStore for PgEventStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        row.map(DirectConversationDurableState::try_from)
-            .transpose()
+        let mut facts = row.map(DirectConversationDurableState::try_from).transpose()?;
+        if let Some(facts) = &mut facts {
+            facts.peer_mls_admission = crate::direct_conversation_admission::peer_mls_admission_snapshot(
+                conn, &arkret_wire::RealmId::new(facts.founding_slot.realm_id.clone())
+                    .map_err(|error| PersistenceError::Database(error.to_string()))?,
+            ).await?;
+        }
+        Ok(facts)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn identity_anchor_account_slot(

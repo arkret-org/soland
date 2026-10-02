@@ -1808,6 +1808,8 @@ async fn direct_conversation_resolve(
             coordinates,
             authorization_basis: facts.founding_slot.authorization_basis.clone(),
             group_state_ref: facts.group_state_ref.clone(),
+            initial_exact_pair_group_state_ref: facts.initial_exact_pair_group_state_ref.clone(),
+            peer_mls_admission: facts.peer_mls_admission,
         });
     }
 

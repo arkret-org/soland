@@ -478,40 +478,87 @@ fn contact_grants_direct_message(contact: Option<&soland_storage::ContactRecord>
     })
 }
 
-/// `exact_pair_completion_requires_recipient_durable_welcome`: the peer's
-/// Welcome of the first exact-pair Commit is bound to its claim and the peer
-/// consumed that claim once its join was durable (decision 0121).
-async fn peer_welcome_consumed(
+/// Read the current peer leaf's creation provenance, never an obsolete Add.
+/// Update preserves a leaf's Add; Remove permanently retires that occurrence.
+pub(crate) async fn peer_mls_admission_snapshot(
     conn: &mut AsyncPgConnection,
-    founding: &FoundingFacts,
-    group_state_ref: &EventId,
-) -> PersistenceResult<bool> {
-    Ok(sql_query(
-        "SELECT (EXISTS(SELECT 1 FROM keypackage_claim_welcome_bindings b \
-           JOIN peer_keypackage_claims c \
-             ON c.source_id=b.source_id AND c.claim_request_id=b.claim_request_id \
-           JOIN mls_welcome_deliveries w ON w.welcome_id=b.welcome_id \
-           WHERE b.commit_event_ref=$1 AND c.state='consumed' \
-             AND w.delivery_json->'recipient_actor_id'=$2) \
-          OR EXISTS(SELECT 1 FROM federation_outbox fan \
-            JOIN peer_keypackage_claims c \
-              ON c.outcome #>> '{claims,0,claim_id}' \
-                 =fan.payload_json::jsonb #>> '{replications,0,welcomes,0,keypackage_claim_ref}' \
-            WHERE fan.endpoint='/_arkret/peer/events' AND fan.state='delivered' \
-              AND fan.payload_json::jsonb #>> '{replications,0,source_commit,event_ref}'=$1 \
-              AND fan.payload_json::jsonb #> '{replications,0,welcomes,0,recipient_actor_id}'=$2 \
-              AND fan.peer_id=c.outcome #>> '{claim_receipt,destination_id}' \
-              AND c.state='consumed' \
-              AND c.consume_receipt #>> '{recipient_durable_receipt,welcome_ref}' \
-                  =fan.payload_json::jsonb #>> '{replications,0,welcomes,0,welcome_id}') \
-         ) AS present",
+    realm_id: &RealmId,
+) -> PersistenceResult<
+    arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission,
+> {
+    use arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission;
+    #[derive(QueryableByName)]
+    struct AdmissionRow {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        has_peer: bool,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        durable: bool,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        pending: bool,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        unknown: bool,
+    }
+    let scope = ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let key = String::from_utf8(
+        arkret_canonical::canonical_json_bytes(&scope).map_err(PersistenceError::database)?,
     )
-    .bind::<Text, _>(group_state_ref.as_str())
-    .bind::<Jsonb, _>(serde_json::to_value(&founding.peer).map_err(PersistenceError::database)?)
-    .get_result::<crate::ExistsRow>(&mut *conn)
-    .await
-    .map_err(PersistenceError::database)?
-    .present)
+    .map_err(PersistenceError::database)?;
+    let row = sql_query(
+        "WITH active AS ( \
+         SELECT p.* FROM mls_consumed_proposal_provenance p \
+         JOIN direct_conversation_founding_slots f ON f.realm_id=p.realm_id \
+         WHERE p.scope_key=$1 AND p.proposal_type=1 \
+           AND p.target_after_actor_id=f.peer_id::jsonb \
+           AND NOT EXISTS(SELECT 1 FROM mls_consumed_proposal_provenance removed \
+             WHERE removed.scope_key=p.scope_key AND removed.proposal_type=3 \
+               AND removed.target_before_leaf_index=p.target_after_leaf_index \
+               AND removed.commit_stream_position>p.commit_stream_position)), \
+         claims AS (SELECT a.*,att.welcome_id,att.claim_id,c.state,c.claim_expires_at_unix_ms, \
+           (c.state='consumed' AND (b.claim_id IS NOT NULL OR EXISTS( \
+             SELECT 1 FROM federation_outbox fan \
+             WHERE fan.endpoint='/_arkret/peer/events' AND fan.state='delivered' \
+               AND fan.payload_json::jsonb #>> '{replications,0,source_commit,event_ref}'=a.commit_event_ref \
+               AND fan.payload_json::jsonb #>> '{replications,0,welcomes,0,welcome_id}'=att.welcome_id \
+               AND fan.peer_id=c.outcome #>> '{claim_receipt,destination_id}' \
+               AND c.consume_receipt #>> '{recipient_durable_receipt,welcome_ref}'=att.welcome_id \
+           ))) AS durable \
+         FROM active a \
+         LEFT JOIN mls_add_authority_attestations att ON att.scope_key=a.scope_key \
+           AND att.commit_event_ref=a.commit_event_ref \
+           AND att.consumed_proposal_ordinal=a.consumed_proposal_ordinal \
+         LEFT JOIN keypackage_claim_welcome_bindings b ON b.claim_id=att.claim_id \
+           AND b.welcome_id=att.welcome_id AND b.commit_event_ref=a.commit_event_ref \
+         LEFT JOIN peer_keypackage_claims c ON \
+           (b.claim_id IS NOT NULL AND c.source_id=b.source_id AND c.claim_request_id=b.claim_request_id) \
+           OR (b.claim_id IS NULL AND c.outcome #>> '{claims,0,claim_id}'=att.claim_id)) \
+         SELECT EXISTS(SELECT 1 FROM active) AS has_peer, \
+           EXISTS(SELECT 1 FROM claims WHERE durable) AS durable, \
+           EXISTS(SELECT 1 FROM claims WHERE state IN ('claimed','last_resort_claimed') \
+             AND claim_expires_at_unix_ms>$2) AS pending, \
+           (EXISTS(SELECT 1 FROM claims WHERE claim_id IS NULL OR state IS NULL \
+             OR (state='consumed' AND NOT durable)) \
+            OR (NOT EXISTS(SELECT 1 FROM active) AND EXISTS( \
+              SELECT 1 FROM direct_conversation_group_states WHERE realm_id=$3 AND current_exact_pair))) AS unknown",
+    ).bind::<Text, _>(&key)
+     .bind::<diesel::sql_types::BigInt, _>(chrono::Utc::now().timestamp_millis())
+    .bind::<Text, _>(realm_id.as_str())
+     .get_result::<AdmissionRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    if row.unknown {
+        return Err(PersistenceError::Internal(
+            "current Direct peer admission evidence unavailable".into(),
+        ));
+    }
+    Ok(if !row.has_peer {
+        DirectConversationPeerMlsAdmission::Missing
+    } else if row.durable {
+        DirectConversationPeerMlsAdmission::Durable
+    } else if row.pending {
+        DirectConversationPeerMlsAdmission::Pending
+    } else {
+        DirectConversationPeerMlsAdmission::RepairRequired
+    })
 }
 
 /// The one critical semantic ref of `role` an authority source requires.
@@ -640,7 +687,8 @@ async fn participant_authority_admits(
                 // (checked by binding integrity) still accumulates.
                 (Some(_), _) => event.kind == EventKind::DirectConversationBound,
                 // `exact_pair_founding_completion`.
-                (None, Some(initial)) if peer_welcome_consumed(conn, founding, initial).await? => {
+                (None, Some(_)) if peer_mls_admission_snapshot(conn, &event.realm_id).await?
+                    == arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission::Durable => {
                     event.kind == EventKind::DirectConversationBound && group.current_exact_pair
                 }
                 // `provisional_history_send`: the founder alone manages its
