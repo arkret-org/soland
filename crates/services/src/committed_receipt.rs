@@ -37,8 +37,9 @@ pub enum CommitContinuity<'a> {
     After(&'a RealmCommit),
     /// The receiver holds nothing of the stream; the Commit must open it.
     StreamStart,
-    /// A committed Event received outside any held stream (invite delivery):
-    /// only the Commit/Event binding is judged.
+    /// Verify the receipt without an unlocked stream-head check. A caller
+    /// either receives it outside a held stream (invite delivery), or proves
+    /// exact replay/direct succession inside the locked replica transaction.
     Standalone,
 }
 
