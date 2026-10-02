@@ -4606,6 +4606,10 @@ CREATE TABLE sidecar_current_results (
  CHECK(value->>'realm_id'=realm_id),
  CHECK(value->'controller_account_id'=controller_account_id)
 );
+-- Realm snapshots use a narrow Realm-leading index instead of scanning the
+-- wider controller-account uniqueness index or unrelated Realm currents.
+CREATE INDEX sidecar_current_results_realm
+ ON sidecar_current_results(realm_id,sidecar_id);
 CREATE TABLE sidecar_context_current_results (
  realm_id TEXT NOT NULL,
  sidecar_id TEXT NOT NULL REFERENCES sidecar_current_results(sidecar_id),

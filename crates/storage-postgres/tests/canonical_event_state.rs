@@ -48,7 +48,12 @@ async fn committed_view_excludes_queued_and_rejected_events() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let mut conn = pool.get().await.unwrap();
-    let realm = format!("ak:realm:test-{}", uuid::Uuid::now_v7());
+    // This storage-only coordinate represents no authority admission.
+    let create_event_id = arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"canonical committed view fixture"),
+    );
+    let realm = arkret_wire::RealmId::from_event_id(&create_event_id).to_string();
 
     insert_event(&mut conn, 201, &realm, "ak.message", "queued").await;
     insert_event(&mut conn, 202, &realm, "ak.message", "committed").await;
@@ -68,7 +73,12 @@ async fn canonical_event_terminal_state_and_bytes_are_immutable() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let mut conn = pool.get().await.unwrap();
-    let realm = format!("ak:realm:test-{}", uuid::Uuid::now_v7());
+    // This storage-only coordinate represents no authority admission.
+    let create_event_id = arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(b"canonical terminal state fixture"),
+    );
+    let realm = arkret_wire::RealmId::from_event_id(&create_event_id).to_string();
     insert_event(&mut conn, 204, &realm, "ak.message", "committed").await;
 
     let state_change = sql_query(
