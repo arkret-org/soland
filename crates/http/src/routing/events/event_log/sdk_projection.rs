@@ -540,13 +540,16 @@ pub(crate) async fn event_visible_to_session(
             // Event closure named by that Seal in order to verify and pin the
             // Agent PCR checkpoint; Agent PCRs intentionally have no ordinary
             // membership row.
-            if crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
-                state,
-                &session.actor,
-                &realm_id,
-            )
-            .await
-            .unwrap_or(false)
+            if let Some(controller_account) = session_actor.as_account_id()
+                && crate::routing::identity::agent_pcr::agent_record_for_controller_account_pcr(
+                    state,
+                    controller_account,
+                    &realm_id,
+                )
+                .await
+                .ok()
+                .flatten()
+                .is_some()
             {
                 return circle_event_visible_to_session(state, record, session);
             }

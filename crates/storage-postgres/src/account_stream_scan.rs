@@ -241,6 +241,27 @@ async fn realm_history_access(
     .and_then(|row| row.value.as_str().map(ToOwned::to_owned)))
 }
 
+async fn realm_purpose(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Option<arkret_models_collaboration::events_payloads::realm::RealmPurpose>> {
+    let row = sql_query(
+        "SELECT value->'purpose' AS value FROM realm_bootstrap_current_results \
+         WHERE realm_id=$1 AND result_family='realm_genesis'",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<ValueRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    row.map(|row| {
+        serde_json::from_value(row.value).map_err(|error| {
+            PersistenceError::Internal(format!("stored Realm purpose is invalid: {error}"))
+        })
+    })
+    .transpose()
+}
+
 /// The genesis readable floor of the Realm stream this governing Station
 /// holds from position 0.
 async fn genesis_floor_in_connection(
@@ -1183,6 +1204,15 @@ pub(crate) async fn committed_event_for_member(
                 realm_id: realm_id.clone(),
             })
         {
+            return Ok(Read::OutsideOrdinaryRealmStream);
+        }
+        use arkret_models_collaboration::events_payloads::realm::RealmPurpose;
+        // A control Realm's since_join history profile does not give it
+        // ordinary membership. Its read path applies principal/controller gates.
+        if matches!(
+            realm_purpose(conn, &realm_id).await?,
+            Some(RealmPurpose::PrincipalControl | RealmPurpose::AgentControl | RealmPurpose::AppletManagedControl)
+        ) {
             return Ok(Read::OutsideOrdinaryRealmStream);
         }
         let Some(history) = realm_history_access(conn, &realm_id).await? else {
