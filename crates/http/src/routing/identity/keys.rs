@@ -772,6 +772,68 @@ async fn proxy_peer_keys_query(
     Ok(outcome)
 }
 
+/// Reuse the exact-device directory gate for the query-local signer surface.
+pub(super) async fn current_device_projection_for_signer(
+    state: &AppState,
+    recipient: &arkret_wire::AccountId,
+    realm: &arkret_wire::RealmId,
+    account: &arkret_wire::AccountId,
+    device: &arkret_wire::DeviceId,
+) -> Option<QueryDeviceRecord> {
+    if account.station_id == state.service_core_id() {
+        let facet = super::device_signing::resolve_device_signing_directory_facet(
+            state,
+            account.principal_id.as_str(),
+            device.as_str(),
+        )
+        .await;
+        let record = attested_device_record(state, account, device, facet, BTreeMap::new())
+            .await
+            .ok()??;
+        let generation = super::device_generation::current_device_generation(
+            state,
+            account.principal_id.as_str(),
+        )
+        .await
+        .ok()??;
+        let generation = arkret_models_crypto::AccountDeviceGenerationEntry {
+            account_id: account.clone(),
+            generation_state: arkret_models_crypto::keys::DeviceGenerationState {
+                current_device_generation_ref: generation.current_ref,
+            },
+        };
+        if !attested_row_is_current(&record, &generation) {
+            return None;
+        }
+        return record.project_verified_row(account, device).ok();
+    }
+    let request = arkret_models_crypto::PeerKeysQueryRequestBody {
+        request_id: arkret_wire::RequestId::new_v7_at(chrono::Utc::now().timestamp_millis() as u64),
+        requester_account_id: recipient.clone(),
+        purpose: arkret_models_crypto::PeerKeysQueryPurpose::E2eeMessageEncryption,
+        relationship_basis: arkret_models_crypto::PeerKeysRelationshipBasis::RealmMembership {
+            realm_id: realm.clone(),
+        },
+        device_keys: vec![arkret_models_crypto::QueryAccountDeviceSelector {
+            account_id: account.clone(),
+            device_ids: vec![device.clone()],
+        }],
+    };
+    let outcome = proxy_peer_keys_query(state, &request, &account.station_id)
+        .await
+        .ok()?;
+    let generation = outcome
+        .device_generations
+        .iter()
+        .find(|entry| entry.account_id == *account)?;
+    let entry = outcome
+        .device_keys
+        .iter()
+        .find(|entry| entry.account_id == *account)?;
+    let record = entry.device_keys.get(device)?;
+    verified_remote_device_projection(state, account, device, record, generation).await
+}
+
 /// `device-lifecycle.md` §8.2.1 — the Station-to-Station surface. It returns
 /// the origin-signed `peer_query_device_record`, never the client-facing
 /// projection: the requesting Station is the party that verifies the
@@ -807,14 +869,11 @@ async fn peer_keys_query(
         ));
     }
     let requester = arkret_wire::ActorId::account(body.requester_account_id.clone());
-    let projection = state.projections().snapshot();
     let mut device_keys = Vec::new();
     let mut device_generations = Vec::new();
     for selector in &body.device_keys {
         let target = arkret_wire::ActorId::account(selector.account_id.clone());
-        if !peer_keys_relationship_authorized(state, &projection, &body, &requester, &target)
-            .await?
-        {
+        if !peer_keys_relationship_authorized(state, &body, &requester, &target).await? {
             continue;
         }
         if state
@@ -891,19 +950,22 @@ async fn peer_keys_query(
 
 async fn peer_keys_relationship_authorized(
     state: &AppState,
-    projection: &soland_domain::reducer::ProjectionState,
     request: &arkret_models_crypto::PeerKeysQueryRequestBody,
     requester: &arkret_wire::ActorId,
     target: &arkret_wire::ActorId,
 ) -> Result<bool, AppError> {
     match &request.relationship_basis {
         arkret_models_crypto::PeerKeysRelationshipBasis::RealmMembership { realm_id } => {
-            Ok(projection
-                .member(realm_id.as_str(), &requester.to_string())
-                .is_some_and(|row| row.state == "join")
-                && projection
-                    .member(realm_id.as_str(), &target.to_string())
-                    .is_some_and(|row| row.state == "join"))
+            let current = state.authority_commits();
+            let requester_joined = current
+                .accepted_current_member_joined(realm_id, requester)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            let target_joined = current
+                .accepted_current_member_joined(realm_id, target)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            Ok(requester_joined && target_joined)
         }
         arkret_models_crypto::PeerKeysRelationshipBasis::Contact {} => {
             let Some(contact) = state

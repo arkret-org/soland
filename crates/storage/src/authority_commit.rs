@@ -1570,6 +1570,16 @@ pub trait AuthorityCommitStore: Send + Sync {
         member: &arkret_wire::ActorId,
     ) -> PersistenceResult<bool>;
 
+    /// A collaboration or Direct Realm genesis backed by a held Commit or a
+    /// verified replica bootstrap anchor, including below the since_join floor.
+    async fn accepted_ordinary_realm(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<bool> {
+        let _ = realm_id;
+        Ok(false)
+    }
+
     /// The accepted lifecycle roster of `realm_id` held here: the current
     /// `realm_authority_root` controller and every member that
     /// [`Self::accepted_current_member_joined`] would report joined. `None`

@@ -383,6 +383,62 @@ pub(crate) async fn list_contacts(
 fn optional_contact_event_ref(value: &Option<EventId>) -> Option<EventId> {
     value.clone()
 }
+fn contact_peer_endpoint(
+    record: &ContactRecord,
+    peer: &arkret_wire::ActorId,
+) -> Option<arkret_models_collaboration::contact_operations::ContactPeerEndpoint> {
+    use arkret_models_collaboration::contact_operations::ContactPeerEndpoint;
+    let account = peer.as_account_id()?;
+    let bundle = record.contact_round_evidence.as_ref()?;
+    if record.contact_round_id.as_ref() != Some(&bundle.contact_round_id) {
+        return None;
+    }
+    if let Some(response) = &bundle.normal_response_receipt {
+        // The response is authored by the request's peer (the target).
+        if response.request_receipt.core.peer.contact_actor_id() == *peer
+            && response.issuer_id == account.station_id
+            && record.response_event_ref.as_ref() == Some(&response.response_event_ref)
+            && response.contact_round_id == bundle.contact_round_id
+        {
+            return ContactPeerEndpoint::from_verified_producer(
+                account,
+                response.response_event_ref.clone(),
+                &response.producer_signer,
+            )
+            .ok();
+        }
+    }
+    let receipts = bundle
+        .request_receipts
+        .iter()
+        .filter(|receipt| {
+            receipt.core.holder.contact_actor_id() == *peer
+                && receipt.core.issuer_id == account.station_id
+                && match &bundle.contact_round {
+                    arkret_models_collaboration::contact_operations::ContactRound::Normal {
+                        request_event_ref,
+                        ..
+                    } => *request_event_ref == receipt.core.request_event_ref,
+                    arkret_models_collaboration::contact_operations::ContactRound::Glare {
+                        requests,
+                        ..
+                    } => requests
+                        .iter()
+                        .any(|request| request.request_event_ref == receipt.core.request_event_ref),
+                }
+        })
+        .collect::<Vec<_>>();
+    if receipts.len() != 1 {
+        return None;
+    }
+    ContactPeerEndpoint::from_verified_producer(
+        account,
+        receipts[0].core.request_event_ref.clone(),
+        &receipts[0].core.producer_signer,
+    )
+    .ok()
+}
+
 async fn contact_list_rows(
     state: &AppState,
     actor: &arkret_wire::ActorId,
@@ -476,6 +532,22 @@ async fn contact_list_rows(
         } else {
             None
         };
+        let peer_endpoint = if row_state == ContactState::Accepted
+            && matches!(peer_model, ContactPeer::Human { .. })
+        {
+            // Reverify the selected durable round before projecting its peer
+            // producer. Failure omits a selector instead of guessing a device.
+            if contact_write::verify_stored_contact_evidence_for_read(state, &record, false)
+                .await
+                .is_ok()
+            {
+                contact_peer_endpoint(&record, &peer)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let candidate = ContactListRow {
             peer: peer_model,
             state: row_state,
@@ -505,6 +577,7 @@ async fn contact_list_rows(
             continuity_evidence,
             direct_conversation: None,
             contact_agent_projections: Vec::new(),
+            peer_endpoint,
         };
         let candidate_order = (row_state, record.updated_at);
         if selected

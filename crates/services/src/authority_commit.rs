@@ -459,6 +459,13 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    pub async fn accepted_ordinary_realm(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> ServiceResult<bool> {
+        Ok(self.store().accepted_ordinary_realm(realm_id).await?)
+    }
+
     /// The accepted Realm root controller and current joined members held
     /// here, governed or replicated.
     pub async fn accepted_realm_roster(

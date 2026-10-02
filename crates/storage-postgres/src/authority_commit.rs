@@ -3100,6 +3100,42 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         accepted_current_member_joined_in_connection(&mut conn, realm_id, member).await
     }
 
+    async fn accepted_ordinary_realm(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<bool> {
+        use arkret_models_collaboration::events_payloads::realm::{RealmGenesis, RealmPurpose};
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT g.value FROM realm_bootstrap_current_results g \
+             WHERE g.realm_id=$1 AND g.result_family='realm_genesis' \
+               AND (EXISTS(SELECT 1 FROM realm_commits c \
+                    WHERE c.commit_id=g.current_commit_id AND c.realm_id=g.realm_id \
+                      AND c.stream_position=g.current_stream_position \
+                      AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',g.realm_id)) \
+                 OR EXISTS(SELECT 1 FROM replica_stream_anchors a \
+                    WHERE a.realm_id=g.realm_id AND a.stream_key=$2 \
+                      AND a.anchor_stream_position>=g.current_stream_position))",
+        )
+        .bind::<Text, _>(realm_id.as_str())
+        .bind::<Text, _>(stream_key(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        })?)
+        .get_result::<ProducerCurrentValueRow>(&mut conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let genesis: RealmGenesis = decode_json(row.value, "accepted Realm genesis")?;
+        genesis.validate().map_err(PersistenceError::database)?;
+        Ok(matches!(
+            genesis.purpose,
+            RealmPurpose::Collaboration | RealmPurpose::DirectConversation
+        ))
+    }
+
     async fn accepted_realm_roster(
         &self,
         realm_id: &arkret_wire::RealmId,

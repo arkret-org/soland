@@ -4,8 +4,8 @@ use arkret_canonical::base64url::base64url_decode;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload;
 use arkret_models_identity::{
-    CurrentSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryResult, SignerKeyQuerySelector,
-    SignerKeysQueryOutcome, SignerKeysQueryRequestBody,
+    CurrentDeviceSigningKey, CurrentSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryResult,
+    SignerKeyQuerySelector, SignerKeysQueryOutcome, SignerKeysQueryRequestBody,
 };
 use arkret_wire::{
     CommittedEventRef, CurrentSelector, EventId, RealmId, StationSigningKey, TypedCurrentResult,
@@ -71,16 +71,20 @@ pub(crate) async fn resolve_self_signer_keys(
 ) -> Result<SignerKeysQueryOutcome, AppError> {
     body.validate().map_err(self_request_error)?;
     let requester = arkret_wire::ActorId::account(body.recipient_account_id.clone());
-    let requester_is_member =
-        crate::routing::realm_has_member(state, body.realm_id.as_str(), &requester.to_string())
-            .await;
-    let ordinary = state
-        .realms()
-        .realm_metadata(body.realm_id.as_str())
+    // Read the accepted typed state, including verified replica anchors below
+    // the reader's since_join floor; legacy projection caches are not authority.
+    let requester_is_member = state
+        .authority_commits()
+        .accepted_current_member_joined(&body.realm_id, &requester)
         .await
         .ok()
-        .flatten()
-        .is_some_and(|realm| !realm.minimal_metadata_realm);
+        .unwrap_or(false);
+    let ordinary = state
+        .authority_commits()
+        .accepted_ordinary_realm(&body.realm_id)
+        .await
+        .ok()
+        .unwrap_or(false);
     let mut results = Vec::with_capacity(body.queries.len());
     for selector in &body.queries {
         let visible = ordinary
@@ -88,15 +92,18 @@ pub(crate) async fn resolve_self_signer_keys(
                 exact_visible_committed_event(state, session, &body.realm_id, reference).await
             } else {
                 requester_is_member
-                    && crate::routing::realm_has_member(
-                        state,
-                        body.realm_id.as_str(),
-                        &selector.actor().to_string(),
-                    )
-                    .await
+                    && state
+                        .authority_commits()
+                        .accepted_current_member_joined(&body.realm_id, &selector.actor())
+                        .await
+                        .ok()
+                        .unwrap_or(false)
             };
         let resolved = if visible {
             match selector {
+                SignerKeyQuerySelector::CurrentAdmission {
+                    sender: CurrentSignerKeyQuerySender::AccountDevice { .. },
+                } => current_device_key(state, body, selector).await,
                 SignerKeyQuerySelector::CurrentAdmission {
                     sender: CurrentSignerKeyQuerySender::Agent { .. },
                 } => current_agent_key(state, &body.realm_id, selector).await,
@@ -131,6 +138,57 @@ pub(crate) async fn resolve_self_signer_keys(
         .validate_for_request(body)
         .map_err(self_result_error)?;
     Ok(outcome)
+}
+
+async fn current_device_key(
+    state: &AppState,
+    body: &SignerKeysQueryRequestBody,
+    selector: &SignerKeyQuerySelector,
+) -> Option<SignerKeyQueryResult> {
+    let account = selector.actor().as_account_id()?;
+    let device = selector.device_id()?;
+    let projection = super::keys::current_device_projection_for_signer(
+        state,
+        &body.recipient_account_id,
+        &body.realm_id,
+        account,
+        device,
+    )
+    .await?;
+    // The selector's method names the principal's exact device, not the
+    // did:key used as the projection's raw key material.
+    let (did, fragment) = selector.verification_method().as_str().split_once('#')?;
+    if fragment != device.as_str()
+        || arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(did).ok()?).ok()?
+            != account.principal_id
+    {
+        return None;
+    }
+    let document = state
+        .dids()
+        .resolve_did(&arkret_wire::Did::new(did).ok()?)
+        .await
+        .ok()?;
+    if document.id.as_str() != did {
+        return None;
+    }
+    let multibase = projection
+        .device_projection
+        .device_signing_key_did
+        .as_str()
+        .strip_prefix("did:key:")?;
+    let raw = arkret_canonical::decode_ed25519_multibase(multibase).ok()?;
+    let key = CurrentDeviceSigningKey {
+        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+            &raw,
+        ))
+        .ok()?,
+    };
+    key.validate().ok()?;
+    Some(SignerKeyQueryResult::CurrentDeviceResolved {
+        selector: selector.clone(),
+        key,
+    })
 }
 
 async fn exact_visible_committed_event(
