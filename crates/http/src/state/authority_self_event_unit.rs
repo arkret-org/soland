@@ -231,9 +231,7 @@ pub(super) async fn commit_event_unit_with_idempotency(
                 ) =>
         {
             tracing::info!(reason = %error, "third-party invite claim refused");
-            Err(ServiceError::Conflict(
-                "capability_denied: invite claim is invalid".to_owned(),
-            ))
+            Err(ServiceError::NotFound("invite claim not found".to_owned()))
         }
         other => other,
     }
