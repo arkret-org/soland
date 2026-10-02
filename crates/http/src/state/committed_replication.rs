@@ -305,33 +305,19 @@ async fn replicate_one(
         .await
         .map_err(|error| temporarily_unavailable(format!("RealmCommit signing key: {error}")))?;
     }
-    let held = state
-        .authority_commits()
-        .held_stream_head_commit(&commit.stream_ref)
-        .await?;
-    // A hosted member's own join is verified for its Commit signature,
-    // generation and Event binding only: whether it opens (or re-opens) the
-    // held stream or directly follows it is decided by the store under its
-    // locks, which re-proves continuity for a successor.
-    let (continuity, role) = match (hosted_member_join(state, item), &held) {
-        (Some(member_account_id), _) => (
-            CommitContinuity::Standalone,
-            CommittedReplicaRole::OpeningJoin { member_account_id },
-        ),
-        (None, Some(head)) => (
-            CommitContinuity::After(head),
-            CommittedReplicaRole::HeldStream,
-        ),
-        (None, None) => (
-            CommitContinuity::StreamStart,
-            CommittedReplicaRole::HeldStream,
-        ),
-    };
+    // The locked installation proves exact replay or direct succession.
+    // An unlocked head can advance after the duplicate lookup and wrongly
+    // reject the same Commit concurrently delivered by another peer request.
+    // Receipt verification still checks every signature and Event binding.
+    let role = hosted_member_join(state, item)
+        .map_or(CommittedReplicaRole::HeldStream, |member_account_id| {
+            CommittedReplicaRole::OpeningJoin { member_account_id }
+        });
     verify_committed_event_receipt(
         state.persistence(),
         event,
         commit,
-        continuity,
+        CommitContinuity::Standalone,
         &located.authority,
         &located.keys,
         &state.service_core_id(),
