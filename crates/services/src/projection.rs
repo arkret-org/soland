@@ -220,6 +220,10 @@ impl ProjectionService {
         projection_adapter: &dyn HydrationProjectionAdapter,
         _realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
+        // A whole-store rebuild must exclude projection writers from its
+        // first persistence read through publication. Otherwise a concurrent
+        // committed bootstrap or successor can be overwritten by this cut.
+        let _authority_guard = self.history_authority_view_cas_guard();
         let mut state = ProjectionState::new();
         hydrate_projections_from_persistence(persistence, &mut state, projection_adapter).await?;
         state.replay_resolved_pending(self.clock());
@@ -255,7 +259,7 @@ impl ProjectionService {
                 },
             );
         }
-        self.install_snapshot(state);
+        *self.state.lock() = state;
         Ok(())
     }
 
@@ -382,6 +386,27 @@ impl ProjectionService {
         clock: &ServerHlc,
     ) -> Result<(), RealmBootstrapProjectionError> {
         for (index, operation) in operations.iter().enumerate() {
+            // The committed membership can reach the independent projection
+            // lane before this atomic founding install. Only that exact
+            // accepted Event is an idempotent replay; another membership
+            // still reaches the bootstrap reducer's conflict checks.
+            if operation.event_kind == arkret_wire::EventKind::MemberState
+                && operation
+                    .typed_payload::<arkret_wire::event_spec::MemberState>()
+                    .ok()
+                    .is_some_and(|payload| {
+                        payload.membership == arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+                            && state
+                            .member(operation.realm_id.as_str(), &payload.member_id.to_string())
+                            .is_some_and(|member| {
+                                member.state == "join"
+                                    && member.membership_event_ref.as_deref()
+                                        == Some(operation.context.event_id.as_str())
+                            })
+                    })
+            {
+                continue;
+            }
             let effect = if operation.event_kind == arkret_wire::EventKind::MemberState {
                 if direct_conversation_founding {
                     state.apply_validated_direct_conversation_bootstrap_membership(operation)
@@ -1039,6 +1064,75 @@ mod projection_service_tests {
                 .contains_key("ak:realm:concurrent-update"),
             "installing a staged bootstrap discarded a concurrent Realm projection"
         );
+    }
+
+    #[test]
+    fn bootstrap_install_reuses_only_the_exact_independently_projected_membership() {
+        let actor = project_did_to_core_id(&Did::new("did:web:alice.example").unwrap()).unwrap();
+        let station =
+            project_did_to_core_id(&Did::new("did:web:service.example").unwrap()).unwrap();
+        let member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor.clone(),
+            station.clone(),
+        ));
+        let genesis = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::RealmCreate.as_str(),
+            ScopeRef::RealmGenesis,
+            actor,
+            station,
+            serde_json::json!({"object": {"purpose": "collaboration"}}),
+            Utc::now(),
+        )
+        .unwrap();
+        let join = arkret_wire::test_support::raw_event_for_actor_at(
+            arkret_wire::EventKind::MemberState.as_str(),
+            ScopeRef::Realm {
+                realm_id: genesis.realm_id.clone(),
+            },
+            member.clone(),
+            serde_json::json!({"member_id": member, "membership": "join"}),
+            Utc::now(),
+        )
+        .unwrap();
+        let operation = Operation::from_accepted_event(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:0196419b-0000-7000-8000-000000000004",
+            )
+            .unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            &join,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        let service = service();
+        let mut projection = ProjectionState::new();
+        projection.restore_accepted_membership(&operation, operation.created_at);
+        ProjectionService::apply_realm_bootstrap_to_state(
+            &mut projection,
+            &[operation.clone()],
+            false,
+            service.clock(),
+        )
+        .unwrap();
+        assert_eq!(
+            projection
+                .member(genesis.realm_id.as_str(), &member.to_string())
+                .unwrap()
+                .membership_event_ref
+                .as_deref(),
+            Some(join.event_id.as_str()),
+        );
+        let mut different = operation;
+        different.context.event_id = genesis.event_id;
+        let error = ProjectionService::apply_realm_bootstrap_to_state(
+            &mut projection,
+            &[different],
+            false,
+            service.clock(),
+        )
+        .unwrap_err();
+        assert_eq!(error.reason, "out_of_order_bootstrap");
     }
 
     #[test]

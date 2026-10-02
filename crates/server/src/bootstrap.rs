@@ -3203,6 +3203,33 @@ mod tests {
                 .unwrap(),
             soland_storage::MonotonicRouteWrite::Applied
         ));
+        let retained = store
+            .service_routes()
+            .route_cache(&original.service_id, "station")
+            .await
+            .unwrap()
+            .unwrap();
+        let earlier = retained.verified_at - chrono::Duration::nanoseconds(1);
+        assert!(
+            matches!(
+                store
+                    .service_routes()
+                    .publish_route_cache(latest.clone(), cache_from(&latest, earlier))
+                    .await
+                    .unwrap(),
+                soland_storage::MonotonicRouteWrite::Replay
+            ),
+            "an identical authenticated route finishing later replays without rollback"
+        );
+        assert_eq!(
+            store
+                .service_routes()
+                .route_cache(&original.service_id, "station")
+                .await
+                .unwrap()
+                .unwrap(),
+            retained
+        );
         store
             .service_routes()
             .evict_route_cache(&original.service_id, "station")

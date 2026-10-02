@@ -872,11 +872,9 @@ pub(crate) async fn bind_claim_welcome_in_connection(
     Ok(())
 }
 
-/// encryption-and-audit.md §5.1.2: the GroupInfo and ratchet tree Blobs a
-/// forwarded Genesis carried become this Station's Realm-bound public MLS
-/// Blobs at the Genesis Commit, so `ak.peer.mls.read.group_state_material.v1`
-/// serves them. The bytes are content-addressed, so a Blob row already
-/// present under the same ref names the same bytes and is kept.
+/// Publish verified Genesis artifacts or the post-Commit tree together with
+/// the accepted current. Public bytes are immutable and content-addressed;
+/// updating current never rewrites the original Genesis artifacts.
 async fn store_public_blobs(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,

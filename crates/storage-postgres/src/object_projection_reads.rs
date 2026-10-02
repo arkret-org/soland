@@ -75,7 +75,7 @@ pub struct PgObjectCurrentSnapshotStore {
 
 /// A verified snapshot can cover a current row without its original Commit.
 /// Match selector, revision, value and source stream against the durable cut.
-fn current_source_sql(row: &str, selector: &str) -> String {
+pub(crate) fn current_source_sql(row: &str, selector: &str) -> String {
     format!(
         "COALESCE(\
          (SELECT proof_commit.stream_ref FROM realm_commits proof_commit \

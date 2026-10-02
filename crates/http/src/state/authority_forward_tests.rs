@@ -234,30 +234,60 @@ async fn a_forwarded_genesis_carries_its_local_blobs_only_when_they_address_thei
         },
         soland_storage_postgres::Db { pool: None },
     );
-    let seed = uuid::Uuid::now_v7();
-    let group_info = format!("group-info {seed}").into_bytes();
-    let tree = format!("ratchet-tree {seed}").into_bytes();
     let realm_id = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
         arkret_canonical::DigestSuite::Sha256,
         [0x5a; 32],
     ));
-    let genesis = arkret_wire::test_support::raw_event_at(
-        arkret_wire::EventKind::MlsGenesis.as_str(),
-        ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
+    let scope = ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let creator = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         DidCoreId::new("ak:did_core:web:genesis-creator.example").unwrap(),
         DidCoreId::new("ak:did_core:web:genesis-forwarder.example").unwrap(),
-        serde_json::json!({
-            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-            "group_info_ref": blob_ref(&group_info),
-            "ratchet_tree_ref": blob_ref(&tree),
-            "governance_binding":
-                arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm_id, None, 0, 0, 0)
-                    .unwrap(),
-            "created_at": "2026-09-26T00:00:00.000Z",
-        }),
-        Utc::now(),
+    ));
+    let device =
+        arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-000000000085").unwrap();
+    let binding =
+        arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm_id, None, 0, 0, 0).unwrap();
+    let group =
+        arkret_mls::ArkretMlsIdentity::new_test_human_device(creator.clone(), device.clone())
+            .unwrap()
+            .create_group_with_governance_binding(&scope, &binding)
+            .unwrap();
+    let (group_info, tree) = group.public_group_state_bytes().unwrap();
+    let leaves =
+        arkret_mls::validate_public_group_state(&group_info, &tree, group.group_id().as_str(), 0)
+            .unwrap();
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].actor_id, creator);
+    let at = Utc::now();
+    let payload = arkret_models_collaboration::events_payloads::MlsGenesisPayload {
+        cipher_suite: arkret_wire::NonEmptyString::new(
+            "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        )
+        .unwrap(),
+        group_info_ref: arkret_wire::BlobRef::new(blob_ref(&group_info)).unwrap(),
+        ratchet_tree_ref: arkret_wire::BlobRef::new(blob_ref(&tree)).unwrap(),
+        creator_leaf_authority:
+            arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority {
+                leaf_signature_key_b64u: leaves[0].signature_key.clone(),
+                endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device { device_id: device },
+                // This transport test does not install or admit PCR authority.
+                authorization_event_ref: arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x5c; 32],
+                ),
+            },
+        governance_binding: binding,
+        created_at: at,
+    };
+    payload.validate().unwrap();
+    let genesis = arkret_wire::test_support::raw_event_for_actor_at(
+        arkret_wire::EventKind::MlsGenesis.as_str(),
+        scope,
+        creator,
+        serde_json::to_value(payload).unwrap(),
+        at,
     )
     .unwrap();
     let refused = |result: ServiceResult<Option<MlsGenesisMaterial>>| {

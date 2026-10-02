@@ -769,9 +769,9 @@ pub struct MlsStateInstallation {
     /// signed PublicMessage wire order. Empty for Genesis or self-update.
     /// The accepting PG transaction freezes these with the winning Commit.
     pub consumed_proposals: Vec<MlsConsumedProposalInstallation>,
-    /// Forwarded Genesis carries GroupInfo and tree (§5.1.2); local Genesis
-    /// already has both Blobs. Every Commit carries the post-transition tree
-    /// derived from its verified public tracker, installed at the same cut.
+    /// The public Blobs published atomically with this transition: two
+    /// carried Genesis artifacts, or one post-Commit ratchet tree. A local
+    /// Genesis may use its already published Blobs.
     pub public_blobs: Vec<MlsPublicBlob>,
 }
 
@@ -797,13 +797,13 @@ pub struct MlsConsumedProposalInstallation {
     pub target_after: Option<MlsProposalLeafProvenance>,
 }
 
-/// One content-addressed public Blob of Genesis or a post-Commit tree. Its exact bytes
+/// One content-addressed public Genesis artifact or post-Commit tree. Its bytes
 /// are already in the object store under `storage_key`; the accepting
 /// transaction writes the Blob row that serves them to
 /// `ak.peer.mls.read.group_state_material.v1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsPublicBlob {
-    /// The content address of verified public MLS material.
+    /// The content-addressed reference of the verified public bytes.
     pub blob_ref: arkret_wire::BlobRef,
     /// Lower-case hex SHA-256 of the bytes, the object store's key input.
     pub sha256: String,
@@ -1785,6 +1785,13 @@ pub trait AuthorityCommitStore: Send + Sync {
         selector: &arkret_wire::CurrentSelector,
     ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>>;
 
+    /// Restore the default pointer from its accepted Commit or verified
+    /// replica cut, without reading unrelated current families.
+    async fn realm_default_strand_current(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>>;
+
     /// Governance generation and current heads for every independent Realm,
     /// Circle, and Sidecar stream at one durable cut, sorted by `stream_ref`.
     async fn realm_stream_heads(
@@ -2138,14 +2145,14 @@ mod mls_installation_tests {
         };
         assert!(validate_mls_installation(&event, &installed).is_ok());
 
-        let mut missing_tree = installed.clone();
-        missing_tree.public_blobs.clear();
-        assert!(validate_mls_installation(&event, &missing_tree).is_err());
-        let mut duplicated_tree = installed.clone();
-        duplicated_tree
+        let mut no_tree = installed.clone();
+        no_tree.public_blobs.clear();
+        assert!(validate_mls_installation(&event, &no_tree).is_err());
+        let mut extra_tree = installed.clone();
+        extra_tree
             .public_blobs
             .push(installed.public_blobs[0].clone());
-        assert!(validate_mls_installation(&event, &duplicated_tree).is_err());
+        assert!(validate_mls_installation(&event, &extra_tree).is_err());
 
         let mut wrong_base = installed.clone();
         wrong_base

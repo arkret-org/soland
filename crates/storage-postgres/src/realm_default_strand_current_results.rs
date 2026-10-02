@@ -42,6 +42,60 @@ fn conflict(detail: &'static str) -> PersistenceError {
     PersistenceError::Conflict(detail.to_owned())
 }
 
+#[derive(diesel::QueryableByName)]
+struct ProvedCurrentRow {
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    proved: bool,
+}
+
+pub(crate) async fn read_current(
+    pool: &crate::PgPool,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+    let mut conn = crate::pg_conn(pool).await?;
+    let source = crate::object_projection_reads::current_source_sql(
+        "r",
+        "jsonb_build_object('kind','realm_set_default_strand')",
+    );
+    let row = diesel::sql_query(format!(
+        "SELECT r.current_commit_id,r.current_stream_position,r.value, \
+         COALESCE({source}=jsonb_build_object('kind','realm','realm_id',r.realm_id),false) AS proved \
+         FROM realm_set_default_strand_current_results r WHERE r.realm_id=$1"
+    ))
+    .bind::<Text, _>(realm_id.as_str())
+    .get_result::<ProvedCurrentRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    row.map(|row| {
+        if !row.proved {
+            return Err(PersistenceError::Internal(
+                "default Strand current has no accepted source cut".to_owned(),
+            ));
+        }
+        Ok(arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::RealmSetDefaultStrand,
+            source_stream_ref: arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            revision: arkret_wire::CurrentRevision {
+                commit_id: arkret_wire::RealmCommitId::new(row.current_commit_id)
+                    .map_err(PersistenceError::database)?,
+                stream_position: u64::try_from(row.current_stream_position)
+                    .map_err(PersistenceError::database)?,
+            },
+            value: row.value,
+        })
+    })
+    .transpose()
+}
+
 /// The caller holds the Realm authority row lock through the encompassing
 /// Event/Commit UoW. All current pointer checks and the write use this same
 /// transaction, so a stale in-memory Realm projection cannot select a winner.

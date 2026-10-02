@@ -482,6 +482,15 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
         commit.authority_commit.event.event_id
     );
     assert_eq!(advanced.value.genesis_event_ref, genesis_ref);
+    for seed in ['3', '4'] {
+        assert!(
+            soland_storage::BlobStore::get(&blobs, &blob(seed))
+                .await
+                .unwrap()
+                .is_some(),
+            "advancing current must preserve the original Genesis artifacts"
+        );
+    }
     assert_eq!(
         advanced.current_commit_id,
         commit.authority_commit.commit.commit_id
