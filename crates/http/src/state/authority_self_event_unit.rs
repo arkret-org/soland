@@ -222,16 +222,29 @@ pub(super) async fn commit_event_unit_with_idempotency(
     let result =
         commit_event_unit_with_idempotency_impl(state, submission, producer, effects, idempotency)
             .await;
-    match result {
-        Err(error)
-            if claim
-                && matches!(
-                    &error,
-                    ServiceError::Conflict(_) | ServiceError::NotFound(_)
-                ) =>
-        {
+    if let Err(error) = &result
+        && error.conflict_code() == Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+    {
+        tracing::warn!(event_id = %submission.event.event_id, %error,
+            "accepting cut temporarily unavailable for exact Event");
+    }
+    if claim {
+        result.map_err(private_claim_refusal)
+    } else {
+        result
+    }
+}
+
+fn private_claim_refusal(error: ServiceError) -> ServiceError {
+    // A moved accepting cut remains retryable; it is no claim verdict.
+    if error.conflict_code() == Some(soland_storage::ConflictCode::TemporarilyUnavailable) {
+        return error;
+    }
+    match error {
+        error @ (ServiceError::Conflict(_) | ServiceError::NotFound(_)) => {
             tracing::info!(reason = %error, "third-party invite claim refused");
-            Err(ServiceError::NotFound("invite claim not found".to_owned()))
+            // third-party-invites.md section 6.1: no token-state reason on wire.
+            ServiceError::NotFound("invite claim not found".to_owned())
         }
         other => other,
     }
@@ -632,4 +645,40 @@ pub(crate) async fn submit_mimi_binding_event(
         SelfEventUnitEffects::default(),
     )
     .await
+}
+
+#[cfg(test)]
+mod claim_privacy_tests {
+    use super::*;
+
+    #[test]
+    fn claim_token_state_refusals_have_one_public_error() {
+        for reason in [
+            "expired_invite_token: expired",
+            "claim_invalid: unknown invite",
+            "duplicate_conflict: already consumed",
+            "capability_denied: inviter left",
+            "capability_denied: inviter lost authority",
+            "claim_invalid: revoked invite",
+        ] {
+            let error = private_claim_refusal(ServiceError::Conflict(reason.to_owned()));
+            assert!(matches!(&error, ServiceError::NotFound(_)));
+            assert_eq!(error.detail(), "invite claim not found");
+        }
+        let missing = private_claim_refusal(ServiceError::NotFound("unknown invite".to_owned()));
+        assert_eq!(missing.detail(), "invite claim not found");
+    }
+
+    #[test]
+    fn a_moved_claim_cut_is_retryable_without_a_token_verdict() {
+        let error = private_claim_refusal(ServiceError::Conflict(
+            "temporarily_unavailable: stream head advanced".to_owned(),
+        ));
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+        );
+        let database = private_claim_refusal(ServiceError::Database("unavailable".to_owned()));
+        assert!(matches!(database, ServiceError::Database(_)));
+    }
 }

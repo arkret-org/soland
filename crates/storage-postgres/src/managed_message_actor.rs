@@ -49,6 +49,24 @@ pub(crate) async fn registration(
     serde_json::from_value(row.value).map_err(PersistenceError::database)
 }
 
+/// Resolve the executor against an accepted registration without changing the
+/// Event carrier. Native Service authors have no delegated executed_by field.
+pub(crate) fn registered_executor(
+    event: &Event,
+    registration: &AppletRegistrationPayload,
+) -> PersistenceResult<ActorId> {
+    let service = ActorId::service(registration.service_id.clone());
+    if (event.actor_id == service && event.executed_by.is_none())
+        || event.executed_by.as_ref() == Some(&service)
+    {
+        Ok(service)
+    } else {
+        Err(denied(
+            "Applet Event is not authored or executed by its exact Service",
+        ))
+    }
+}
+
 /// The caller supplies a fresh DID document, not a verified flag. The current
 /// registration evidence re-binds its whole material and producer method here.
 pub(crate) async fn require_applet_producer_in_connection(
@@ -59,16 +77,7 @@ pub(crate) async fn require_applet_producer_in_connection(
 ) -> PersistenceResult<()> {
     let registration = registration(conn, event).await?;
     let service = ActorId::service(registration.service_id.clone());
-    let service_account = ActorId::account(arkret_wire::AccountId::new(
-        registration.service_id.clone(),
-        registration.bot_actor_id.route_service_id().clone(),
-    ));
-    let native_service = event.actor_id == service_account && event.executed_by.is_none();
-    if !native_service && event.executed_by.as_ref() != Some(&service) {
-        return Err(denied(
-            "Applet Event is not authored or executed by its exact Service",
-        ));
-    }
+    let executor = registered_executor(event, &registration)?;
     registration
         .manifest
         .registration_epoch_evidence
@@ -146,8 +155,35 @@ pub(crate) async fn require_applet_producer_in_connection(
     let grant = grants
         .get(&grant_id)
         .ok_or_else(|| denied("Applet authorization grant has no accepted current"))?;
+    // Only this exact installation contract binds a Service producer to its
+    // installed authority pair. The generic grant evaluator retains distinct
+    // Account and Service identities.
+    let native_service = event.actor_id == service && event.executed_by.is_none();
+    if event.kind == EventKind::AppletBridgeError {
+        let payload: arkret_models_integration::AppletBridgeErrorPayload = serde_json::from_value(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(denied)?;
+        if !native_service
+            || payload.applet_id != registration.applet_id
+            || payload.realm_id != event.realm_id
+        {
+            return Err(denied(
+                "bridge audit must bind its exact native Service installation",
+            ));
+        }
+    }
+    let installation_account = ActorId::account(arkret_wire::AccountId::new(
+        registration.service_id.clone(),
+        registration.bot_actor_id.route_service_id().clone(),
+    ));
+    let grant_actor = if native_service {
+        &installation_account
+    } else {
+        &event.actor_id
+    };
     if !grant_is_active_at(grant, at)
-        || !matches!(&grant.subject,CapabilitySubject::Actor(actor) if actor==&event.actor_id)
+        || !matches!(&grant.subject,CapabilitySubject::Actor(actor) if actor==grant_actor)
     {
         return Err(denied(
             "Applet authorization grant is not active for the exact actor",
@@ -155,9 +191,14 @@ pub(crate) async fn require_applet_producer_in_connection(
     }
     if matches!(
         event.kind,
-        EventKind::MessageCreate | EventKind::MemberState
+        EventKind::MessageCreate | EventKind::MemberState | EventKind::AppletBridgeError
     ) && !arkret_schema::capability_actions_for_event_kind(event.kind.as_str())
-        .filter(|descriptor| descriptor.required_evaluator_checks.is_empty())
+        .filter(|descriptor| {
+            descriptor.required_evaluator_checks.is_empty()
+                || (event.kind == EventKind::AppletBridgeError
+                    && native_service
+                    && descriptor.required_evaluator_checks == ["active_applet_registration_exact"])
+        })
         .any(|descriptor| {
             grant
                 .actions
@@ -205,15 +246,24 @@ pub(crate) async fn require_applet_producer_in_connection(
     }
     if matches!(
         event.kind,
-        EventKind::MessageCreate | EventKind::MemberState
+        EventKind::MessageCreate | EventKind::MemberState | EventKind::AppletBridgeError
     ) {
         let actions = arkret_schema::capability_actions_for_event_kind(event.kind.as_str())
-            .filter(|descriptor| descriptor.required_evaluator_checks.is_empty())
+            .filter(|descriptor| {
+                descriptor.required_evaluator_checks.is_empty()
+                    || (event.kind == EventKind::AppletBridgeError
+                        && native_service
+                        && descriptor.required_evaluator_checks
+                            == ["active_applet_registration_exact"])
+            })
             .map(|descriptor| descriptor.action.as_str())
             .collect::<Vec<_>>();
         let facts = soland_storage::OperationFacts {
             applet_id: Some(registration.applet_id.to_string()),
-            executed_by: event.executed_by.clone(),
+            // A native Service write has no delegated executed_by carrier.
+            // Both native and delegated producers were bound to this exact
+            // Service above; the Applet constraint evaluates that executor.
+            executed_by: Some(executor),
             registration_epoch: Some(registration.registration_epoch.to_string()),
             strand_id: event
                 .payload
@@ -230,7 +280,7 @@ pub(crate) async fn require_applet_producer_in_connection(
         };
         let evaluation = soland_storage::evaluate_grants(
             &soland_storage::AuthorizationOperation {
-                actor: &event.actor_id,
+                actor: grant_actor,
                 actions: &actions,
                 target: &resource,
                 at,

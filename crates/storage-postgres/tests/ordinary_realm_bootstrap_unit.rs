@@ -6,6 +6,8 @@ mod device_authorization_history;
 #[path = "support/human_profile.rs"]
 #[allow(dead_code)]
 mod human_profile;
+#[path = "support/hydration.rs"]
+mod hydration;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
@@ -17,8 +19,7 @@ use arkret_models_collaboration::authority_commit::{
 };
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
-use sha2::{Digest as _, Sha256};
-use soland_services::hydration::HydrationProjectionAdapter;
+use hydration::BootstrapHydrationAdapter;
 use soland_services::projection::ProjectionService;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, CurrentRealmAuthority, EventCommitRequest,
@@ -506,38 +507,6 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
             .is_err()
     );
     assert_eq!(issuance_count(&pool, &realm_id).await, 2);
-}
-
-struct BootstrapHydrationAdapter;
-
-impl HydrationProjectionAdapter for BootstrapHydrationAdapter {
-    fn operation_from_canonical_record(
-        &self,
-        record: &soland_services::events::AcceptedEvent,
-    ) -> Option<arkret_event_draft::ProjectedEventOperation> {
-        let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).ok()?;
-        let mut hasher = Sha256::new();
-        hasher.update(b"ak:operation:soland-event-projection:v1:");
-        hasher.update(record.event_id.as_bytes());
-        let digest = hasher.finalize();
-        let mut bytes = [0_u8; 16];
-        bytes.copy_from_slice(&digest[..16]);
-        bytes[6] = (bytes[6] & 0x0f) | 0x70;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        let operation_id = arkret_identifiers::OperationId::new(format!(
-            "ak:operation:{}",
-            uuid::Uuid::from_bytes(bytes)
-        ))
-        .ok()?;
-        arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-            operation_id,
-            arkret_wire::OperationKind::Create,
-            None,
-            &event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .ok()
-    }
 }
 
 #[derive(diesel::QueryableByName)]
@@ -1542,6 +1511,47 @@ async fn default_strand_writes_exact_current_at_commit_and_rejects_dangling_and_
         snapshot_after.current_state_entries
     );
     assert_eq!(source_outbox_count(&pool, realm_id).await, 0);
+
+    // Replica snapshots can retain unrelated typed rows before the local
+    // history floor. Default-pointer hydration needs only its own source cut.
+    let absent_commit = arkret_wire::RealmCommitId::from_digest([0xee; 32]);
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE member_state_current_results SET current_commit_id=$2 WHERE realm_id=$1",
+    )
+    .bind::<diesel::sql_types::Text, _>(realm_id.as_str())
+    .bind::<diesel::sql_types::Text, _>(absent_commit.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(store.realm_state_snapshot_material(realm_id).await.is_err());
+    let restarted = ProjectionService::new("default-strand-isolated-current-restart-test");
+    restarted
+        .hydrate_from_persistence(
+            &soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
+            &BootstrapHydrationAdapter,
+            [realm_id.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted.snapshot().realm_states[realm_id.as_str()]
+            .default_strand_id
+            .as_deref(),
+        Some(strand_id.as_str())
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE realm_set_default_strand_current_results SET current_commit_id=$2 WHERE realm_id=$1",
+    )
+    .bind::<diesel::sql_types::Text, _>(realm_id.as_str())
+    .bind::<diesel::sql_types::Text, _>(absent_commit.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+    assert!(store.realm_default_strand_current(realm_id).await.is_err());
 }
 
 #[derive(diesel::QueryableByName, Debug, PartialEq)]

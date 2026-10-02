@@ -152,13 +152,52 @@ pub(crate) async fn verify_franking_committed_pair(
             .producer_proof
             .as_ref()
             .ok_or_else(|| refused("producer proof is absent"))?;
-        let key = crate::jws_verify::resolve_ed25519_pubkey_at(
-            state,
-            producer.verification_method.as_str(),
-            pair.event.created_at,
-        )
-        .await
-        .map_err(refused)?;
+        let key_bytes = if pair.event.actual_signer().as_account_id().is_some() {
+            // Runtime methods are authorized by an Agent PCR Event, rather
+            // than by a DID document method. Use the original accepting cut.
+            let selector = arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+                sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Agent {
+                    actor: pair.event.actual_signer().clone(),
+                    verification_method: producer.verification_method.clone(),
+                    committed_event_ref: arkret_wire::CommittedEventRef {
+                        event_id: pair.event.event_id.clone(),
+                        commit_id: pair.commit.commit_id.clone(),
+                        stream_ref: pair.commit.stream_ref.clone(),
+                        stream_position: pair.commit.stream_position,
+                    },
+                },
+            };
+            let result = state
+                .authority_commits()
+                .historical_agent_signer_key(realm, &selector)
+                .await?;
+            let Some(arkret_models_identity::SignerKeyQueryResult::HistoricalResolved {
+                selector: actual,
+                key,
+                ..
+            }) = result
+            else {
+                return Err(refused(
+                    "exact historical Agent authorization is unavailable",
+                ));
+            };
+            if actual != selector {
+                return Err(refused("historical Agent selector differs"));
+            }
+            key.validate().map_err(refused)?;
+            arkret_canonical::base64url_decode(key.public_key_b64u.as_str().as_bytes())
+                .map_err(refused)?
+        } else {
+            crate::jws_verify::resolve_ed25519_pubkey_at(
+                state,
+                producer.verification_method.as_str(),
+                pair.event.created_at,
+            )
+            .await
+            .map_err(refused)?
+            .as_bytes()
+            .to_vec()
+        };
         let bytes = arkret_signatures::EventProofBuilder::new()
             .envelope_bytes(&pair.event)
             .map_err(refused)?;
@@ -166,9 +205,7 @@ pub(crate) async fn verify_franking_committed_pair(
             producer,
             &bytes,
             &pair.event.actor_id,
-            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                bytes: key.as_bytes().to_vec(),
-            },
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes: key_bytes },
             record.digest_suite,
         )
         .map_err(refused)?;

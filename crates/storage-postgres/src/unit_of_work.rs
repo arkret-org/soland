@@ -1235,7 +1235,7 @@ async fn ensure_applet_admission_in_transaction(
             .payload
             .get("grant_id")
             .and_then(serde_json::Value::as_str)
-    } else if event.applet_id.is_some() {
+    } else if event.applet_id.is_some() || event.kind == arkret_wire::EventKind::AppletBridgeError {
         event.authorization_ref.as_deref()
     } else {
         None

@@ -13,6 +13,8 @@ mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
+#[path = "support/hydration.rs"]
+mod hydration;
 #[path = "support/ordinary_realm.rs"]
 mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
@@ -3516,6 +3518,78 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
             .accepted_realm_reader(&realm_id, &outsider)
             .await
             .unwrap()
+    );
+
+    // A since-join replica has no Realm genesis to replay. Its accepted
+    // default pointer remains independent of the optional local Realm cache.
+    let pointer = member
+        .realm_default_strand_current(&realm_id)
+        .await
+        .unwrap();
+    assert!(pointer.is_some());
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(member_pool.clone());
+    let restarted = soland_services::projection::ProjectionService::new("member-anchor-restart");
+    restarted
+        .hydrate_from_persistence(
+            &persistence,
+            &hydration::BootstrapHydrationAdapter,
+            [realm_id.clone()],
+        )
+        .await
+        .unwrap();
+    let restored = restarted.snapshot();
+    assert!(!restored.realm_states.contains_key(realm_id.as_str()));
+    assert_eq!(
+        restored.strands[strand_id.as_str()].realm_id,
+        realm_id.as_str()
+    );
+    assert_eq!(
+        member
+            .realm_default_strand_current(&realm_id)
+            .await
+            .unwrap(),
+        pointer
+    );
+    let AccountStreamScan::Page(after_restart) = member
+        .scan_stream_for_account(
+            &scan_request(&realm_id, After(None), 10),
+            &alice_account,
+            &member_station(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("restart must preserve the proved member interval");
+    };
+    assert_eq!(after_restart.committed_events, own.committed_events);
+    assert_eq!(after_restart.readable_floor, own.readable_floor);
+
+    // A pointer alone cannot invent a Realm, even when its exact Commit is held.
+    let mut conn = member_pool.get().await.unwrap();
+    diesel::sql_query("UPDATE replica_stream_anchors SET anchor_commit_id=NULL,anchor_stream_position=NULL,anchored_at=NULL WHERE realm_id=$1")
+        .bind::<Text, _>(realm_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    assert_eq!(
+        member
+            .realm_default_strand_current(&realm_id)
+            .await
+            .unwrap(),
+        pointer
+    );
+    let refused = soland_services::projection::ProjectionService::new("unanchored-member-restart")
+        .hydrate_from_persistence(
+            &persistence,
+            &hydration::BootstrapHydrationAdapter,
+            [realm_id.clone()],
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("without an anchored replica"),
+        "{refused}"
     );
 }
 
