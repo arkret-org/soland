@@ -7,6 +7,11 @@ use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
 use crate::{PersistenceError, PersistenceResult};
 
+#[cfg(test)]
+#[path = "../tests/support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
+
 fn typed_payload<T>(
     event: &arkret_wire::Event,
     decode: fn(&arkret_wire::Event) -> arkret_wire::Result<T>,
@@ -128,7 +133,8 @@ pub(crate) async fn commit_realm_profile_current_result_in_connection(
     advance_singleton(conn, event, commit, "realm_profile", &value).await
 }
 
-/// Admit policy authorization at the same transaction cut as its replacement.
+/// Read-receipt disclosure is a separate Realm current family; it does not
+/// alter the policy bundle or the MLS key-access revision.
 pub(crate) async fn commit_read_receipt_policy_authority_current_result_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -146,7 +152,6 @@ pub(crate) async fn commit_read_receipt_policy_authority_current_result_in_conne
     commit_read_receipt_policy_current_result_in_connection(conn, event, commit).await
 }
 
-/// Apply one verified policy Commit without retaining omitted old fields.
 pub(crate) async fn commit_read_receipt_policy_current_result_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -155,7 +160,13 @@ pub(crate) async fn commit_read_receipt_policy_current_result_in_connection(
     if event.kind != arkret_wire::EventKind::RealmReadReceiptPolicy {
         return Ok(());
     }
-    if !matches!(&event.scope_ref, arkret_wire::ScopeRef::Realm {realm_id} if realm_id == &event.realm_id)
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if event.kind != arkret_wire::EventKind::RealmReadReceiptPolicy
+        || event.scope_ref
+            != (arkret_wire::ScopeRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
         || commit.stream_ref
             != (arkret_wire::CommitStreamRef::Realm {
                 realm_id: event.realm_id.clone(),
@@ -163,16 +174,22 @@ pub(crate) async fn commit_read_receipt_policy_current_result_in_connection(
         || commit.realm_id != event.realm_id
         || commit.event_ref != event.event_id
     {
-        return Err(PersistenceError::SchemaViolation(
-            "read receipt policy requires its exact Realm Event and covering Commit".to_owned(),
+        return Err(PersistenceError::Conflict(
+            "read-receipt policy requires its exact Realm Event and covering Commit".to_owned(),
         ));
     }
     let policy = typed_payload(event, EventPayloadExt::as_realm_read_receipt_policy)?;
     policy
         .validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-    let value = result_value(&policy)?;
-    advance_singleton(conn, event, commit, "realm_read_receipt_policy", &value).await
+    advance_singleton(
+        conn,
+        event,
+        commit,
+        "realm_read_receipt_policy",
+        &result_value(&policy)?,
+    )
+    .await
 }
 
 async fn advance_singleton(
@@ -183,12 +200,12 @@ async fn advance_singleton(
     value: &serde_json::Value,
 ) -> PersistenceResult<()> {
     let position = i64::try_from(commit.stream_position).map_err(|_| {
-        PersistenceError::SchemaViolation("Realm profile position exceeds BIGINT".to_owned())
+        PersistenceError::SchemaViolation("Realm singleton position exceeds BIGINT".to_owned())
     })?;
     let changed = diesel::sql_query(
         "INSERT INTO realm_bootstrap_current_results \
          (realm_id,result_family,current_commit_id,current_stream_position,value,updated_at) \
-         VALUES($1,$6,$2,$3,$4,$5) \
+         VALUES($1,$2,$3,$4,$5,$6) \
          ON CONFLICT(realm_id,result_family) DO UPDATE SET \
          current_commit_id=EXCLUDED.current_commit_id, \
          current_stream_position=EXCLUDED.current_stream_position, \
@@ -196,17 +213,17 @@ async fn advance_singleton(
          WHERE realm_bootstrap_current_results.current_stream_position < EXCLUDED.current_stream_position",
     )
     .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(family)
     .bind::<Text, _>(commit.commit_id.as_str())
     .bind::<BigInt, _>(position)
-    .bind::<Jsonb, _>(&value)
+    .bind::<Jsonb, _>(value)
     .bind::<Timestamptz, _>(commit.committed_at)
-    .bind::<Text, _>(family)
     .execute(conn)
     .await
     .map_err(PersistenceError::database)?;
     if changed != 1 {
         return Err(PersistenceError::Conflict(format!(
-            "{family} current result cannot advance from this Commit"
+            "Realm singleton {family} cannot advance from this Commit"
         )));
     }
     Ok(())
@@ -244,4 +261,83 @@ async fn insert_singleton(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use soland_storage::{EventCommitUnitOfWork, EventStore};
+
+    use super::*;
+
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+    }
+
+    #[tokio::test]
+    async fn read_receipt_policy_commits_exact_current_and_rejects_unauthorized_writes() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let discussion =
+            ordinary_realm::open_human_discussion(&pool, &uuid::Uuid::now_v7().to_string()).await;
+        let mut previous = discussion.head.authority_commit;
+        let uow = crate::PgEventCommitUnitOfWork::new(pool.clone());
+        let founder = discussion.unit.transactions[0]
+            .event
+            .actor_id
+            .signing_principal_id();
+        for payload in [
+            serde_json::json!({"disclosure":"disabled","visibility":"private"}),
+            serde_json::json!({"disclosure":"required"}),
+        ] {
+            let request = ordinary_realm::next_request(
+                &previous,
+                arkret_wire::EventKind::RealmReadReceiptPolicy,
+                founder,
+                payload.clone(),
+                chrono::Utc::now(),
+            );
+            uow.commit_event(request.clone()).await.unwrap();
+            let mut conn = pool.get().await.unwrap();
+            let current = diesel::sql_query("SELECT current_commit_id,value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_read_receipt_policy'")
+                .bind::<Text, _>(request.authority_commit.event.realm_id.as_str()).get_result::<Row>(&mut *conn).await.unwrap();
+            assert_eq!(
+                current.current_commit_id,
+                request.authority_commit.commit.commit_id.as_str()
+            );
+            assert_eq!(
+                current.value, payload,
+                "a successor replaces the entire policy value"
+            );
+            previous = request.authority_commit;
+        }
+        let outsider = arkret_wire::DidCoreId::new("ak:did_core:web:outsider.example").unwrap();
+        let denied = ordinary_realm::next_request(
+            &previous,
+            arkret_wire::EventKind::RealmReadReceiptPolicy,
+            &outsider,
+            serde_json::json!({"disclosure":"disabled"}),
+            chrono::Utc::now(),
+        );
+        assert!(uow.commit_event(denied.clone()).await.is_err());
+        let mut conn = pool.get().await.unwrap();
+        let current = diesel::sql_query("SELECT current_commit_id,value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_read_receipt_policy'")
+            .bind::<Text, _>(previous.event.realm_id.as_str()).get_result::<Row>(&mut *conn).await.unwrap();
+        assert_eq!(
+            current.current_commit_id,
+            previous.commit.commit_id.as_str()
+        );
+        assert_eq!(current.value, serde_json::json!({"disclosure":"required"}));
+        let stored = crate::PgEventStore { pool }
+            .get(&denied.authority_commit.event.event_id.to_string())
+            .await
+            .unwrap();
+        assert!(
+            stored.is_none(),
+            "an unauthorized policy must leave no canonical Event"
+        );
+    }
 }

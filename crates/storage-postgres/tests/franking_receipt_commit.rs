@@ -160,6 +160,17 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
     )
     .unwrap();
     let (group_info, tree) = group.public_group_state_bytes().unwrap();
+    let leaves =
+        arkret_mls::validate_public_group_state(&group_info, &tree, group.group_id().as_str(), 0)
+            .unwrap();
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].actor_id, actor);
+    let creator_authorization = fixture
+        .unit
+        .transactions
+        .iter()
+        .find(|transaction| transaction.event.kind == EventKind::DeviceAuthorize)
+        .expect("the founding Device authorization was accepted with the PCR");
     let tracker = arkret_mls::MlsPublicGroupTracker::from_external(
         &group_info,
         &tree,
@@ -175,6 +186,13 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
             "cipher_suite":group.group_ciphersuite_canonical_id().unwrap(),
             "group_info_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&group_info)),
             "ratchet_tree_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&tree)),
+            "creator_leaf_authority": arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority {
+                leaf_signature_key_b64u: leaves[0].signature_key.clone(),
+                endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+                    device_id: fixture.history.founding_device_id.clone(),
+                },
+                authorization_event_ref: creator_authorization.event.event_id.clone(),
+            },
             "governance_binding":MlsGovernanceBindingPayload::realm(realm.clone(),None,0,0,0).unwrap(),
             "created_at":arkret_canonical::format_timestamp_canonical(at)
         }),

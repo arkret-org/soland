@@ -907,7 +907,6 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 ("realm_freeze", None) => arkret_wire::CurrentSelector::RealmFreeze,
                 ("realm_authority_root", None) => arkret_wire::CurrentSelector::RealmAuthorityRoot,
                 ("realm_profile", None) => arkret_wire::CurrentSelector::RealmProfile,
-                ("realm_read_receipt_policy", None) => arkret_wire::CurrentSelector::RealmReadReceiptPolicy,
                 ("realm_policy_bundle", None) => arkret_wire::CurrentSelector::RealmPolicyBundle,
                 ("schema_definition", Some(schema_id)) => arkret_wire::CurrentSelector::SchemaDefinition {
                     schema_id: serde_json::from_value(schema_id).map_err(PersistenceError::database)?,
@@ -929,6 +928,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 ("sidecar_context", Some(selector)) => serde_json::from_value(selector).map_err(PersistenceError::database)?,
                 ("realm_join_rule", None) => arkret_wire::CurrentSelector::RealmJoinRule,
                 ("realm_history_access", None) => arkret_wire::CurrentSelector::RealmHistoryAccess,
+                ("realm_read_receipt_policy", None) => arkret_wire::CurrentSelector::RealmReadReceiptPolicy,
                 ("realm_discovery", None) => arkret_wire::CurrentSelector::RealmDiscovery,
                 ("realm_alias", None) => arkret_wire::CurrentSelector::RealmAlias,
                 ("realm_plaintext_visible_services", None) => {
@@ -3552,6 +3552,13 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
         crate::agent_current_results::read_agent_current_result(&self.pool, realm_id, selector)
             .await
+    }
+
+    async fn realm_default_strand_current(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+        crate::realm_default_strand_current_results::read_current(&self.pool, realm_id).await
     }
 
     async fn signal_scope_authority(

@@ -30,10 +30,10 @@ use super::{
 pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmCreate,
     EventKind::RealmProfile,
-    EventKind::RealmReadReceiptPolicy,
     EventKind::RealmPolicyBundle,
     EventKind::RealmJoinRule,
     EventKind::RealmHistoryAccess,
+    EventKind::RealmReadReceiptPolicy,
     EventKind::RealmDiscovery,
     EventKind::RealmAlias,
     EventKind::RealmPlaintextVisibleServices,
@@ -1318,6 +1318,11 @@ pub(crate) fn disclose_to_account(
                         .map_err(PersistenceError::database)?,
                 );
             }
+            CurrentSelector::RealmReadReceiptPolicy => {
+                let policy: arkret_models_collaboration::events_payloads::ReadReceiptPolicyPayload =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                policy.validate().map_err(PersistenceError::database)?;
+            }
             CurrentSelector::MemberState { actor_id } => {
                 own_join |=
                     actor_id == &caller && value == &serde_json::json!({"membership":"join"});
@@ -1440,11 +1445,6 @@ pub(crate) fn disclose_to_account(
                 if set.assertions().is_empty() {
                     return Err(rejected("reaction current holds no assertion"));
                 }
-            }
-            CurrentSelector::RealmReadReceiptPolicy => {
-                let policy: arkret_models_collaboration::events_payloads::ReadReceiptPolicyPayload =
-                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
-                policy.validate().map_err(PersistenceError::database)?;
             }
             CurrentSelector::RealmProfile
             | CurrentSelector::RealmPolicyBundle

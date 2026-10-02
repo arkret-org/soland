@@ -16,6 +16,54 @@ const STRAND_B: &str = "ak:strand:Aa-h0nYxlvhQk1U9H0yQTY4hZEVTz0be75pj6U70n7qy";
 const LIST_A: &str = "ak:space:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7";
 const LIST_B: &str = "ak:space:AZ6GqZWWvnQ2KFwbBD-MenomzWNz-31MUAuKzBXIP0zv";
 
+#[test]
+fn applet_authority_requires_exact_service_and_registration_epoch() {
+    let applet = arkret_wire::AppletId::new_v7_at(1_790_876_000_000);
+    let executor = ActorId::service("ak:did_core:web:bridge.example".parse().unwrap());
+    let epoch: arkret_wire::Hash = format!("sha256:{}", "1".repeat(64)).parse().unwrap();
+    let grants = [grant(
+        1,
+        &["ak.message.create"],
+        realm_wide(),
+        vec![GrantConstraint::applet_authority(
+            applet.clone(),
+            executor.clone(),
+            epoch.clone(),
+        )],
+    )];
+    let mut facts = OperationFacts {
+        applet_id: Some(applet.to_string()),
+        executed_by: Some(executor),
+        registration_epoch: Some(epoch.to_string()),
+        ..Default::default()
+    };
+    let now = at("2026-10-01T18:41:32.000Z");
+    assert!(allowed(&evaluate(
+        &grants,
+        "ak.message.create",
+        &realm(),
+        &facts,
+        now
+    )));
+    facts.registration_epoch = Some(format!("sha256:{}", "2".repeat(64)));
+    assert!(!allowed(&evaluate(
+        &grants,
+        "ak.message.create",
+        &realm(),
+        &facts,
+        now
+    )));
+    facts.registration_epoch = Some(epoch.to_string());
+    facts.executed_by = None;
+    assert!(!allowed(&evaluate(
+        &grants,
+        "ak.message.create",
+        &realm(),
+        &facts,
+        now
+    )));
+}
+
 fn actor() -> ActorId {
     ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new("ak:did_core:web:reader.example").unwrap(),

@@ -54,13 +54,13 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         EventKind::ConsentGrant | EventKind::ConsentRevoke => Ok(SelfEventRoute::Consent),
         EventKind::MlsGenesis | EventKind::MlsCommit => Ok(SelfEventRoute::Mls),
         EventKind::CircleCreate
+        | EventKind::AppletBridgeError
         | EventKind::SidecarCreate
         | EventKind::SidecarContextAttach
         | EventKind::RealmOrganization
         | EventKind::CircleMemberState
         | EventKind::StrandCreate
         | EventKind::RealmProfile
-        | EventKind::RealmReadReceiptPolicy
         | EventKind::RealmTombstone
         | EventKind::RealmDestroy
         | EventKind::RealmArchive
@@ -82,6 +82,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::RealmPolicyBundle
         | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
+        | EventKind::RealmReadReceiptPolicy
         | EventKind::MemberIdentityUpdate
         | EventKind::CallCreate
         | EventKind::MessageCreate
@@ -169,6 +170,7 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
                 event.kind,
                 arkret_wire::EventKind::CircleMemberState
                     | arkret_wire::EventKind::StrandCreate
+                    | arkret_wire::EventKind::AppletBridgeError
                     | arkret_wire::EventKind::MessageCreate
                     | arkret_wire::EventKind::ModerationDecision
                     | arkret_wire::EventKind::ModerationDecisionLift
@@ -591,6 +593,18 @@ mod tests {
             assert_eq!(self_event_route(&kind).unwrap(), SelfEventRoute::Mls);
         }
         for kind in [
+            EventKind::AppletBridgeError,
+            EventKind::PinAdd,
+            EventKind::PinRemove,
+            EventKind::PinReorder,
+            EventKind::MimiRoomBinding,
+            EventKind::SidecarCreate,
+            EventKind::SidecarContextAttach,
+            EventKind::SpaceUpdate,
+            EventKind::SchemaDefine,
+            EventKind::RealmPolicyBundle,
+            EventKind::DirectConversationBound,
+            EventKind::InviteClaim,
             EventKind::CircleCreate,
             EventKind::CircleMemberState,
             EventKind::MemberIdentityUpdate,
@@ -648,6 +662,7 @@ mod tests {
     #[test]
     fn every_other_active_kind_is_unsupported_event_kind_not_internal() {
         let routed = [
+            EventKind::AppletBridgeError,
             EventKind::ConsentGrant,
             EventKind::ConsentRevoke,
             EventKind::KeyBackupActiveSeries,
@@ -712,6 +727,13 @@ mod tests {
             EventKind::SidecarCreate,
             EventKind::SpaceUpdate,
         ];
+        let unique_routed: std::collections::BTreeSet<_> =
+            routed.iter().map(EventKind::as_str).collect();
+        assert_eq!(
+            unique_routed.len(),
+            routed.len(),
+            "routed kinds must be unique"
+        );
         let mut refused = 0;
         for kind in EventKind::ALL.iter().filter(|kind| !routed.contains(kind)) {
             match self_event_route(kind) {

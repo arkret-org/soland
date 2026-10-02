@@ -1451,6 +1451,7 @@ mod tests {
             "realm_profile",
             "realm_join_rule",
             "realm_history_access",
+            "realm_read_receipt_policy",
             "realm_discovery",
             "realm_alias",
             "realm_plaintext_visible_services",
@@ -2925,11 +2926,16 @@ mod tests {
                 ..head.clone()
             };
             diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
-            assert!(
-                install_snapshot_in_connection(&mut conn, &realm, &head, &[malformed_entry], at)
-                    .await
-                    .is_err()
-            );
+            let refused = install_snapshot_in_connection(
+                &mut conn,
+                &realm,
+                &malformed_head,
+                &[malformed_entry],
+                at,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(refused, PersistenceError::SchemaViolation(_)));
             diesel::sql_query("ROLLBACK")
                 .execute(&mut conn)
                 .await
@@ -2964,7 +2970,7 @@ mod tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:receipt-replica-author.example").unwrap(),
             arkret_wire::DidCoreId::new("ak:did_core:web:receipt-replica-station.example").unwrap(),
         ));
-        let event = arkret_wire::test_support::raw_event_for_actor_at(
+        let mut event = arkret_wire::test_support::raw_event_for_actor_at(
             "ak.realm.read_receipt_policy",
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
@@ -2974,6 +2980,24 @@ mod tests {
             at,
         )
         .unwrap();
+        let mut proof = arkret_wire::ProducerEventProof {
+            kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:receipt-replica-author.example#ak:device:01904100-0000-7000-8000-000000000086",
+            ).unwrap(),
+            event_digest: event.event_id.event_digest(),
+            created_at: at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: String::new(),
+        };
+        proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+            &proof.canonical_binding_bytes(&event.actor_id).unwrap(),
+            &ed25519_dalek::SigningKey::from_bytes(&[0x79; 32]),
+        )
+        .unwrap();
+        event.producer_proof = Some(proof);
         let commit = arkret_wire::RealmCommit {
             commit_id: arkret_wire::RealmCommitId::from_digest([8; 32]),
             realm_id: realm.clone(),

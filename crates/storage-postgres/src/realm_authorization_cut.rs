@@ -927,7 +927,10 @@ impl RealmAuthorizationCut {
         if event.applet_id.is_some() {
             let registration = crate::managed_message_actor::registration(conn, event).await?;
             facts.applet_id = Some(registration.applet_id.to_string());
-            facts.executed_by = event.executed_by.clone();
+            facts.executed_by = Some(crate::managed_message_actor::registered_executor(
+                event,
+                &registration,
+            )?);
             facts.registration_epoch = Some(registration.registration_epoch.to_string());
         }
         Ok(())

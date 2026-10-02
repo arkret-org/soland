@@ -1406,27 +1406,10 @@ pub async fn hydrate_projections_from_persistence(
     // reception order would let an older Event overwrite a later Commit, so
     // restore the exact typed current row after Strand projection hydration.
     for realm_id in default_strand_realms {
-        let material = persistence
+        let result = persistence
             .authority_commits()
-            .realm_state_snapshot_material(&realm_id)
+            .realm_default_strand_current(&realm_id)
             .await?
-            .ok_or_else(|| {
-                soland_storage::PersistenceError::Internal(
-                    "confirmed default Strand Realm has no snapshot".to_owned(),
-                )
-            })?;
-        let result = material
-            .current_state_entries
-            .iter()
-            .find(|entry| {
-                matches!(
-                    entry,
-                    arkret_wire::TypedCurrentResult::Value {
-                        selector: arkret_wire::CurrentSelector::RealmSetDefaultStrand,
-                        ..
-                    }
-                )
-            })
             .ok_or_else(|| {
                 soland_storage::PersistenceError::Internal(
                     "confirmed default Strand Event has no typed current result".to_owned(),
@@ -1464,14 +1447,33 @@ pub async fn hydrate_projections_from_persistence(
                 "default Strand current pointer targets a redacted or foreign Strand".to_owned(),
             ));
         }
-        proj.realm_states
-            .get_mut(realm_id.as_str())
-            .ok_or_else(|| {
-                soland_storage::PersistenceError::Internal(
-                    "default Strand Realm projection is missing".to_owned(),
-                )
-            })?
-            .default_strand_id = Some(strand_id.to_string());
+        if let Some(realm) = proj.realm_states.get_mut(realm_id.as_str()) {
+            realm.default_strand_id = Some(strand_id.to_string());
+        } else {
+            // A since-join member replica need not retain Realm genesis. Its
+            // proved pointer remains in typed current storage; do not invent
+            // an owner/Realm cache merely to mirror that independent result.
+            let anchored = persistence
+                .authority_commits()
+                .replica_stream_anchor(&realm_id)
+                .await?
+                .is_some_and(|anchor| {
+                    anchor.realm_id == realm_id
+                        && anchor.join_commit.stream_ref
+                            == (CommitStreamRef::Realm {
+                                realm_id: realm_id.clone(),
+                            })
+                        && anchor.anchored_head.is_some_and(|head| {
+                            head.stream_ref == anchor.join_commit.stream_ref
+                                && head.stream_position >= anchor.join_commit.stream_position
+                        })
+                });
+            if !anchored {
+                return Err(soland_storage::PersistenceError::Internal(format!(
+                    "default Strand Realm projection is missing without an anchored replica: {realm_id}"
+                )));
+            }
+        }
     }
     // Relation admission serializes one authoritative current row per typed
     // primary domain in the RealmCommit transaction. Hydrate that same row,

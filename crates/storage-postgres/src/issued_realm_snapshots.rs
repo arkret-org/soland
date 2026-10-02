@@ -454,10 +454,10 @@ async fn recheck_disclosure_in_connection(
             CurrentSelector::RealmGenesis
             | CurrentSelector::RealmAuthorityRoot
             | CurrentSelector::RealmProfile
-            | CurrentSelector::RealmReadReceiptPolicy
             | CurrentSelector::RealmPolicyBundle
             | CurrentSelector::RealmJoinRule
             | CurrentSelector::RealmHistoryAccess
+            | CurrentSelector::RealmReadReceiptPolicy
             | CurrentSelector::RealmDiscovery
             | CurrentSelector::RealmAlias
             | CurrentSelector::RealmPlaintextVisibleServices
