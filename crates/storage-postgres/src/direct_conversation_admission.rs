@@ -505,6 +505,8 @@ pub(crate) async fn peer_mls_admission_snapshot(
         arkret_canonical::canonical_json_bytes(&scope).map_err(PersistenceError::database)?,
     )
     .map_err(PersistenceError::database)?;
+    // Source admission freezes the verified peer proof in the accepted Add's
+    // outbox; recipient admission installs the same proof in received history.
     let row = sql_query(
         "WITH active AS ( \
          SELECT p.* FROM mls_consumed_proposal_provenance p \
@@ -525,9 +527,17 @@ pub(crate) async fn peer_mls_admission_snapshot(
                AND c.consume_receipt #>> '{recipient_durable_receipt,welcome_ref}'=att.welcome_id \
            ))) AS durable \
          FROM active a \
-         LEFT JOIN mls_add_authority_attestations att ON att.scope_key=a.scope_key \
-           AND att.commit_event_ref=a.commit_event_ref \
-           AND att.consumed_proposal_ordinal=a.consumed_proposal_ordinal \
+         LEFT JOIN LATERAL ( \
+           SELECT welcome_id,claim_id FROM mls_add_authority_attestations received \
+           WHERE received.scope_key=a.scope_key AND received.commit_event_ref=a.commit_event_ref \
+             AND received.consumed_proposal_ordinal=a.consumed_proposal_ordinal \
+           UNION \
+           SELECT welcome_id,claim_id FROM mls_add_authority_attestation_outbox sent \
+           WHERE sent.scope_key=a.scope_key AND sent.commit_event_ref=a.commit_event_ref \
+             AND sent.commit_stream_position=a.commit_stream_position \
+             AND sent.request_json #> '{attestation,actor_id}'=a.target_after_actor_id \
+             AND sent.request_json #>> '{attestation,leaf_signature_key_b64u}'=a.target_after_signature_key \
+         ) att ON TRUE \
          LEFT JOIN keypackage_claim_welcome_bindings b ON b.claim_id=att.claim_id \
            AND b.welcome_id=att.welcome_id AND b.commit_event_ref=a.commit_event_ref \
          LEFT JOIN peer_keypackage_claims c ON \
