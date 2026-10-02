@@ -100,6 +100,14 @@ pub(crate) async fn resolve_self_signer_keys(
                 SignerKeyQuerySelector::CurrentAdmission {
                     sender: CurrentSignerKeyQuerySender::Agent { .. },
                 } => current_agent_key(state, &body.realm_id, selector).await,
+                SignerKeyQuerySelector::HistoricalEvent {
+                    sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Agent { .. },
+                } => state
+                    .authority_commits()
+                    .historical_agent_signer_key(&body.realm_id, selector)
+                    .await
+                    .ok()
+                    .flatten(),
                 // A historical answer needs the authorization state as of the
                 // exact accepted Event, rather than a current-key substitution.
                 _ => None,

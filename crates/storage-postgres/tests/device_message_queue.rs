@@ -1325,3 +1325,113 @@ async fn postgres_agent_message_send_gate_checks_epoch_and_current_key() {
     );
     assert_eq!(groups.current(&scope).await.unwrap().unwrap(), before);
 }
+
+/// Freeze the key at a real guarded PostgreSQL commit. Signature validation
+/// belongs to the upstream producer verifier; this storage case proves exact
+/// coordinates, duplicate replay, PCR independence, and post-revoke retention.
+#[tokio::test]
+async fn postgres_historical_agent_key_survives_revocation_at_exact_coordinate() {
+    use soland_storage::AuthorityCommitStore as _;
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (agent, _recipient) = CommittedAgent::provision(&pool).await;
+    let discussion = ordinary_realm::open_discussion(&pool, "agent-historical-key").await;
+    let realm_id = discussion.realm_id();
+    let at = discussion.committed_at();
+    let mut accepted = ordinary_realm::next_request_for_actor(
+        &discussion.head.authority_commit,
+        arkret_wire::EventKind::MessageCreate,
+        arkret_wire::ActorId::account(agent.agent_account.clone()),
+        serde_json::json!({"strand_id":discussion.strand_id,"track_name":"discussion","content":{"kind":"ak.content.text","body":"historical"}}),
+        at,
+    );
+    accepted
+        .authority_commit
+        .event
+        .producer_proof
+        .as_mut()
+        .unwrap()
+        .verification_method = agent.verification_method.clone();
+    let guard = soland_storage::SelfProducerCommitGuard::Agent {
+        pcr_realm_id: agent.pcr_realm_id.clone(),
+        agent_id: agent.agent_account.principal_id.clone(),
+        authorization_ref: agent.authorization_ref.clone(),
+        verification_method: agent.verification_method.clone(),
+    };
+    let admission_store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
+    assert_eq!(
+        admission_store
+            .admit_self_event_transaction(&accepted.authority_commit, &guard, at)
+            .await
+            .unwrap(),
+        soland_storage::AuthorityCommitWriteOutcome::Committed
+    );
+    let historical_store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
+    let historical_selector = arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+        sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Agent {
+            actor: accepted.authority_commit.event.actor_id.clone(),
+            verification_method: agent.verification_method.clone(),
+            committed_event_ref: arkret_wire::CommittedEventRef {
+                event_id: accepted.authority_commit.event.event_id.clone(),
+                commit_id: accepted.authority_commit.commit.commit_id.clone(),
+                stream_ref: accepted.authority_commit.commit.stream_ref.clone(),
+                stream_position: accepted.authority_commit.commit.stream_position,
+            },
+        },
+    };
+    let frozen = historical_store
+        .historical_agent_signer_key(&realm_id, &historical_selector)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        frozen.key().unwrap().authorization_ref,
+        agent.authorization_ref
+    );
+    assert_ne!(
+        frozen
+            .key()
+            .unwrap()
+            .authorization_ref
+            .stream_ref
+            .realm_id(),
+        &realm_id
+    );
+    assert_eq!(
+        frozen.accepted_at(),
+        Some(accepted.authority_commit.commit.committed_at)
+    );
+    assert_eq!(
+        historical_store
+            .admit_self_event_transaction(&accepted.authority_commit, &guard, at)
+            .await
+            .unwrap(),
+        soland_storage::AuthorityCommitWriteOutcome::Duplicate
+    );
+    agent.revoke_key().await;
+    assert_eq!(
+        historical_store
+            .historical_agent_signer_key(&realm_id, &historical_selector)
+            .await
+            .unwrap(),
+        Some(frozen)
+    );
+    let mut mismatched = historical_selector.clone();
+    if let arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+        sender:
+            arkret_models_identity::HistoricalSignerKeyQuerySender::Agent {
+                committed_event_ref,
+                ..
+            },
+    } = &mut mismatched
+    {
+        committed_event_ref.stream_position += 1;
+    }
+    assert!(
+        historical_store
+            .historical_agent_signer_key(&realm_id, &mismatched)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

@@ -43,6 +43,7 @@ mod agent_membership_cascades;
 mod agent_pcr_genesis;
 mod agent_principal_row;
 mod agent_provisioning;
+mod agent_producer_signer_keys;
 mod agents;
 mod applet_admission;
 mod applet_current_results;

@@ -5180,6 +5180,13 @@ CREATE TABLE pcr_genesis_units (
 CREATE INDEX agent_status_current_result_agent
  ON agent_status_current_results(realm_id,agent_id);
 
+-- One immutable result captured under the original producer admission locks.
+-- Missing historical results are unavailable, never reconstructed from current keys.
+CREATE TABLE agent_producer_signer_keys (
+ commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
+ outcome JSONB NOT NULL CHECK(jsonb_typeof(outcome)='object')
+);
+
 CREATE TABLE agent_key_current_results (
  realm_id TEXT NOT NULL,
  current_key TEXT NOT NULL,

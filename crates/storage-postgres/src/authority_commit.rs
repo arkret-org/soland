@@ -2113,6 +2113,11 @@ impl PgAuthorityCommitStore {
                         );
                     }
                 }
+                if let Some(guards) = producer_guards {
+                    crate::agent_producer_signer_keys::retain_in_connection(
+                        conn, &transaction.event, &transaction.commit, Some(&guards[index]),
+                    ).await?;
+                }
                 commit_realm_authority_root_current_result_in_connection(
                     conn,
                     &transaction.event,
@@ -2320,6 +2325,14 @@ async fn accepted_realm_roster_in_connection(
 
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
+    async fn historical_agent_signer_key(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_models_identity::SignerKeyQuerySelector,
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+        crate::agent_producer_signer_keys::read(&self.pool, realm_id, selector).await
+    }
+
     async fn mls_roster_authority_read(
         &self,
         request: &arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody,
@@ -3378,6 +3391,13 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                 commit_transaction_in_connection(conn, transaction).await?,
             )?;
             if matches!(outcome, AuthorityCommitWriteOutcome::Committed) {
+                crate::agent_producer_signer_keys::retain_in_connection(
+                    conn,
+                    &transaction.event,
+                    &transaction.commit,
+                    Some(guard),
+                )
+                .await?;
                 commit_capability_grant_current_result_in_connection(
                     conn,
                     &transaction.event,

@@ -2631,6 +2631,13 @@ async fn commit_one_in_connection(
     let commit = &request.authority_commit.commit;
     crate::approval_admission::validate_candidate(event, commit, event_approvals)?;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
+        crate::agent_producer_signer_keys::retain_in_connection(
+            conn,
+            event,
+            commit,
+            request.self_producer_guard.as_ref(),
+        )
+        .await?;
         crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
         crate::agent_confirmation_admission::commit_confirmation(conn, event, commit).await?;
         crate::approval_admission::consume_and_audit(

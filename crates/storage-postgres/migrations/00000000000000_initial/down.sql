@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS agent_producer_signer_keys;
 DROP TABLE IF EXISTS agent_action_approval_current_results;
 DROP TABLE IF EXISTS public.applet_widget_tokens;
 DROP TABLE IF EXISTS call_state_current_results;

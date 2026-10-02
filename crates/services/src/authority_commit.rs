@@ -1433,6 +1433,17 @@ impl AuthorityCommitApplication {
         Ok(self.store().committed_event(event_id).await?)
     }
 
+    pub async fn historical_agent_signer_key(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_models_identity::SignerKeyQuerySelector,
+    ) -> crate::ServiceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+        Ok(self
+            .store()
+            .historical_agent_signer_key(realm_id, selector)
+            .await?)
+    }
+
     pub async fn signal_recipient_realms(
         &self,
         actor: &arkret_wire::ActorId,

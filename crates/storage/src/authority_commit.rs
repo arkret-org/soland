@@ -1281,6 +1281,17 @@ pub enum MlsMemberGroupStateMaterialRead {
 
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    /// Return only the producer key frozen at this exact accepted Agent Event.
+    /// Current key state must never substitute for a missing admission record.
+    async fn historical_agent_signer_key(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_models_identity::SignerKeyQuerySelector,
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+        let _ = (realm_id, selector);
+        Ok(None)
+    }
+
     /// Recheck current and target-cut disclosure, history, membership and
     /// peer replication right in one read transaction, then return only a
     /// complete, internally consistent historical roster.
