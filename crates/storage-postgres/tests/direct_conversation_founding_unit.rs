@@ -1499,6 +1499,17 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
             .collect()
     );
     drop(conn);
+    let durable = PgEventStore {
+        pool: pair.pool.clone(),
+    }
+    .direct_conversation_durable_state(TRUST_DOMAIN, unit.facts().unwrap().pair_key.as_str())
+    .await
+    .unwrap()
+    .expect("accepted Agent founding is durable");
+    assert_eq!(
+        serde_json::to_value(durable.founding_slot.authorization_basis).unwrap(),
+        basis.authorization_basis
+    );
 
     // An owned Agent never needs a Contact round. Its provisional Message
     // and peer Add use the current controller/provision branch at the cut.
@@ -1554,6 +1565,53 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
             soland_storage::DirectConversationAdmissionCut::Passed
         );
     }
+    // The same owned-Agent branch must admit encrypted Session Signals in a
+    // read-only cut after exact-pair MLS and binding, without a Contact row.
+    let peer = pair.peer_actor();
+    let add = with_group(
+        add,
+        Some((&genesis.authority_commit.event.event_id, 0)),
+        1,
+        &[&founder, &peer],
+    );
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(add.clone()).await.unwrap();
+    consume_peer_welcome(&pool, &pair.station, &add, &peer).await;
+    let add_ref = add.authority_commit.event.event_id.clone();
+    let bound = cited(
+        &add.authority_commit,
+        EventKind::DirectConversationBound,
+        founder.clone(),
+        serde_json::json!({
+            "pair_key":facts.pair_key, "unordered_participant_ids":[founder,peer],
+            "realm_id":realm_id,"main_strand_id":facts.main_strand_id,
+            "founding_unit_digest":facts.founding_unit_digest,
+            "authorization_basis":basis.authorization_basis,
+            "initial_exact_pair_group_state_ref":add_ref,
+            "created_at":arkret_canonical::format_timestamp_canonical(unit_at),
+        }),
+        Cites::Bootstrap(&create_ref),
+    );
+    uow.commit_event(bound.clone()).await.unwrap();
+    let signal_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let signal_at = bound.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
+    let signal = store
+        .signal_scope_authority(
+            &signal_scope,
+            &bound.authority_commit.commit.commit_id,
+            &peer,
+            arkret_wire::SignalClass::Session,
+            signal_at,
+            signal_at,
+        )
+        .await
+        .unwrap()
+        .expect("owned-Agent Signal has a complete read-only authority cut without Contact");
+    assert_eq!(signal.current_mls.current_mls_commit_event_ref, add_ref);
+    assert!(signal.recipient_actors.contains(&founder));
+    assert!(signal.recipient_actors.contains(&peer));
     // Accepted founding coordinates do not bypass a current Agent pause.
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
@@ -1572,6 +1630,48 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         soland_storage::DirectConversationAdmissionCut::Refused(
             ConflictCode::DirectConversationParticipantAuthorityDenied
         )
+    );
+    assert!(
+        store
+            .signal_scope_authority(
+                &signal_scope,
+                &bound.authority_commit.commit.commit_id,
+                &peer,
+                arkret_wire::SignalClass::Session,
+                signal_at,
+                signal_at
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE agent_status_current_results SET value='\"active\"'::jsonb WHERE agent_id=$1",
+    )
+    .bind::<Text, _>(agent_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    diesel::sql_query("DELETE FROM agent_key_current_results WHERE agent_id=$1")
+        .bind::<Text, _>(agent_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+    assert!(
+        store
+            .signal_scope_authority(
+                &signal_scope,
+                &bound.authority_commit.commit.commit_id,
+                &peer,
+                arkret_wire::SignalClass::Session,
+                signal_at,
+                signal_at
+            )
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 

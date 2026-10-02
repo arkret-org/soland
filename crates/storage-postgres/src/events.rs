@@ -56,6 +56,8 @@ struct DirectConversationDurableStateRow {
     #[diesel(sql_type = Text)]
     main_strand_id: String,
     #[diesel(sql_type = Jsonb)]
+    authorization_basis: Value,
+    #[diesel(sql_type = Jsonb)]
     event_ids: Value,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
@@ -108,6 +110,8 @@ impl TryFrom<DirectConversationDurableStateRow> for DirectConversationDurableSta
                 founding_unit_digest: row.founding_unit_digest,
                 realm_id: row.realm_id,
                 main_strand_id: row.main_strand_id,
+                authorization_basis: serde_json::from_value(row.authorization_basis)
+                    .map_err(PersistenceError::database)?,
                 event_ids: serde_json::from_value(row.event_ids)
                     .map_err(PersistenceError::database)?,
                 idempotency_key: row.idempotency_key,
@@ -200,6 +204,8 @@ struct DirectConversationFoundingSlotRow {
     #[diesel(sql_type = Text)]
     main_strand_id: String,
     #[diesel(sql_type = Jsonb)]
+    authorization_basis: Value,
+    #[diesel(sql_type = Jsonb)]
     event_ids: Value,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
@@ -218,6 +224,8 @@ impl TryFrom<DirectConversationFoundingSlotRow> for DirectConversationFoundingSl
             founding_unit_digest: row.founding_unit_digest,
             realm_id: row.realm_id,
             main_strand_id: row.main_strand_id,
+            authorization_basis: serde_json::from_value(row.authorization_basis)
+                .map_err(PersistenceError::database)?,
             event_ids: serde_json::from_value(row.event_ids).map_err(PersistenceError::database)?,
             idempotency_key: row.idempotency_key,
             accepted_at: row.accepted_at,
@@ -260,7 +268,7 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
             "SELECT founder_id, trust_domain_id, pair_key, founding_unit_digest, realm_id, \
-                    main_strand_id, event_ids, idempotency_key, accepted_at \
+                    main_strand_id, authorization_basis, event_ids, idempotency_key, accepted_at \
              FROM direct_conversation_founding_slots \
              WHERE founder_id = $1 AND trust_domain_id = $2 AND pair_key = $3",
         )
@@ -283,7 +291,7 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
             "SELECT s.founder_id,s.trust_domain_id,s.pair_key,s.founding_unit_digest,\
-                    s.realm_id,s.main_strand_id,s.event_ids,s.idempotency_key,s.accepted_at,\
+                    s.realm_id,s.main_strand_id,s.authorization_basis,s.event_ids,s.idempotency_key,s.accepted_at,\
                     b.value AS binding,\
                     m.value->>'current_mls_commit_event_ref' AS group_state_ref,\
                     g.current_exact_pair AS group_current_exact_pair,\
@@ -315,7 +323,7 @@ impl EventStore for PgEventStore {
         let mut conn = pg_conn(&self.pool).await?;
         let row = sql_query(
             "SELECT s.founder_id,s.trust_domain_id,s.pair_key,s.founding_unit_digest,\
-                    s.realm_id,s.main_strand_id,s.event_ids,s.idempotency_key,s.accepted_at,\
+                    s.realm_id,s.main_strand_id,s.authorization_basis,s.event_ids,s.idempotency_key,s.accepted_at,\
                     b.value AS binding,\
                     m.value->>'current_mls_commit_event_ref' AS group_state_ref,\
                     g.current_exact_pair AS group_current_exact_pair,\

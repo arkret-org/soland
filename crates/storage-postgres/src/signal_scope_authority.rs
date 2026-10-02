@@ -506,22 +506,7 @@ async fn read_in_connection(
         {
             return Ok(None);
         }
-        let actors = pair.iter().copied().collect::<Vec<_>>();
-        let contacts =
-            crate::contacts::pair_contacts_snapshot_in_connection(conn, actors[0], actors[1])
-                .await?;
-        let Some(contact) = crate::direct_conversation_founding::current_contact(contacts) else {
-            return Ok(None);
-        };
-        if contact.status != "accepted"
-            || contact.tombstone_event_ref.is_some()
-            || ![
-                &contact.granted_to_target_scopes,
-                &contact.granted_to_requester_scopes,
-            ]
-            .iter()
-            .all(|s| s.iter().any(|v| v == "direct_message"))
-        {
+        if !profile.pair_grants_direct_message_snapshot(conn).await? {
             return Ok(None);
         }
     }

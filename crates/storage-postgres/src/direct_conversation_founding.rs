@@ -191,6 +191,7 @@ async fn verify_agent_founding_authority(
     provision_ref: &EventId,
     at: chrono::DateTime<chrono::Utc>,
     missing_code: ConflictCode,
+    lock_current: bool,
 ) -> PersistenceResult<(
     DirectConversationAuthorizationBasis,
     DirectConversationFoundingAuthorityEvidence,
@@ -263,11 +264,12 @@ async fn verify_agent_founding_authority(
         ));
     }
 
-    let current = sql_query(
+    let lock_clause = if lock_current { " FOR SHARE" } else { "" };
+    let current = sql_query(format!(
         "SELECT current_commit_id,current_stream_position,value \
          FROM agent_provisioning_current_results \
-         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
-    )
+         WHERE realm_id=$1 AND agent_id=$2{lock_clause}",
+    ))
     .bind::<Text, _>(provision_event.realm_id.as_str())
     .bind::<Text, _>(agent.principal_id.as_str())
     .get_result::<AgentProvisionCurrentRow>(&mut *conn)
@@ -296,10 +298,10 @@ async fn verify_agent_founding_authority(
         ));
     }
 
-    let status = sql_query(
+    let status = sql_query(format!(
         "SELECT value FROM agent_status_current_results \
-         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
-    )
+         WHERE realm_id=$1 AND agent_id=$2{lock_clause}",
+    ))
     .bind::<Text, _>(payload.principal_control_realm_id.as_str())
     .bind::<Text, _>(agent.principal_id.as_str())
     .get_result::<CurrentValueRow>(&mut *conn)
@@ -310,10 +312,10 @@ async fn verify_agent_founding_authority(
         return Err(stale("the owned Agent lifecycle is not active"));
     }
 
-    let key_rows = sql_query(
+    let key_rows = sql_query(format!(
         "SELECT value FROM agent_key_current_results \
-         WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
-    )
+         WHERE realm_id=$1 AND agent_id=$2{lock_clause}",
+    ))
     .bind::<Text, _>(payload.principal_control_realm_id.as_str())
     .bind::<Text, _>(agent.principal_id.as_str())
     .load::<CurrentValueRow>(&mut *conn)
@@ -424,6 +426,25 @@ pub(crate) async fn agent_controller_pair_current(
     peer: &arkret_wire::ActorId,
     basis: &DirectConversationAuthorizationBasis,
 ) -> PersistenceResult<bool> {
+    agent_controller_pair_current_with_lock(conn, founder, peer, basis, true).await
+}
+
+pub(crate) async fn agent_controller_pair_current_snapshot(
+    conn: &mut diesel_async::AsyncPgConnection,
+    founder: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
+    basis: &DirectConversationAuthorizationBasis,
+) -> PersistenceResult<bool> {
+    agent_controller_pair_current_with_lock(conn, founder, peer, basis, false).await
+}
+
+async fn agent_controller_pair_current_with_lock(
+    conn: &mut diesel_async::AsyncPgConnection,
+    founder: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
+    basis: &DirectConversationAuthorizationBasis,
+    lock_current: bool,
+) -> PersistenceResult<bool> {
     basis
         .validate_shape()
         .map_err(|error| PersistenceError::Database(error.to_string()))?;
@@ -461,6 +482,7 @@ pub(crate) async fn agent_controller_pair_current(
         provision_ref,
         chrono::Utc::now(),
         ConflictCode::FailedPrecondition,
+        lock_current,
     )
     .await
     {
@@ -781,6 +803,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                     provision_ref,
                     committed_at,
                     ConflictCode::FailedPrecondition,
+                    true,
                 )
                 .await?
             }
@@ -1059,6 +1082,7 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
                     provision_ref,
                     commits[3].committed_at,
                     ConflictCode::DependencyMissing,
+                    true,
                 )
                 .await?
             }

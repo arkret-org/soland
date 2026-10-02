@@ -112,6 +112,37 @@ impl DirectConversationRealm {
     pub(crate) fn pair(&self) -> Option<BTreeSet<&ActorId>> {
         self.founding.as_ref().map(FoundingFacts::pair)
     }
+
+    /// Signal reads use the same branch-specific pair gate in their read-only
+    /// snapshot, without acquiring the row locks used by durable admission.
+    pub(crate) async fn pair_grants_direct_message_snapshot(
+        &self,
+        conn: &mut AsyncPgConnection,
+    ) -> PersistenceResult<bool> {
+        let Some(founding) = &self.founding else {
+            return Ok(false);
+        };
+        use arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind;
+        if founding.authorization_basis.kind == DirectConversationAuthorizationKind::AgentController
+        {
+            return crate::direct_conversation_founding::agent_controller_pair_current_snapshot(
+                conn,
+                &founding.founder,
+                &founding.peer,
+                &founding.authorization_basis,
+            )
+            .await;
+        }
+        let contact = crate::direct_conversation_founding::current_contact(
+            crate::contacts::pair_contacts_snapshot_in_connection(
+                conn,
+                &founding.founder,
+                &founding.peer,
+            )
+            .await?,
+        );
+        Ok(contact_grants_direct_message(contact.as_ref()))
+    }
 }
 
 struct FoundingFacts {
@@ -434,13 +465,17 @@ async fn pair_grants_direct_message(
         crate::contacts::pair_contacts_in_connection(conn, &founding.founder, &founding.peer)
             .await?,
     );
+    Ok(contact_grants_direct_message(contact.as_ref()))
+}
+
+fn contact_grants_direct_message(contact: Option<&soland_storage::ContactRecord>) -> bool {
     let grants = |scopes: &[String]| scopes.iter().any(|scope| scope == DIRECT_MESSAGE_SCOPE);
-    Ok(contact.is_some_and(|contact| {
+    contact.is_some_and(|contact| {
         contact.status == "accepted"
             && contact.tombstone_event_ref.is_none()
             && grants(&contact.granted_to_target_scopes)
             && grants(&contact.granted_to_requester_scopes)
-    }))
+    })
 }
 
 /// `exact_pair_completion_requires_recipient_durable_welcome`: the peer's

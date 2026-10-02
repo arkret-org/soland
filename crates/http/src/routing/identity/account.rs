@@ -1806,6 +1806,7 @@ async fn direct_conversation_resolve(
         }
         return json_ok(DirectConversationResolveOutcome::Provisional {
             coordinates,
+            authorization_basis: facts.founding_slot.authorization_basis.clone(),
             group_state_ref: facts.group_state_ref.clone(),
         });
     }

@@ -1254,6 +1254,7 @@ pub struct DirectConversationFoundingSlotRecord {
     pub founding_unit_digest: String,
     pub realm_id: String,
     pub main_strand_id: String,
+    pub authorization_basis: arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis,
     pub event_ids: Vec<String>,
     pub idempotency_key: String,
     pub accepted_at: chrono::DateTime<chrono::Utc>,
