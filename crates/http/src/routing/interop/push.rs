@@ -110,7 +110,8 @@ pub(super) async fn push_register(
         Ok(session) => session,
         Err((_status, code, message)) => {
             return Err(AppError::from_rejection(
-                canonical_error_code(code),
+                soland_http::error::ErrorCode::from_wire(code)
+                    .unwrap_or(soland_http::error::ErrorCode::InternalError),
                 message,
             ));
         }
@@ -187,19 +188,6 @@ pub(super) async fn push_register(
     )
     .await?;
     json_ok(outcome)
-}
-
-/// Map the `(status, code, message)` triplet produced by
-/// `authenticated_session` to a canonical `ErrorCode`. The lookup is fast and
-/// lossless because the call site only emits a small closed set.
-fn canonical_error_code(wire: &str) -> soland_http::error::ErrorCode {
-    use soland_http::error::ErrorCode;
-    match wire {
-        "missing_auth" | "unauthenticated" => ErrorCode::Unauthenticated,
-        "param_invalid" | "param_missing" => ErrorCode::ParamInvalid,
-        "session_expired" => ErrorCode::CursorExpired,
-        _ => ErrorCode::InternalError,
-    }
 }
 
 fn push_route_id_for_registration(body: &PushRegisterDeviceRequestBody) -> String {
