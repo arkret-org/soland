@@ -331,7 +331,7 @@ fn runtime_approval_request_body(
             signature: arkret_wire::Base64UrlString::new("AA").unwrap(),
         };
     let transcript = proof_of_possession
-        .canonical_transcript_bytes("AAAAAAAAAAAAAAAAAAAAAA")
+        .canonical_transcript_bytes("01234567")
         .unwrap();
     proof_of_possession.transcript_digest =
         arkret_wire::Hash::new(arkret_canonical::sha256_digest(&transcript)).unwrap();
@@ -341,7 +341,7 @@ fn runtime_approval_request_body(
     )
     .unwrap();
     AgentRuntimeApprovalRequestBody {
-        pairing_code: arkret_wire::NonEmptyString::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+        pairing_code: arkret_wire::NonEmptyString::new("01234567").unwrap(),
         pairing_request_id,
         agent_id,
         verification_method,
@@ -568,7 +568,7 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2026-07-08T00:00:00.000Z",
     );
     assert!(agent_record_reserves_selector_slug(&pending_future, &now));
@@ -577,7 +577,7 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2026-07-06T00:00:00.000Z",
     );
     assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
@@ -599,14 +599,22 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
 
 #[test]
 fn agent_pairing_token_decodes_compact_request_and_code() {
-    let token = URL_SAFE_NO_PAD
-        .encode(br#"{"r":"agent_pairing_request:0193","c":"AAAAAAAAAAAAAAAAAAAAAA"}"#);
+    let token = URL_SAFE_NO_PAD.encode(br#"{"r":"agent_pairing_request:0193","c":"01234567"}"#);
 
     assert!(is_agent_pairing_token_shape(&token));
     let decoded = decode_agent_pairing_token(&token).expect("decode token");
 
     assert_eq!(decoded["r"], json!("agent_pairing_request:0193"));
-    assert_eq!(decoded["c"], json!("AAAAAAAAAAAAAAAAAAAAAA"));
+    assert_eq!(decoded["c"], json!("01234567"));
+}
+
+#[test]
+fn agent_pairing_code_is_eight_ascii_decimal_digits() {
+    for _ in 0..100 {
+        let code = generate_pairing_code();
+        assert_eq!(code.len(), 8);
+        assert!(code.bytes().all(|byte| byte.is_ascii_digit()));
+    }
 }
 
 #[test]
@@ -642,7 +650,7 @@ fn key_authorize_event_binds_pairing_transcript_and_scope() {
         agent,
         controller,
         scope.clone(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let envelope = key_authorize_envelope(
@@ -705,7 +713,7 @@ fn key_pair_proof_of_possession_verifies_runtime_key() {
         agent,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
 
@@ -730,7 +738,7 @@ fn runtime_approval_request_for_controller_omits_pairing_code() {
     let service_id = SERVICE_CORE;
     let key_pair = runtime_approval_request_body(AGENT_DID, verification_method, service_id);
     let request = AgentRuntimeApprovalRequestBody {
-        pairing_code: arkret_wire::NonEmptyString::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+        pairing_code: arkret_wire::NonEmptyString::new("01234567").unwrap(),
         pairing_request_id: key_pair.pairing_request_id.clone(),
         agent_id: key_pair.agent_id.clone(),
         verification_method: key_pair.verification_method.clone(),
@@ -760,7 +768,7 @@ fn agent_key_state_projects_pending_runtime_approval() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     record.approval_request_id =
@@ -804,10 +812,7 @@ fn agent_key_state_projects_pending_runtime_approval() {
         key_state.approval_requested_at,
         record.approval_requested_at
     );
-    assert_eq!(
-        key_state.pairing_code.as_deref(),
-        Some("AAAAAAAAAAAAAAAAAAAAAA")
-    );
+    assert_eq!(key_state.pairing_code.as_deref(), Some("01234567"));
 }
 
 fn status_request_body(
@@ -836,7 +841,7 @@ fn runtime_approval_status_reports_pending_request() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     record.approval_request_id =
@@ -844,7 +849,7 @@ fn runtime_approval_status_reports_pending_request() {
 
     let outcome = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
+        &status_request_body("01234567", AGENT_CORE),
         status_now(),
     )
     .expect("pending status must resolve");
@@ -865,7 +870,7 @@ fn runtime_approval_status_lazily_reports_expired_open_pairing() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2026-07-09T00:00:00.000Z",
     );
     record.approval_request_id =
@@ -873,7 +878,7 @@ fn runtime_approval_status_lazily_reports_expired_open_pairing() {
 
     let outcome = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", AGENT_CORE),
+        &status_request_body("01234567", AGENT_CORE),
         status_now(),
     )
     .expect("expired status must resolve");
@@ -890,7 +895,7 @@ fn runtime_approval_status_mismatch_is_indistinguishable_from_missing_record() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let missing = agent_pairing_not_found();
@@ -903,7 +908,7 @@ fn runtime_approval_status_mismatch_is_indistinguishable_from_missing_record() {
     .expect_err("wrong pairing code must fail closed");
     let wrong_principal = agent_runtime_key_request_status_outcome(
         &record,
-        &status_request_body("AAAAAAAAAAAAAAAAAAAAAA", "ak:did_core:web:intruder.example"),
+        &status_request_body("01234567", "ak:did_core:web:intruder.example"),
         status_now(),
     )
     .expect_err("wrong principal must fail closed");
@@ -920,7 +925,7 @@ fn key_pair_rejects_wrong_pairing_request_id() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
 
@@ -946,7 +951,7 @@ fn key_authorize_event_rejects_wrong_stable_approval_identity() {
         agent,
         controller,
         scope.clone(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let envelope = key_authorize_envelope(
@@ -994,7 +999,7 @@ fn key_authorize_event_rejects_wrong_controller_executor() {
         agent,
         controller,
         scope.clone(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let envelope = key_authorize_envelope(
@@ -1035,7 +1040,7 @@ fn key_authorize_event_rejects_wrong_approval_principal() {
         agent,
         controller,
         scope.clone(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let mut envelope = key_authorize_envelope(
@@ -1071,7 +1076,7 @@ fn key_authorize_event_rejects_expired_pairing() {
         AGENT_CORE,
         CONTROLLER_CORE,
         requested_agent_scope(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2000-01-01T00:00:00.000Z",
     );
 
@@ -1098,7 +1103,7 @@ fn key_authorize_event_accepts_narrower_scope_and_rejects_widening() {
         agent,
         controller,
         expected_scope,
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let weaker_scope = json!({
@@ -1166,7 +1171,7 @@ fn key_authorize_event_rejects_substituted_raw_authorization_key() {
         agent,
         controller,
         scope.clone(),
-        "AAAAAAAAAAAAAAAAAAAAAA",
+        "01234567",
         "2999-01-01T00:00:00.000Z",
     );
     let mut envelope = key_authorize_envelope(

@@ -2070,12 +2070,10 @@ pub(super) fn pairing_request_binding_digest(
     })
 }
 
-/// Generate the Agent pairing secret with 128 bits of OS-backed entropy.
+/// Generate a uniform eight-digit decimal code, retaining leading zeroes.
 pub(super) fn generate_pairing_code() -> String {
     use rand::RngExt;
-    let mut bytes = [0u8; 16];
-    rand::rng().fill(&mut bytes);
-    arkret_canonical::base64url_encode(bytes)
+    format!("{:08}", rand::rng().random_range(0u32..100_000_000))
 }
 
 pub(super) fn agent_pairing_token_appears_in_url(req: &Request) -> bool {
