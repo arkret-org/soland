@@ -10,6 +10,8 @@ mod ordinary_realm;
 mod pcr_genesis;
 #[path = "support/sidecar_agent.rs"]
 mod sidecar_agent;
+#[path = "support/sidecar_exchange_controls.rs"]
+mod sidecar_exchange_controls;
 #[path = "support/sidecar_readiness.rs"]
 mod sidecar_readiness;
 
@@ -1417,7 +1419,19 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
     diesel::sql_query("UPDATE peer_keypackage_claims SET consume_receipt=$1 WHERE source_id=$2 AND claim_request_id=$3")
         .bind::<Jsonb,_>(receipt_json).bind::<Text,_>(&ledger.source_id).bind::<Text,_>(&ledger.claim_request_id).execute(&mut conn).await.unwrap();
     drop(conn);
-    assert_eq!(status().await.unwrap().unwrap().1, vec![agent.principal_id]);
+    assert_eq!(
+        status().await.unwrap().unwrap().1,
+        vec![agent.principal_id.clone()]
+    );
+    sidecar_exchange_controls::assert_current(
+        &pool,
+        &principal,
+        &sidecar,
+        &request.authority_commit,
+        &mut group,
+        &agent.principal_id,
+    )
+    .await;
 }
 
 #[tokio::test]

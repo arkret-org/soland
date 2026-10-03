@@ -130,6 +130,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "call_state_current_results",
     "sidecar_current_results",
     "sidecar_context_current_results",
+    "sidecar_exchange_controls_current_results",
     "strand_current_results",
     "strand_watch_current_results",
     "strand_position_current_results",
@@ -1050,10 +1051,13 @@ pub(crate) fn disclose_to_account(
                 }
                 _ => return Err(rejected("Pin home differs from its Realm")),
             }),
-            CurrentSelector::SidecarContext { sidecar_id, .. } => Some(CommitStreamRef::Sidecar {
-                realm_id: material.realm_id.clone(),
-                sidecar_id: sidecar_id.clone(),
-            }),
+            CurrentSelector::SidecarContext { sidecar_id, .. }
+            | CurrentSelector::AgentSidecarExchangeControls { sidecar_id, .. } => {
+                Some(CommitStreamRef::Sidecar {
+                    realm_id: material.realm_id.clone(),
+                    sidecar_id: sidecar_id.clone(),
+                })
+            }
             CurrentSelector::CircleMemberState { circle_id, .. } => {
                 Some(scope_stream(Some(circle_id.clone())))
             }
@@ -1149,6 +1153,9 @@ pub(crate) fn disclose_to_account(
                     | CurrentSelector::SidecarContext { sidecar_id, .. } => {
                         facts.owned_sidecars.contains(sidecar_id)
                     }
+                    CurrentSelector::AgentSidecarExchangeControls { sidecar_id, .. } => {
+                        facts.sidecar_floors.contains_key(sidecar_id)
+                    }
                     CurrentSelector::Circle { circle_id }
                     | CurrentSelector::CircleMemberState { circle_id, .. } => {
                         facts.circle_floors.contains_key(circle_id)
@@ -1221,6 +1228,21 @@ pub(crate) fn disclose_to_account(
                     || context.source_context_ref != *source_context_ref
                 {
                     return Err(rejected("Sidecar context differs from its exact selector"));
+                }
+            }
+            CurrentSelector::AgentSidecarExchangeControls {
+                sidecar_id,
+                source_context_ref,
+            } => {
+                let controls: arkret_models_collaboration::agent_sidecar::AgentSidecarExchangeControlsCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                controls
+                    .validate_for_context(sidecar_id, source_context_ref)
+                    .map_err(|error| rejected(&error.to_string()))?;
+                if controls.assertions().is_empty() {
+                    return Err(rejected(
+                        "Sidecar control current has no accepted assertion",
+                    ));
                 }
             }
             CurrentSelector::CallState { call_id } => {

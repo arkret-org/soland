@@ -4636,6 +4636,29 @@ CREATE TABLE sidecar_context_current_results (
 CREATE INDEX sidecar_context_current_results_realm
  ON sidecar_context_current_results(realm_id,sidecar_id,context_ref_digest);
 
+-- Encrypted controller controls are one native Sidecar-context keyed set.
+-- No exchange id or decrypted control member is stored outside the carrier.
+CREATE TABLE sidecar_exchange_controls_current_results (
+ realm_id TEXT NOT NULL,
+ sidecar_id TEXT NOT NULL,
+ context_ref_digest TEXT NOT NULL,
+ context_ref JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ source_stream_ref JSONB NOT NULL,
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(sidecar_id,context_ref_digest),
+ CHECK(jsonb_typeof(context_ref)='object'),
+ CHECK(source_stream_ref->>'kind'='sidecar'),
+ CHECK(source_stream_ref->>'realm_id'=realm_id),
+ CHECK(source_stream_ref->>'sidecar_id'=sidecar_id),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(jsonb_typeof(value->'assertions')='array')
+);
+CREATE INDEX sidecar_exchange_controls_current_results_realm
+ ON sidecar_exchange_controls_current_results(realm_id,sidecar_id,context_ref_digest);
+
 -- Event-derived Strand identity and its complete registered current value.
 CREATE TABLE strand_current_results (
  realm_id TEXT NOT NULL,

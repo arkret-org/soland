@@ -85,6 +85,16 @@ async fn require_reference_visibility(
             .await?
             .map(|floor| floor.oldest_position)
         }
+        arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } => {
+            crate::sidecar_authority_cut::caller_floor_in_connection(
+                conn,
+                &event.realm_id,
+                sidecar_id,
+                &event.actor_id,
+            )
+            .await?
+            .map(|floor| floor.oldest_position)
+        }
         _ => None,
     }
     .ok_or_else(|| rejected("Message reference visibility has no proved membership floor"))?;

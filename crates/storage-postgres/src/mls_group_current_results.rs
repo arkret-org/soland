@@ -1019,7 +1019,9 @@ pub(crate) async fn require_mls_send_gate_in_connection(
             soland_storage::message_create_envelopes(&event.payload)
                 .map_err(PersistenceError::SchemaViolation)?
         }
-        EventKind::ReactionAdd | EventKind::ReactionRemove => event
+        EventKind::ReactionAdd
+        | EventKind::ReactionRemove
+        | EventKind::AgentSidecarExchangeControl => event
             .payload
             .get("encrypted_payload")
             .map(|value| {
@@ -1027,7 +1029,7 @@ pub(crate) async fn require_mls_send_gate_in_connection(
                     .map(|envelope| vec![envelope])
                     .map_err(|error| {
                         PersistenceError::SchemaViolation(format!(
-                            "reaction encrypted_payload: {error}"
+                            "encrypted application payload: {error}"
                         ))
                     })
             })

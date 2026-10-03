@@ -43,6 +43,7 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "message_revision_current_results",
     "object_redaction_current_results",
     "message_reactions_current_results",
+    "sidecar_exchange_controls_current_results",
     "pin_current_results",
     "schema_definition_current_results",
     "circle_member_state_current_results",
@@ -207,6 +208,38 @@ async fn guard_snapshot_revisions(
         let source = serde_json::to_value(source_stream_ref).map_err(malformed)?;
         let incoming_position = position(revision.stream_position)?;
         match selector {
+            S::AgentSidecarExchangeControls {
+                sidecar_id,
+                source_context_ref,
+            } => {
+                use arkret_models_collaboration::agent_sidecar::AgentSidecarExchangeControlsCurrentValue;
+                let incoming: AgentSidecarExchangeControlsCurrentValue =
+                    serde_json::from_value(value.clone()).map_err(malformed)?;
+                incoming
+                    .validate_for_context(sidecar_id, source_context_ref)
+                    .map_err(malformed)?;
+                let subject =
+                    arkret_canonical::canonical_sha256(source_context_ref).map_err(malformed)?;
+                let old = diesel::sql_query("SELECT current_commit_id,current_stream_position,source_stream_ref,value FROM sidecar_exchange_controls_current_results WHERE realm_id=$1 AND sidecar_id=$2 AND context_ref_digest=$3 FOR UPDATE")
+                    .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(sidecar_id.as_str()).bind::<Text,_>(&subject)
+                    .get_result::<ExistingFrankingProofCurrent>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+                if let Some(old) = old {
+                    let retained: AgentSidecarExchangeControlsCurrentValue =
+                        serde_json::from_value(old.value.clone()).map_err(malformed)?;
+                    if old.source_stream_ref != source
+                        || old.current_stream_position > incoming_position
+                        || retained
+                            .assertions()
+                            .iter()
+                            .any(|assertion| !incoming.assertions().contains(assertion))
+                        || (old.current_stream_position == incoming_position
+                            && (old.current_commit_id != revision.commit_id.as_str()
+                                || old.value != *value))
+                    {
+                        return Err(PersistenceError::Conflict("failed_precondition: Sidecar controls snapshot changes its source, revision or retained assertions".into()));
+                    }
+                }
+            }
             S::Pin { pin_scope } => {
                 use arkret_models_collaboration::objects::productivity::PinCurrentValue;
                 let incoming: PinCurrentValue =
@@ -663,6 +696,15 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             continue;
         }
         match selector {
+            S::AgentSidecarExchangeControls { .. } => {
+                crate::sidecar_exchange_controls::install_in_connection(
+                    conn,
+                    realm_id,
+                    entry,
+                    installed_at,
+                )
+                .await?;
+            }
             S::Sidecar { .. } | S::SidecarContext { .. } => {
                 crate::sidecar_replica_current::install_in_connection(
                     conn,
@@ -1011,6 +1053,10 @@ pub(crate) async fn advance_in_connection(
         }
         arkret_wire::EventKind::CircleCreate | arkret_wire::EventKind::CircleMemberState => {
             crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
+        }
+        arkret_wire::EventKind::AgentSidecarExchangeControl => {
+            crate::sidecar_exchange_controls::commit_in_connection(conn, event, commit, false)
+                .await?;
         }
         arkret_wire::EventKind::SidecarCreate | arkret_wire::EventKind::SidecarContextAttach => {
             // The source authority accepted the immutable Event; project its

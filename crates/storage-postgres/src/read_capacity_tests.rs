@@ -368,6 +368,7 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
         ("moderation_report_current_results", "report_event_id", format!("'report-' || {key}"), format!("jsonb_build_object('realm_id',{realm},'target_ref','target-' || m,'reporter_id','reporter')")),
         ("object_redaction_current_results", "target_ref", "'target-' || m".to_owned(), "jsonb_build_object('assertions',jsonb_build_array(jsonb_build_object('tag_id','dot')))".to_owned()),
         ("message_reactions_current_results", "target_ref", "'target-' || m".to_owned(), "jsonb_build_object('assertions',jsonb_build_array(jsonb_build_object('tag_id','dot')))".to_owned()),
+        ("sidecar_exchange_controls_current_results", "sidecar_id,context_ref_digest,context_ref,source_stream_ref", format!("'sidecar-' || {key},'context-' || {key},jsonb_build_object('kind','strand','strand_id','strand-' || {key}),jsonb_build_object('kind','sidecar','realm_id',{realm},'sidecar_id','sidecar-' || {key})"), "jsonb_build_object('assertions',jsonb_build_array(jsonb_build_object('tag_id','control-dot')))".to_owned()),
         ("invite_lifecycle_current_results", "invite_id", format!("'invite-' || {key}"), "'\"pending\"'::jsonb".to_owned()),
         ("invite_live_target_current_results", "invitee_account_id", "jsonb_build_object('account',m)::text".to_owned(), format!("jsonb_build_object('create_event_id','create-' || {key})")),
         ("invite_directed_invitee_current_results", "invite_id", format!("'invite-' || {key}"), "jsonb_build_object('invitee_account_id',jsonb_build_object('account',m))".to_owned()),
@@ -532,15 +533,15 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                 .map(str::to_owned)
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(observed, expected);
-            // The union has 34 width-sized families: member, message and
-            // moderation plus the 31 seed_snapshot_families loop entries.
+            // The union has 35 width-sized families: member, message and
+            // moderation plus the 32 seed_snapshot_families loop entries.
             // Relation is seeded for the exact self-read matrix only and is
             // absent from this union. StrandWatch contributes one family,
             // not another row for each accepted replacement in its history.
             // The other five tables emit eight bootstrap facets and four
             // singleton rows per Realm.
-            assert_eq!(observed.len(), 39);
-            let output = 34.0 * width + 12.0;
+            assert_eq!(observed.len(), 40);
+            let output = 35.0 * width + 12.0;
             assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan

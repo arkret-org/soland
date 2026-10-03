@@ -2676,6 +2676,7 @@ async fn commit_one_in_connection(
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
         crate::strand_watch_current_results::commit_in_connection(conn, event, commit).await?;
         crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
+        crate::sidecar_exchange_controls::commit_in_connection(conn, event, commit, true).await?;
         commit_relation_current_result_in_connection(conn, event, commit, true).await?;
         commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
         // An accepted Invite decides its accepting actor's `leave -> join`

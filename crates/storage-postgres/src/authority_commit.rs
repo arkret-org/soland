@@ -741,6 +741,11 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id,current_stream_position,value \
            FROM sidecar_context_current_results WHERE realm_id=$1 \
          UNION ALL \
+         SELECT 'agent_sidecar_exchange_controls'::text AS selector_kind, \
+                jsonb_build_object('kind','agent_sidecar_exchange_controls','sidecar_id',sidecar_id,'source_context_ref',context_ref) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM sidecar_exchange_controls_current_results WHERE realm_id=$1 \
+         UNION ALL \
          SELECT 'circle'::text AS selector_kind, to_jsonb(circle_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM circle_current_results WHERE realm_id = $1 \
@@ -925,7 +930,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                     sidecar_id: serde_json::from_value(sidecar_id).map_err(PersistenceError::database)?,
                 },
                 ("policy_action", Some(subject)) => serde_json::from_value(subject).map_err(PersistenceError::database)?,
-                ("sidecar_context", Some(selector)) => serde_json::from_value(selector).map_err(PersistenceError::database)?,
+                ("sidecar_context" | "agent_sidecar_exchange_controls", Some(selector)) => serde_json::from_value(selector).map_err(PersistenceError::database)?,
                 ("realm_join_rule", None) => arkret_wire::CurrentSelector::RealmJoinRule,
                 ("realm_history_access", None) => arkret_wire::CurrentSelector::RealmHistoryAccess,
                 ("realm_read_receipt_policy", None) => arkret_wire::CurrentSelector::RealmReadReceiptPolicy,

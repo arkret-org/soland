@@ -111,6 +111,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
         arkret_wire::EventKind::CircleCreate
             | arkret_wire::EventKind::SidecarCreate
             | arkret_wire::EventKind::SidecarContextAttach
+            | arkret_wire::EventKind::AgentSidecarExchangeControl
             | arkret_wire::EventKind::CircleMemberState
             | arkret_wire::EventKind::RealmOrganization
             | arkret_wire::EventKind::SelfModerationReport

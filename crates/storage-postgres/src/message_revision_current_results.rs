@@ -181,6 +181,11 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     arkret_schema::validate_event_for_submit(event)
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     require_message_source_stream(event, commit)?;
+    if matches!(event.scope_ref, arkret_wire::ScopeRef::Sidecar { .. }) {
+        admit_sidecar_message(conn, event, commit).await?;
+        let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+        return insert_message_create_current(conn, event, commit, &payload).await;
+    }
     let ordinary = diesel::sql_query(
         "SELECT EXISTS (SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk \
          WHERE c.realm_id=$1 AND c.stream_position=0 AND e.kind='ak.realm.create' \
@@ -321,6 +326,15 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
             return Ok(());
         }
     }
+    insert_message_create_current(conn, event, commit, &payload).await
+}
+
+async fn insert_message_create_current(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    payload: &Value,
+) -> PersistenceResult<()> {
     let message_id = arkret_wire::MessageId::from_event_id(&event.event_id);
     let inserted = diesel::sql_query(
         "INSERT INTO message_revision_current_results \
@@ -334,7 +348,7 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
         i64::try_from(commit.stream_position)
             .map_err(|_| conflict("invalid Message stream position"))?,
     )
-    .bind::<Jsonb, _>(&payload)
+    .bind::<Jsonb, _>(payload)
     .bind::<Timestamptz, _>(commit.committed_at)
     .execute(conn)
     .await
@@ -342,6 +356,90 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if inserted != 1 {
         return Err(conflict("Message revision current result already exists"));
     }
+    Ok(())
+}
+
+/// Private Messages use the native participant cut, never a parent capability.
+/// The source Strand is a placement context; the current carrier stays on the
+/// Sidecar stream and is disclosed through that stream's private floor.
+async fn admit_sidecar_message(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    use arkret_models_collaboration::events_payloads::message::{
+        MESSAGE_CONTENT_BLOCK_MLS_CONTENT_TYPE, MESSAGE_METADATA_MLS_CONTENT_TYPE,
+        MessageCreatePayload,
+    };
+    let arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref else {
+        return Err(conflict("private Message requires a native Sidecar scope"));
+    };
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    crate::message_interactions::require_message_actor(conn, event, commit.committed_at).await?;
+    if event.applet_id.is_some()
+        || !crate::sidecar_access::participant_in_connection(
+            conn,
+            &event.realm_id,
+            sidecar_id,
+            &event.actor_id,
+        )
+        .await?
+    {
+        return Err(conflict(
+            "private Message actor is outside the effective Sidecar access set",
+        ));
+    }
+    let payload: MessageCreatePayload = serde_json::from_value(
+        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+    )
+    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if payload.content.is_some()
+        || payload.metadata.is_some()
+        || payload
+            .encrypted_content
+            .as_ref()
+            .is_none_or(|content| content.content_type != MESSAGE_CONTENT_BLOCK_MLS_CONTENT_TYPE)
+        || payload
+            .encrypted_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.content_type != MESSAGE_METADATA_MLS_CONTENT_TYPE)
+        || event.payload.contains_key("mimi_provenance")
+    {
+        return Err(conflict(
+            "private Message requires the registered encrypted carriers",
+        ));
+    }
+    let context = arkret_wire::SidecarContextRef::Strand {
+        strand_id: payload.strand_id.clone(),
+    };
+    let digest =
+        arkret_canonical::canonical_sha256(&context).map_err(PersistenceError::database)?;
+    let attached = diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM sidecar_context_current_results \
+         WHERE realm_id=$1 AND sidecar_id=$2 AND context_ref_digest=$3 AND context_ref=$4) AS present",
+    )
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(sidecar_id.as_str())
+    .bind::<Text, _>(&digest)
+    .bind::<Jsonb, _>(serde_json::to_value(context).map_err(PersistenceError::database)?)
+    .get_result::<PresentRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    if !attached.present {
+        return Err(conflict("private Message source context is not attached"));
+    }
+    require_active_strand_track(
+        conn,
+        &event.realm_id,
+        &payload.strand_id,
+        &arkret_wire::ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        },
+        &payload.track_name,
+    )
+    .await?;
+    crate::message_interactions::require_reply_and_mentions_in_connection(
+        conn, event, commit, &payload,
+    )
+    .await?;
     Ok(())
 }
 
@@ -358,6 +456,16 @@ pub(crate) async fn require_active_discussion_strand(
     realm_id: &arkret_wire::RealmId,
     strand_id: &arkret_wire::StrandId,
     scope: &arkret_wire::ScopeRef,
+) -> PersistenceResult<()> {
+    require_active_strand_track(conn, realm_id, strand_id, scope, "discussion").await
+}
+
+async fn require_active_strand_track(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    strand_id: &arkret_wire::StrandId,
+    scope: &arkret_wire::ScopeRef,
+    track_name: &str,
 ) -> PersistenceResult<()> {
     // Strand identities preserve the creating Event's token. Resolve that
     // immutable source separately from the current value's covering Commit.
@@ -422,13 +530,14 @@ pub(crate) async fn require_active_discussion_strand(
     if strand.value.get("scope_circle_id").and_then(Value::as_str) != expected_circle {
         return Err(conflict("Message target Strand is outside the Realm scope"));
     }
-    let discussion = strand
+    let track = strand
         .value
-        .pointer("/tracks/discussion")
+        .get("tracks")
+        .and_then(|tracks| tracks.get(track_name))
         .and_then(Value::as_object)
-        .ok_or_else(|| conflict("Message discussion track is unavailable"))?;
-    if discussion.get("enabled") == Some(&Value::Bool(false)) {
-        return Err(conflict("Message discussion track is disabled"));
+        .ok_or_else(|| conflict("Message target track is unavailable"))?;
+    if track.get("enabled") == Some(&Value::Bool(false)) {
+        return Err(conflict("Message target track is disabled"));
     }
     // Unsupported structural or terminal writes still invalidate the proof.
     // Already materialized kinds, including watches on other Strands, do not.
@@ -466,6 +575,13 @@ fn message_scope_stream(
         } if realm_id == realm => Ok(arkret_wire::CommitStreamRef::Circle {
             realm_id: realm_id.clone(),
             circle_id: circle_id.clone(),
+        }),
+        arkret_wire::ScopeRef::Sidecar {
+            realm_id,
+            sidecar_id,
+        } if realm_id == realm => Ok(arkret_wire::CommitStreamRef::Sidecar {
+            realm_id: realm_id.clone(),
+            sidecar_id: sidecar_id.clone(),
         }),
         _ => Err(conflict("Message has no admitted effective scope")),
     }

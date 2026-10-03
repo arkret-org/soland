@@ -49,6 +49,7 @@ DROP FUNCTION IF EXISTS circle_member_parent_join_current(TEXT,TEXT,JSONB);
 DROP TABLE IF EXISTS member_state_current_results;
 DROP TABLE IF EXISTS circle_member_state_current_results;
 DROP TABLE IF EXISTS circle_current_results;
+DROP TABLE IF EXISTS sidecar_exchange_controls_current_results;
 DROP TABLE IF EXISTS sidecar_context_current_results;
 DROP TABLE IF EXISTS sidecar_current_results;
 DROP TABLE IF EXISTS realm_bootstrap_current_results;

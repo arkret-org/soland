@@ -57,6 +57,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::AppletBridgeError
         | EventKind::SidecarCreate
         | EventKind::SidecarContextAttach
+        | EventKind::AgentSidecarExchangeControl
         | EventKind::RealmOrganization
         | EventKind::CircleMemberState
         | EventKind::StrandCreate
@@ -182,6 +183,13 @@ pub(super) fn require_guarded_unit_event(request: &EventAdmissionSubmission) -> 
                     | arkret_wire::EventKind::PinAdd
                     | arkret_wire::EventKind::PinRemove
                     | arkret_wire::EventKind::PinReorder
+            ))
+        && !(matches!(event.scope_ref, arkret_wire::ScopeRef::Sidecar { .. })
+            && matches!(
+                event.kind,
+                arkret_wire::EventKind::SidecarContextAttach
+                    | arkret_wire::EventKind::MessageCreate
+                    | arkret_wire::EventKind::AgentSidecarExchangeControl
             ))
     {
         return Err(ServiceError::Conflict(
@@ -577,7 +585,9 @@ mod tests {
     use arkret_wire::EventKind;
     use soland_services::ServiceError;
 
-    use super::{SelfEventRoute, refuse_actor_private_event, self_event_route};
+    use super::{
+        SelfEventRoute, refuse_actor_private_event, require_guarded_unit_event, self_event_route,
+    };
 
     #[test]
     fn only_kinds_with_a_self_authority_cut_are_routed() {
@@ -600,6 +610,7 @@ mod tests {
             EventKind::MimiRoomBinding,
             EventKind::SidecarCreate,
             EventKind::SidecarContextAttach,
+            EventKind::AgentSidecarExchangeControl,
             EventKind::SpaceUpdate,
             EventKind::SchemaDefine,
             EventKind::RealmPolicyBundle,
@@ -724,6 +735,7 @@ mod tests {
             EventKind::RealmPolicyBundle,
             EventKind::SchemaDefine,
             EventKind::SidecarContextAttach,
+            EventKind::AgentSidecarExchangeControl,
             EventKind::SidecarCreate,
             EventKind::SpaceUpdate,
         ];
@@ -775,6 +787,62 @@ mod tests {
             Err(ServiceError::UnsupportedEventKind(_))
         ));
         assert!(refuse_actor_private_event(&EventKind::MessageCreate).is_ok());
+    }
+
+    #[test]
+    fn native_sidecar_units_do_not_authorize_other_scope_operations() {
+        let event_id =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [119; 32]);
+        let realm_id = arkret_wire::RealmId::from_event_id(&event_id);
+        let scope = arkret_wire::ScopeRef::Sidecar {
+            realm_id: realm_id.clone(),
+            sidecar_id: arkret_wire::SidecarId::from_event_id(&event_id),
+        };
+        let mut event = arkret_wire::Event {
+            event_id,
+            kind: EventKind::MessageCreate,
+            realm_id,
+            scope_ref: scope,
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:controller.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+            )),
+            executed_by: None,
+            authorization_ref: None,
+            applet_id: None,
+            external_ref: None,
+            created_at: chrono::Utc::now(),
+            semantic_refs: Vec::new(),
+            payload: Default::default(),
+            producer_proof: None,
+        };
+        for kind in [
+            EventKind::MessageCreate,
+            EventKind::SidecarContextAttach,
+            EventKind::AgentSidecarExchangeControl,
+        ] {
+            event.kind = kind;
+            assert!(
+                require_guarded_unit_event(&arkret_wire::EventAdmissionSubmission::new(
+                    event.clone()
+                ))
+                .is_ok()
+            );
+        }
+        for kind in [
+            EventKind::StrandCreate,
+            EventKind::CircleMemberState,
+            EventKind::RealmProfile,
+            EventKind::MessageRevise,
+        ] {
+            event.kind = kind;
+            assert!(
+                require_guarded_unit_event(&arkret_wire::EventAdmissionSubmission::new(
+                    event.clone()
+                ))
+                .is_err()
+            );
+        }
     }
 
     #[test]

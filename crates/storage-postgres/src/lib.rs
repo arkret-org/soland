@@ -158,6 +158,7 @@ mod sidecar_authority_change_guard;
 pub mod sidecar_authority_cut;
 mod sidecar_current_results;
 mod sidecar_effective_access;
+mod sidecar_exchange_controls;
 mod sidecar_mls_readiness;
 mod sidecar_replica_authority;
 mod sidecar_replica_current;

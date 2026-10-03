@@ -1,4 +1,7 @@
 use arkret_models_collaboration::agent_sidecar::AgentSidecarState;
+use arkret_models_collaboration::events_payloads::sidecar::{
+    AgentSidecarExchangeControlPayload, SidecarContextAttachPayload,
+};
 use arkret_models_collaboration::sidecar_operations::SidecarContextRef;
 
 use super::*;
@@ -6,30 +9,6 @@ use super::*;
 fn event_derived_sidecar_id(event_ref: &str) -> Option<String> {
     let event_id = arkret_identifiers::EventId::new(event_ref.to_owned()).ok()?;
     Some(arkret_identifiers::SidecarId::from_event_id(&event_id).into_string())
-}
-
-/// Outer wire payload of `ak.sidecar.context.attach`
-/// (`event-payload.schema.json#/$defs/sidecar_context_attach_payload`).
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SidecarContextAttachPayload {
-    sidecar_id: arkret_wire::SidecarId,
-    source_context_ref: SidecarContextRef,
-    version: u64,
-    #[serde(default)]
-    predecessor_event_ref: Option<arkret_wire::EventId>,
-}
-
-/// Outer wire payload of `ak.agent.sidecar.exchange.control`
-/// (`event-payload.schema.json#/$defs/agent_sidecar_exchange_control_payload`).
-/// The plaintext inside `encrypted_payload` is
-/// [`AgentSidecarExchangeControl`], which only the controller can open.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentSidecarExchangeControlPayload {
-    sidecar_id: arkret_wire::SidecarId,
-    source_context_ref: SidecarContextRef,
-    encrypted_payload: arkret_models_crypto::EncryptedEnvelope,
 }
 
 fn context_key(context_ref: &SidecarContextRef) -> String {
