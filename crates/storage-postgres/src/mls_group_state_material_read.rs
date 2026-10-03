@@ -217,7 +217,7 @@ pub(crate) async fn read_in_connection(
     }
     let (joined_at_target, floor) =
         if let ScopeRef::Sidecar { sidecar_id, .. } = &request.effective_scope {
-            let floor = crate::sidecar_authority_cut::caller_floor_in_connection(
+            let floor = crate::sidecar_authority_cut::public_material_floor_in_connection(
                 conn, realm_id, sidecar_id, caller,
             )
             .await?;

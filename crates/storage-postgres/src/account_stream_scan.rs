@@ -96,7 +96,7 @@ pub(crate) async fn scan_stream_for_account(
                     .await?
             }
             (CommitStreamRef::Sidecar { sidecar_id, .. }, true) => {
-                crate::sidecar_authority_cut::caller_floor_in_connection(
+                crate::sidecar_authority_cut::public_material_floor_in_connection(
                     conn,
                     &request.realm_id,
                     sidecar_id,
@@ -126,7 +126,7 @@ pub(crate) async fn scan_stream_for_account(
                 }
             }
             (CommitStreamRef::Sidecar { sidecar_id, .. }, false) => {
-                match crate::sidecar_replica_authority::floor_in_connection(
+                match crate::sidecar_replica_authority::handshake_floor_in_connection(
                     conn,
                     &request.realm_id,
                     sidecar_id,

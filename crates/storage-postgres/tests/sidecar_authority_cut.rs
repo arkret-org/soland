@@ -39,6 +39,296 @@ async fn accepted_controller(
     principal
 }
 
+/// Exercise the real PG read ports with an RFC public group and accepted
+/// handshake Events while the desired Agent has no consumed Welcome.
+async fn pending_agent_handshake_reads(
+    pool: &soland_storage_postgres::PgPool,
+    principal: &pcr_genesis::PcrGenesisFixture,
+    head: &soland_storage::AuthorityCommitTransaction,
+    sidecar: &SidecarId,
+    sidecar_genesis: &arkret_wire::EventId,
+    agent: &AccountId,
+) -> soland_storage::AuthorityCommitTransaction {
+    use arkret_models_crypto::{MlsCommitPayload, MlsGovernanceBindingPayload};
+    use arkret_wire::{ActorId, CommitStreamRef, CommittedEventView, ScopeRef};
+    use soland_storage::{
+        AccountStreamScan, MlsMemberGroupStateMaterialRead, MlsStateInstallation,
+    };
+
+    let controller = &principal.history.account;
+    let realm = &head.event.realm_id;
+    let at = head.commit.committed_at;
+    let actor = ActorId::account(controller.clone());
+    let cut = read(pool, realm, sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    let scope = ScopeRef::Sidecar {
+        realm_id: realm.clone(),
+        sidecar_id: sidecar.clone(),
+    };
+    let stream = CommitStreamRef::from_scope(&scope, None).unwrap();
+    let binding = |base, previous, next| {
+        MlsGovernanceBindingPayload::sidecar(
+            realm.clone(),
+            sidecar.clone(),
+            base,
+            previous,
+            next,
+            0,
+            cut.participant_authority_digest.clone(),
+            cut.authority_stream_head.clone(),
+        )
+        .unwrap()
+    };
+    let identity = arkret_mls::ArkretMlsIdentity::new_human_device(
+        actor.clone(),
+        principal.history.founding_device_id.clone(),
+        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+            ed25519_dalek::SigningKey::from_bytes(&principal.history.founding_device_signing_seed),
+        ),
+    )
+    .unwrap();
+    let mut group = identity
+        .create_group_with_governance_binding(&scope, &binding(None, 0, 0))
+        .unwrap();
+    let (info, tree) = group.public_group_state_bytes().unwrap();
+    let mut tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+        &info,
+        &tree,
+        group.group_id().as_str(),
+        0,
+    )
+    .unwrap();
+    let blob = |bytes: &[u8]| {
+        arkret_wire::BlobRef::new(format!(
+            "ak:blob:{}",
+            arkret_canonical::sha256_digest(bytes),
+        ))
+        .unwrap()
+    };
+    let authorization = principal
+        .history
+        .events
+        .iter()
+        .find(|event| event.kind == EventKind::DeviceAuthorize)
+        .unwrap();
+    let genesis_payload = serde_json::json!({
+        "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        "group_info_ref": blob(&info), "ratchet_tree_ref": blob(&tree),
+        "creator_leaf_authority": {
+            "leaf_signature_key_b64u": arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(&principal.history.founding_device_signing_seed)
+                    .verifying_key().as_bytes(),
+            ),
+            "endpoint": {"kind":"device", "device_id": principal.history.founding_device_id},
+            "authorization_event_ref": authorization.event_id,
+        },
+        "governance_binding": binding(None, 0, 0),
+        "created_at": arkret_canonical::format_timestamp_canonical(at),
+    });
+    let make_request = |kind, payload, previous: &soland_storage::AuthorityCommitTransaction| {
+        let mut event =
+            ordinary_realm::event_for_actor(kind, scope.clone(), actor.clone(), payload, at);
+        if event.kind == EventKind::SidecarContextAttach {
+            event.semantic_refs = vec![arkret_wire::SemanticRef::new(
+                sidecar_genesis.to_string(),
+                "after",
+            )];
+        }
+        let event = device_authorization_history::sign_event(
+            event,
+            principal.history.device_verification_method.clone(),
+            principal.history.founding_device_signing_seed,
+        );
+        let mut request = ordinary_realm::request_for_event(previous, event, at);
+        request.authority_commit.commit.stream_ref = stream.clone();
+        if previous.commit.stream_ref == stream {
+            request.authority_commit.commit.stream_position = previous.commit.stream_position + 1;
+            request.authority_commit.commit.previous_commit_ref =
+                Some(previous.commit.commit_id.clone());
+        } else {
+            request.authority_commit.commit.stream_position = 0;
+            request.authority_commit.commit.previous_commit_ref = None;
+        }
+        request
+    };
+    let state = |base, epoch, public_state| MlsStateInstallation {
+        effective_scope: scope.clone(),
+        base,
+        epoch,
+        public_state,
+        member_principals: [actor.clone()].into_iter().collect(),
+        consumed_proposals: Vec::new(),
+        public_blobs: Vec::new(),
+    };
+    let public_blob = |bytes: &[u8]| {
+        let sha256 = arkret_canonical::sha256_digest(bytes)
+            .strip_prefix("sha256:")
+            .unwrap()
+            .to_owned();
+        soland_storage::MlsPublicBlob {
+            blob_ref: blob(bytes),
+            size_bytes: i64::try_from(bytes.len()).unwrap(),
+            storage_backend: "local".to_owned(),
+            storage_key: format!("sha256/{sha256}"),
+            sha256,
+        }
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut genesis = make_request(EventKind::MlsGenesis, genesis_payload, head);
+    genesis.authority_commit.mls_state = Some(state(None, 0, tracker.export_state().unwrap()));
+    genesis
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .public_blobs = vec![public_blob(&info), public_blob(&tree)];
+    uow.commit_event(genesis.clone()).await.unwrap();
+    let envelope = group
+        .self_update_commit_with_governance_binding(&binding(
+            Some(genesis.authority_commit.event.event_id.clone()),
+            0,
+            1,
+        ))
+        .unwrap();
+    let wire = arkret_canonical::base64url_decode(&envelope.commit).unwrap();
+    tracker.process_public_handshake(&wire).unwrap();
+    let payload = MlsCommitPayload::new(
+        genesis.authority_commit.event.event_id.clone(),
+        0,
+        &envelope,
+        binding(Some(genesis.authority_commit.event.event_id.clone()), 0, 1),
+    )
+    .unwrap();
+    let mut commit = make_request(
+        EventKind::MlsCommit,
+        serde_json::to_value(payload).unwrap(),
+        &genesis.authority_commit,
+    );
+    commit.authority_commit.mls_state = Some(state(
+        Some(soland_storage::MlsInstalledBase {
+            current_mls_commit_event_ref: genesis.authority_commit.event.event_id.clone(),
+            epoch: 0,
+        }),
+        1,
+        tracker.export_state().unwrap(),
+    ));
+    commit
+        .authority_commit
+        .mls_state
+        .as_mut()
+        .unwrap()
+        .public_blobs = vec![public_blob(&tracker.ratchet_tree_bytes().unwrap())];
+    uow.commit_event(commit.clone()).await.unwrap();
+    let strand = ordinary_realm::next_request(
+        head,
+        EventKind::StrandCreate,
+        &controller.principal_id,
+        serde_json::json!({"object":{"schema":"ak.schema.strand.v1","realm_id":realm,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Pending Sidecar source"},"state":"active","created_by":actor,
+            "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
+        at,
+    );
+    uow.commit_event(strand.clone()).await.unwrap();
+    let context = make_request(
+        EventKind::SidecarContextAttach,
+        serde_json::json!({
+            "sidecar_id":sidecar,
+            "source_context_ref":{"kind":"strand","strand_id":arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id)},
+            "version":1,
+        }),
+        &commit.authority_commit,
+    );
+    uow.commit_event(context.clone()).await.unwrap();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let request = arkret_wire::StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: stream.clone(),
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 10,
+    };
+    let AccountStreamScan::Page(page) = store
+        .scan_stream_for_account(&request, agent, &controller.station_id)
+        .await
+        .unwrap()
+    else {
+        panic!("desired Agent must be able to verify its restricted handshakes before consume")
+    };
+    assert_eq!(page.committed_events.len(), 3);
+    assert!(
+        matches!(&page.committed_events[0], CommittedEventView::Full(row) if row.event == genesis.authority_commit.event)
+    );
+    assert!(
+        matches!(&page.committed_events[1], CommittedEventView::Full(row) if row.event == commit.authority_commit.event)
+    );
+    assert!(
+        matches!(&page.committed_events[2], CommittedEventView::Withheld(row) if row.commit == context.authority_commit.commit)
+    );
+    let material =
+        arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody {
+            realm_id: realm.clone(),
+            effective_scope: scope,
+            mls_group_id: group.group_id().clone(),
+            epoch: Default::default(),
+            group_state_event_id: genesis.authority_commit.event.event_id.clone(),
+            caller_actor_id: Some(ActorId::account(agent.clone())),
+            target_commit_event_ref: Some(commit.authority_commit.event.event_id.clone()),
+            target_epoch: Some(1),
+            group_info_ref: blob(&info),
+            ratchet_tree_ref: blob(&tree),
+            max_response_bytes: None,
+        };
+    assert!(
+        matches!(store.mls_member_group_state_material_read(&material, &controller.station_id, None).await.unwrap(),
+        MlsMemberGroupStateMaterialRead::Authorized {genesis:Some(row)} if row.event == genesis.authority_commit.event)
+    );
+    let snapshot = store
+        .realm_state_snapshot_material_for_account(realm, agent)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        snapshot
+            .visible_stream_heads
+            .iter()
+            .any(|head| head.stream_ref == stream)
+    );
+    let public_rows: Vec<_> = snapshot.current_state_entries.iter().filter(|row| matches!(row,
+        arkret_wire::TypedCurrentResult::Value {source_stream_ref,..} if source_stream_ref == &stream)).collect();
+    assert_eq!(public_rows.len(), 1);
+    assert!(
+        matches!(public_rows[0], arkret_wire::TypedCurrentResult::Value {
+        selector: arkret_wire::CurrentSelector::MlsGroup {scope_ref}, value, ..
+    } if scope_ref == &material.effective_scope
+        && value["genesis_event_ref"] == serde_json::to_value(&genesis.authority_commit.event.event_id).unwrap()
+        && value["epoch"] == 1)
+    );
+    assert!(
+        !snapshot
+            .current_state_entries
+            .iter()
+            .any(|row| matches!(row,
+        arkret_wire::TypedCurrentResult::Value {selector:
+            arkret_wire::CurrentSelector::Sidecar {sidecar_id}
+            | arkret_wire::CurrentSelector::SidecarContext {sidecar_id,..}, ..}
+            if sidecar_id == sidecar))
+    );
+    let foreign = AccountId::new(
+        agent.principal_id.clone(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:wrong-sidecar-station.example").unwrap(),
+    );
+    assert!(matches!(
+        store
+            .scan_stream_for_account(&request, &foreign, &controller.station_id)
+            .await
+            .unwrap(),
+        AccountStreamScan::NotAuthorized
+    ));
+    strand.authority_commit
+}
+
 #[tokio::test]
 async fn sidecar_cut_requires_exact_controller_and_current_parent_join() {
     let database = TestDatabase::lease().await;
@@ -330,6 +620,190 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         fresh
             .authority_stream_head
             .contains(&fresh_join.authority_commit.event.event_id)
+    );
+}
+
+#[tokio::test]
+async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_authority() {
+    use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite};
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let station = ordinary_realm::station();
+    let station_did = device_authorization_history::did_web_station(&station);
+    let principal = accepted_controller(&pool, station_did.clone()).await;
+    let controller = &principal.history.account;
+    let realm = ordinary_realm::bootstrap_unit_for_account(
+        "sidecar-agent-matrix",
+        controller,
+        &station_did,
+    );
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store
+        .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let parent = realm.transactions.last().unwrap();
+    let create = ordinary_realm::next_request(
+        parent,
+        EventKind::SidecarCreate,
+        &controller.principal_id,
+        serde_json::json!({}),
+        parent.commit.committed_at,
+    );
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(create.clone()).await.unwrap();
+    let realm_id = &create.authority_commit.event.realm_id;
+    let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
+    let (agent, genesis, provision_ref) = provision_owned_agent(&pool, &principal).await;
+    let no_key = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(no_key.desired_agent_ids.is_empty());
+    assert!(no_key.authority_stream_head.contains(&provision_ref));
+    let agent_did = arkret_wire::Did::new(format!(
+        "did:{}",
+        agent
+            .principal_id
+            .as_str()
+            .strip_prefix("ak:did_core:")
+            .unwrap()
+    ))
+    .unwrap();
+    let delegation = format!("{agent_did}#managed-controller");
+    let key_event = sidecar_agent::agent_control_event(
+        &principal.history.device_verification_method,
+        principal.history.founding_device_signing_seed,
+        controller,
+        &agent,
+        &genesis.event.realm_id,
+        &delegation,
+        sidecar_agent::agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            genesis.commit.committed_at,
+        ),
+        genesis.commit.committed_at,
+    );
+    let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    profiles
+        .admit_agent_control_event(AgentControlAdmissionWrite {
+            commit: soland_storage::AuthorityCommitTransaction {
+                expected_authority: genesis.expected_authority.clone(),
+                event: key_event.clone(),
+                commit: key_commit.clone(),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: key_commit.committed_at,
+        })
+        .await
+        .unwrap();
+    let not_joined = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(not_joined.desired_agent_ids.is_empty());
+    assert!(
+        not_joined
+            .authority_stream_head
+            .contains(&key_event.event_id)
+    );
+    let join = ordinary_realm::next_request(
+        &create.authority_commit,
+        EventKind::MemberState,
+        &controller.principal_id,
+        serde_json::json!({"member_id": arkret_wire::ActorId::account(agent.clone()), "membership":"join",
+            "agent_controller_binding": {"controller_account_id":controller,
+                "controller_membership_generation_ref":parent.event.event_id}}),
+        key_commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    pending_agent_handshake_reads(
+        &pool,
+        &principal,
+        &join.authority_commit,
+        &sidecar,
+        &create.authority_commit.event.event_id,
+        &agent,
+    )
+    .await;
+    let renewed_at = key_commit.committed_at + chrono::TimeDelta::seconds(2);
+    let mut renewed_authorization =
+        sidecar_agent::agent_key_authorization(&agent_did, &controller.principal_id, renewed_at);
+    renewed_authorization["supersedes"] = serde_json::json!([{
+        "key_id":key_event.payload["key_id"],
+        "authorized_event_ref":key_event.event_id,
+    }]);
+    let renewal = sidecar_agent::agent_control_event(
+        &principal.history.device_verification_method,
+        principal.history.founding_device_signing_seed,
+        controller,
+        &agent,
+        &genesis.event.realm_id,
+        &delegation,
+        renewed_authorization,
+        renewed_at,
+    );
+    let renewal_commit = sidecar_agent::station_successor(&key_commit, &renewal, &station_did, 2);
+    profiles
+        .admit_agent_control_event(AgentControlAdmissionWrite {
+            commit: soland_storage::AuthorityCommitTransaction {
+                expected_authority: genesis.expected_authority.clone(),
+                event: renewal,
+                commit: renewal_commit.clone(),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: renewal_commit.committed_at,
+        })
+        .await
+        .unwrap();
+    let current_cut = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current_cut.desired_agent_ids,
+        vec![agent.principal_id.clone()]
+    );
+    let stale = arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Sidecar {
+            realm_id: realm_id.clone(),
+            sidecar_id: sidecar,
+        },
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 10,
+    };
+    assert!(matches!(
+        store
+            .scan_stream_for_account(&stale, &agent, &controller.station_id)
+            .await
+            .unwrap(),
+        soland_storage::AccountStreamScan::NotAuthorized
+    ));
+    let snapshot = store
+        .realm_state_snapshot_material_for_account(realm_id, &agent)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !snapshot
+            .visible_stream_heads
+            .iter()
+            .any(|head| head.stream_ref == stale.stream_ref)
+    );
+    assert!(
+        !snapshot
+            .current_state_entries
+            .iter()
+            .any(|row| matches!(row,
+        arkret_wire::TypedCurrentResult::Value {source_stream_ref,..}
+        if source_stream_ref == &stale.stream_ref))
     );
 }
 

@@ -504,6 +504,86 @@ pub(crate) async fn caller_floor_in_connection(
         .transpose()
 }
 
+/// Preserve the ordinary effective interval, or prove the restricted public
+/// material interval for a still pending desired recipient.
+pub(crate) async fn public_material_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+    sidecar: &SidecarId,
+    caller: &ActorId,
+) -> PersistenceResult<Option<arkret_wire::ReadableFloor>> {
+    match caller_floor_in_connection(conn, realm, sidecar, caller).await? {
+        Some(floor) => Ok(Some(floor)),
+        None => handshake_floor_in_connection(conn, realm, sidecar, caller).await,
+    }
+}
+
+/// A desired recipient must verify its accepted Add before it can consume
+/// the Welcome. Only handshakes bound to this exact current authority cut
+/// open this interval; ordinary content floors stay unchanged. Snapshot callers
+/// may use it only for the public MLS current needed to verify the roster.
+pub(crate) async fn handshake_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+    sidecar: &SidecarId,
+    caller: &ActorId,
+) -> PersistenceResult<Option<arkret_wire::ReadableFloor>> {
+    if let Some(floor) = controller_floor_in_connection(conn, realm, sidecar, caller).await? {
+        return Ok(Some(floor));
+    }
+    let Some(cut) = crate::sidecar_access::cut_in_connection(conn, realm, sidecar).await? else {
+        return Ok(None);
+    };
+    if !crate::sidecar_access::desired_participant(&cut, caller) {
+        return Ok(None);
+    }
+    #[derive(QueryableByName)]
+    struct FloorRow {
+        #[diesel(sql_type = Text)]
+        commit_id: String,
+        #[diesel(sql_type = BigInt)]
+        stream_position: i64,
+    }
+    let stream = CommitStreamRef::Sidecar {
+        realm_id: realm.clone(),
+        sidecar_id: sidecar.clone(),
+    };
+    let floor = sql_query(
+        "SELECT c.commit_id,c.stream_position FROM realm_commits c \
+         JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
+         WHERE c.realm_id=$1 AND c.stream_key=$2 AND e.kind IN ('ak.mls.genesis','ak.mls.commit') \
+         AND e.envelope->'scope_ref'=c.stream_ref \
+         AND e.envelope->'payload'->'governance_binding'->>'participant_authority_digest'=$3 \
+         AND e.envelope->'payload'->'governance_binding'->'authority_stream_head'=$4 \
+         ORDER BY c.stream_position LIMIT 1",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .bind::<Text, _>(crate::authority_commit::stream_key(&stream)?)
+    .bind::<Text, _>(cut.participant_authority_digest.as_str())
+    .bind::<Jsonb, _>(
+        serde_json::to_value(cut.authority_stream_head).map_err(PersistenceError::database)?,
+    )
+    .get_result::<FloorRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    floor
+        .map(|row| {
+            let oldest_position =
+                u64::try_from(row.stream_position).map_err(PersistenceError::database)?;
+            Ok(arkret_wire::ReadableFloor {
+                oldest_position,
+                floor_commit_id: row.commit_id.parse().map_err(PersistenceError::database)?,
+                floor_reason: if oldest_position == 0 {
+                    arkret_wire::ReadableFloorReason::StreamStart
+                } else {
+                    arkret_wire::ReadableFloorReason::HistoryAccessPolicy
+                },
+            })
+        })
+        .transpose()
+}
+
 /// Hold the controller ownership stream before discovering its Agent PCRs.
 /// Every authority mutation already holds its source Realm authority row;
 /// these shared locks therefore protect both current rows and new ownership

@@ -228,6 +228,9 @@ pub(crate) struct DisclosureFacts {
     /// Exact current Circle memberships and readable floors at this same cut.
     pub(crate) circle_floors: std::collections::BTreeMap<CircleId, ReadableFloor>,
     pub(crate) sidecar_floors: std::collections::BTreeMap<arkret_wire::SidecarId, ReadableFloor>,
+    /// Pending desired recipients may learn public MLS current, never content.
+    pub(crate) sidecar_public_floors:
+        std::collections::BTreeMap<arkret_wire::SidecarId, ReadableFloor>,
     pub(crate) owned_sidecars: std::collections::BTreeSet<arkret_wire::SidecarId>,
     /// Report subjects whose exact scope's moderator grant is proved at this cut.
     pub(crate) report_subjects: std::collections::BTreeSet<arkret_wire::EventId>,
@@ -727,6 +730,7 @@ async fn disclosure_facts_in_connection(
         }
     }
     let mut sidecar_floors = std::collections::BTreeMap::new();
+    let mut sidecar_public_floors = std::collections::BTreeMap::new();
     let mut owned_sidecars = std::collections::BTreeSet::new();
     if caller_floor.is_some() {
         for row in &material.current_state_entries {
@@ -740,6 +744,15 @@ async fn disclosure_facts_in_connection(
                     conn, realm_id, sidecar_id, &caller,
                 )
                 .await?;
+                if floor.is_none()
+                    && let Some(public_floor) =
+                        crate::sidecar_authority_cut::handshake_floor_in_connection(
+                            conn, realm_id, sidecar_id, &caller,
+                        )
+                        .await?
+                {
+                    sidecar_public_floors.insert(sidecar_id.clone(), public_floor);
+                }
                 if floor.is_some()
                     || serde_json::from_value::<AccountId>(value["controller_account_id"].clone())
                         .ok()
@@ -782,6 +795,7 @@ async fn disclosure_facts_in_connection(
         call_creations,
         circle_floors,
         sidecar_floors,
+        sidecar_public_floors,
         owned_sidecars,
         report_subjects,
         franking_subjects,
@@ -927,7 +941,11 @@ pub(crate) fn disclose_to_account(
             CommitStreamRef::Sidecar {
                 realm_id,
                 sidecar_id,
-            } => realm_id == &material.realm_id && facts.sidecar_floors.contains_key(sidecar_id),
+            } => {
+                realm_id == &material.realm_id
+                    && (facts.sidecar_floors.contains_key(sidecar_id)
+                        || facts.sidecar_public_floors.contains_key(sidecar_id))
+            }
             _ => false,
         });
     if !material
@@ -1107,7 +1125,14 @@ pub(crate) fn disclose_to_account(
                     realm_id,
                     sidecar_id,
                 } => {
-                    realm_id == &material.realm_id && facts.sidecar_floors.contains_key(sidecar_id)
+                    realm_id == &material.realm_id
+                        && (facts.sidecar_floors.contains_key(sidecar_id)
+                            || matches!(selector, CurrentSelector::MlsGroup {
+                                scope_ref: arkret_wire::ScopeRef::Sidecar {
+                                    realm_id: scope_realm, sidecar_id: scope_sidecar,
+                                }
+                            } if scope_realm == realm_id && scope_sidecar == sidecar_id
+                                && facts.sidecar_public_floors.contains_key(sidecar_id)))
                 }
                 _ => false,
             };
@@ -1514,7 +1539,9 @@ pub(crate) fn disclose_to_account(
                     && !matches!(scope_ref, arkret_wire::ScopeRef::Circle { realm_id, circle_id }
                         if realm_id == &material.realm_id && facts.circle_floors.contains_key(circle_id))
                     && !matches!(scope_ref, arkret_wire::ScopeRef::Sidecar { realm_id, sidecar_id }
-                        if realm_id == &material.realm_id && facts.sidecar_floors.contains_key(sidecar_id))
+                        if realm_id == &material.realm_id
+                            && (facts.sidecar_floors.contains_key(sidecar_id)
+                                || facts.sidecar_public_floors.contains_key(sidecar_id)))
                 {
                     return Err(rejected(
                         "the MLS group's exact scope visibility is not proved",
@@ -1659,15 +1686,19 @@ pub(crate) fn disclose_to_account(
             }),
     );
     stream_floors.sort_by(|left, right| left.stream_ref.cmp(&right.stream_ref));
-    stream_floors.extend(facts.sidecar_floors.iter().map(|(sidecar_id, floor)| {
-        StreamHistoryFloor {
-            stream_ref: CommitStreamRef::Sidecar {
-                realm_id: material.realm_id.clone(),
-                sidecar_id: sidecar_id.clone(),
-            },
-            oldest_position: floor.oldest_position,
-        }
-    }));
+    stream_floors.extend(
+        facts
+            .sidecar_floors
+            .iter()
+            .chain(&facts.sidecar_public_floors)
+            .map(|(sidecar_id, floor)| StreamHistoryFloor {
+                stream_ref: CommitStreamRef::Sidecar {
+                    realm_id: material.realm_id.clone(),
+                    sidecar_id: sidecar_id.clone(),
+                },
+                oldest_position: floor.oldest_position,
+            }),
+    );
     material.retention_and_history_floor = arkret_wire::RetentionAndHistoryFloor {
         history_access,
         stream_floors,
@@ -1879,6 +1910,7 @@ mod tests {
             .into(),
             circle_floors: Default::default(),
             sidecar_floors: Default::default(),
+            sidecar_public_floors: Default::default(),
             owned_sidecars: Default::default(),
             report_subjects: Default::default(),
             franking_subjects: Default::default(),
@@ -1969,6 +2001,7 @@ mod tests {
             .into(),
             circle_floors: Default::default(),
             sidecar_floors: Default::default(),
+            sidecar_public_floors: Default::default(),
             owned_sidecars: Default::default(),
             report_subjects: Default::default(),
             franking_subjects: Default::default(),

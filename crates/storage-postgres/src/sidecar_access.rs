@@ -39,6 +39,63 @@ pub(crate) async fn cut_in_connection(
     crate::sidecar_authority_cut::in_connection(conn, realm, sidecar, &controller).await
 }
 
+/// Desired authority permits only the restricted public handshake needed to
+/// validate a recipient's Welcome. It is not application or delivery access.
+pub(crate) fn desired_participant(
+    cut: &crate::sidecar_authority_cut::SidecarParticipantAuthorityCut,
+    actor: &ActorId,
+) -> bool {
+    actor.as_account_id().is_some_and(|account| {
+        account == &cut.controller_account_id
+            || (account.station_id == cut.controller_account_id.station_id
+                && cut.desired_agent_ids.contains(&account.principal_id))
+    })
+}
+
+/// Pending recipients may read a handshake only when its signed participant
+/// binding equals the currently accepted cut. Content still requires consume.
+pub(crate) async fn handshake_event_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    actor: &ActorId,
+) -> PersistenceResult<bool> {
+    let arkret_wire::ScopeRef::Sidecar {
+        realm_id,
+        sidecar_id,
+    } = &event.scope_ref
+    else {
+        return Ok(false);
+    };
+    let binding = match event.kind {
+        arkret_wire::EventKind::MlsGenesis => serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::MlsGenesisPayload,
+        >(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?
+        .governance_binding,
+        arkret_wire::EventKind::MlsCommit => {
+            serde_json::from_value::<arkret_models_crypto::MlsCommitPayload>(
+                serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+            )
+            .map_err(PersistenceError::database)?
+            .governance_binding()
+            .clone()
+        }
+        _ => return Ok(false),
+    };
+    let Some(cut) = cut_in_connection(conn, realm_id, sidecar_id).await? else {
+        return Ok(false);
+    };
+    Ok(desired_participant(&cut, actor)
+        && binding.effective_scope() == &event.scope_ref
+        && binding.sidecar_binding().is_some_and(|binding| {
+            binding.sidecar_id == cut.sidecar_id
+                && binding.participant_authority_digest == cut.participant_authority_digest
+                && binding.authority_stream_head == cut.authority_stream_head
+        }))
+}
+
 /// Use only inside the caller's read/admission transaction. Realm membership,
 /// a Circle capability and an Agent ownership projection cannot authorize
 /// this scope; the exact controller or a currently effective owned Agent can.

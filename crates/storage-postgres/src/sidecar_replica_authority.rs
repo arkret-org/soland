@@ -101,6 +101,33 @@ pub(crate) async fn floor_in_connection(
     else {
         return Ok(Ok(None));
     };
+    prove_floor_in_connection(conn, realm, sidecar, floor).await
+}
+
+/// Welcome verification uses the same held replica proof, with a restricted
+/// handshake interval when the desired recipient has not consumed it yet.
+pub(crate) async fn handshake_floor_in_connection(
+    conn: &mut crate::AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    sidecar: &arkret_wire::SidecarId,
+    caller: &arkret_wire::ActorId,
+) -> PersistenceResult<Result<Option<arkret_wire::ReadableFloor>, &'static str>> {
+    let Some(floor) = crate::sidecar_authority_cut::public_material_floor_in_connection(
+        conn, realm, sidecar, caller,
+    )
+    .await?
+    else {
+        return Ok(Ok(None));
+    };
+    prove_floor_in_connection(conn, realm, sidecar, floor).await
+}
+
+async fn prove_floor_in_connection(
+    conn: &mut crate::AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    sidecar: &arkret_wire::SidecarId,
+    floor: arkret_wire::ReadableFloor,
+) -> PersistenceResult<Result<Option<arkret_wire::ReadableFloor>, &'static str>> {
     let stream = CommitStreamRef::Sidecar {
         realm_id: realm.clone(),
         sidecar_id: sidecar.clone(),

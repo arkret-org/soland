@@ -77,6 +77,7 @@ pub(crate) async fn full_event_for_member_in_connection(
             caller,
         )
         .await?
+            && !crate::sidecar_access::handshake_event_in_connection(conn, event, caller).await?
         {
             return Ok(false);
         }
