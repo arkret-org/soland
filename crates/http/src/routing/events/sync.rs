@@ -102,7 +102,9 @@ pub fn spawn_account_data_change_retention_sweeper(state: AppState) -> tokio::ta
 pub(crate) use cursor::*;
 mod subscribe;
 pub(crate) use subscribe::*;
+mod committed_subscription;
 mod events_query;
+pub(crate) mod websocket;
 pub(crate) use events_query::*;
 
 pub(super) fn protocol_router() -> Router {

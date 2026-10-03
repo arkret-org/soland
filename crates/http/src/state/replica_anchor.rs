@@ -349,6 +349,7 @@ async fn anchor_stream(
             snapshot_head: head.clone(),
             visible_stream_heads: snapshot.visible_stream_heads.clone(),
             current_state_entries: snapshot.current_state_entries.clone(),
+            verified_snapshot: snapshot.clone(),
         })
         .await
         .map_err(temporary)?;

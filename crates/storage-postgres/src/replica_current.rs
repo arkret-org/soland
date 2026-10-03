@@ -986,6 +986,8 @@ pub(crate) async fn advance_in_connection(
             | arkret_wire::EventKind::RealmPolicyBundle
             | arkret_wire::EventKind::RealmOwnerTransfer
             | arkret_wire::EventKind::RealmAuthorityReset
+            | arkret_wire::EventKind::MlsGenesis
+            | arkret_wire::EventKind::MlsCommit
     ) {
         diesel::sql_query("DELETE FROM replica_authorization_cuts WHERE realm_id=$1")
             .bind::<Text, _>(event.realm_id.as_str())
@@ -1129,6 +1131,9 @@ pub(crate) async fn advance_in_connection(
                 &serde_json::json!({"assertions":assertions}),
             )
             .await?;
+        }
+        arkret_wire::EventKind::RealmHistoryAccess => {
+            crate::realm_bootstrap_current_results::commit_realm_history_access_current_result_in_connection(conn, event, commit).await?;
         }
         arkret_wire::EventKind::RealmReadReceiptPolicy => {
             crate::realm_bootstrap_current_results::commit_read_receipt_policy_current_result_in_connection(conn, event, commit).await?;

@@ -773,7 +773,7 @@ async fn proxy_peer_keys_query(
 }
 
 /// Reuse the exact-device directory gate for the query-local signer surface.
-pub(super) async fn current_device_projection_for_signer(
+pub(crate) async fn current_device_projection_for_signer(
     state: &AppState,
     recipient: &arkret_wire::AccountId,
     realm: &arkret_wire::RealmId,

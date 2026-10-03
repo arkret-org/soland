@@ -519,6 +519,10 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
         .authority()
         .scan_stream_for_account(account, request.clone())
         .await;
+    tracing::debug!(target: "sync_network",
+        after_position = match request.direction { arkret_wire::StreamScanDirection::After(position) => position, _ => None },
+        stream_kind = match request.stream_ref { arkret_wire::CommitStreamRef::Realm {..} => "realm", arkret_wire::CommitStreamRef::Circle {..} => "circle", arkret_wire::CommitStreamRef::Sidecar {..} => "sidecar", _ => "unknown" },
+        "authorized stream scan direction");
     render_stream_scan(res, &request, result);
 }
 

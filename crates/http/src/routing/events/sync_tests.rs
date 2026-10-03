@@ -256,6 +256,7 @@ fn signal_envelope(
             arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         ),
         authority_commit_id: arkret_wire::RealmCommitId::from_digest([0xa; 32]),
+        parent_realm_authority_commit_id: None,
         signal_class: arkret_wire::SignalClass::Session,
         sent_at,
         expires_at: sent_at + chrono::Duration::seconds(ttl_seconds),
@@ -672,8 +673,8 @@ fn realm_fixture_event(
 
 /// An ordinary Realm on this Station, admitted through the bootstrap unit
 /// and extended through the Event unit of work, as production commits it.
-struct CommittedRealm {
-    head: soland_storage::AuthorityCommitTransaction,
+pub(super) struct CommittedRealm {
+    pub(super) head: soland_storage::AuthorityCommitTransaction,
 }
 
 impl CommittedRealm {
@@ -717,7 +718,7 @@ impl CommittedRealm {
         }
     }
 
-    async fn bootstrap(
+    pub(super) async fn bootstrap(
         store: &dyn soland_storage::PersistenceStore,
         founder: &arkret_wire::AccountId,
         method: arkret_wire::DidUrl,
@@ -828,7 +829,7 @@ impl CommittedRealm {
     }
 
     /// Commit `author`'s `ak.member.state` for `member` at the Realm head.
-    async fn member_state(
+    pub(super) async fn member_state(
         &mut self,
         store: &dyn soland_storage::PersistenceStore,
         author: &arkret_wire::AccountId,

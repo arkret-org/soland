@@ -37,6 +37,49 @@ use soland_storage::{
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
+fn bootstrap_snapshot(
+    realm: &arkret_wire::RealmId,
+    generation: u64,
+    heads: &[arkret_wire::CommitStreamHead],
+    entries: &[arkret_wire::TypedCurrentResult],
+) -> arkret_wire::RealmStateSnapshot {
+    let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let mut snapshot = arkret_wire::RealmStateSnapshot {
+        snapshot_id: arkret_wire::RealmSnapshotId::from_digest([0; 32]),
+        realm_id: realm.clone(),
+        governance_generation: generation,
+        visible_stream_heads: heads.to_vec(),
+        current_state_entries: entries.to_vec(),
+        retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
+            history_access: arkret_wire::HistoryAccess::SinceJoin,
+            stream_floors: heads
+                .iter()
+                .map(|h| arkret_wire::StreamHistoryFloor {
+                    stream_ref: h.stream_ref.clone(),
+                    oldest_position: h.stream_position,
+                })
+                .collect(),
+        },
+        created_at: at,
+        signature: arkret_wire::DetachedObjectSignature {
+            context: arkret_wire::DetachedSignatureContext::RealmSnapshot,
+            signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+            verification_method: arkret_wire::DidUrl::new("did:web:station.example#authority")
+                .unwrap(),
+            signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+            created_at: at,
+            sig: arkret_wire::Base64UrlString::new("c2ln").unwrap(),
+        },
+    };
+    let mut identity = serde_json::to_value(&snapshot).unwrap();
+    identity.as_object_mut().unwrap().remove("snapshot_id");
+    identity.as_object_mut().unwrap().remove("signature");
+    snapshot.snapshot_id = arkret_wire::RealmSnapshotId::from_digest(
+        arkret_canonical::sha256_bytes(&arkret_canonical::canonical_json_bytes(&identity).unwrap()),
+    );
+    snapshot
+}
+
 const MEMBER_STATION: &str = "ak:did_core:web:member-station.example";
 
 fn member_station() -> arkret_wire::DidCoreId {
@@ -954,21 +997,32 @@ async fn anchor_at_join(
 ) {
     let commit = &join.authority_commit.commit;
     store
-        .install_replica_anchor(&ReplicaAnchorInstall {
-            realm_id: commit.realm_id.clone(),
-            join_commit_id: commit.commit_id.clone(),
-            governance_generation: commit.governance_generation,
-            snapshot_head: arkret_wire::CommitStreamHead {
-                stream_ref: commit.stream_ref.clone(),
-                stream_position: commit.stream_position,
-                commit_id: commit.commit_id.clone(),
-            },
-            visible_stream_heads: vec![arkret_wire::CommitStreamHead {
-                stream_ref: commit.stream_ref.clone(),
-                stream_position: commit.stream_position,
-                commit_id: commit.commit_id.clone(),
-            }],
-            current_state_entries: entries,
+        .install_replica_anchor(&{
+            let mut install = ReplicaAnchorInstall {
+                realm_id: commit.realm_id.clone(),
+                join_commit_id: commit.commit_id.clone(),
+                governance_generation: commit.governance_generation,
+                snapshot_head: arkret_wire::CommitStreamHead {
+                    stream_ref: commit.stream_ref.clone(),
+                    stream_position: commit.stream_position,
+                    commit_id: commit.commit_id.clone(),
+                },
+                visible_stream_heads: vec![arkret_wire::CommitStreamHead {
+                    stream_ref: commit.stream_ref.clone(),
+                    stream_position: commit.stream_position,
+                    commit_id: commit.commit_id.clone(),
+                }],
+                current_state_entries: entries,
+
+                verified_snapshot: bootstrap_snapshot(&(commit.realm_id.clone()), 0, &[], &[]),
+            };
+            install.verified_snapshot = bootstrap_snapshot(
+                &install.realm_id,
+                install.governance_generation,
+                &install.visible_stream_heads,
+                &install.current_state_entries,
+            );
+            install
         })
         .await
         .unwrap();
@@ -1410,13 +1464,24 @@ async fn old_governance_snapshot_cannot_anchor_or_publish_current() {
         commit_id: commit.commit_id.clone(),
     };
     let error = store
-        .install_replica_anchor(&ReplicaAnchorInstall {
-            realm_id: realm_id.clone(),
-            join_commit_id: commit.commit_id.clone(),
-            governance_generation: 0,
-            snapshot_head: head.clone(),
-            visible_stream_heads: vec![head],
-            current_state_entries: vec![joined_row(&join, &actor)],
+        .install_replica_anchor(&{
+            let mut install = ReplicaAnchorInstall {
+                realm_id: realm_id.clone(),
+                join_commit_id: commit.commit_id.clone(),
+                governance_generation: 0,
+                snapshot_head: head.clone(),
+                visible_stream_heads: vec![head],
+                current_state_entries: vec![joined_row(&join, &actor)],
+
+                verified_snapshot: bootstrap_snapshot(&(realm_id.clone()), 0, &[], &[]),
+            };
+            install.verified_snapshot = bootstrap_snapshot(
+                &install.realm_id,
+                install.governance_generation,
+                &install.visible_stream_heads,
+                &install.current_state_entries,
+            );
+            install
         })
         .await
         .unwrap_err();
@@ -1783,13 +1848,24 @@ async fn circle_create_withheld_gap_allows_next_realm_replica() {
         .unwrap()
         .unwrap();
     member
-        .install_replica_anchor(&ReplicaAnchorInstall {
-            realm_id: realm_id.clone(),
-            join_commit_id: join.authority_commit.commit.commit_id.clone(),
-            governance_generation: join.authority_commit.commit.governance_generation,
-            snapshot_head: material.visible_stream_heads[0].clone(),
-            visible_stream_heads: material.visible_stream_heads.clone(),
-            current_state_entries: material.current_state_entries,
+        .install_replica_anchor(&{
+            let mut install = ReplicaAnchorInstall {
+                realm_id: realm_id.clone(),
+                join_commit_id: join.authority_commit.commit.commit_id.clone(),
+                governance_generation: join.authority_commit.commit.governance_generation,
+                snapshot_head: material.visible_stream_heads[0].clone(),
+                visible_stream_heads: material.visible_stream_heads.clone(),
+                current_state_entries: material.current_state_entries,
+
+                verified_snapshot: bootstrap_snapshot(&(realm_id.clone()), 0, &[], &[]),
+            };
+            install.verified_snapshot = bootstrap_snapshot(
+                &install.realm_id,
+                install.governance_generation,
+                &install.visible_stream_heads,
+                &install.current_state_entries,
+            );
+            install
         })
         .await
         .unwrap();
@@ -3261,13 +3337,24 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
     let head = material.visible_stream_heads[0].clone();
     assert_eq!(head.commit_id, message.authority_commit.commit.commit_id);
     member
-        .install_replica_anchor(&ReplicaAnchorInstall {
-            realm_id: realm_id.clone(),
-            join_commit_id: join.authority_commit.commit.commit_id.clone(),
-            governance_generation: join.authority_commit.commit.governance_generation,
-            snapshot_head: head.clone(),
-            visible_stream_heads: material.visible_stream_heads.clone(),
-            current_state_entries: material.current_state_entries.clone(),
+        .install_replica_anchor(&{
+            let mut install = ReplicaAnchorInstall {
+                realm_id: realm_id.clone(),
+                join_commit_id: join.authority_commit.commit.commit_id.clone(),
+                governance_generation: join.authority_commit.commit.governance_generation,
+                snapshot_head: head.clone(),
+                visible_stream_heads: material.visible_stream_heads.clone(),
+                current_state_entries: material.current_state_entries.clone(),
+
+                verified_snapshot: bootstrap_snapshot(&(realm_id.clone()), 0, &[], &[]),
+            };
+            install.verified_snapshot = bootstrap_snapshot(
+                &install.realm_id,
+                install.governance_generation,
+                &install.visible_stream_heads,
+                &install.current_state_entries,
+            );
+            install
         })
         .await
         .unwrap();
@@ -4267,13 +4354,24 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         .unwrap()
         .clone();
     member
-        .install_replica_anchor(&ReplicaAnchorInstall {
-            realm_id: realm.clone(),
-            join_commit_id: join.authority_commit.commit.commit_id.clone(),
-            governance_generation: join.authority_commit.commit.governance_generation,
-            snapshot_head: realm_head,
-            visible_stream_heads: material.visible_stream_heads,
-            current_state_entries: material.current_state_entries,
+        .install_replica_anchor(&{
+            let mut install = ReplicaAnchorInstall {
+                realm_id: realm.clone(),
+                join_commit_id: join.authority_commit.commit.commit_id.clone(),
+                governance_generation: join.authority_commit.commit.governance_generation,
+                snapshot_head: realm_head,
+                visible_stream_heads: material.visible_stream_heads,
+                current_state_entries: material.current_state_entries,
+
+                verified_snapshot: bootstrap_snapshot(&(realm.clone()), 0, &[], &[]),
+            };
+            install.verified_snapshot = bootstrap_snapshot(
+                &install.realm_id,
+                install.governance_generation,
+                &install.visible_stream_heads,
+                &install.current_state_entries,
+            );
+            install
         })
         .await
         .unwrap();
@@ -4419,13 +4517,24 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         circle_join.authority_commit.commit.commit_id
     );
     member
-        .install_replica_anchor(&ReplicaAnchorInstall {
-            realm_id: realm.clone(),
-            join_commit_id: circle_join.authority_commit.commit.commit_id.clone(),
-            governance_generation: circle_join.authority_commit.commit.governance_generation,
-            snapshot_head: circle_head,
-            visible_stream_heads: material.visible_stream_heads.clone(),
-            current_state_entries: material.current_state_entries.clone(),
+        .install_replica_anchor(&{
+            let mut install = ReplicaAnchorInstall {
+                realm_id: realm.clone(),
+                join_commit_id: circle_join.authority_commit.commit.commit_id.clone(),
+                governance_generation: circle_join.authority_commit.commit.governance_generation,
+                snapshot_head: circle_head,
+                visible_stream_heads: material.visible_stream_heads.clone(),
+                current_state_entries: material.current_state_entries.clone(),
+
+                verified_snapshot: bootstrap_snapshot(&(realm.clone()), 0, &[], &[]),
+            };
+            install.verified_snapshot = bootstrap_snapshot(
+                &install.realm_id,
+                install.governance_generation,
+                &install.visible_stream_heads,
+                &install.current_state_entries,
+            );
+            install
         })
         .await
         .unwrap();

@@ -5,40 +5,14 @@
 
 use super::*;
 
-/// Bounded catch-up page size, shared by the NDJSON surface and the WebSocket
-/// events channel so both bindings truncate at the same point.
-
 /// `ak.self.committed_event.stream.subscribe.v1` at `GET /_arkret/self/committed-events/subscribe`.
-/// NDJSON streaming: each line is one frame, frame `kind` is one of
-/// `event` / `catchup_complete` / `heartbeat` / `dropped`.
-///
-/// Selectors: repeated `realm_ids` and percent-encoded JCS `actor_ids` values.
-///
-/// Lifecycle:
-///   1. Validate inputs (realms, accessibility).
-///   2. Subscribe to the live event broadcast BEFORE serving history so no events are missed in the
-///      history-vs-live window.
-///   3. Build an async stream that yields: a) bounded replay frames when `catchup=true` b) one
-///      `catchup_complete` frame after replay data, or after a `frontier` baseline when the replay
-///      is empty c) live event frames as broadcast notifications arrive d) periodic `heartbeat`
-///      frames every 30s of idle e) a terminal `resync_required` frame when subscription-wide
-///      broadcast lag is detected
-///   4. Stream terminates when:
-///      - `max_duration_ms` query param elapsed (default 30_000 ms)
-///      - client disconnects (drops the response stream)
-///      - the broadcast channel is closed (server shutdown)
+/// Each NDJSON line is a formal committed-event subscription frame. An opaque
+/// continuation covers independent signed Commit identities and readable floors;
+/// notifications only wake a fresh authorized durable scan.
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.committed_event.stream.subscribe.v1"))]
-pub(crate) async fn events_subscribe(_depot: &mut Depot, _req: &mut Request, res: &mut Response) {
-    // The current contract requires per-stream RealmCommit positions and the
-    // closed CommittedEventSubscribeFrame. The retired actor-wide EventId
-    // cursor cannot establish coverage or produce a valid continuation.
-    render_error(
-        res,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "temporarily_unavailable",
-        "committed Event stream cut is unavailable",
-    );
+pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
+    super::committed_subscription::subscribe(depot, req, res).await;
 }
 
 /// Serialize a JSON frame to a canonical NDJSON line. Each line ends with `\n`
@@ -57,7 +31,7 @@ pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionIdentityS
         Some(session) => format!(
             "session:{}:{}",
             session.actor,
-            session.require_human_device_id()
+            session.human_device_id().unwrap_or(&session.token_hash)
         ),
         None => format!("remote:{}", req.remote_addr()),
     }
@@ -320,7 +294,7 @@ pub(super) fn realm_history_scan_digest(realm: &RealmId) -> String {
     events_query_scope_digest(&[realm.to_string()], &[], None, "default")
 }
 
-fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
+pub(super) fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
     match error {
         SyncCursorError::Expired => crate::app_error!(CursorExpired, "cursor has expired",),
         // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
@@ -652,15 +626,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn committed_event_subscribe_fails_closed_without_stream_cut() {
+    async fn committed_event_subscribe_requires_authenticated_stream_reader() {
         let state = test_state();
         let router = salvo::Router::new()
             .hoop(salvo::affix_state::inject(state))
             .get(events_subscribe);
-        let response = salvo::test::TestClient::get("http://server/")
-            .send(&salvo::Service::new(router))
-            .await;
-        assert_eq!(response.status_code, Some(StatusCode::SERVICE_UNAVAILABLE));
+        let response =
+            salvo::test::TestClient::get(format!("http://server/?realm_ids={TEST_REALM}"))
+                .send(&salvo::Service::new(router))
+                .await;
+        assert_eq!(response.status_code, Some(StatusCode::UNAUTHORIZED));
     }
 
     #[test]

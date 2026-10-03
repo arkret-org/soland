@@ -187,11 +187,30 @@ fn refusal_code(error: &PersistenceError) -> Option<ConflictCode> {
 #[tokio::test]
 async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_it() {
     for history in ["since_join", "all_history_for_current_members"] {
-        parent_revision_matrix(history).await;
+        parent_revision_matrix(history, None).await;
     }
 }
 
-async fn parent_revision_matrix(history: &str) {
+#[tokio::test]
+async fn signal_parent_cut_reset_controller_and_handoff_matrix() {
+    for branch in ["reset", "controller", "handoff"] {
+        parent_revision_matrix("since_join", Some(branch)).await;
+    }
+}
+
+async fn root_digest(pool: &PgPool, realm: &arkret_wire::RealmId) -> arkret_wire::Hash {
+    #[derive(diesel::QueryableByName)]
+    struct Root {
+        #[diesel(sql_type=Jsonb)]
+        value: Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let root=diesel::sql_query("SELECT jsonb_build_object('controller_actor_id',controller_actor_id,'controller_epoch',controller_epoch,'authority_generation',authority_generation) AS value FROM realm_authority_root_current_results WHERE realm_id=$1")
+        .bind::<Text,_>(realm.as_str()).get_result::<Root>(&mut conn).await.unwrap();
+    arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&root.value).unwrap()).unwrap()
+}
+
+async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
@@ -420,6 +439,7 @@ async fn parent_revision_matrix(history: &str) {
             caller_actor_id: alice.clone(),
             cursor: None,
         };
+    let mut parent_tail = grant.authority_commit.clone();
     if activated {
         assert!(matches!(
             store
@@ -432,6 +452,346 @@ async fn parent_revision_matrix(history: &str) {
                 .unwrap(),
             soland_storage::MlsMemberGroupStateMaterialRead::Authorized { genesis: Some(_) }
         ));
+        let signal_at =
+            genesis.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
+        let authority = store
+            .signal_scope_authority(
+                &material_request.effective_scope,
+                &genesis.authority_commit.commit.commit_id,
+                Some(&grant.authority_commit.commit.commit_id),
+                &alice,
+                arkret_wire::SignalClass::Session,
+                signal_at,
+                signal_at,
+            )
+            .await
+            .unwrap()
+            .expect("signed Circle parent join proves the historical and current Signal cut");
+        assert_eq!(authority.recipient_actors, vec![alice.clone()]);
+        assert_eq!(
+            authority.historical_mls_event_ref,
+            genesis.authority_commit.event.event_id
+        );
+        for parent in [
+            None,
+            Some(&genesis.authority_commit.commit.commit_id),
+            Some(&unit.transactions[0].commit.commit_id),
+        ] {
+            assert!(
+                store
+                    .signal_scope_authority(
+                        &material_request.effective_scope,
+                        &genesis.authority_commit.commit.commit_id,
+                        parent,
+                        &alice,
+                        arkret_wire::SignalClass::Session,
+                        signal_at,
+                        signal_at
+                    )
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let moderation_at =
+            genesis.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1);
+        let moderation_grant = sourced(ordinary_realm::next_request_for_actor(
+            &parent_tail,
+            EventKind::CapabilityGrant,
+            creator.clone(),
+            json!({"grant":{"schema":"ak.schema.capability.v1","realm_id":realm,"issuer_id":creator,
+                "subject":alice,"actions":["ak.call.moderate"],"resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
+                "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,"authority_event_ref":root_event_ref,"authority_generation":0}],
+                "issued_at":arkret_canonical::format_timestamp_canonical(moderation_at)}}),
+            moderation_at,
+        ));
+        uow.commit_event(moderation_grant.clone()).await.unwrap();
+        // A later grant cannot retroactively authorize an older parent cut.
+        assert!(
+            store
+                .signal_scope_authority(
+                    &material_request.effective_scope,
+                    &genesis.authority_commit.commit.commit_id,
+                    Some(&grant.authority_commit.commit.commit_id),
+                    &alice,
+                    arkret_wire::SignalClass::Moderation,
+                    signal_at,
+                    signal_at
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .signal_scope_authority(
+                    &material_request.effective_scope,
+                    &genesis.authority_commit.commit.commit_id,
+                    Some(&moderation_grant.authority_commit.commit.commit_id),
+                    &alice,
+                    arkret_wire::SignalClass::Moderation,
+                    signal_at,
+                    signal_at
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        if let Some(branch) = branch {
+            let scope = &material_request.effective_scope;
+            let scope_head = &genesis.authority_commit.commit.commit_id;
+            let original_parent = &moderation_grant.authority_commit.commit.commit_id;
+            let mut tail = moderation_grant.authority_commit.clone();
+            if branch == "reset" {
+                let reset = sourced(ordinary_realm::next_request_for_actor(
+                    &tail,
+                    EventKind::RealmAuthorityReset,
+                    creator.clone(),
+                    json!({"realm_id":realm,"expected_state_digest":root_digest(&pool,&realm).await}),
+                    moderation_at + chrono::TimeDelta::milliseconds(1),
+                ));
+                uow.commit_event(reset).await.unwrap();
+                assert!(
+                    store
+                        .signal_scope_authority(
+                            scope,
+                            scope_head,
+                            Some(original_parent),
+                            &alice,
+                            arkret_wire::SignalClass::Moderation,
+                            signal_at,
+                            signal_at
+                        )
+                        .await
+                        .unwrap()
+                        .is_none(),
+                    "current root reset invalidates the old root-generation moderation grant"
+                );
+            } else if branch == "controller" {
+                let transfer = sourced(ordinary_realm::next_request_for_actor(
+                    &tail,
+                    EventKind::RealmOwnerTransfer,
+                    creator.clone(),
+                    json!({"realm_id":realm,"expected_state_digest":root_digest(&pool,&realm).await,
+                        "patch":{"controller_actor_id":alice},"successor_acceptance":"storage-boundary-fixture"}),
+                    moderation_at + chrono::TimeDelta::milliseconds(1),
+                ));
+                uow.commit_event(transfer.clone()).await.unwrap();
+                assert!(
+                    store
+                        .signal_scope_authority(
+                            scope,
+                            scope_head,
+                            Some(original_parent),
+                            &alice,
+                            arkret_wire::SignalClass::Moderation,
+                            signal_at,
+                            signal_at
+                        )
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    "owner transfer preserves the already accepted ordinary grant"
+                );
+                tail = transfer.authority_commit;
+                let revoke = sourced(ordinary_realm::next_request_for_actor(
+                    &tail,
+                    EventKind::CapabilityRevoke,
+                    alice.clone(),
+                    json!({"grant_id":arkret_wire::GrantId::from_event_id(&moderation_grant.authority_commit.event.event_id),
+                        "expected_revision":{"commit_id":original_parent,"stream_position":moderation_grant.authority_commit.commit.stream_position}}),
+                    tail.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+                ));
+                uow.commit_event(revoke.clone()).await.unwrap();
+                let transfer_back = sourced(ordinary_realm::next_request_for_actor(
+                    &revoke.authority_commit,
+                    EventKind::RealmOwnerTransfer,
+                    alice.clone(),
+                    json!({"realm_id":realm,"expected_state_digest":root_digest(&pool,&realm).await,
+                        "patch":{"controller_actor_id":creator},"successor_acceptance":"storage-boundary-fixture"}),
+                    revoke.authority_commit.commit.committed_at
+                        + chrono::TimeDelta::milliseconds(1),
+                ));
+                uow.commit_event(transfer_back).await.unwrap();
+                assert!(
+                    store
+                        .signal_scope_authority(
+                            scope,
+                            scope_head,
+                            Some(original_parent),
+                            &alice,
+                            arkret_wire::SignalClass::Moderation,
+                            signal_at,
+                            signal_at
+                        )
+                        .await
+                        .unwrap()
+                        .is_none(),
+                    "old controller authority cannot revive a revoked moderation grant"
+                );
+            } else {
+                let next_station =
+                    arkret_wire::DidCoreId::new("ak:did_core:web:next-signal-station.example")
+                        .unwrap();
+                let change = sourced(ordinary_realm::next_request_for_actor(
+                    &tail,
+                    EventKind::RealmGovernanceStationChange,
+                    creator.clone(),
+                    json!({"expected_governance_generation":0,"expected_realm_stream_commit_id":tail.commit.commit_id,
+                        "new_governance_station_id":next_station}),
+                    tail.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+                ));
+                uow.commit_event(change.clone()).await.unwrap();
+                let mut heads = vec![
+                    arkret_wire::CommitStreamHead {
+                        stream_ref: change.authority_commit.commit.stream_ref.clone(),
+                        stream_position: change.authority_commit.commit.stream_position,
+                        commit_id: change.authority_commit.commit.commit_id.clone(),
+                    },
+                    arkret_wire::CommitStreamHead {
+                        stream_ref: stream.clone(),
+                        stream_position: genesis.authority_commit.commit.stream_position,
+                        commit_id: scope_head.clone(),
+                    },
+                ];
+                heads.sort_by(|a, b| a.stream_ref.cmp(&b.stream_ref));
+                let mut snapshot_signature =
+                    ordinary_realm::signature(&ordinary_realm::station(), signal_at);
+                snapshot_signature.context = arkret_wire::DetachedSignatureContext::RealmSnapshot;
+                let snapshot = arkret_wire::RealmStateSnapshot {
+                    snapshot_id: arkret_wire::RealmSnapshotId::from_digest([0x91; 32]),
+                    realm_id: realm.clone(),
+                    governance_generation: 0,
+                    visible_stream_heads: heads.clone(),
+                    current_state_entries: Vec::new(),
+                    retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor {
+                        history_access: arkret_wire::HistoryAccess::SinceJoin,
+                        stream_floors: heads
+                            .iter()
+                            .map(|head| arkret_wire::StreamHistoryFloor {
+                                stream_ref: head.stream_ref.clone(),
+                                oldest_position: 0,
+                            })
+                            .collect(),
+                    },
+                    created_at: signal_at,
+                    signature: snapshot_signature,
+                };
+                let mut old_signature =
+                    ordinary_realm::signature(&ordinary_realm::station(), signal_at);
+                old_signature.context =
+                    arkret_wire::DetachedSignatureContext::RealmAuthorityHandoffOld;
+                let mut new_signature = ordinary_realm::signature(&next_station, signal_at);
+                new_signature.context =
+                    arkret_wire::DetachedSignatureContext::RealmAuthorityHandoffNewAcceptance;
+                let handoff = arkret_wire::RealmAuthorityHandoff {
+                    handoff_id: arkret_wire::RealmAuthorityHandoffId::from_digest([0x92; 32]),
+                    realm_id: realm.clone(),
+                    from_generation: 0,
+                    to_generation: 1,
+                    from_service_id: ordinary_realm::station(),
+                    to_service_id: next_station,
+                    final_stream_heads_digest: arkret_wire::Hash::new(
+                        arkret_canonical::canonical_sha256(&heads).unwrap(),
+                    )
+                    .unwrap(),
+                    snapshot_ref: snapshot.snapshot_id.clone(),
+                    snapshot_digest: snapshot.signature.signed_digest.clone(),
+                    change_event_ref: change.authority_commit.event.event_id.clone(),
+                    change_commit_id: change.authority_commit.commit.commit_id.clone(),
+                    old_authority_signature: old_signature,
+                    new_authority_acceptance_signature: new_signature,
+                };
+                // Storage fixtures use structural signatures; the Garth verified-scan fixture
+                // independently verifies the real dual Ed25519 signatures and complete manifest.
+                store
+                    .install_handoff(&handoff, &heads, &snapshot)
+                    .await
+                    .unwrap();
+                assert!(
+                    store
+                        .signal_scope_authority(
+                            scope,
+                            scope_head,
+                            Some(original_parent),
+                            &alice,
+                            arkret_wire::SignalClass::Moderation,
+                            signal_at,
+                            signal_at
+                        )
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    "accepted complete handoff preserves an unchanged Circle head"
+                );
+                let mut stale = handoff.clone();
+                stale.handoff_id = arkret_wire::RealmAuthorityHandoffId::from_digest([0x93; 32]);
+                assert!(matches!(
+                    store
+                        .install_handoff(&stale, &heads, &snapshot)
+                        .await
+                        .unwrap_err(),
+                    PersistenceError::Conflict(_)
+                ));
+                let mut conn = pool.get().await.unwrap();
+                diesel::sql_query("DELETE FROM realm_state_snapshots WHERE snapshot_id=$1")
+                    .bind::<Text, _>(snapshot.snapshot_id.as_str())
+                    .execute(&mut conn)
+                    .await
+                    .unwrap();
+                drop(conn);
+                assert!(
+                    store
+                        .signal_scope_authority(
+                            scope,
+                            scope_head,
+                            Some(original_parent),
+                            &alice,
+                            arkret_wire::SignalClass::Moderation,
+                            signal_at,
+                            signal_at
+                        )
+                        .await
+                        .is_err(),
+                    "missing durable handoff manifest cannot authorize an old generation head"
+                );
+            }
+            assert_eq!(
+                circle_stream_commits(&pool, &stream).await,
+                2,
+                "authority decisions do not synthesize Circle Events or Commits"
+            );
+            println!(
+                "[signal-authority-matrix] branch={branch} real_postgres=1 scope_head_unchanged=1 assertions_passed=1"
+            );
+            return;
+        }
+        let revoke = sourced(ordinary_realm::next_request_for_actor(
+            &moderation_grant.authority_commit,
+            EventKind::CapabilityRevoke,
+            creator.clone(),
+            json!({"grant_id":arkret_wire::GrantId::from_event_id(&moderation_grant.authority_commit.event.event_id),
+                "expected_revision":{"commit_id":moderation_grant.authority_commit.commit.commit_id,"stream_position":moderation_grant.authority_commit.commit.stream_position}}),
+            moderation_at + chrono::TimeDelta::milliseconds(1),
+        ));
+        uow.commit_event(revoke.clone()).await.unwrap();
+        assert!(
+            store
+                .signal_scope_authority(
+                    &material_request.effective_scope,
+                    &genesis.authority_commit.commit.commit_id,
+                    Some(&moderation_grant.authority_commit.commit.commit_id),
+                    &alice,
+                    arkret_wire::SignalClass::Moderation,
+                    signal_at,
+                    signal_at
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(circle_stream_commits(&pool, &stream).await, 2);
+        parent_tail = revoke.authority_commit;
         assert!(matches!(
             store
                 .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
@@ -485,15 +845,28 @@ async fn parent_revision_matrix(history: &str) {
 
     // Parent leave: the old Circle join is effective-invalid at once; no
     // Circle Event is synthesized and the canonical row is not rewritten.
-    let realm_leave = realm_membership(
-        &grant.authority_commit,
-        &alice,
-        &alice,
-        "leave",
-        "parent leave",
-    );
+    let realm_leave = realm_membership(&parent_tail, &alice, &alice, "leave", "parent leave");
     uow.commit_event(realm_leave.clone()).await.unwrap();
     let after_leave = circle_member(&pool, &circle, &alice).await;
+    if activated {
+        let signal_at =
+            realm_leave.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
+        assert!(
+            store
+                .signal_scope_authority(
+                    &material_request.effective_scope,
+                    &genesis.authority_commit.commit.commit_id,
+                    Some(&grant.authority_commit.commit.commit_id),
+                    &alice,
+                    arkret_wire::SignalClass::Session,
+                    signal_at,
+                    signal_at
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
     assert!(!after_leave.effective);
     assert_eq!(after_leave.membership, "join");
     assert_eq!(after_leave.current_commit_id, joined.current_commit_id);
@@ -534,6 +907,25 @@ async fn parent_revision_matrix(history: &str) {
     let second_parent = ordinary_realm::parent_membership_revision(&pool, &realm, &alice).await;
     assert_ne!(second_parent, first_parent);
     let after_rejoin = circle_member(&pool, &circle, &alice).await;
+    if activated {
+        let signal_at = rejoin.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
+        assert!(
+            store
+                .signal_scope_authority(
+                    &material_request.effective_scope,
+                    &genesis.authority_commit.commit.commit_id,
+                    Some(&grant.authority_commit.commit.commit_id),
+                    &alice,
+                    arkret_wire::SignalClass::Session,
+                    signal_at,
+                    signal_at
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "parent rejoin cannot revive an old Signal cut"
+        );
+    }
     assert!(!after_rejoin.effective);
     assert_eq!(after_rejoin.value, joined.value);
     assert_eq!(

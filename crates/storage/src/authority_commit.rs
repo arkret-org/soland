@@ -52,6 +52,13 @@ pub enum AccountRealmStreamList {
     Unproved(&'static str),
 }
 
+/// Internal subscription admission cut; no parallel protocol result carrier.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccountRealmStreamAuthorizationCut {
+    pub listing: AccountRealmStreamList,
+    pub history_digest: Option<String>,
+}
+
 /// Result of `ak.self.committed_event.resource.get.v1` for one caller on an
 /// ordinary Realm's Realm stream, decided from typed current at one read cut.
 #[derive(Clone, Debug, PartialEq)]
@@ -1256,6 +1263,8 @@ pub struct ReplicaAnchorInstall {
     pub snapshot_head: CommitStreamHead,
     pub visible_stream_heads: Vec<CommitStreamHead>,
     pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+    /// Exact signed bootstrap verified by the caller, archived with its rows.
+    pub verified_snapshot: arkret_wire::RealmStateSnapshot,
 }
 
 /// Internal read-only eligibility at the Signal's signed and current cuts.
@@ -1353,6 +1362,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         scope: &arkret_wire::ScopeRef,
         authority_commit_id: &RealmCommitId,
+        parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
         sender: &arkret_wire::ActorId,
         signal_class: arkret_wire::SignalClass,
         sent_at: chrono::DateTime<chrono::Utc>,
@@ -1361,6 +1371,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         let _ = (
             scope,
             authority_commit_id,
+            parent_realm_authority_commit_id,
             sender,
             signal_class,
             sent_at,
@@ -2033,6 +2044,20 @@ pub trait AuthorityCommitStore: Send + Sync {
         account: &arkret_wire::AccountId,
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<AccountRealmStreamList>;
+
+    async fn realm_stream_subscription_cut(
+        &self,
+        _realm_id: &arkret_wire::RealmId,
+        _account: &arkret_wire::AccountId,
+        _issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<AccountRealmStreamAuthorizationCut> {
+        Ok(AccountRealmStreamAuthorizationCut {
+            listing: AccountRealmStreamList::Unproved(
+                "subscription history policy cut is unavailable",
+            ),
+            history_digest: None,
+        })
+    }
 
     /// `ak.self.current_results.read.exact.v1` for one authenticated Account:
     /// membership, governance generation, effective stream head and the

@@ -156,6 +156,40 @@ async fn bind_session_account(
         })
 }
 
+/// Validate the grant's current holder gates after the socket-specific proof
+/// verifier has bound its nonce, origin, target and holder key. No local
+/// bearer session or HTTP DPoP replay entry is created by this read.
+pub(crate) async fn websocket_session(
+    state: &AppState,
+    grant_jwt: &str,
+) -> Result<SessionRecord, (StatusCode, &'static str, &'static str)> {
+    let grant =
+        super::super::auth_grant_dpop::introspect_session_grant_cached(state, grant_jwt, true)
+            .await?;
+    if grant.audience_id.as_str() != state.service_id() || grant.expires_at <= now() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "socket grant is not current for this Station",
+        ));
+    }
+    let endpoint = super::super::auth_grant_dpop::grant_session_binding(&grant)?;
+    let mut session = super::super::auth_grant_dpop::session_from_verified_grant(
+        state, grant_jwt, grant, endpoint,
+    );
+    if is_recovery_session_grant(&session) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated",
+            "recovery grants do not authorize realtime channels",
+        ));
+    }
+    classify_agent_session(&session)?;
+    enforce_session_device_revocation_gate(state, &session).await?;
+    bind_session_account(state, &mut session).await?;
+    Ok(session)
+}
+
 /// Recheck an established HTTP stream without replaying its consumed DPoP proof.
 /// The original credential bounds the stream; a later lookup cannot replace its
 /// account, holder, scope or expiry with a different authorization.

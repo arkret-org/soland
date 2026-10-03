@@ -528,6 +528,9 @@ pub struct AppConfig {
     /// requests. `None` keeps the "wait indefinitely" behaviour.
     /// Env: `SOLAND_SHUTDOWN_GRACE_SECS`.
     pub shutdown_grace_seconds: Option<u64>,
+    /// Maximum physical WebSocket lifetime before bounded drain (1..=600s).
+    /// Env: `SOLAND_WEBSOCKET_MAX_LIFETIME_SECS`.
+    pub websocket_max_lifetime_seconds: u64,
     /// Resolved `RUST_LOG` directive.
     ///
     /// Resolved here rather than by `EnvFilter::from_default_env()` so a
@@ -976,6 +979,7 @@ impl AppConfig {
             max_request_size_bytes: DEFAULT_MAX_REQUEST_SIZE_BYTES,
             pq_hybrid_tls_probe: None,
             shutdown_grace_seconds: None,
+            websocket_max_lifetime_seconds: 600,
             log_filter: None,
             log_file: None,
             otel: OtelConfig::default(),
@@ -1347,6 +1351,15 @@ impl AppConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|secs| *secs > 0);
         let log_filter = env_non_empty(values, "RUST_LOG");
+        let websocket_max_lifetime_seconds =
+            env_non_empty(values, "SOLAND_WEBSOCKET_MAX_LIFETIME_SECS")
+                .map(|value| value.parse::<u64>())
+                .transpose()
+                .map_err(|_| {
+                    anyhow::anyhow!("SOLAND_WEBSOCKET_MAX_LIFETIME_SECS must be an integer")
+                })?
+                .unwrap_or(600)
+                .clamp(1, 600);
         let log_file = env_non_empty(values, "SOLAND_LOG_FILE").map(PathBuf::from);
         let otel = load_otel_config(values)?;
         let db_pool_max_size = env_non_empty(values, "SOLAND_DB_POOL_MAX_SIZE")
@@ -1479,6 +1492,7 @@ impl AppConfig {
             max_request_size_bytes,
             pq_hybrid_tls_probe,
             shutdown_grace_seconds,
+            websocket_max_lifetime_seconds,
             log_filter,
             log_file,
             otel,

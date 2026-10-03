@@ -473,6 +473,22 @@ async fn circle_join_floor(
     join: &JoinRow,
     history: arkret_wire::HistoryAccess,
 ) -> PersistenceResult<Option<ReadableFloor>> {
+    let join_position = u64::try_from(join.current_stream_position).map_err(|_| {
+        PersistenceError::SchemaViolation("Circle join position is negative".to_owned())
+    })?;
+    // A since-join replica is not entitled to download the private prefix
+    // before its opening join. The exact proven join is its readable floor;
+    // requiring a locally held position zero would reject that valid interval.
+    if history == arkret_wire::HistoryAccess::SinceJoin && join_position > 0 {
+        return Ok(Some(ReadableFloor {
+            oldest_position: join_position,
+            floor_commit_id: join
+                .current_commit_id
+                .parse()
+                .map_err(PersistenceError::database)?,
+            floor_reason: ReadableFloorReason::MembershipJoin,
+        }));
+    }
     let Some(genesis) = crate::authority_commit::stream_page_in_connection(
         conn,
         &StreamScanRequest {

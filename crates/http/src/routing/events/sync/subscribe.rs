@@ -93,6 +93,20 @@ pub(crate) async fn account_subscribe_session_or_render(
     }
 }
 
+pub(super) fn stream_grant(req: &Request) -> Option<String> {
+    soland_http::util::dpop_token(req).map(str::to_owned)
+}
+
+pub(super) async fn stream_session_current(
+    state: &AppState,
+    session: &SessionIdentityState,
+    grant: Option<&str>,
+) -> bool {
+    crate::routing::identity::auth::revalidate_stream_session(state, session, grant)
+        .await
+        .is_ok()
+}
+
 #[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.stream.subscribe.v1"))]
 pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
@@ -111,6 +125,19 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         Some(session) => session,
         None => return,
     };
+    let grant = stream_grant(req);
+    account_response(depot, req, res, state, session, body, grant).await;
+}
+
+pub(super) async fn account_response(
+    depot: &mut Depot,
+    req: &Request,
+    res: &mut Response,
+    state: AppState,
+    session: SessionIdentityState,
+    body: SyncRequestBody,
+    grant: Option<String>,
+) {
     if let Some(token) = body
         .realm_list
         .as_ref()
@@ -291,6 +318,10 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     let initial_has_delta = body.after.is_none()
         || (!delta_is_empty(&response) && !only_unavailable_details(&response));
     let body_stream = async_stream::stream! {
+        if !stream_session_current(&state, &session, grant.as_deref()).await {
+            yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
+            return;
+        }
         if initial_has_delta {
             yield Ok::<Bytes, std::io::Error>(ndjson_line(&response));
             if body.catchup.unwrap_or(false) && initial_cursor.is_some() {
@@ -308,7 +339,15 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
 
         loop {
             tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis((session.expires_at-Utc::now()).num_milliseconds().max(0) as u64)) => {
+                    yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
+                    break;
+                }
                 _ = tokio::time::sleep_until(deadline) => {
+                    if !stream_session_current(&state, &session, grant.as_deref()).await {
+                        yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
+                        break;
+                    }
                     // Re-read durable projections at timeout. Broadcast is only
                     // a latency hint, so a lost wake-up must not hide data.
                     let final_snapshot = build_sync_snapshot(
@@ -372,6 +411,10 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             ));
                             break;
                         }
+                        if !stream_session_current(&state, &session, grant.as_deref()).await {
+                            yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
+                            break;
+                        }
                         let delta = build_sync_snapshot(
                             &state,
                             Some(&session),
@@ -412,6 +455,13 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     };
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+pub(super) fn account_unauthorized_frame()
+-> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+    let mut frame = account_checkpoint_frame(None);
+    frame.kind = arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Unauthorized;
+    frame
 }
 
 pub(crate) fn account_checkpoint_frame(
@@ -622,7 +672,7 @@ fn parse_account_subscribe_query(query: &str) -> Result<SyncRequestBody, String>
     Ok(body)
 }
 
-fn decode_account_query_component(value: &str) -> Result<String, String> {
+pub(super) fn decode_account_query_component(value: &str) -> Result<String, String> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut bytes = value.bytes();
     while let Some(byte) = bytes.next() {

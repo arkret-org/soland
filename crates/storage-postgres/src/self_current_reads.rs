@@ -218,83 +218,162 @@ pub(crate) async fn list_realm_streams_for_account(
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         begin_read_cut(conn).await?;
-        let realm_head = match member_cut(conn, realm_id, &caller, issuer).await? {
-            MemberCut::NotVisible => return Ok(AccountRealmStreamList::NotVisible),
-            MemberCut::ForeignTenure => {
-                return Ok(
-                    crate::replica_stream_listing::in_connection(conn, realm_id, &caller).await?,
-                );
-            }
-            MemberCut::Member { realm_head, .. } => realm_head,
-        };
-        let Some(head) = realm_head else {
-            return Ok(AccountRealmStreamList::Listed(Vec::new()));
-        };
-        let Some(floor) =
-            crate::account_stream_scan::caller_realm_floor_in_connection(conn, realm_id, &caller)
-                .await?
-        else {
-            return Ok(AccountRealmStreamList::Unproved(
-                "a per-member join or history floor is not proved at this cut",
-            ));
-        };
-        let mut visible = vec![RealmStreamRow {
-            stream_ref: head.stream_ref,
-            head_commit_ref: head.commit_id,
-            next_position: head.stream_position.checked_add(1).ok_or_else(|| {
-                PersistenceError::Internal("Realm stream position overflows".to_owned())
-            })?,
-            readable_floor: Some(floor),
-        }];
-        let heads = sql_query(crate::authority_commit::REALM_STREAM_HEADS_SQL)
-            .bind::<Text, _>(realm_id.as_str())
-            .load::<ScopedHeadRow>(&mut *conn)
-            .await?;
-        for head in heads {
-            let stream: CommitStreamRef =
-                serde_json::from_value(head.stream_ref).map_err(PersistenceError::database)?;
-            let floor = match &stream {
-                CommitStreamRef::Circle { circle_id, .. } => {
-                    crate::account_stream_scan::caller_circle_floor_in_connection(
-                        conn, realm_id, circle_id, &caller,
-                    )
-                    .await?
-                }
-                CommitStreamRef::Realm { .. } => continue,
-                CommitStreamRef::Sidecar { sidecar_id, .. } => {
-                    crate::sidecar_authority_cut::caller_floor_in_connection(
-                        conn, realm_id, sidecar_id, &caller,
-                    )
-                    .await?
-                }
-                _ => None,
-            };
-            let Some(floor) = floor else {
-                continue;
-            };
-            visible.push(RealmStreamRow {
-                stream_ref: stream,
-                head_commit_ref: head.commit_id.parse().map_err(PersistenceError::database)?,
-                next_position: to_u64(head.stream_position, "scoped stream position")?
-                    .checked_add(1)
-                    .ok_or_else(|| corrupt("scoped stream position overflows"))?,
-                readable_floor: Some(floor),
-            });
-        }
-        let mut keyed = visible
-            .into_iter()
-            .map(|row| {
-                let key = arkret_canonical::canonical_json_bytes(&row.stream_ref)
-                    .map_err(PersistenceError::database)?;
-                Ok((key, row))
-            })
-            .collect::<PersistenceResult<Vec<_>>>()?;
-        keyed.sort_by(|left, right| left.0.cmp(&right.0));
-        let visible = keyed.into_iter().map(|(_, row)| row).collect();
-        Ok(AccountRealmStreamList::Listed(visible))
+        list_streams_in_connection(conn, realm_id, &caller, issuer).await
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+#[derive(QueryableByName)]
+struct HistoryBindingRow {
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+/// Heads, caller visibility and policy provenance are frozen by one snapshot.
+pub(crate) async fn realm_stream_subscription_cut(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &AccountId,
+    issuer: &DidCoreId,
+) -> PersistenceResult<soland_storage::AccountRealmStreamAuthorizationCut> {
+    let caller = ActorId::account(account.clone());
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        begin_read_cut(conn).await?;
+        let mut listing = list_streams_in_connection(conn, realm_id, &caller, issuer).await?;
+        let mut history_digest = None;
+        if let AccountRealmStreamList::Listed(streams) = &listing {
+            let realm_policy = sql_query(
+                "SELECT jsonb_build_array(h.value,h.current_commit_id,h.current_stream_position,m.current_commit_id,m.current_stream_position,a.generation,a.service_id) AS value \
+                 FROM realm_bootstrap_current_results h \
+                 LEFT JOIN realm_commits hc ON hc.realm_id=h.realm_id AND hc.commit_id=h.current_commit_id AND hc.stream_position=h.current_stream_position AND hc.stream_ref=jsonb_build_object('kind','realm','realm_id',h.realm_id) \
+                 JOIN member_state_current_results m ON m.realm_id=h.realm_id AND m.member_id=$2 AND m.membership='join' \
+                 LEFT JOIN realm_commits mc ON mc.realm_id=m.realm_id AND mc.commit_id=m.current_commit_id AND mc.stream_position=m.current_stream_position AND mc.stream_ref=jsonb_build_object('kind','realm','realm_id',m.realm_id) \
+                 JOIN realm_authorities a ON a.realm_id=h.realm_id \
+                 WHERE h.realm_id=$1 AND h.result_family='realm_history_access' \
+                 AND (hc.commit_id IS NOT NULL OR EXISTS(SELECT 1 FROM replica_authorization_rows r WHERE r.realm_id=h.realm_id AND r.selector=jsonb_build_object('kind','realm_history_access') AND r.source_stream_ref=jsonb_build_object('kind','realm','realm_id',h.realm_id) AND r.current_commit_id=h.current_commit_id AND r.current_stream_position=h.current_stream_position AND r.value=h.value)) \
+                 AND (mc.commit_id IS NOT NULL OR EXISTS(SELECT 1 FROM replica_authorization_rows r WHERE r.realm_id=m.realm_id AND r.selector=jsonb_build_object('kind','member_state','actor_id',$3::jsonb) AND r.source_stream_ref=jsonb_build_object('kind','realm','realm_id',m.realm_id) AND r.current_commit_id=m.current_commit_id AND r.current_stream_position=m.current_stream_position AND r.value=m.value))",
+            ).bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(caller.to_string())
+                .bind::<Jsonb,_>(serde_json::to_value(&caller).map_err(PersistenceError::database)?)
+                .get_result::<HistoryBindingRow>(&mut *conn).await.optional()?;
+            if let Some(policy) = realm_policy {
+                let mut bindings = vec![policy.value];
+                let mut complete = true;
+                for row in streams {
+                    let scoped = match &row.stream_ref {
+                        CommitStreamRef::Realm { .. } => continue,
+                        CommitStreamRef::Circle { circle_id, .. } => sql_query(
+                            "SELECT jsonb_build_array(c.value->'history_access',c.current_commit_id,c.current_stream_position,m.current_commit_id,m.current_stream_position,m.value->'parent_membership_revision') AS value \
+                             FROM circle_current_results c \
+                             LEFT JOIN realm_commits cc ON cc.realm_id=c.realm_id AND cc.commit_id=c.current_commit_id AND cc.stream_position=c.current_stream_position AND cc.stream_ref=c.source_stream_ref \
+                             JOIN circle_member_state_current_results m ON m.realm_id=c.realm_id AND m.circle_id=c.circle_id AND m.member_id=$3 AND m.membership='join' \
+                             LEFT JOIN realm_commits mc ON mc.realm_id=m.realm_id AND mc.commit_id=m.current_commit_id AND mc.stream_position=m.current_stream_position AND mc.stream_ref=m.source_stream_ref \
+                             WHERE c.realm_id=$1 AND c.circle_id=$2 AND circle_member_parent_join_current(m.realm_id,m.member_id,m.value) \
+                             AND (cc.commit_id IS NOT NULL OR EXISTS(SELECT 1 FROM replica_authorization_rows r WHERE r.realm_id=c.realm_id AND r.selector=jsonb_build_object('kind','circle','circle_id',c.circle_id) AND r.source_stream_ref=c.source_stream_ref AND r.current_commit_id=c.current_commit_id AND r.current_stream_position=c.current_stream_position AND r.value=c.value)) \
+                             AND (mc.commit_id IS NOT NULL OR EXISTS(SELECT 1 FROM replica_authorization_rows r WHERE r.realm_id=m.realm_id AND r.selector=jsonb_build_object('kind','circle_member_state','circle_id',m.circle_id,'member_actor_id',$4::jsonb) AND r.source_stream_ref=m.source_stream_ref AND r.current_commit_id=m.current_commit_id AND r.current_stream_position=m.current_stream_position AND r.value=m.value))",
+                        ).bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(circle_id.as_str()).bind::<Text,_>(caller.to_string())
+                            .bind::<Jsonb,_>(serde_json::to_value(&caller).map_err(PersistenceError::database)?)
+                            .get_result::<HistoryBindingRow>(&mut *conn).await.optional()?,
+                        CommitStreamRef::Sidecar { sidecar_id, .. } => sql_query(
+                            "SELECT jsonb_build_array(s.value,s.current_commit_id,s.current_stream_position) AS value \
+                             FROM sidecar_current_results s LEFT JOIN realm_commits c ON c.realm_id=s.realm_id AND c.commit_id=s.current_commit_id AND c.stream_position=s.current_stream_position AND c.stream_ref=s.source_stream_ref \
+                             WHERE s.realm_id=$1 AND s.sidecar_id=$2 \
+                             AND (c.commit_id IS NOT NULL OR EXISTS(SELECT 1 FROM replica_authorization_rows r WHERE r.realm_id=s.realm_id AND r.selector=jsonb_build_object('kind','sidecar','sidecar_id',s.sidecar_id) AND r.source_stream_ref=s.source_stream_ref AND r.current_commit_id=s.current_commit_id AND r.current_stream_position=s.current_stream_position AND r.value=s.value))",
+                        ).bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(sidecar_id.as_str())
+                            .get_result::<HistoryBindingRow>(&mut *conn).await.optional()?,
+                        _ => None,
+                    };
+                    if let Some(scoped) = scoped { bindings.push(scoped.value); } else { complete = false; break; }
+                }
+                if complete {
+                    let bytes = arkret_canonical::canonical_json_bytes(&(realm_id, caller, bindings)).map_err(PersistenceError::database)?;
+                    history_digest = Some(arkret_canonical::base64url_encode(arkret_canonical::sha256_bytes(&bytes)));
+                }
+            }
+            if history_digest.is_none() { listing = AccountRealmStreamList::Unproved("subscription policy provenance is not proved at this cut"); }
+        }
+        Ok(soland_storage::AccountRealmStreamAuthorizationCut { listing, history_digest })
+    }).await.map_err(PgTransactionError::into_persistence)
+}
+async fn list_streams_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    caller: &ActorId,
+    issuer: &DidCoreId,
+) -> Result<AccountRealmStreamList, PgTransactionError> {
+    let realm_head = match member_cut(conn, realm_id, caller, issuer).await? {
+        MemberCut::NotVisible => return Ok(AccountRealmStreamList::NotVisible),
+        MemberCut::ForeignTenure => {
+            return Ok(crate::replica_stream_listing::in_connection(conn, realm_id, caller).await?);
+        }
+        MemberCut::Member { realm_head, .. } => realm_head,
+    };
+    let Some(head) = realm_head else {
+        return Ok(AccountRealmStreamList::Listed(Vec::new()));
+    };
+    let Some(floor) =
+        crate::account_stream_scan::caller_realm_floor_in_connection(conn, realm_id, caller)
+            .await?
+    else {
+        return Ok(AccountRealmStreamList::Unproved(
+            "a per-member join or history floor is not proved at this cut",
+        ));
+    };
+    let mut visible = vec![RealmStreamRow {
+        stream_ref: head.stream_ref,
+        head_commit_ref: head.commit_id,
+        next_position: head.stream_position.checked_add(1).ok_or_else(|| {
+            PersistenceError::Internal("Realm stream position overflows".to_owned())
+        })?,
+        readable_floor: Some(floor),
+    }];
+    let heads = sql_query(crate::authority_commit::REALM_STREAM_HEADS_SQL)
+        .bind::<Text, _>(realm_id.as_str())
+        .load::<ScopedHeadRow>(&mut *conn)
+        .await?;
+    for head in heads {
+        let stream: CommitStreamRef =
+            serde_json::from_value(head.stream_ref).map_err(PersistenceError::database)?;
+        let floor = match &stream {
+            CommitStreamRef::Circle { circle_id, .. } => {
+                crate::account_stream_scan::caller_circle_floor_in_connection(
+                    conn, realm_id, circle_id, caller,
+                )
+                .await?
+            }
+            CommitStreamRef::Realm { .. } => continue,
+            CommitStreamRef::Sidecar { sidecar_id, .. } => {
+                crate::sidecar_authority_cut::caller_floor_in_connection(
+                    conn, realm_id, sidecar_id, caller,
+                )
+                .await?
+            }
+            _ => None,
+        };
+        let Some(floor) = floor else {
+            continue;
+        };
+        visible.push(RealmStreamRow {
+            stream_ref: stream,
+            head_commit_ref: head.commit_id.parse().map_err(PersistenceError::database)?,
+            next_position: to_u64(head.stream_position, "scoped stream position")?
+                .checked_add(1)
+                .ok_or_else(|| corrupt("scoped stream position overflows"))?,
+            readable_floor: Some(floor),
+        });
+    }
+    let mut keyed = visible
+        .into_iter()
+        .map(|row| {
+            let key = arkret_canonical::canonical_json_bytes(&row.stream_ref)
+                .map_err(PersistenceError::database)?;
+            Ok((key, row))
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    let visible = keyed.into_iter().map(|(_, row)| row).collect();
+    Ok(AccountRealmStreamList::Listed(visible))
 }
 
 pub(crate) async fn exact_current_result_for_account(

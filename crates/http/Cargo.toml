@@ -81,6 +81,7 @@ soland-storage.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 url = "2.5"
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
@@ -101,7 +102,6 @@ soland-services = { workspace = true, features = ["test-support"] }
 soland-storage-postgres = { workspace = true, features = ["test-support"] }
 soland-test-support.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
-tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

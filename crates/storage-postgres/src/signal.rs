@@ -1,8 +1,11 @@
+use diesel_async::AsyncConnection;
+
 use super::{
     BigInt, Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
     RunQueryDsl, SIGNAL_RELAY_MAX_PER_REALM, SignalRelayRecord, SignalRelayStore, Text,
     Timestamptz, Uuid, Value, async_trait, pg_conn, sql_query, sql_types,
 };
+use crate::PgTransactionError;
 
 /// PostgreSQL-backed live Signal relay (`sync/signal.md` §4).
 ///
@@ -96,7 +99,7 @@ const SIGNAL_RELAY_COLUMNS: &str = "realm_id, position, scope_ref, sender_actor_
 
 #[async_trait]
 impl SignalRelayStore for PgSignalRelayStore {
-    async fn append(&self, mut record: SignalRelayRecord) -> PersistenceResult<()> {
+    async fn append(&self, record: SignalRelayRecord) -> PersistenceResult<bool> {
         let envelope = serde_json::to_value(&record.envelope).map_err(|error| {
             PersistenceError::Internal(format!("failed to encode signal envelope: {error}"))
         })?;
@@ -112,12 +115,20 @@ impl SignalRelayStore for PgSignalRelayStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        // The existing per-Realm allocator serializes duplicate checks and
+        // insertion across Station processes. Allocation and retention share
+        // the same transaction, so a failed append cannot burn progress.
+        sql_query("INSERT INTO signal_relay_position (realm_id,next_position,updated_at) VALUES ($1,0,NOW()) ON CONFLICT DO NOTHING")
+            .bind::<Text,_>(&record.realm_id).execute(&mut *conn).await?;
+        sql_query("SELECT next_position FROM signal_relay_position WHERE realm_id=$1 FOR UPDATE")
+            .bind::<Text,_>(&record.realm_id).get_result::<SignalRelayPositionRow>(&mut *conn).await?;
+        let seen=sql_query("SELECT 1::bigint AS present FROM signal_relay WHERE realm_id=$1 AND envelope_digest=$2 LIMIT 1")
+            .bind::<Text,_>(&record.realm_id).bind::<Text,_>(&record.envelope_digest)
+            .get_result::<SignalRelayExistsRow>(&mut *conn).await.optional()?;
+        if seen.is_some_and(|row|row.present==1) {return Ok(false);}
         let position_row = sql_query(
-            "INSERT INTO signal_relay_position (realm_id, next_position, updated_at) \
-             VALUES ($1, 1, NOW()) \
-             ON CONFLICT (realm_id) DO UPDATE SET \
-                next_position = signal_relay_position.next_position + 1, \
-                updated_at = NOW() \
+            "UPDATE signal_relay_position SET next_position=next_position+1,updated_at=NOW() WHERE realm_id=$1 \
              RETURNING next_position",
         )
         .bind::<Text, _>(&record.realm_id)
@@ -125,7 +136,6 @@ impl SignalRelayStore for PgSignalRelayStore {
         .await
         .map_err(PersistenceError::database)?;
         let position = position_row.next_position;
-        record.position = position.max(0) as u64;
 
         sql_query(
             "INSERT INTO signal_relay \
@@ -155,7 +165,8 @@ impl SignalRelayStore for PgSignalRelayStore {
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
-        Ok(())
+        Ok(true)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<SignalRelayRecord>> {
@@ -172,28 +183,6 @@ impl SignalRelayStore for PgSignalRelayStore {
         .await
         .map_err(PersistenceError::database)?;
         rows.into_iter().map(SignalRelayRecord::try_from).collect()
-    }
-
-    async fn contains_digest(
-        &self,
-        realm_id: &str,
-        envelope_digest: &str,
-    ) -> PersistenceResult<bool> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let row = sql_query(
-            "SELECT 1::bigint AS present FROM signal_relay \
-             WHERE realm_id = $1 AND envelope_digest = $2 AND expires_at > NOW() \
-             LIMIT 1",
-        )
-        .bind::<Text, _>(realm_id)
-        .bind::<Text, _>(envelope_digest)
-        .get_result::<SignalRelayExistsRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        Ok(row.is_some_and(|row| row.present == 1))
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {

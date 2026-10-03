@@ -15,7 +15,7 @@
 //!
 //! There is no plaintext branch (§3).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_models_collaboration::signal_operations::SignalSubmitOutcome;
 use arkret_wire::{SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
@@ -83,37 +83,28 @@ pub(super) async fn submit_signal(
     // as accepted without a second relay append: a Signal has no durable
     // receipt to reissue, so the only observable difference must be that it is
     // not delivered twice.
-    let duplicate = state
+    let record = soland_storage::SignalRelayRecord {
+        realm_id: realm_id.as_str().to_owned(),
+        scope_ref: envelope.scope_ref.clone(),
+        sender_actor_id: sender_actor.to_string(),
+        sender_device_id: envelope.sender_device_id.as_ref().map(ToString::to_string),
+        signal_class: envelope.signal_class,
+        envelope_digest: envelope_digest.clone(),
+        sent_at: envelope.sent_at,
+        expires_at: envelope.expires_at,
+        envelope: envelope.clone(),
+        position: 0,
+    };
+    let appended = state
         .deliveries()
-        .signal_digest_seen(realm_id.as_str(), &envelope_digest)
+        .append_signal(record)
         .await
         .map_err(|error| {
-            tracing::error!(%error, "failed to check signal replay suppression");
-            signal_rail_unavailable("check signal replay suppression")
+            tracing::error!(%error, "failed to append signal to the live relay");
+            signal_rail_unavailable("append the signal to the live relay")
         })?;
-
     let mut dispatched_recipient_count = None;
-    if !duplicate {
-        let record = soland_storage::SignalRelayRecord {
-            realm_id: realm_id.as_str().to_owned(),
-            scope_ref: envelope.scope_ref.clone(),
-            sender_actor_id: sender_actor.to_string(),
-            sender_device_id: envelope.sender_device_id.as_ref().map(ToString::to_string),
-            signal_class: envelope.signal_class,
-            envelope_digest: envelope_digest.clone(),
-            sent_at: envelope.sent_at,
-            expires_at: envelope.expires_at,
-            envelope: envelope.clone(),
-            position: 0,
-        };
-        state
-            .deliveries()
-            .append_signal(record)
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, "failed to append signal to the live relay");
-                signal_rail_unavailable("append the signal to the live relay")
-            })?;
+    if appended {
         dispatched_recipient_count = Some(
             scope_authority
                 .recipient_actors
@@ -213,14 +204,12 @@ async fn admit_signal(
 
     // The source-selected basis must resolve to an accepted Event and its exact
     // covering RealmCommit before any live eligibility decision is made.
-    verify_signal_authority_commit_id(state, envelope).await?;
 
     // (2, continued) + (3) — require authority-committed membership and
     // class action at both the declared Commit and the current accepted head.
     verify_signal_scope_authority(state, envelope, &actor).await?;
     // Resolve eligibility before reporting a stale MLS basis, so a sender
     // excluded at the current cut receives the closed class denial.
-    verify_signal_mls_basis(state, envelope).await?;
 
     match (&envelope.sender_device_id, session.agent_session()) {
         (Some(device_id), None) if device_id.as_str() == session.require_human_device_id() => {
@@ -239,38 +228,6 @@ async fn admit_signal(
     }
 }
 
-/// Resolve the signed stream coordinate carried by a Signal. The signal is
-/// ephemeral, but its governance basis must be a durable accepted Commit in
-/// the exact Realm and scope stream named by the envelope.
-async fn verify_signal_authority_commit_id(
-    state: &AppState,
-    envelope: &SignalEnvelope,
-) -> Result<(), AppError> {
-    let record = state
-        .authority_commits()
-        .committed_event_by_commit_id(&envelope.authority_commit_id)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to resolve Signal stream head Commit");
-            signal_rail_unavailable("resolve Signal stream head Commit")
-        })?
-        .ok_or_else(|| signal_invalid("Signal authority_commit_id is not an accepted Commit"))?;
-    let stream_ref = arkret_wire::CommitStreamRef::from_scope(&envelope.scope_ref, None)
-        .map_err(|error| signal_invalid(format!("Signal scope stream: {error}")))?;
-    if record.commit.commit_id != envelope.authority_commit_id
-        || record.commit.realm_id != envelope.realm_id
-        || record.commit.stream_ref != stream_ref
-        || record.commit.event_ref != record.event.event_id
-        || record.event.realm_id != envelope.realm_id
-        || record.event.scope_ref != envelope.scope_ref
-    {
-        return Err(signal_invalid(
-            "Signal authority_commit_id does not cover the exact scope Event",
-        ));
-    }
-    Ok(())
-}
-
 /// Resolve both declared and current accepted governance cuts in one read transaction.
 async fn verify_signal_scope_authority(
     state: &AppState,
@@ -282,6 +239,7 @@ async fn verify_signal_scope_authority(
         .signal_scope_authority(
             &envelope.scope_ref,
             &envelope.authority_commit_id,
+            envelope.parent_realm_authority_commit_id.as_ref(),
             actor,
             envelope.signal_class,
             envelope.sent_at,
@@ -298,7 +256,8 @@ async fn verify_signal_scope_authority(
                 "Signal class is not eligible in this scope"
             )
         })?;
-    if authority.current_mls.epoch != envelope.encrypted_payload.epoch
+    if !mls_ciphersuite_is_active(&envelope.encrypted_payload.aead_profile)
+        || authority.current_mls.epoch != envelope.encrypted_payload.epoch
         || authority.current_mls.current_mls_commit_event_ref.as_str()
             != envelope.encrypted_payload.key_ref.group_state_ref
         || authority.historical_mls_event_ref.as_str()
@@ -436,6 +395,59 @@ async fn resolve_local_signal_device_key(
         authorization_ref: facet
             .device_authorize_event_id
             .ok_or_else(|| signal_proof_invalid("Signal device authorization is missing"))?,
+    })
+}
+
+/// Recipient admission resolves remote exact-account authority through the
+/// registered peer keys surface, with the same verified attestation gate as
+/// self signer lookup. Peer relay itself never enters this device gate.
+async fn resolve_signal_delivery_device_key(
+    state: &AppState,
+    recipient: &arkret_wire::AccountId,
+    envelope: &SignalEnvelope,
+) -> Result<arkret_wire::StationSigningKey, AppError> {
+    let actor = &envelope.sender_actor_id;
+    let account = actor
+        .as_account_id()
+        .ok_or_else(|| signal_proof_invalid("ordinary sender requires an account"))?;
+    if account.station_id == state.service_core_id() {
+        return resolve_local_signal_device_key(state, envelope, actor).await;
+    }
+    let device = envelope
+        .sender_device_id
+        .as_ref()
+        .ok_or_else(|| signal_proof_invalid("ordinary sender requires a device"))?;
+    let record = crate::routing::identity::keys::current_device_projection_for_signer(
+        state,
+        recipient,
+        &envelope.realm_id,
+        account,
+        device,
+    )
+    .await
+    .ok_or_else(|| {
+        signal_rail_unavailable("verify current remote exact-account device authority")
+    })?;
+    let projection = record.device_projection;
+    let multibase = projection
+        .device_signing_key_did
+        .as_str()
+        .strip_prefix("did:key:")
+        .ok_or_else(|| signal_proof_invalid("remote device key is unavailable"))?;
+    let public = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
+        value: multibase.to_owned(),
+    };
+    arkret_signatures::verify_ed25519_signal_proof(envelope, &public)
+        .map_err(|_| signal_proof_invalid("remote Signal producer proof is invalid"))?;
+    let raw = public
+        .ed25519_bytes()
+        .map_err(|_| signal_proof_invalid("remote device key encoding is invalid"))?;
+    Ok(arkret_wire::StationSigningKey {
+        actor: actor.clone(),
+        verification_method: envelope.proof.verification_method.clone(),
+        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(raw))
+            .map_err(|_| signal_proof_invalid("remote device key encoding is invalid"))?,
+        authorization_ref: projection.device_authorize_event_id,
     })
 }
 
@@ -657,15 +669,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         .map_err(|error| signal_invalid(format!("signal envelope digest: {error}")))?
         .as_str()
         .to_owned();
-    if state
-        .deliveries()
-        .signal_digest_seen(envelope.realm_id.as_str(), &envelope_digest)
-        .await
-        .map_err(|_| signal_rail_unavailable("check signal replay suppression"))?
-    {
-        return Ok(());
-    }
-    state
+    let appended = state
         .deliveries()
         .append_signal(soland_storage::SignalRelayRecord {
             realm_id: envelope.realm_id.as_str().to_owned(),
@@ -681,10 +685,12 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         })
         .await
         .map_err(|_| signal_rail_unavailable("append peer signal to the live relay"))?;
-    let _ = state.publish_event_notification(EventNotification::signal(
-        envelope.realm_id.as_str().to_owned(),
-        envelope.signal_class,
-    ));
+    if appended {
+        let _ = state.publish_event_notification(EventNotification::signal(
+            envelope.realm_id.as_str().to_owned(),
+            envelope.signal_class,
+        ));
+    }
     Ok(())
 }
 
@@ -743,9 +749,7 @@ async fn admit_signal_outer(
             "Signal sender route does not match the authenticated source Station",
         ));
     }
-    verify_signal_authority_commit_id(state, envelope).await?;
     verify_signal_scope_authority(state, envelope, &sender_actor).await?;
-    verify_signal_mls_basis(state, envelope).await?;
     Ok(())
 }
 
@@ -753,69 +757,6 @@ fn mls_ciphersuite_is_active(canonical_id: &str) -> bool {
     arkret_wire::MLS_CIPHERSUITES
         .iter()
         .any(|suite| suite.canonical_id == canonical_id && suite.status == "active")
-}
-
-/// Check the accepted outer MLS basis, without a public tree or device lookup.
-async fn verify_signal_mls_basis(
-    state: &AppState,
-    envelope: &SignalEnvelope,
-) -> Result<(), AppError> {
-    if !mls_ciphersuite_is_active(&envelope.encrypted_payload.aead_profile) {
-        return Err(signal_invalid("signal aead_profile is not active"));
-    }
-    let group_id = envelope
-        .scope_ref
-        .canonical_mls_group_id()
-        .map_err(|error| signal_invalid(format!("signal MLS scope: {error}")))?;
-    let current = state
-        .mls_groups()
-        .current(&envelope.scope_ref)
-        .await
-        .map_err(|_| signal_rail_unavailable("resolve the signal MLS basis"))?
-        .ok_or_else(|| signal_invalid("signal scope has no accepted MLS state"))?
-        .value;
-    if current.effective_scope != envelope.scope_ref
-        || current.epoch != envelope.encrypted_payload.epoch
-        || current.current_mls_commit_event_ref.as_str()
-            != envelope.encrypted_payload.key_ref.group_state_ref
-    {
-        return Err(signal_invalid(
-            "signal MLS basis is stale, mismatched, or contested",
-        ));
-    }
-    if current.covered_key_access_revision < current.current_key_access_revision {
-        return Err(signal_invalid(
-            "signal MLS basis has an uncovered key-access revision",
-        ));
-    }
-    let genesis = state
-        .event_queries()
-        .canonical_event(current.genesis_event_ref.as_str())
-        .await
-        .map_err(|_| signal_rail_unavailable("resolve the signal MLS genesis"))?
-        .ok_or_else(|| signal_invalid("signal MLS genesis is unavailable"))?;
-    let payload = genesis
-        .envelope
-        .get("payload")
-        .ok_or_else(|| signal_invalid("signal MLS genesis payload is unavailable"))?;
-    if genesis.kind != arkret_wire::EventKind::MlsGenesis.as_str()
-        || genesis.realm_id.as_deref() != Some(envelope.realm_id.as_str())
-        || crate::routing::mls::payload_fields::mls_group_id(payload).as_deref()
-            != Some(group_id.as_str())
-        || payload
-            .get("cipher_suite")
-            .and_then(serde_json::Value::as_str)
-            != Some(envelope.encrypted_payload.aead_profile.as_str())
-        || crate::routing::mls::payload_fields::group_state_effective_scope(payload)
-            .and_then(|value| serde_json::from_value::<arkret_wire::ScopeRef>(value).ok())
-            .as_ref()
-            != Some(&envelope.scope_ref)
-    {
-        return Err(signal_invalid(
-            "signal MLS genesis does not bind the scope and cipher suite",
-        ));
-    }
-    Ok(())
 }
 
 /// Map the SDK's structural rejection onto the registered wire code. The TTL
@@ -868,6 +809,7 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
         Some(session) => session,
         None => return,
     };
+    let grant = super::subscribe::stream_grant(req);
     if let Err(error) = super::super::require_agent_session_scope(
         &session,
         arkret_wire::ServiceOperationId::SELF_SIGNAL_STREAM_SUBSCRIBE_V1,
@@ -890,9 +832,31 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .unwrap_or(SIGNAL_SUBSCRIBE_DEFAULT_HEARTBEAT_MS)
         .max(100);
 
+    signal_response(
+        state,
+        session,
+        grant,
+        res,
+        Some(max_duration_ms),
+        heartbeat_ms,
+    );
+}
+
+pub(super) fn signal_response(
+    state: AppState,
+    session: SessionIdentityState,
+    grant: Option<String>,
+    res: &mut Response,
+    max_duration_ms: Option<u64>,
+    heartbeat_ms: u64,
+) {
     let body_stream = async_stream::stream! {
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_millis(max_duration_ms);
+        let Ok(mut live_starts) = signal_subscription_start(&state, &session).await else {
+            yield Ok::<bytes::Bytes,std::io::Error>(ndjson_line(&SignalStreamFrame::Unauthorized { reason:None }));
+            return;
+        };
+        yield Ok::<bytes::Bytes,std::io::Error>(ndjson_line(&SignalStreamFrame::HEARTBEAT));
+        let deadline = max_duration_ms.map(|ms|tokio::time::Instant::now()+std::time::Duration::from_millis(ms));
         let mut heartbeat = tokio::time::interval(std::time::Duration::from_millis(heartbeat_ms));
         heartbeat.tick().await;
         let mut poll = tokio::time::interval(std::time::Duration::from_millis(
@@ -900,7 +864,7 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
         ));
         loop {
             tokio::select! {
-                _ = tokio::time::sleep_until(deadline) => {
+                _ = async { match deadline { Some(deadline)=>tokio::time::sleep_until(deadline).await,None=>std::future::pending().await } } => {
                     let frame = SignalStreamFrame::Drain {
                         reconnect_after_ms: Some(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS),
                         reason: None,
@@ -909,7 +873,11 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     break;
                 }
                 _ = poll.tick() => {
-                    for envelope in pending_signals_for_subscriber(&state, &session).await {
+                    if !super::subscribe::stream_session_current(&state, &session, grant.as_deref()).await {
+                        yield Ok::<bytes::Bytes,std::io::Error>(ndjson_line(&SignalStreamFrame::Unauthorized { reason:None }));
+                        break;
+                    }
+                    for envelope in pending_signals_for_subscriber(&state, &session, &mut live_starts).await {
                         if let Ok(frame) = admitted_signal_frame(&state, &session, envelope).await {
                             yield Ok(ndjson_line(&frame));
                         }
@@ -949,8 +917,7 @@ pub(crate) async fn admitted_signal_frame(
         &envelope,
     )
     .await?;
-    // Ordinary local device delivery uses the same complete source gate below;
-    // the general signer lookup currently registers only Agent current results.
+    // Agent and ordinary devices retain their distinct current authority gates.
     let agent_key = if envelope.sender_device_id.is_none() {
         let selector = SignerKeyQuerySelector::CurrentAdmission {
             sender: CurrentSignerKeyQuerySender::Agent {
@@ -1012,9 +979,7 @@ pub(crate) async fn admitted_signal_frame(
             .await?;
             key
         }
-        None => {
-            resolve_local_signal_device_key(state, &envelope, &envelope.sender_actor_id).await?
-        }
+        None => resolve_signal_delivery_device_key(state, &recipient, &envelope).await?,
     };
     let authority = arkret_wire::SignalDeliveryAuthority {
         recipient_account_id: recipient,
@@ -1023,16 +988,63 @@ pub(crate) async fn admitted_signal_frame(
     authority
         .validate_for_envelope(&envelope)
         .map_err(structural_error)?;
+    // A remote directory lookup may have crossed a membership or TTL change.
+    // Repeat the session and governance gates at the actual frame boundary.
+    let current_actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
+    admit_signal_outer(
+        state,
+        envelope.sender_actor_id.route_service_id().as_str(),
+        &envelope,
+    )
+    .await?;
+    let current =
+        verify_signal_scope_authority(state, &envelope, &envelope.sender_actor_id).await?;
+    if current_actor.as_account_id() != Some(&authority.recipient_account_id)
+        || !current.recipient_actors.contains(&current_actor)
+    {
+        return Err(crate::app_error!(
+            SignalClassDenied,
+            "Signal recipient is no longer eligible"
+        ));
+    }
     Ok(SignalStreamFrame::signal(envelope, authority))
 }
 
-/// Every unexpired Signal this device is eligible for and has not already been
+async fn signal_subscription_start(
+    state: &AppState,
+    session: &SessionIdentityState,
+) -> Result<BTreeMap<String, u64>, AppError> {
+    let actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
+    let realms = state
+        .authority_commits()
+        .signal_recipient_realms(&actor)
+        .await
+        .map_err(|_| signal_rail_unavailable("establish live recipient cut"))?;
+    let mut starts = BTreeMap::new();
+    for realm in realms {
+        let records = state
+            .deliveries()
+            .signals_for_realm(realm.as_str())
+            .await
+            .map_err(|_| signal_rail_unavailable("establish live relay cut"))?;
+        starts.insert(
+            realm.to_string(),
+            records.iter().map(|row| row.position).max().unwrap_or(0),
+        );
+    }
+    Ok(starts)
+}
+
+/// Every unexpired Signal this live connection is eligible for and has not already been
 /// handed, ascending by relay position. The watermark is advanced as the batch
 /// is taken, so the same envelope is not re-emitted on the next poll or on a
 /// reconnect inside the TTL window.
 pub(crate) async fn pending_signals_for_subscriber(
     state: &AppState,
     session: &SessionIdentityState,
+    live_starts: &mut BTreeMap<String, u64>,
 ) -> Vec<SignalEnvelope> {
     let now = chrono::Utc::now();
     let mut delivered = Vec::new();
@@ -1051,16 +1063,21 @@ pub(crate) async fn pending_signals_for_subscriber(
     };
     for realm in member_realms {
         let realm_id = realm.to_string();
-        let watermark = state
+        let Ok(watermark) = state
             .deliveries()
             .signal_watermark(&actor_key, &session.require_human_device_id(), &realm_id)
             .await
-            .unwrap_or(0);
-        let records = state
-            .deliveries()
-            .signals_for_realm(&realm_id)
-            .await
-            .unwrap_or_default();
+        else {
+            continue;
+        };
+        let Ok(records) = state.deliveries().signals_for_realm(&realm_id).await else {
+            continue;
+        };
+        // A newly eligible Realm starts live here, never at its retained backlog.
+        let start = live_starts
+            .entry(realm_id.clone())
+            .or_insert_with(|| records.iter().map(|row| row.position).max().unwrap_or(0));
+        let watermark = watermark.max(*start);
         let mut highest = watermark;
         for record in records {
             highest = highest.max(record.position);

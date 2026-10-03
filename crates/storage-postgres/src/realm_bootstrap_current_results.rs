@@ -2,6 +2,7 @@
 
 use arkret_event_draft::EventPayloadExt;
 use arkret_models_collaboration::events_payloads::realm::RealmPurpose;
+use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 
@@ -188,6 +189,78 @@ pub(crate) async fn commit_read_receipt_policy_current_result_in_connection(
         commit,
         "realm_read_receipt_policy",
         &result_value(&policy)?,
+    )
+    .await
+}
+
+/// History policy is a scope-local security ratchet with an exact current
+/// predecessor. The accepted Event and its new provenance advance atomically.
+pub(crate) async fn commit_realm_history_access_authority_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RealmHistoryAccess {
+        return Ok(());
+    }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
+    commit_realm_history_access_current_result_in_connection(conn, event, commit).await
+}
+
+pub(crate) async fn commit_realm_history_access_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RealmHistoryAccess {
+        return Ok(());
+    }
+    if event.scope_ref
+        != (arkret_wire::ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        })
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.realm_id != event.realm_id
+        || commit.event_ref != event.event_id
+    {
+        return Err(PersistenceError::Conflict(
+            "history policy requires its exact Realm Event and covering Commit".to_owned(),
+        ));
+    }
+    let payload = typed_payload(event, EventPayloadExt::as_realm_history_access)?;
+    payload
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    #[derive(diesel::QueryableByName)]
+    struct Current {
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+    }
+    let current = diesel::sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_history_access' FOR UPDATE")
+        .bind::<Text,_>(event.realm_id.as_str())
+        .get_result::<Current>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(|| PersistenceError::Conflict("failed_precondition: history policy current is missing".to_owned()))?;
+    let current: arkret_wire::HistoryAccess = serde_json::from_value(current.value)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if payload.from != Some(current) {
+        return Err(PersistenceError::Conflict(
+            "failed_precondition: history policy predecessor differs from current".to_owned(),
+        ));
+    }
+    advance_singleton(
+        conn,
+        event,
+        commit,
+        "realm_history_access",
+        &result_value(&payload.to)?,
     )
     .await
 }

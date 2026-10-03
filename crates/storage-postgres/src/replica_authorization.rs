@@ -76,7 +76,7 @@ struct StoredRow {
 /// The Station signature establishes each grant's reducer-derived root refs.
 /// The member Station checks their Realm/generation and every live parent,
 /// without guessing a root Event ref not disclosed by the root value.
-fn intact_chain(
+pub(crate) fn intact_chain(
     id: &GrantId,
     grants: &BTreeMap<GrantId, CapabilityGrant>,
     realm: &RealmId,

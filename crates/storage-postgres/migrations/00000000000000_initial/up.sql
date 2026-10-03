@@ -831,7 +831,7 @@ CREATE INDEX signal_relay_realm_position_idx ON public.signal_relay USING btree 
 
 CREATE INDEX signal_relay_expires_idx ON public.signal_relay USING btree (expires_at);
 
-CREATE INDEX signal_relay_realm_digest_idx ON public.signal_relay USING btree (realm_id, envelope_digest);
+CREATE UNIQUE INDEX signal_relay_realm_digest_idx ON public.signal_relay USING btree (realm_id, envelope_digest);
 
 -- Per-Realm monotonic position counter for `signal_relay`. Held in a dedicated
 -- table (not `MAX(position)` of live rows) so positions keep increasing even
@@ -3571,7 +3571,7 @@ CREATE TABLE public.sync_cursor_handles (
     target jsonb,
     issued_at_ms bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
-    CONSTRAINT sync_cursor_handles_purpose_check CHECK (purpose IN ('stream','barrier','realm_list','ak.self.account.stream.subscribe.v1','ak.self.device_messages.read.list.v1'))
+    CONSTRAINT sync_cursor_handles_purpose_check CHECK (purpose IN ('stream','barrier','realm_list','ak.self.account.stream.subscribe.v1','ak.self.committed_event.stream.subscribe.v1','ak.self.device_messages.read.list.v1'))
 );
 
 CREATE INDEX sync_cursor_handles_expiry_idx ON public.sync_cursor_handles USING btree (expires_at_ms);
@@ -3622,6 +3622,18 @@ CREATE TABLE public.websocket_auth_replay_ledger (
 );
 
 CREATE INDEX websocket_auth_replay_ledger_retain_until_idx ON public.websocket_auth_replay_ledger (retain_until);
+
+CREATE TABLE public.websocket_connection_leases (
+    connection_id text PRIMARY KEY,
+    session_binding text NOT NULL,
+    device_binding text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    CHECK (octet_length(connection_id) BETWEEN 1 AND 64),
+    CHECK (octet_length(session_binding) = 43 AND octet_length(device_binding) = 43)
+);
+CREATE INDEX websocket_connection_leases_device_idx ON public.websocket_connection_leases (device_binding, expires_at);
+CREATE INDEX websocket_connection_leases_session_idx ON public.websocket_connection_leases (session_binding, expires_at);
+CREATE INDEX websocket_connection_leases_expiry_idx ON public.websocket_connection_leases (expires_at);
 
 CREATE TABLE public.idempotency_keys (
     actor_key text NOT NULL,

@@ -127,15 +127,10 @@ pub trait BlobPort: Send + Sync {
 /// watermark.
 #[async_trait]
 pub trait SignalRelayPort: Send + Sync {
-    async fn append_signal(&self, record: SignalRelayRecord) -> ServiceResult<()>;
+    async fn append_signal(&self, record: SignalRelayRecord) -> ServiceResult<bool>;
     async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayRecord>>;
     /// Short-lived replay suppression: whether this exact envelope digest was
     /// already admitted inside the retention window (`signal.md` §2).
-    async fn signal_digest_seen(
-        &self,
-        realm_id: &str,
-        envelope_digest: &str,
-    ) -> ServiceResult<bool>;
     async fn prune_expired_signals(&self) -> ServiceResult<usize>;
     async fn signal_watermark(
         &self,
@@ -466,22 +461,12 @@ impl DeliveryService {
             .await
     }
 
-    pub async fn append_signal(&self, record: SignalRelayRecord) -> ServiceResult<()> {
+    pub async fn append_signal(&self, record: SignalRelayRecord) -> ServiceResult<bool> {
         self.signals.append_signal(record).await
     }
 
     pub async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayRecord>> {
         self.signals.signals_for_realm(realm_id).await
-    }
-
-    pub async fn signal_digest_seen(
-        &self,
-        realm_id: &str,
-        envelope_digest: &str,
-    ) -> ServiceResult<bool> {
-        self.signals
-            .signal_digest_seen(realm_id, envelope_digest)
-            .await
     }
 
     pub async fn prune_expired_signals(&self) -> ServiceResult<usize> {
@@ -588,21 +573,14 @@ mod tests {
 
     #[async_trait]
     impl SignalRelayPort for NoSignalRelay {
-        async fn append_signal(&self, _record: SignalRelayRecord) -> ServiceResult<()> {
-            Ok(())
+        async fn append_signal(&self, _record: SignalRelayRecord) -> ServiceResult<bool> {
+            Ok(true)
         }
         async fn signals_for_realm(
             &self,
             _realm_id: &str,
         ) -> ServiceResult<Vec<SignalRelayRecord>> {
             Ok(Vec::new())
-        }
-        async fn signal_digest_seen(
-            &self,
-            _realm_id: &str,
-            _envelope_digest: &str,
-        ) -> ServiceResult<bool> {
-            Ok(false)
         }
         async fn prune_expired_signals(&self) -> ServiceResult<usize> {
             Ok(0)

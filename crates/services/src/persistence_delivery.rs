@@ -116,9 +116,8 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
 
 #[async_trait::async_trait]
 impl crate::delivery::SignalRelayPort for PersistenceSignalRelay {
-    async fn append_signal(&self, record: SignalRelayRecord) -> crate::ServiceResult<()> {
-        self.0.signal_relay().append(record).await?;
-        Ok(())
+    async fn append_signal(&self, record: SignalRelayRecord) -> crate::ServiceResult<bool> {
+        Ok(self.0.signal_relay().append(record).await?)
     }
 
     async fn signals_for_realm(
@@ -126,18 +125,6 @@ impl crate::delivery::SignalRelayPort for PersistenceSignalRelay {
         realm_id: &str,
     ) -> crate::ServiceResult<Vec<SignalRelayRecord>> {
         Ok(self.0.signal_relay().list_for_realm(realm_id).await?)
-    }
-
-    async fn signal_digest_seen(
-        &self,
-        realm_id: &str,
-        envelope_digest: &str,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .signal_relay()
-            .contains_digest(realm_id, envelope_digest)
-            .await?)
     }
 
     async fn prune_expired_signals(&self) -> crate::ServiceResult<usize> {

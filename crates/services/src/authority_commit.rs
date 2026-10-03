@@ -1462,6 +1462,7 @@ impl AuthorityCommitApplication {
         &self,
         scope: &arkret_wire::ScopeRef,
         authority_commit_id: &RealmCommitId,
+        parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
         sender: &arkret_wire::ActorId,
         signal_class: arkret_wire::SignalClass,
         sent_at: DateTime<Utc>,
@@ -1472,6 +1473,7 @@ impl AuthorityCommitApplication {
             .signal_scope_authority(
                 scope,
                 authority_commit_id,
+                parent_realm_authority_commit_id,
                 sender,
                 signal_class,
                 sent_at,
@@ -1793,6 +1795,38 @@ impl AuthorityCommitApplication {
             })?;
         }
         Ok(listing)
+    }
+
+    pub async fn realm_stream_subscription_cut(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::AccountRealmStreamAuthorizationCut> {
+        let cut = self
+            .store()
+            .realm_stream_subscription_cut(realm_id, account, issuer)
+            .await?;
+        if let soland_storage::AccountRealmStreamList::Listed(streams) = &cut.listing {
+            arkret_wire::RealmStreamList {
+                realm_id: realm_id.clone(),
+                streams: streams.clone(),
+                next_cursor: None,
+                has_more: false,
+            }
+            .validate()
+            .map_err(|e| crate::ServiceError::Internal(e.to_string()))?;
+            if cut
+                .history_digest
+                .as_ref()
+                .is_none_or(|digest| digest.is_empty())
+            {
+                return Err(crate::ServiceError::Internal(
+                    "subscription cut omits history binding".to_owned(),
+                ));
+            }
+        }
+        Ok(cut)
     }
 
     /// `ak.self.current_results.read.exact.v1` at one governing read cut. The

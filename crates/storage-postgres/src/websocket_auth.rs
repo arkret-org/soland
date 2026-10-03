@@ -1,7 +1,10 @@
 use arkret_wire::WebOrigin;
 use diesel::sql_types::Bool;
 use diesel_async::AsyncConnection;
-use soland_storage::{WebsocketAuthChallengeRecord, WebsocketAuthReplayRecord, WebsocketAuthStore};
+use soland_storage::{
+    WebsocketAuthChallengeRecord, WebsocketAuthReplayRecord, WebsocketAuthStore,
+    WebsocketConnectionLease,
+};
 
 use super::{
     ExistsRow, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
@@ -65,6 +68,52 @@ impl TryFrom<WebsocketChallengeRow> for WebsocketAuthChallengeRecord {
 
 #[async_trait]
 impl WebsocketAuthStore for PgWebsocketAuthStore {
+    async fn reserve_connection(
+        &self,
+        lease: &WebsocketConnectionLease,
+    ) -> PersistenceResult<bool> {
+        if lease.expires_at <= Utc::now()
+            || lease.expires_at > Utc::now() + chrono::Duration::seconds(31)
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "socket lease must expire within thirty seconds".to_owned(),
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            // All grants for this exact holder serialize at this shared lock.
+            // No pool connection is held for the lifetime of a physical socket.
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+                .bind::<Text,_>(&lease.device_binding).execute(&mut *conn).await?;
+            sql_query("DELETE FROM websocket_connection_leases WHERE device_binding=$1 AND expires_at<=clock_timestamp()")
+                .bind::<Text,_>(&lease.device_binding).execute(&mut *conn).await?;
+            let allowed = sql_query(
+                "SELECT NOT EXISTS(SELECT 1 FROM websocket_connection_leases WHERE connection_id=$1 AND device_binding<>$3) \
+                 AND (SELECT count(*) FROM websocket_connection_leases WHERE session_binding=$2 AND connection_id<>$1 AND expires_at>clock_timestamp())<2 \
+                 AND (SELECT count(*) FROM websocket_connection_leases WHERE device_binding=$3 AND connection_id<>$1 AND expires_at>clock_timestamp())<4 AS present",
+            ).bind::<Text,_>(&lease.connection_id).bind::<Text,_>(&lease.session_binding).bind::<Text,_>(&lease.device_binding)
+                .get_result::<ExistsRow>(&mut *conn).await?.present;
+            if !allowed { return Ok(false); }
+            let written = sql_query(
+                "INSERT INTO websocket_connection_leases(connection_id,session_binding,device_binding,expires_at) \
+                 SELECT $1,$2,$3,$4 WHERE $4>clock_timestamp() \
+                 ON CONFLICT(connection_id) DO UPDATE SET session_binding=EXCLUDED.session_binding,expires_at=EXCLUDED.expires_at \
+                 WHERE websocket_connection_leases.device_binding=EXCLUDED.device_binding",
+            ).bind::<Text,_>(&lease.connection_id).bind::<Text,_>(&lease.session_binding).bind::<Text,_>(&lease.device_binding)
+                .bind::<Timestamptz,_>(lease.expires_at).execute(&mut *conn).await?;
+            Ok(written == 1)
+        }).await.map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn release_connection(&self, connection_id: &str) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        sql_query("DELETE FROM websocket_connection_leases WHERE connection_id=$1")
+            .bind::<Text, _>(connection_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        Ok(())
+    }
     async fn prepare_challenge(
         &self,
         record: &WebsocketAuthChallengeRecord,
@@ -172,7 +221,8 @@ impl WebsocketAuthStore for PgWebsocketAuthStore {
             }
             let consumed = sql_query(
                 "UPDATE websocket_auth_challenges SET consumed = true \
-                 WHERE connection_id = $1 AND nonce = $2 AND consumed = false",
+                 WHERE connection_id = $1 AND nonce = $2 AND consumed = false \
+                 AND expires_at > clock_timestamp()",
             )
             .bind::<Text, _>(&connection_id)
             .bind::<Text, _>(&nonce)
@@ -209,6 +259,11 @@ impl WebsocketAuthStore for PgWebsocketAuthStore {
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
-        Ok(challenges + ledger)
+        let leases = sql_query("DELETE FROM websocket_connection_leases WHERE expires_at <= $1")
+            .bind::<Timestamptz, _>(now)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        Ok(challenges + ledger + leases)
     }
 }

@@ -36,9 +36,32 @@ pub struct WebsocketAuthReplayRecord {
     pub retain_until: chrono::DateTime<Utc>,
 }
 
+/// Short shared lease for the physical connection, renewed while it is live.
+/// Bindings are service-derived digests, never protocol credentials.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebsocketConnectionLease {
+    pub connection_id: String,
+    pub session_binding: String,
+    pub device_binding: String,
+    pub expires_at: chrono::DateTime<Utc>,
+}
+
 /// Durable challenge + replay-ledger state for the WebSocket binding.
 #[async_trait]
 pub trait WebsocketAuthStore: Send + Sync {
+    async fn reserve_connection(
+        &self,
+        _lease: &WebsocketConnectionLease,
+    ) -> PersistenceResult<bool> {
+        Err(super::PersistenceError::Internal(
+            "shared socket connection quotas are unavailable".to_owned(),
+        ))
+    }
+    async fn release_connection(&self, _connection_id: &str) -> PersistenceResult<()> {
+        Err(super::PersistenceError::Internal(
+            "shared socket connection quotas are unavailable".to_owned(),
+        ))
+    }
     /// Write a fresh challenge. Fails if `(connection_id, nonce)` already
     /// exists: a challenge is minted once and never rewritten.
     async fn prepare_challenge(

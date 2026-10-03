@@ -552,6 +552,17 @@ pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
     open_discussion_unit(pool, bootstrap_unit(seed)).await
 }
 
+pub async fn open_discussion_with_history(pool: &PgPool, seed: &str, history: &str) -> Discussion {
+    let unit = bootstrap_unit_with_history_for_station(
+        seed,
+        "public",
+        history,
+        &station(),
+        &arkret_wire::Did::new("did:web:ordinary-station.example").unwrap(),
+    );
+    open_discussion_unit(pool, unit).await
+}
+
 pub async fn open_discussion_for_station(
     pool: &PgPool,
     seed: &str,

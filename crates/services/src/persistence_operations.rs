@@ -690,6 +690,19 @@ pub struct PersistenceOperationalServices {
 
 #[async_trait::async_trait]
 impl crate::sync::WebsocketAuthPort for PersistenceWebsocketAuth {
+    async fn reserve_connection(
+        &self,
+        lease: &crate::sync::WebsocketConnectionLease,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self.0.websocket_auth().reserve_connection(lease).await?)
+    }
+    async fn release_connection(&self, connection_id: &str) -> crate::ServiceResult<()> {
+        Ok(self
+            .0
+            .websocket_auth()
+            .release_connection(connection_id)
+            .await?)
+    }
     async fn prepare_challenge(
         &self,
         record: &crate::sync::WebsocketChallengeState,

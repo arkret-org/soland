@@ -329,6 +329,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
     let mut router = Router::with_path("_arkret")
         .hoop(OperationSelectorMiddleware)
         .hoop(wait_for_sync_token)
+        .push(Router::with_path("ws").get(events::sync::websocket::upgrade))
         // `/_arkret/describe` (root meta). Integration describe is mounted
         // under `/_soland/self/integration/describe`.
         .push(system::router())

@@ -986,6 +986,7 @@ pub(super) async fn install_replica_anchor_in_connection(
     conn: &mut AsyncPgConnection,
     install: &ReplicaAnchorInstall,
 ) -> Result<(), PgTransactionError> {
+    crate::sync_cursor::retention::lock(conn, false).await?;
     let realm_stream = install.snapshot_head.stream_ref.clone();
     let key = stream_key(&realm_stream)?;
     let anchor = locked_anchor(conn, &key)
@@ -1125,6 +1126,29 @@ pub(super) async fn install_replica_anchor_in_connection(
         }
     }
     let installed_at = chrono::Utc::now();
+    let snapshot = &install.verified_snapshot;
+    if snapshot.realm_id != install.realm_id
+        || snapshot.governance_generation != install.governance_generation
+        || snapshot.visible_stream_heads != install.visible_stream_heads
+        || snapshot.current_state_entries != install.current_state_entries
+        || !snapshot.visible_stream_heads.contains(snapshot_head)
+        || snapshot.signature.context != arkret_wire::DetachedSignatureContext::RealmSnapshot
+    {
+        return Err(invalid("verified bootstrap differs from its installed material").into());
+    }
+    crate::issued_realm_snapshots::issue_head_in_connection(
+        conn,
+        &anchor.member_account_id,
+        &soland_storage::RealmStateSnapshotMaterial {
+            realm_id: snapshot.realm_id.clone(),
+            governance_generation: snapshot.governance_generation,
+            visible_stream_heads: snapshot.visible_stream_heads.clone(),
+            current_state_entries: snapshot.current_state_entries.clone(),
+            retention_and_history_floor: snapshot.retention_and_history_floor.clone(),
+        },
+        snapshot.clone(),
+    )
+    .await?;
     crate::replica_current::install_snapshot_at_heads_in_connection(
         conn,
         &install.realm_id,

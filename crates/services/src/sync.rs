@@ -63,12 +63,22 @@ pub trait CursorStorePort: Send + Sync {
 
 pub use soland_storage::{
     WebsocketAuthChallengeRecord as WebsocketChallengeState,
-    WebsocketAuthReplayRecord as WebsocketReplayState,
+    WebsocketAuthReplayRecord as WebsocketReplayState, WebsocketConnectionLease,
 };
 
 /// Durable, cross-instance challenge + replay state for the WebSocket binding.
 #[async_trait]
 pub trait WebsocketAuthPort: Send + Sync {
+    async fn reserve_connection(&self, _lease: &WebsocketConnectionLease) -> ServiceResult<bool> {
+        Err(crate::ServiceError::Internal(
+            "shared socket connection quotas are unavailable".to_owned(),
+        ))
+    }
+    async fn release_connection(&self, _connection_id: &str) -> ServiceResult<()> {
+        Err(crate::ServiceError::Internal(
+            "shared socket connection quotas are unavailable".to_owned(),
+        ))
+    }
     async fn prepare_challenge(&self, record: &WebsocketChallengeState) -> ServiceResult<()>;
     async fn challenge(
         &self,

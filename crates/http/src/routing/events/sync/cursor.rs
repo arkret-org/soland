@@ -46,6 +46,86 @@ pub enum SyncCursorError {
 }
 
 pub(crate) const ACCOUNT_STREAM_CURSOR_PURPOSE: &str = "ak.self.account.stream.subscribe.v1";
+pub(crate) const COMMITTED_STREAM_CURSOR_PURPOSE: &str =
+    "ak.self.committed_event.stream.subscribe.v1";
+
+/// Independent stream coordinates stay behind the existing opaque handle;
+/// no private stream-set shape is exposed in the cursor token.
+pub(crate) async fn committed_stream_cursor(
+    state: &AppState,
+    session: &SessionIdentityState,
+    filter_digest: &str,
+    positions: Value,
+) -> Result<String, SyncCursorError> {
+    let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
+    let target = json!({"endpoint":endpoint});
+    let binding = arkret_canonical::canonical_json_bytes(&json!({
+        "purpose":COMMITTED_STREAM_CURSOR_PURPOSE,"subject":subject,"device":device,
+        "service":state.service_core_id(),"filter_digest":filter_digest,"positions":positions,"target":target
+    })).map_err(|_| SyncCursorError::Integrity("invalid committed stream binding"))?;
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
+    let cursor = arkret_hlc::Cursor::new_at(Utc::now(), 3_600_000)
+        .map_err(|_| SyncCursorError::Integrity("invalid committed stream expiry"))?
+        .with_stateful_handle(handle.clone());
+    state
+        .sync()
+        .upsert_cursor(&CursorState {
+            handle,
+            binding_subject: Some(subject),
+            device_id: device,
+            service_id: state.service_core_id(),
+            filter_digest: Some(filter_digest.to_owned()),
+            purpose: COMMITTED_STREAM_CURSOR_PURPOSE.to_owned(),
+            positions: Some(positions),
+            target: Some(target),
+            issued_at_ms: cursor.issued_at.timestamp_millis(),
+            expires_at_ms: cursor.expires_at.timestamp_millis(),
+        })
+        .await
+        .map_err(|_| SyncCursorError::Integrity("cannot persist committed stream cursor"))?;
+    cursor
+        .encode()
+        .map_err(|_| SyncCursorError::Integrity("cannot encode committed stream cursor"))
+}
+
+pub(crate) async fn parse_committed_stream_cursor(
+    state: &AppState,
+    session: &SessionIdentityState,
+    filter_digest: &str,
+    token: &str,
+) -> Result<Value, SyncCursorError> {
+    let now_ms = Utc::now().timestamp_millis();
+    let cursor = decode_sync_cursor(token, now_ms)?;
+    if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
+        return Err(SyncCursorError::Mismatch(
+            "committed stream outer purpose mismatch",
+        ));
+    }
+    if session.agent_session().is_none()
+        && cursor_authority_revoked(state, token, Some(session), now_ms)
+    {
+        return Err(SyncCursorError::Revoked);
+    }
+    let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
+    let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
+    if stored.purpose != COMMITTED_STREAM_CURSOR_PURPOSE
+        || stored.service_id != state.service_core_id()
+        || stored.binding_subject.as_deref() != Some(subject.as_str())
+        || stored.device_id != device
+        || stored.filter_digest.as_deref() != Some(filter_digest)
+        || stored.target != Some(json!({"endpoint":endpoint}))
+    {
+        return Err(SyncCursorError::Mismatch(
+            "committed stream cursor binding mismatch",
+        ));
+    }
+    if stored.expires_at_ms <= now_ms {
+        return Err(SyncCursorError::Expired);
+    }
+    stored.positions.ok_or(SyncCursorError::Integrity(
+        "committed stream positions absent",
+    ))
+}
 pub(crate) const DEVICE_MESSAGES_CURSOR_PURPOSE: &str = "ak.self.device_messages.read.list.v1";
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
 pub(crate) const BARRIER_CURSOR_PURPOSE: &str = "barrier";

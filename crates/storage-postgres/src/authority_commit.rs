@@ -3609,6 +3609,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         &self,
         scope: &arkret_wire::ScopeRef,
         authority_commit_id: &arkret_wire::RealmCommitId,
+        parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
         sender: &arkret_wire::ActorId,
         signal_class: arkret_wire::SignalClass,
         sent_at: chrono::DateTime<chrono::Utc>,
@@ -3618,6 +3619,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             &self.pool,
             scope,
             authority_commit_id,
+            parent_realm_authority_commit_id,
             sender,
             signal_class,
             sent_at,
@@ -3887,6 +3889,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         issuer: &arkret_wire::DidCoreId,
     ) -> PersistenceResult<soland_storage::AccountRealmStreamList> {
         crate::self_current_reads::list_realm_streams_for_account(
+            &self.pool, realm_id, account, issuer,
+        )
+        .await
+    }
+
+    async fn realm_stream_subscription_cut(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::AccountRealmStreamAuthorizationCut> {
+        crate::self_current_reads::realm_stream_subscription_cut(
             &self.pool, realm_id, account, issuer,
         )
         .await

@@ -1601,6 +1601,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         .signal_scope_authority(
             &signal_scope,
             &bound.authority_commit.commit.commit_id,
+            None,
             &peer,
             arkret_wire::SignalClass::Session,
             signal_at,
@@ -1636,6 +1637,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
             .signal_scope_authority(
                 &signal_scope,
                 &bound.authority_commit.commit.commit_id,
+                None,
                 &peer,
                 arkret_wire::SignalClass::Session,
                 signal_at,
@@ -1664,6 +1666,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
             .signal_scope_authority(
                 &signal_scope,
                 &bound.authority_commit.commit.commit_id,
+                None,
                 &peer,
                 arkret_wire::SignalClass::Session,
                 signal_at,
@@ -2111,18 +2114,25 @@ async fn record_peer_welcome(
      .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(peer).unwrap())
      .execute(&mut *conn).await.unwrap();
     diesel::sql_query(
-        "INSERT INTO mls_add_authority_attestations \
-         (attestor_station_id,realm_id,scope_key,mls_group_id,genesis_event_ref,commit_event_ref, \
-          commit_stream_position,epoch,welcome_id,claim_id,consumed_proposal_ordinal,attestation_digest, \
-          request_json,attestor_resolution_canonical_json,installed_at) \
-         VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,'{}'::jsonb,decode('01','hex'),now())",
-    ).bind::<Text,_>(station.as_str()).bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&scope_key)
-     .bind::<Text,_>(event.scope_ref.canonical_mls_group_id().unwrap().as_str())
-     .bind::<Text,_>(event.event_id.as_str())
-     .bind::<BigInt,_>(commit.authority_commit.commit.stream_position as i64)
-     .bind::<BigInt,_>(epoch as i64).bind::<Text,_>(&welcome_id).bind::<Text,_>(&claim_id)
-     .bind::<BigInt,_>(ordinal).bind::<Text,_>(format!("sha256:{}", "8".repeat(64)))
-     .execute(&mut *conn).await.unwrap();
+        "INSERT INTO mls_welcome_provenance \
+         (welcome_id,realm_id,scope_key,commit_event_ref,recipient_station_id,claim_id, \
+          delivery_digest,delivery_canonical_json,accepted_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())",
+    )
+    .bind::<Text, _>(&welcome_id)
+    .bind::<Text, _>(event.realm_id.as_str())
+    .bind::<Text, _>(&scope_key)
+    .bind::<Text, _>(event.event_id.as_str())
+    .bind::<Text, _>(peer.route_service_id().as_str())
+    .bind::<Text, _>(&claim_id)
+    .bind::<Text, _>(format!("sha256:{}", "7".repeat(64)))
+    .bind::<diesel::sql_types::Binary, _>(
+        arkret_canonical::canonical_json_bytes(&serde_json::json!({"recipient_actor_id":peer}))
+            .unwrap(),
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
 }
 
 /// Every row an admitted Direct Conversation Event can leave for `realm_id`.
@@ -2500,6 +2510,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
                 realm_id: realm_id.clone(),
             },
             &head.commit.commit_id,
+            None,
             &founder,
             arkret_wire::SignalClass::Session,
             signal_at,

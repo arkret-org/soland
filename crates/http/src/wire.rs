@@ -429,6 +429,29 @@ pub fn describe(
         principal_conformance: MimiPrincipalConformance::NotClaimed,
     };
     let public_base_url = config.public_base_url.as_str();
+    let websocket_binding = url::Url::parse(public_base_url)
+        .ok()
+        .and_then(|mut endpoint| {
+            if endpoint.scheme() != "https"
+                || endpoint.path() != "/"
+                || endpoint.query().is_some()
+                || endpoint.fragment().is_some()
+                || !endpoint.username().is_empty()
+                || endpoint.password().is_some()
+            {
+                return None;
+            }
+            endpoint.set_scheme("wss").ok()?;
+            endpoint.set_path("/_arkret/ws");
+            let binding = arkret_models_discovery::TransportBinding::websocket(
+                endpoint.to_string(),
+                crate::routing::events::sync::websocket::MAX_FRAME,
+                crate::routing::events::sync::websocket::MAX_CHANNELS,
+            );
+            arkret_models_discovery::websocket_binding::validate_websocket_transport(&binding)
+                .ok()?;
+            Some(binding)
+        });
     let development_mode = config.development_mode;
     let account_authority_url = config.account_authority_url.as_deref();
     let oidc_client_id = config.oidc_client_id.as_deref();
@@ -575,10 +598,14 @@ pub fn describe(
             // handler. soland mounts the handler unconditionally, and also
             // claims the required `ak.profile.webrtc_media.v1` dependency above.
             profiles.push(arkret_wire::ProfileId::MEDIA_SERVICE_BINDING_V1.to_owned());
+            if websocket_binding.is_some() {
+                profiles.push(arkret_wire::ProfileId::BINDING_WEBSOCKET_V1.to_owned());
+            }
             profiles
         },
         profile_bindings: Default::default(),
-        supported_operation_bundles: vec![
+        supported_operation_bundles: {
+            let mut bundles = vec![
             // Caller-signed actor-private Events without a dedicated operation
             // (actor-private-effects.md §2.1).
             "ak.operation_bundle.station.actor_private_events.v1".to_owned(),
@@ -606,8 +633,14 @@ pub fn describe(
             // caller at `/head`, re-proved for disclosure at the read cut.
             "ak.operation_bundle.station.snapshot_exact_read.v1".to_owned(),
             "ak.operation_bundle.station.tus_upload.v1".to_owned(),
-        ],
-        transport_bindings: vec![
+            ];
+            if websocket_binding.is_some() {
+                bundles.push("ak.operation_bundle.station.websocket.v1".to_owned());
+            }
+            bundles
+        },
+        transport_bindings: {
+            let mut bindings = vec![
             arkret_models_discovery::TransportBinding::HttpJson {
                 base_url: format!("{}/", public_base_url.trim_end_matches('/')),
                 extension_profile_required: (),
@@ -629,7 +662,12 @@ pub fn describe(
                     arkret_models_discovery::service_description::TusExtension::Termination,
                 ],
             },
-        ],
+            ];
+            if let Some(binding) = websocket_binding {
+                bindings.push(binding);
+            }
+            bindings
+        },
         plaintext_visibility,
         calendar_tzdb_versions: Vec::new(),
         verified_profiles,
@@ -890,6 +928,66 @@ mod tests {
     }
 
     #[test]
+    fn websocket_advertisement_is_complete_on_https_and_http_keeps_fallback() {
+        for development_mode in [false, true] {
+            for base_url in ["https://soland.example/", "http://localhost/"] {
+                let description = describe(
+                    &fixture_service_resolution(),
+                    "memory",
+                    &crate::config::AppConfig {
+                        public_base_url: base_url.to_owned(),
+                        development_mode,
+                        ..crate::config::AppConfig::test_default()
+                    },
+                );
+                let secure = base_url.starts_with("https:");
+                assert_eq!(
+                    description
+                        .supported_profiles
+                        .iter()
+                        .any(|id| id.as_str() == arkret_wire::ProfileId::BINDING_WEBSOCKET_V1),
+                    secure
+                );
+                assert_eq!(
+                    arkret_models_discovery::websocket_binding::websocket_operations_reachable(
+                        &description
+                    ),
+                    secure
+                );
+                assert_eq!(
+                    arkret_models_discovery::websocket_binding::select_websocket_binding(
+                        &description,
+                        262_144
+                    )
+                    .is_some(),
+                    secure
+                );
+                for operation in [
+                    arkret_wire::WebSocketOperationId::AccountStreamSubscribe,
+                    arkret_wire::WebSocketOperationId::CommittedEventStreamSubscribe,
+                    arkret_wire::WebSocketOperationId::SignalStreamSubscribe,
+                ] {
+                    let operation =
+                        arkret_wire::ServiceOperationId::from_wire(operation.as_str()).unwrap();
+                    assert!(
+                        description.supports_operation_binding(
+                            operation,
+                            arkret_wire::BindingKind::HttpJson
+                        )
+                    );
+                    assert_eq!(
+                        description.supports_operation_binding(
+                            operation,
+                            arkret_wire::BindingKind::Websocket
+                        ),
+                        secure
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn service_describe_advertises_bundles_and_transport_roots() {
         let description = describe(
             &fixture_service_resolution(),
@@ -915,6 +1013,16 @@ mod tests {
         description
             .validate()
             .expect("advertised bundles are registered");
+        assert!(
+            arkret_models_discovery::websocket_binding::websocket_operations_reachable(
+                &description
+            )
+        );
+        assert!(matches!(
+            arkret_models_discovery::websocket_binding::select_websocket_binding(&description, 262_144),
+            Some(arkret_models_discovery::TransportBinding::Websocket { base_url, max_frame_bytes: 262_144, max_channels: 16 })
+                if base_url == "wss://soland.example/_arkret/ws"
+        ));
         let value = serde_json::to_value(description).expect("description serializes");
         assert!(value["limits"].get("mls_governance_proof").is_none());
         assert_eq!(value["transport_bindings"][0]["kind"], "http_json");

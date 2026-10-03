@@ -13,7 +13,7 @@ pub(crate) mod operations;
 pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(crate) mod strand;
-pub(super) mod sync;
+pub(crate) mod sync;
 pub(crate) mod test_chaos;
 
 use operations::{

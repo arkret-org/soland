@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use parking_lot::Mutex;
+use salvo::http::Method;
 use salvo::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -37,6 +38,7 @@ const REQUEST_OP_LABEL_CARDINALITY_THRESHOLD: usize = 200;
 // ─────────────────────────────────────────────────────────────────────────
 const REQUEST_COUNTER: &str = "soland_request_total";
 const REQUEST_DURATION: &str = "soland_request_duration_seconds";
+const STREAM_SCAN_BYTES: &str = "soland_stream_scan_response_bytes_total";
 const AUDIT_APPEND_FAILURES: &str = "soland_audit_append_failures_total";
 const FEDERATION_DLQ: &str = "soland_federation_outbox_dead_letter_total";
 const EGRESS_DENIED: &str = "soland_egress_denied_total";
@@ -121,6 +123,24 @@ impl Handler for MetricsMiddleware {
         ctrl.call_next(req, depot, res).await;
         let status = res.status_code.unwrap_or(StatusCode::OK).as_u16();
         record_http_request(&op, status, started.elapsed());
+        if req.method() == Method::POST
+            && req.uri().path() == "/_arkret/self/streams/scan"
+            && (200..300).contains(&status)
+        {
+            if let Some(bytes) = res.body.size() {
+                counter!(STREAM_SCAN_BYTES).increment(bytes);
+            }
+        }
+        if matches!(
+            req.uri().path(),
+            "/_arkret/self/streams/scan"
+                | "/_arkret/open/realm-authority/bundle"
+                | "/_arkret/self/committed-events/subscribe"
+                | "/_arkret/ws"
+        ) {
+            tracing::debug!(target:"sync_network",method=%req.method(),path=req.uri().path(),status,
+                response_body_bytes=res.body.size(),elapsed_ms=started.elapsed().as_millis() as u64,"realtime request");
+        }
     }
 }
 
@@ -145,6 +165,7 @@ fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
 
         describe_counter!(REQUEST_COUNTER, "HTTP requests by operation and status.");
         describe_histogram!(REQUEST_DURATION, "HTTP request duration by operation.");
+        describe_counter!(STREAM_SCAN_BYTES,"Successful caller-scoped stream scan JSON body bytes, excluding HTTP framing.");
         describe_counter!(
             AUDIT_APPEND_FAILURES,
             "Audit-log append failures (spec C.3.7)."
@@ -487,6 +508,9 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
     match (method, path) {
         ("POST", "/_arkret/self/streams/scan") => {
             Some(arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
+        }
+        ("GET", "/_arkret/self/committed-events/subscribe") => {
+            Some(arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_STREAM_SUBSCRIBE_V1)
         }
         ("POST", "/_arkret/peer/mls/group-state-material") => {
             Some(arkret_wire::ServiceOperationId::PEER_MLS_READ_GROUP_STATE_MATERIAL_V1)
