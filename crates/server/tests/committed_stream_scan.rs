@@ -21,20 +21,23 @@ const SCAN_PATH: &str = "/_arkret/self/streams/scan";
 
 #[tokio::test]
 async fn authority_bundle_unknown_and_non_governing_realms_have_one_public_refusal() {
-    let (state, pool) = soland_test_support::app_state_with_pool(AppConfig {
+    let (state, _pool) = soland_test_support::app_state_with_pool(AppConfig {
         development_mode: true,
         ..soland_test_support::app_config()
     });
     let foreign =
         ordinary_realm::bootstrap_unit(&format!("non-governing-bundle-{}", uuid::Uuid::now_v7()));
-    ordinary_realm::human_profile::admit(&pool, &ordinary_realm::station(), "ordinary-founder")
-        .await;
+    // A replica records remote governance without importing foreign devices
+    // into its own Station inventory or executing a foreign bootstrap locally.
     state
         .test_persistence()
         .authority_commits()
-        .admit_ordinary_realm_bootstrap_unit(&foreign, foreign.transactions[0].commit.committed_at)
+        .record_remote_authority(
+            &foreign.transactions[0].expected_authority,
+            &state.service_core_id(),
+        )
         .await
-        .expect("accepted foreign-governed Realm");
+        .expect("durable remote Realm authority");
     let unknown =
         ordinary_realm::bootstrap_unit(&format!("unknown-bundle-{}", uuid::Uuid::now_v7()));
     let mut refusals = Vec::new();
@@ -119,13 +122,13 @@ fn next(
     previous: &soland_storage::AuthorityCommitTransaction,
     kind: EventKind,
     payload: Value,
+    actor: &arkret_wire::AccountId,
     station_did: &arkret_wire::Did,
 ) -> soland_storage::EventCommitRequest {
-    let mut request = ordinary_realm::next_request(
+    let mut request = ordinary_realm::next_request_for_actor(
         previous,
         kind,
-        &ordinary_realm::human_profile::account(&ordinary_realm::station(), "ordinary-founder")
-            .principal_id,
+        arkret_wire::ActorId::account(actor.clone()),
         payload,
         previous.commit.committed_at,
     );
@@ -142,9 +145,12 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
     };
     config.jws_replay_window_seconds = 0;
     let (state, pool) = soland_test_support::app_state_with_pool(config);
-    let human =
-        ordinary_realm::human_profile::admit(&pool, &state.service_core_id(), "ordinary-founder")
-            .await;
+    let human = ordinary_realm::human_profile::admit_for_station_did(
+        &pool,
+        state.service_did(),
+        "ordinary-founder",
+    )
+    .await;
     let persistence = state.test_persistence();
     let unit = ordinary_realm::bootstrap_unit_for_account(
         &format!("http-redaction-{}", uuid::Uuid::now_v7()),
@@ -161,7 +167,7 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
 
     let initial = unit.transactions.last().expect("bootstrap head");
     let realm_id = initial.event.realm_id.clone();
-    let founder = human.principal_id;
+    let founder = human.principal_id.clone();
     let token = dev_session(&state, &founder).await;
     let outsider = dev_session(
         &state,
@@ -189,6 +195,7 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
             "created_by": initial.event.actor_id,
             "created_at": initial.commit.committed_at,
         }}),
+        &human,
         &state.service_did(),
     );
     persistence
@@ -204,6 +211,7 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
             "strand_id": strand_id,
             "expected_default_strand_id": null,
         }),
+        &human,
         &state.service_did(),
     );
     persistence
@@ -214,6 +222,7 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         &default.authority_commit,
         EventKind::MessageCreate,
         ordinary_realm::message_payload(&strand_id, "redacted content"),
+        &human,
         &state.service_did(),
     );
     persistence
@@ -240,6 +249,7 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         &message.authority_commit,
         EventKind::MessageRedact,
         json!({"message_id": message_id, "reason": "retracted by author"}),
+        &human,
         &state.service_did(),
     );
     persistence
