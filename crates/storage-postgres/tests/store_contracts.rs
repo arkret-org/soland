@@ -1213,26 +1213,37 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("relation-current:{}", uuid::Uuid::now_v7());
-    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
-        .expect("fixture Realm id");
-    let station_id =
-        arkret_wire::DidCoreId::new("ak:did_core:web:relation-station.example").unwrap();
-    let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:relation-author.example").unwrap();
-    let mut stream = FixtureCommitStream::new(&realm_id, &station_id);
-    stream.install(&pool).await;
+    let discussion = ordinary_realm::open_discussion(&pool, &namespace).await;
+    let realm_id = discussion.realm_id();
+    let station_id = discussion
+        .head
+        .authority_commit
+        .expected_authority
+        .service_id
+        .clone();
+    let actor_id = discussion.unit.transactions[0]
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
+    let mut stream = FixtureCommitStream {
+        authority: discussion.head.authority_commit.expected_authority.clone(),
+        next_position: discussion.head.authority_commit.commit.stream_position + 1,
+        previous_commit_ref: Some(discussion.head.authority_commit.commit.commit_id.clone()),
+    };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let now =
         chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
     let domain = serde_json::json!({
         "domain_kind":"tuple",
         "relation_kind":"references",
-        "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
-        "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-"
+        "from_ref":discussion.strand_id,
+        "to_ref":realm_id
     });
     let definition = serde_json::json!({
         "relation_kind":"references",
-        "from_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4",
-        "to_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
+        "from_ref":discussion.strand_id,
+        "to_ref":realm_id,
         "rank":"A1",
         "fields":{"note":"initial"}
     });
@@ -1285,7 +1296,10 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     assert_eq!(row.relation_id, first_relation_id.as_str());
     assert_eq!(row.state, "active");
     assert_eq!(row.current_commit_id, create_commit.commit_id.as_str());
-    assert_eq!(row.current_stream_position, 0);
+    assert_eq!(
+        row.current_stream_position,
+        create_commit.stream_position as i64
+    );
     assert_eq!(
         row.value["created_at"],
         serde_json::json!(arkret_canonical::format_timestamp_canonical(
@@ -1357,8 +1371,8 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     let missing_domain = serde_json::json!({
         "domain_kind":"tuple",
         "relation_kind":"references",
-        "from_ref":"ak:strand:AQdknt9AByYY2gb16KB093xeB4J8b02mTEd4Mt8z2rO-",
-        "to_ref":"ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4"
+        "from_ref":realm_id,
+        "to_ref":discussion.strand_id
     });
     let missing_update = request(
         &mut stream,

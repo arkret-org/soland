@@ -233,6 +233,7 @@ pub(crate) struct DisclosureFacts {
     pub(crate) report_subjects: std::collections::BTreeSet<arkret_wire::EventId>,
     /// Encrypted target subjects authorized through their actual signed scopes.
     pub(crate) franking_subjects: std::collections::BTreeSet<arkret_wire::EventId>,
+    pub(crate) relation_subjects: std::collections::BTreeSet<arkret_wire::RelationId>,
     /// The caller's readable floor on the Realm stream, `None` when the caller
     /// is not a currently joined member or the floor is not provable.
     pub(crate) caller_floor: Option<ReadableFloor>,
@@ -460,8 +461,7 @@ async fn disclosure_facts_in_connection(
     material: &soland_storage::RealmStateSnapshotMaterial,
 ) -> PersistenceResult<DisclosureFacts> {
     let undisclosed_family_row = sql_query(
-        "SELECT (EXISTS(SELECT 1 FROM relation_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
+        "SELECT (EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM policy_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
@@ -754,6 +754,29 @@ async fn disclosure_facts_in_connection(
             }
         }
     }
+    let mut relation_subjects = std::collections::BTreeSet::new();
+    for entry in &material.current_state_entries {
+        if let TypedCurrentResult::Value {
+            selector:
+                CurrentSelector::Relation {
+                    primary_conflict_domain,
+                },
+            value,
+            ..
+        } = entry
+        {
+            let relation: arkret_wire::relation::Relation =
+                serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+            relation
+                .validate_current_for_domain(realm_id, primary_conflict_domain)
+                .map_err(PersistenceError::database)?;
+            if crate::relation_disclosure::relation_visible_in_connection(conn, &relation, &caller)
+                .await?
+            {
+                relation_subjects.insert(relation.id.expect("validated current has a Relation id"));
+            }
+        }
+    }
     Ok(DisclosureFacts {
         message_streams,
         call_creations,
@@ -762,6 +785,7 @@ async fn disclosure_facts_in_connection(
         owned_sidecars,
         report_subjects,
         franking_subjects,
+        relation_subjects,
         caller_floor,
         undisclosed_kind,
         undisclosed_family_row,
@@ -1015,9 +1039,9 @@ pub(crate) fn disclose_to_account(
             CurrentSelector::CircleMemberState { circle_id, .. } => {
                 Some(scope_stream(Some(circle_id.clone())))
             }
-            CurrentSelector::Strand { .. } | CurrentSelector::Space { .. } => {
-                Some(object_scope(value)?)
-            }
+            CurrentSelector::Strand { .. }
+            | CurrentSelector::Space { .. }
+            | CurrentSelector::Relation { .. } => Some(object_scope(value)?),
             CurrentSelector::Rsvp { event_ref, .. } => {
                 let strand = strands
                     .get(event_ref)
@@ -1070,6 +1094,7 @@ pub(crate) fn disclose_to_account(
         TypedCurrentResult::Value {
             selector,
             source_stream_ref,
+            value,
             ..
         } => {
             let visible_stream = match source_stream_ref {
@@ -1108,6 +1133,10 @@ pub(crate) fn disclose_to_account(
                     }
                     CurrentSelector::ModerationFrankingProof { event_id } => {
                         facts.franking_subjects.contains(event_id)
+                    }
+                    CurrentSelector::Relation { .. } => {
+                        serde_json::from_value::<arkret_wire::RelationId>(value["id"].clone())
+                            .is_ok_and(|id| facts.relation_subjects.contains(&id))
                     }
                     _ => true,
                 }
@@ -1331,6 +1360,22 @@ pub(crate) fn disclose_to_account(
                 let _: arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
             }
             CurrentSelector::Strand { .. } => {}
+            CurrentSelector::Relation {
+                primary_conflict_domain,
+            } => {
+                let relation: arkret_wire::relation::Relation =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                relation
+                    .validate_current_for_domain(&material.realm_id, primary_conflict_domain)
+                    .map_err(PersistenceError::database)?;
+                if !relation
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| facts.relation_subjects.contains(id))
+                {
+                    return Err(rejected("Relation references have no disclosure proof"));
+                }
+            }
             CurrentSelector::Rsvp {
                 event_ref,
                 occurrence,
@@ -1837,6 +1882,7 @@ mod tests {
             owned_sidecars: Default::default(),
             report_subjects: Default::default(),
             franking_subjects: Default::default(),
+            relation_subjects: Default::default(),
             call_creations: Default::default(),
             caller_floor: Some(ReadableFloor {
                 oldest_position: 0,
@@ -1926,6 +1972,7 @@ mod tests {
             owned_sidecars: Default::default(),
             report_subjects: Default::default(),
             franking_subjects: Default::default(),
+            relation_subjects: Default::default(),
             call_creations: Default::default(),
             caller_floor: Some(ReadableFloor {
                 oldest_position: 11,

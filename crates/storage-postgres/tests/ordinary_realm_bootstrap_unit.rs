@@ -8,6 +8,9 @@ mod device_authorization_history;
 mod human_profile;
 #[path = "support/hydration.rs"]
 mod hydration;
+#[path = "support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
@@ -4587,14 +4590,28 @@ fn realm_event_request_as(
     kind: arkret_wire::EventKind,
     payload: serde_json::Value,
 ) -> EventCommitRequest {
+    let realm_id = previous.authority_commit.event.realm_id.clone();
+    scoped_event_request_as(
+        previous,
+        actor,
+        kind,
+        payload,
+        arkret_wire::ScopeRef::Realm { realm_id },
+    )
+}
+
+fn scoped_event_request_as(
+    previous: &EventCommitRequest,
+    actor: &arkret_wire::AccountId,
+    kind: arkret_wire::EventKind,
+    payload: serde_json::Value,
+    scope: arkret_wire::ScopeRef,
+) -> EventCommitRequest {
     let mut request = previous.clone();
     let previous_commit = &previous.authority_commit.commit;
-    let realm_id = previous.authority_commit.event.realm_id.clone();
     let event = event(
         kind,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
+        scope.clone(),
         &actor.principal_id,
         &actor.station_id,
         payload,
@@ -4607,6 +4624,8 @@ fn realm_event_request_as(
     );
     request.authority_commit.commit.stream_position = previous_commit.stream_position + 1;
     request.authority_commit.commit.previous_commit_ref = Some(previous_commit.commit_id.clone());
+    request.authority_commit.commit.stream_ref =
+        arkret_wire::CommitStreamRef::from_scope(&scope, None).unwrap();
     request.event.event_id = event.event_id.to_string();
     request.event.actor_id = event.actor_id.to_string();
     request.event.kind = event.kind.as_str().to_owned();
@@ -4620,6 +4639,8 @@ fn realm_event_request_as(
     request.projections[0].event_kind = event.kind.as_str().to_owned();
     request.projections[0].sender = Some(event.actor_id.to_string());
     request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
+    request.realm_fanout_source = matches!(scope, arkret_wire::ScopeRef::Realm { .. })
+        .then(|| arkret_wire::EventAdmissionSubmission::new(event));
     request
 }
 
@@ -5235,6 +5256,278 @@ fn circle_self_member_request(
     request.projections[0].sender = Some(event.actor_id.to_string());
     request.projections[0].payload = serde_json::to_value(&event.payload).unwrap();
     request
+}
+
+#[tokio::test]
+async fn relation_snapshot_carrier_keeps_circle_and_cross_realm_reference_disclosure() {
+    use arkret_wire::{
+        CurrentSelector, EventKind, RelationId, ScopeRef, StrandId, TypedCurrentResult,
+    };
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
+    let unit = unit_with_plaintext_service();
+    let creator = creator_account(&unit);
+    let realm_id = unit.transactions[0].event.realm_id.clone();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let (bob, joined) = admit_joined_human(
+        &pool,
+        &uow,
+        &bootstrap_tail(&unit),
+        &unit,
+        "relation-snapshot-bob",
+        'b',
+    )
+    .await;
+    let public_payload =
+        serde_json::to_value(&strand_create_request(&unit).authority_commit.event.payload).unwrap();
+    let public = realm_event_request_as(
+        &joined,
+        &creator,
+        EventKind::StrandCreate,
+        public_payload.clone(),
+    );
+    uow.commit_event(public.clone()).await.unwrap();
+    let public_id = StrandId::from_event_id(&public.authority_commit.event.event_id);
+    let circle = realm_event_request_as(
+        &public,
+        &creator,
+        EventKind::CircleCreate,
+        serde_json::json!({
+            "object": {
+                "schema": arkret_wire::SchemaId::CIRCLE_V1, "realm_id": realm_id,
+                "title": "Private relation", "display":{"short_name":"Private-relation","color_token":"blue","symbol":{"glyph":"lock"}},
+                "directory_visibility":"members", "join_rule":"public", "history_access":"since_join",
+                "state":"active", "created_by":arkret_wire::ActorId::account(creator.clone()),
+                "created_at":unit.transactions[0].commit.committed_at,
+            }
+        }),
+    );
+    uow.commit_event(circle.clone()).await.unwrap();
+    let circle_id = arkret_wire::CircleId::from_event_id(&circle.authority_commit.event.event_id);
+    let parent = unit
+        .transactions
+        .iter()
+        .find(|tx| tx.event.kind == EventKind::MemberState)
+        .unwrap();
+    let parent = serde_json::json!({"commit_id":parent.commit.commit_id,"stream_position":parent.commit.stream_position});
+    let join = circle_self_member_request(
+        &circle,
+        &creator,
+        &circle_id,
+        "join",
+        Some(serde_json::Value::Null),
+        Some(&parent),
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    let scope = ScopeRef::Circle {
+        realm_id: realm_id.clone(),
+        circle_id: circle_id.clone(),
+    };
+    let mut payload = public_payload;
+    payload["object"]["scope_circle_id"] = serde_json::json!(circle_id);
+    payload["object"]["metadata"]["title"] = serde_json::json!("Private discussion");
+    let private = scoped_event_request_as(
+        &join,
+        &creator,
+        EventKind::StrandCreate,
+        payload,
+        scope.clone(),
+    );
+    uow.commit_event(private.clone()).await.unwrap();
+    let private_id = StrandId::from_event_id(&private.authority_commit.event.event_id);
+    let domain = serde_json::json!({"domain_kind":"from","relation_kind":"confidential_discussion_of","from_ref":private_id});
+    let relation = scoped_event_request_as(
+        &private,
+        &creator,
+        EventKind::RelationCreate,
+        serde_json::json!({
+            "primary_conflict_domain":domain, "expected_revision":null,
+            "relation":{"relation_kind":"confidential_discussion_of","scope_circle_id":circle_id,"from_ref":private_id,"to_ref":public_id},
+        }),
+        scope.clone(),
+    );
+    uow.commit_event(relation.clone()).await.unwrap();
+    let relation_id = RelationId::from_event_id(&relation.authority_commit.event.event_id);
+    let rows = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        material
+            .current_state_entries
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row,
+                    TypedCurrentResult::Value {
+                        selector: CurrentSelector::Relation { .. },
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    let current = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows(&current), 1);
+    let entry = current
+        .current_state_entries
+        .iter()
+        .find(|row| {
+            matches!(
+                row,
+                TypedCurrentResult::Value {
+                    selector: CurrentSelector::Relation { .. },
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let TypedCurrentResult::Value {
+        selector,
+        source_stream_ref,
+        revision,
+        value,
+    } = entry;
+    assert_eq!(
+        serde_json::to_value(selector).unwrap(),
+        serde_json::json!({"kind":"relation","primary_conflict_domain":domain})
+    );
+    assert_eq!(
+        *source_stream_ref,
+        relation.authority_commit.commit.stream_ref
+    );
+    assert_eq!(
+        revision.commit_id,
+        relation.authority_commit.commit.commit_id
+    );
+    assert_eq!(value["id"], serde_json::json!(relation_id));
+    let hidden = account_snapshot_material(&pool, &realm_id, &bob)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows(&hidden), 0);
+    let bytes = serde_json::to_string(&serde_json::json!({"current":hidden.current_state_entries,"heads":hidden.visible_stream_heads,"floor":hidden.retention_and_history_floor})).unwrap();
+    for secret in [
+        circle_id.to_string(),
+        private_id.to_string(),
+        relation_id.to_string(),
+    ] {
+        assert!(!bytes.contains(&secret));
+    }
+
+    let foreign = ordinary_realm::open_discussion(&pool, "relation-snapshot-foreign").await;
+    let cross_domain = serde_json::json!({"domain_kind":"tuple","relation_kind":"references","from_ref":public_id,"to_ref":foreign.strand_id});
+    let cross = realm_event_request_as(
+        &circle,
+        &creator,
+        EventKind::RelationCreate,
+        serde_json::json!({
+            "primary_conflict_domain":cross_domain,"expected_revision":null,
+            "relation":{"relation_kind":"references","from_ref":public_id,"to_ref":foreign.strand_id},
+        }),
+    );
+    uow.commit_event(cross.clone()).await.unwrap();
+    let hidden_cross = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows(&hidden_cross), 1);
+    assert!(
+        !serde_json::to_string(&hidden_cross.current_state_entries)
+            .unwrap()
+            .contains(foreign.strand_id.as_str())
+    );
+    let actor = arkret_wire::ActorId::account(creator.clone());
+    let station = unit.transactions[0].expected_authority.service_id.clone();
+    assert!(matches!(
+        store
+            .committed_event_for_member(&cross.authority_commit.event.event_id, &actor, &station)
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
+            _
+        ))
+    ));
+    let (_, foreign_join) =
+        admit_joined_account(&uow, &foreign.head, &foreign.unit, creator.clone(), 'c').await;
+    let visible_cross = account_snapshot_material(&pool, &realm_id, &creator)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows(&visible_cross), 2);
+    assert!(matches!(
+        store
+            .committed_event_for_member(&cross.authority_commit.event.event_id, &actor, &station)
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(_))
+    ));
+    let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
+        soland_services::authority_commit::build_signed_realm_state_snapshot(
+            material,
+            arkret_wire::DidUrl::new("did:web:bootstrap-station.example#snapshot").unwrap(),
+            &key,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
+    };
+    let signed = store
+        .issue_realm_state_snapshot_for_account(&realm_id, &creator, &station, &sign)
+        .await
+        .unwrap()
+        .unwrap();
+    let reopened = PgAuthorityCommitStore { pool: pool.clone() };
+    assert_eq!(
+        reopened
+            .issued_realm_state_snapshot(&realm_id, &creator, &signed.snapshot_id, &station)
+            .await
+            .unwrap(),
+        Some(signed.clone())
+    );
+    let leave = realm_event_request_as(
+        &foreign_join,
+        &creator,
+        EventKind::MemberState,
+        serde_json::json!({"member_id":actor,"membership":"leave"}),
+    );
+    uow.commit_event(leave).await.unwrap();
+    let withdrawn = reopened
+        .issued_realm_state_snapshot(&realm_id, &creator, &signed.snapshot_id, &station)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(withdrawn, soland_storage::PersistenceError::SchemaViolation(reason)
+        if reason == "issued snapshot is no longer provably disclosable: a signed row is no longer disclosed")
+    );
+    assert_eq!(
+        rows(
+            &account_snapshot_material(&pool, &realm_id, &creator)
+                .await
+                .unwrap()
+                .unwrap()
+        ),
+        1
+    );
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE relation_current_results SET current_stream_position=current_stream_position+1 WHERE relation_id=$1")
+        .bind::<Text, _>(relation_id.as_str()).execute(&mut conn).await.unwrap();
+    drop(conn);
+    assert!(
+        account_snapshot_material(&pool, &realm_id, &creator)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

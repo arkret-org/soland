@@ -46,7 +46,9 @@ pub(crate) async fn read(
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)
             .map_err(|_| "invalid account actor".to_owned())?;
     let actor_key = actor.canonical_key().map_err(|error| error.to_string())?;
-    let initial = body.after.is_none();
+    // A resumable Realm-detail turn can precede the first account baseline.
+    // Its cursor has no summary cut yet, even though `after` is present.
+    let initial = body.after.is_none() || after.global_baseline.is_none();
     let mut position = after.account_summary_position;
     let mut page = None;
     let mut initial_global_snapshot = None;

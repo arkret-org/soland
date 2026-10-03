@@ -897,7 +897,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         .load::<SnapshotCurrentRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-    let current_state_entries = rows
+    let mut current_state_entries = rows
         .into_iter()
         .map(|row| {
             let selector = match (row.selector_kind.as_str(), row.selector_subject) {
@@ -1181,6 +1181,9 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
             })
         })
         .collect::<PersistenceResult<Vec<_>>>()?;
+    current_state_entries.extend(
+        crate::relation_current_results::snapshot_rows_in_connection(conn, realm_id).await?,
+    );
     let mut keyed_entries = current_state_entries
         .into_iter()
         .map(|entry| {

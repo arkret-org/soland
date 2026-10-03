@@ -101,7 +101,13 @@ pub(super) fn cursor_floors(record: &SyncCursorRecord) -> PersistenceResult<Opti
             let positions = record.positions.as_ref().ok_or_else(|| {
                 PersistenceError::SchemaViolation("account positions absent".into())
             })?;
-            let mut summary = integer(positions.get("account_summary"))?;
+            let summary_position = integer(positions.get("account_summary"))?;
+            let progress = positions
+                .get("global_baseline")
+                .filter(|value| !value.is_null());
+            // Before the first account baseline, zero is an uninitialized
+            // summary position. Only delivered detail windows retain history.
+            let mut summary = progress.map_or(i64::MAX, |_| summary_position);
             if let Some(details) = positions.get("detail_positions") {
                 let details = details.as_object().ok_or_else(|| {
                     PersistenceError::SchemaViolation(
@@ -112,10 +118,7 @@ pub(super) fn cursor_floors(record: &SyncCursorRecord) -> PersistenceResult<Opti
                     summary = summary.min(integer(detail.get("retained_revision"))?);
                 }
             }
-            let Some(progress) = positions
-                .get("global_baseline")
-                .filter(|value| !value.is_null())
-            else {
+            let Some(progress) = progress else {
                 // A Realm detail turn may precede the first account-global
                 // baseline. It has no global history to retain; pinning
                 // revision zero rejects valid cursors after global GC moves.
@@ -330,8 +333,8 @@ mod tests {
         assert_eq!(count.revision, 1);
     }
 
-    /// A Realm-detail-only cursor has not yet chosen an account-global cut.
-    /// It must remain writable after unrelated global revisions were reclaimed.
+    /// A first Realm-detail turn has not chosen either account baseline cut.
+    /// Real PostgreSQL must accept it after both retention floors advance.
     #[tokio::test]
     async fn detail_cursor_without_global_baseline_does_not_pin_revision_zero() {
         let database = crate::test_database::TestDatabase::lease().await;
@@ -354,7 +357,7 @@ mod tests {
             filter_digest: Some("digest".into()),
             purpose: "ak.self.account.stream.subscribe.v1".into(),
             positions: Some(serde_json::json!({
-                "account_summary": 5,
+                "account_summary": 0,
                 "global_baseline": null,
                 "detail_positions": {},
             })),
@@ -362,8 +365,22 @@ mod tests {
             issued_at_ms: now,
             expires_at_ms: now + 3_600_000,
         };
-        assert_eq!(cursor_floors(&cursor).unwrap(), Some((5, i64::MAX)));
-        PgSyncCursorStore { pool }.upsert(&cursor).await.unwrap();
+        assert_eq!(cursor_floors(&cursor).unwrap(), Some((i64::MAX, i64::MAX)));
+        let store = PgSyncCursorStore { pool };
+        store.upsert(&cursor).await.unwrap();
+        let mut detail = cursor.clone();
+        detail.handle = "detail-retains-its-window".into();
+        detail.positions.as_mut().unwrap()["detail_positions"] =
+            serde_json::json!({"realm": {"retained_revision": 5}});
+        assert_eq!(cursor_floors(&detail).unwrap(), Some((5, i64::MAX)));
+        store.upsert(&detail).await.unwrap();
+        detail.handle = "detail-window-was-reclaimed".into();
+        detail.positions.as_mut().unwrap()["detail_positions"]["realm"]["retained_revision"] =
+            serde_json::json!(4);
+        assert!(matches!(
+            store.upsert(&detail).await,
+            Err(PersistenceError::Conflict(_))
+        ));
     }
 
     /// Real PostgreSQL: an Account stream cursor that carries a frozen

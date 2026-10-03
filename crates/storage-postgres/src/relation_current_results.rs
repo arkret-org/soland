@@ -1,6 +1,4 @@
-use arkret_models_collaboration::objects::relation::{
-    Relation, RelationPrimaryConflictDomain, RelationPrimaryConflictDomainKind,
-};
+use arkret_models_collaboration::objects::relation::{Relation, RelationPrimaryConflictDomain};
 use arkret_wire::{CurrentRevision, RealmCommitId, RelationState};
 
 use super::{
@@ -37,17 +35,6 @@ fn corrupt(detail: impl Into<String>) -> PersistenceError {
     PersistenceError::Database(detail.into())
 }
 
-fn domain_matches_relation(domain: &RelationPrimaryConflictDomain, relation: &Relation) -> bool {
-    domain.relation_kind == relation.relation_kind
-        && domain.from_ref == relation.from_ref
-        && match domain.domain_kind {
-            RelationPrimaryConflictDomainKind::Tuple => {
-                domain.to_ref.as_ref() == Some(&relation.to_ref)
-            }
-            RelationPrimaryConflictDomainKind::From => domain.to_ref.is_none(),
-        }
-}
-
 fn decode_row(row: RelationCurrentResultReadRow) -> PersistenceResult<RelationCurrentResultRecord> {
     let realm_id = row
         .realm_id
@@ -67,11 +54,10 @@ fn decode_row(row: RelationCurrentResultReadRow) -> PersistenceResult<RelationCu
     }
     let relation = serde_json::from_value::<Relation>(row.value)
         .map_err(|error| corrupt(format!("stored Relation current value is invalid: {error}")))?;
-    if relation.schema != Relation::SCHEMA
-        || relation.validate_endpoints().is_err()
-        || relation.realm_id != realm_id
+    if relation
+        .validate_current_for_domain(&realm_id, &domain)
+        .is_err()
         || relation.id.as_ref().map(|id| id.as_str()) != Some(row.relation_id.as_str())
-        || !domain_matches_relation(&domain, &relation)
     {
         return Err(corrupt(
             "stored Relation current value does not match its row identity",
@@ -102,6 +88,64 @@ fn decode_row(row: RelationCurrentResultReadRow) -> PersistenceResult<RelationCu
             stream_position,
         },
     })
+}
+
+#[derive(QueryableByName)]
+struct RelationSnapshotReadRow {
+    #[diesel(embed)]
+    current: RelationCurrentResultReadRow,
+    #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+    source_stream_ref: Option<serde_json::Value>,
+}
+
+pub(crate) async fn snapshot_rows_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Vec<arkret_wire::TypedCurrentResult>> {
+    let rows = sql_query(
+        "SELECT result.*, covering.stream_ref AS source_stream_ref \
+         FROM relation_current_results result LEFT JOIN realm_commits covering \
+           ON covering.realm_id=result.realm_id \
+          AND covering.commit_id=result.current_commit_id \
+          AND covering.stream_position=result.current_stream_position \
+         WHERE result.realm_id=$1 ORDER BY result.domain_key",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .load::<RelationSnapshotReadRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    rows.into_iter()
+        .map(|row| {
+            let record = decode_row(row.current)?;
+            let source_stream_ref = serde_json::from_value::<arkret_wire::CommitStreamRef>(
+                row.source_stream_ref
+                    .ok_or_else(|| corrupt("Relation current has no exact covering Commit"))?,
+            )
+            .map_err(PersistenceError::database)?;
+            let expected = match record.relation.scope_circle_id.as_ref() {
+                Some(circle_id) => arkret_wire::CommitStreamRef::Circle {
+                    realm_id: realm_id.clone(),
+                    circle_id: circle_id.clone(),
+                },
+                None => arkret_wire::CommitStreamRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+            };
+            if source_stream_ref != expected {
+                return Err(corrupt(
+                    "Relation current source differs from its value scope",
+                ));
+            }
+            Ok(arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::Relation {
+                    primary_conflict_domain: record.primary_conflict_domain,
+                },
+                source_stream_ref,
+                revision: record.revision,
+                value: serde_json::to_value(record.relation).map_err(PersistenceError::database)?,
+            })
+        })
+        .collect()
 }
 
 #[derive(QueryableByName)]

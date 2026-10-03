@@ -142,6 +142,7 @@ mod realm_lifecycle_current_results;
 mod recovery;
 mod registry;
 mod relation_current_results;
+mod relation_disclosure;
 mod replica_authorization;
 mod replica_current;
 mod replica_stream_listing;

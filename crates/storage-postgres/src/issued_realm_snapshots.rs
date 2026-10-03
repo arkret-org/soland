@@ -469,6 +469,22 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::InviteDirectedInvitee { .. }
             | CurrentSelector::CapabilityGrant { .. }
             | CurrentSelector::ObjectRedaction { .. } => {}
+            CurrentSelector::Relation {
+                primary_conflict_domain,
+            } => {
+                let relation: arkret_wire::relation::Relation =
+                    serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                relation
+                    .validate_current_for_domain(&snapshot.realm_id, primary_conflict_domain)
+                    .map_err(PersistenceError::database)?;
+                if !crate::relation_disclosure::relation_visible_in_connection(
+                    conn, &relation, &actor,
+                )
+                .await?
+                {
+                    return Err(undisclosable("Relation references are no longer disclosed"));
+                }
+            }
             CurrentSelector::MessageRevision { .. }
                 if revision.stream_position < current_floor.oldest_position =>
             {

@@ -60,6 +60,15 @@ pub(crate) async fn full_event_for_member_in_connection(
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<bool> {
     let event = &row.event;
+    if matches!(
+        event.kind,
+        arkret_wire::EventKind::RelationCreate
+            | arkret_wire::EventKind::RelationUpdate
+            | arkret_wire::EventKind::RelationTombstone
+    ) && !crate::relation_disclosure::event_visible_in_connection(conn, event, caller).await?
+    {
+        return Ok(false);
+    }
     if let arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
         if !crate::sidecar_access::participant_in_connection(
             conn,

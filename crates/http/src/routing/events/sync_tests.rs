@@ -1734,6 +1734,73 @@ async fn selected_unreadable_realm_is_an_explicit_unavailable_detail() {
 }
 
 #[tokio::test]
+async fn first_detail_continuation_starts_an_account_baseline_after_retention_advances() {
+    use diesel_async::SimpleAsyncConnection;
+
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(
+        config,
+        soland_storage_postgres::Db {
+            pool: Some(pool.clone()),
+        },
+    );
+    let mut conn = pool.get().await.unwrap();
+    conn.batch_execute(
+        "UPDATE account_summary_clock SET revision=5;
+         UPDATE account_global_clock SET revision=5;
+         UPDATE account_sync_retention SET summary_floor=5,global_floor=5",
+    )
+    .await
+    .unwrap();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
+    let body: SyncRequestBody = serde_json::from_value(json!({
+        "filter": {"realm_ids": [ROSTER_REALM]}
+    }))
+    .unwrap();
+    let detail = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    detail.validate().unwrap();
+    assert!(detail.realms.is_some());
+    let filter = sync_filter_value(body.filter.as_ref());
+    let after = parse_and_validate_sync_cursor(
+        detail
+            .cursor
+            .as_deref()
+            .expect("detail cursor persists after GC"),
+        &state,
+        Some(&session),
+        filter.as_ref(),
+        Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(after.account_summary_position, 0);
+    assert!(after.global_baseline.is_none());
+    let mut resumed = body;
+    resumed.after = detail.cursor;
+    let global = build_sync_snapshot(&state, Some(&session), &resumed, &after).await;
+    global.validate().unwrap();
+    assert!(
+        global.realm_list.is_some(),
+        "first account baseline includes the frozen Realm list"
+    );
+    assert!(global.baseline.is_some());
+    let completed = parse_and_validate_sync_cursor(
+        global.cursor.as_deref().unwrap(),
+        &state,
+        Some(&session),
+        filter.as_ref(),
+        Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(completed.account_summary_position, 5);
+    assert!(completed.global_baseline.is_some());
+}
+
+#[tokio::test]
 async fn account_and_device_queue_cursors_reject_cross_operation_resume() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
