@@ -17,8 +17,15 @@ use soland_storage::{ActorProfileAdmissionWrite, ActorProfileStore, AuthorityCom
 use soland_storage_postgres::{PgActorProfileStore, PgPersistenceStore, PgPool};
 
 fn fixture(station: &DidCoreId, label: &str) -> pcr_genesis::PcrGenesisFixture {
-    pcr_genesis::PcrGenesisFixture::new_with(
+    fixture_for_did(
         device_authorization_history::did_web_station(station),
+        label,
+    )
+}
+
+fn fixture_for_did(station_did: arkret_wire::Did, label: &str) -> pcr_genesis::PcrGenesisFixture {
+    pcr_genesis::PcrGenesisFixture::new_with(
+        station_did,
         device_authorization_history::DeviceHistoryFixtureOptions {
             local_id: label.to_owned(),
             founding_device_id: arkret_wire::DeviceId::new(format!(
@@ -45,7 +52,19 @@ pub fn account(station: &DidCoreId, label: &str) -> AccountId {
 /// Repeated calls retain the exact accepted Profile. Nothing is seeded into
 /// a current table: the PCR unit and ProfileCreate use their production stores.
 pub async fn admit(pool: &PgPool, station: &DidCoreId, label: &str) -> AccountId {
-    let fixture = fixture(station, label);
+    admit_fixture(pool, fixture(station, label)).await
+}
+
+/// WebVH core IDs are not reversible; retain the caller's full Station DID.
+pub async fn admit_for_station_did(
+    pool: &PgPool,
+    station_did: arkret_wire::Did,
+    label: &str,
+) -> AccountId {
+    admit_fixture(pool, fixture_for_did(station_did, label)).await
+}
+
+async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -> AccountId {
     let account = fixture.history.account.clone();
     let mut conn = pool.get().await.unwrap();
     #[derive(diesel::QueryableByName)]
@@ -71,7 +90,7 @@ pub async fn admit(pool: &PgPool, station: &DidCoreId, label: &str) -> AccountId
         "INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1) \
          ON CONFLICT(singleton) DO NOTHING",
     )
-    .bind::<Text, _>(station.as_str())
+    .bind::<Text, _>(account.station_id.as_str())
     .execute(&mut *conn)
     .await
     .unwrap();
@@ -105,11 +124,7 @@ pub async fn admit(pool: &PgPool, station: &DidCoreId, label: &str) -> AccountId
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap(),
         DetachedSignatureContext::RealmCommit,
-        DidUrl::new(format!(
-            "{}#authority",
-            device_authorization_history::did_web_station(station)
-        ))
-        .unwrap(),
+        DidUrl::new(format!("{}#authority", fixture.history.station_did)).unwrap(),
         at,
         &SigningKey::from_bytes(&device_authorization_history::STATION_AUTHORITY_SEED),
     )
