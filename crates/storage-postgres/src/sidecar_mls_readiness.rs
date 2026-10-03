@@ -13,8 +13,6 @@ struct Evidence {
     #[diesel(sql_type = Text)]
     claim_request_id: String,
     #[diesel(sql_type = Text)]
-    request_digest: String,
-    #[diesel(sql_type = Text)]
     keypackage_ref: String,
 }
 
@@ -149,6 +147,7 @@ pub(crate) async fn controller_device_ready_in_connection(
         conn,
         &scope,
         &actor,
+        &cut.controller_account_id,
         &MlsWelcomeRecipientEndpoint::Device {
             device_id: device.clone(),
         },
@@ -163,6 +162,7 @@ pub(crate) async fn consumed_endpoint_in_connection(
     conn: &mut crate::AsyncPgConnection,
     scope: &ScopeRef,
     actor: &ActorId,
+    owner_account: &arkret_wire::AccountId,
     endpoint: &MlsWelcomeRecipientEndpoint,
     authorization_ref: &EventId,
     signature_key: &arkret_wire::Base64UrlString,
@@ -201,6 +201,14 @@ pub(crate) async fn consumed_endpoint_in_connection(
     let account = actor
         .as_account_id()
         .ok_or_else(|| invalid("Sidecar endpoint actor is not an Account"))?;
+    // Agent packages belong to their controller's local Account; device
+    // packages belong to the recipient itself. Both keep the exact Station.
+    if owner_account.station_id != account.station_id
+        || (matches!(endpoint, MlsWelcomeRecipientEndpoint::Device { .. })
+            && owner_account != account)
+    {
+        return Ok(false);
+    }
     let (device, method) = match endpoint {
         MlsWelcomeRecipientEndpoint::Device { device_id } => (device_id.as_str(), ""),
         MlsWelcomeRecipientEndpoint::AgentRuntime {
@@ -208,14 +216,15 @@ pub(crate) async fn consumed_endpoint_in_connection(
         } => ("", verification_method.as_str()),
     };
     let evidence = diesel::sql_query("SELECT convert_from(w.delivery_canonical_json,'UTF8')::jsonb AS delivery, \
-        p.consume_receipt AS receipt,p.claim_request_id,p.request_digest,k.keypackage_ref \
-        FROM mls_key_packages k JOIN peer_keypackage_claims p ON p.keypackage_id=k.id \
+        p.consume_receipt AS receipt,p.claim_request_id,k.keypackage_ref \
+        FROM mls_key_packages k JOIN accounts a ON a.pk=k.owner_account_pk \
+        JOIN peer_keypackage_claims p ON p.keypackage_id=k.id \
         JOIN keypackage_claim_welcome_bindings b ON b.source_id=p.source_id AND b.claim_request_id=p.claim_request_id \
         JOIN mls_welcome_provenance w ON w.claim_id=b.claim_id AND w.welcome_id=b.welcome_id AND w.commit_event_ref=b.commit_event_ref \
         JOIN canonical_events e ON e.envelope->>'event_id'=w.commit_event_ref AND e.state='committed' \
         JOIN realm_commits c ON c.event_pk=e.pk \
         JOIN mls_group_current_results g ON g.scope_key=w.scope_key \
-        WHERE k.actor_id=$1 AND w.scope_key=$2 AND w.recipient_station_id=$3 \
+        WHERE k.actor_id=$1 AND a.principal_id=$9 AND a.station_id=$3 AND w.scope_key=$2 AND w.recipient_station_id=$3 \
         AND p.state='consumed' AND p.consume_receipt IS NOT NULL \
         AND b.welcome_digest=w.delivery_digest AND c.stream_ref=jsonb_build_object('kind','sidecar','realm_id',w.realm_id,'sidecar_id',$4) \
         AND c.stream_position<=g.current_stream_position \
@@ -223,9 +232,9 @@ pub(crate) async fn consumed_endpoint_in_connection(
           OR ($6<>'' AND k.endpoint_verification_method=$6 AND k.agent_key_authorize_event_id=$7)) \
         AND ((NOT k.last_resort AND p.key_package_use='single_use' AND k.consumed_at IS NOT NULL AND k.claimed_by_mls_group_id=$8) \
           OR (k.last_resort AND p.key_package_use='last_resort'))")
-        .bind::<Text,_>(actor.to_string()).bind::<Text,_>(&scope_key).bind::<Text,_>(account.station_id.as_str())
+        .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(&scope_key).bind::<Text,_>(account.station_id.as_str())
         .bind::<Text,_>(scope.sidecar_id().ok_or_else(|| invalid("Sidecar readiness requires native scope"))?.as_str())
-        .bind::<Text,_>(device).bind::<Text,_>(method).bind::<Binary,_>(token.to_vec()).bind::<Text,_>(group.as_str())
+        .bind::<Text,_>(device).bind::<Text,_>(method).bind::<Binary,_>(token.to_vec()).bind::<Text,_>(group.as_str()).bind::<Text,_>(owner_account.principal_id.as_str())
         .load::<Evidence>(&mut *conn).await.map_err(PersistenceError::database)?;
     for evidence in evidence {
         let delivery: MlsWelcomeDelivery =
@@ -237,6 +246,14 @@ pub(crate) async fn consumed_endpoint_in_connection(
             .map_err(PersistenceError::database)?;
         receipt.validate_shape().map_err(invalid)?;
         let durable = &receipt.recipient_durable_receipt;
+        // The terminal receipt addresses the consume command, not the
+        // original peer claim command retained by the claim ledger.
+        let consume = arkret_models_crypto::KeyPackagesConsumeUnsignedRequest {
+            claim_id: receipt.claim_id.clone(),
+            recipient_durable_receipt: durable.clone(),
+        };
+        let consume_digest =
+            arkret_canonical::canonical_sha256(&consume).map_err(PersistenceError::database)?;
         let signer_matches = match (&durable.recipient, endpoint) {
             (
                 RecipientMlsDurableSigner::Device {
@@ -272,7 +289,7 @@ pub(crate) async fn consumed_endpoint_in_connection(
                     .durable_receipt_digest()
                     .map_err(PersistenceError::database)?
             && durable.claim_request_id.as_str() == evidence.claim_request_id
-            && receipt.request_digest.as_str() == evidence.request_digest
+            && receipt.request_digest.as_str() == consume_digest
             && durable.key_package_ref.as_str() == evidence.keypackage_ref
             && durable.recipient_id == account.station_id
             && durable.realm_id == *scope.realm_id()

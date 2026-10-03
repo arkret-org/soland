@@ -146,6 +146,7 @@ pub(crate) async fn effective_agents_in_connection(
                     conn,
                     &scope,
                     &actor,
+                    &cut.controller_account_id,
                     &arkret_wire::MlsWelcomeRecipientEndpoint::AgentRuntime {
                         verification_method: authorization.verification_method.clone(),
                     },
