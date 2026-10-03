@@ -1,18 +1,12 @@
 //! Native Sidecar genesis current is accepted with its RealmCommit, under
 //! the same singleton reservation. The public ensure route remains closed.
 
-#[path = "../../test-support/src/device_authorization_history.rs"]
-#[allow(dead_code)]
-mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
 mod ordinary_realm;
-#[path = "../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
-mod pcr_genesis;
 
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
-use ordinary_realm::{bootstrap_unit_with_join_rule, founder, next_request};
+use ordinary_realm::next_request;
 use soland_storage::{
     AuthorityCommitStore, ConflictCode, EventBatchCommitRequest, EventCommitRequest,
     EventCommitUnitOfWork,
@@ -151,7 +145,17 @@ fn batch(create: EventCommitRequest, attach: EventCommitRequest) -> EventBatchCo
 async fn sidecar_genesis_reserves_exact_controller_and_current_in_one_commit() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = bootstrap_unit_with_join_rule("sidecar-current", "public");
+    let controller = ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "sidecar-current-controller",
+    )
+    .await;
+    let unit = ordinary_realm::bootstrap_unit_for_account(
+        "sidecar-current",
+        &controller,
+        &ordinary_realm::human_profile::station_did(&ordinary_realm::station()),
+    );
     PgAuthorityCommitStore { pool: pool.clone() }
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
         .await
@@ -162,7 +166,7 @@ async fn sidecar_genesis_reserves_exact_controller_and_current_in_one_commit() {
     let create = next_request(
         last,
         arkret_wire::EventKind::SidecarCreate,
-        &founder(),
+        &controller.principal_id,
         serde_json::json!({}),
         at,
     );
@@ -213,7 +217,7 @@ async fn sidecar_genesis_reserves_exact_controller_and_current_in_one_commit() {
     let second = next_request(
         &create.authority_commit,
         arkret_wire::EventKind::SidecarCreate,
-        &founder(),
+        &controller.principal_id,
         serde_json::json!({}),
         at + chrono::Duration::seconds(1),
     );
@@ -265,7 +269,12 @@ async fn sidecar_create_and_context_attach_commit_atomically_or_write_nothing() 
     let create = next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::SidecarCreate,
-        &founder(),
+        discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id(),
         serde_json::json!({}),
         at,
     );
@@ -344,7 +353,12 @@ async fn sidecar_create_and_context_attach_commit_atomically_or_write_nothing() 
     let other_create = next_request(
         &other_discussion.head.authority_commit,
         arkret_wire::EventKind::SidecarCreate,
-        &founder(),
+        other_discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id(),
         serde_json::json!({}),
         other_at,
     );

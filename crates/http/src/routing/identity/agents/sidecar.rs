@@ -119,32 +119,38 @@ pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str)
             || projection.effective_agent_membership_base(realm_id, actor))
 }
 
-fn validate_sidecar_context_projection(
+async fn validate_sidecar_context(
     state: &AppState,
     realm_id: &RealmId,
     context_ref: &SidecarContextRef,
+    controller: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
-    let projection = state.projections().snapshot();
-    let realm_id = realm_id.as_str();
     match context_ref {
         SidecarContextRef::Strand { strand_id } => {
-            let strand = projection
-                .strands
-                .get(strand_id.as_str())
+            // Canonical Strand writes do not depend on the reducer mirror.
+            // Prepare reads the accepted current, while the atomic attach
+            // transaction rechecks the source at its own locked cut.
+            let scope = state
+                .authority_commits()
+                .visible_strand_scope_for_actor(realm_id, strand_id, controller)
+                .await
+                .map_err(|error| AppError::internal(format!("Sidecar source current: {error}")))?
                 .ok_or_else(|| AppError::not_found("context_ref.strand_id not found"))?;
-            if strand.realm_id != realm_id {
-                return Err(sidecar_failed_precondition(
-                    "context_ref_realm_mismatch",
-                    "context_ref.strand_id belongs to another Realm",
-                ));
+            if scope
+                != (arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                })
+            {
+                return Err(AppError::not_found("context_ref.strand_id not found"));
             }
         }
         SidecarContextRef::Relation { relation_id } => {
+            let projection = state.projections().snapshot();
             let relation = projection
                 .relations
                 .get(relation_id.as_str())
                 .ok_or_else(|| AppError::not_found("context_ref.relation_id not found"))?;
-            if relation.realm_id != realm_id {
+            if relation.realm_id != realm_id.as_str() {
                 return Err(sidecar_failed_precondition(
                     "context_ref_realm_mismatch",
                     "context_ref.relation_id belongs to another Realm",
@@ -665,7 +671,13 @@ async fn prepare_sidecar(
         ));
     }
     authorize_sidecar_ensure(state, session, body.source_realm_id.as_str()).await?;
-    validate_sidecar_context_projection(state, &body.source_realm_id, &body.context_ref)?;
+    validate_sidecar_context(
+        state,
+        &body.source_realm_id,
+        &body.context_ref,
+        &arkret_wire::ActorId::account(authenticated_controller_account_id),
+    )
+    .await?;
     let normalized_context_ref = serde_json::to_value(&body.context_ref).map_err(|error| {
         AppError::internal(format!("context_ref serialization failed: {error}"))
     })?;
@@ -1266,10 +1278,58 @@ pub(super) async fn list_sidecars(
 }
 
 #[cfg(test)]
+#[path = "../../../../../storage-postgres/tests/support/ordinary_realm.rs"]
+#[allow(dead_code)]
+mod source_context_test_realm;
+
+#[cfg(test)]
 mod tests {
     use chrono::{TimeZone as _, Timelike as _};
 
     use super::*;
+
+    #[tokio::test]
+    async fn sidecar_source_strand_reads_durable_current_without_a_reducer_mirror() {
+        let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let discussion = source_context_test_realm::open_human_discussion(
+            &pool,
+            "sidecar-source-durable-current",
+        )
+        .await;
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: Some(pool) },
+        );
+        state.test_projection().lock().strands.clear();
+        let realm = discussion.head.authority_commit.event.realm_id;
+        let controller = discussion.head.authority_commit.event.actor_id;
+        let context = SidecarContextRef::Strand {
+            strand_id: discussion.strand_id,
+        };
+        validate_sidecar_context(&state, &realm, &context, &controller)
+            .await
+            .unwrap();
+        let foreign_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            controller.as_account_id().unwrap().principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:foreign-source-station.example").unwrap(),
+        ));
+        assert!(
+            validate_sidecar_context(&state, &realm, &context, &foreign_station)
+                .await
+                .is_err()
+        );
+        let wrong_realm = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x9f; 32],
+        ));
+        assert!(
+            validate_sidecar_context(&state, &wrong_realm, &context, &controller)
+                .await
+                .is_err()
+        );
+        assert!(state.projections().snapshot().strands.is_empty());
+    }
 
     #[test]
     fn prepared_create_event_is_content_bound_and_derives_sidecar_id() {
