@@ -124,11 +124,7 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap(),
         DetachedSignatureContext::RealmCommit,
-        DidUrl::new(format!(
-            "{}#authority",
-            device_authorization_history::did_web_station(station)
-        ))
-        .unwrap(),
+        DidUrl::new(format!("{}#authority", fixture.history.station_did)).unwrap(),
         at,
         &SigningKey::from_bytes(&device_authorization_history::STATION_AUTHORITY_SEED),
     )
