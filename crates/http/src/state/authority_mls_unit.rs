@@ -892,10 +892,20 @@ mod tests {
     /// The creator's accepted epoch-0 group, installed as the scope's
     /// current `mls_group` with the public tracker its Genesis verified into.
     async fn accepted_genesis(state: &AppState) -> (ArkretMlsGroup, EventId) {
-        let scope = realm_scope();
-        let genesis_binding =
+        accepted_genesis_in_scope(
+            state,
+            realm_scope(),
             MlsGovernanceBindingPayload::realm(RealmId::new(REALM).unwrap(), None, 0, 0, 0)
-                .unwrap();
+                .unwrap(),
+        )
+        .await
+    }
+
+    async fn accepted_genesis_in_scope(
+        state: &AppState,
+        scope: ScopeRef,
+        genesis_binding: MlsGovernanceBindingPayload,
+    ) -> (ArkretMlsGroup, EventId) {
         let group = identity(CREATOR, "ak:device:01904100-0000-7000-8000-000000000081")
             .create_group_with_governance_binding(&scope, &genesis_binding)
             .unwrap();
@@ -931,6 +941,7 @@ mod tests {
     }
 
     fn commit_event(actor: ActorId, payload: &MlsCommitPayload) -> Event {
+        let scope = payload.governance_binding().effective_scope().clone();
         let serde_json::Value::Object(payload) = serde_json::to_value(payload).unwrap() else {
             unreachable!("an MLS Commit payload is an object")
         };
@@ -938,7 +949,7 @@ mod tests {
             event_id: event_ref(0x73),
             kind: EventKind::MlsCommit,
             realm_id: RealmId::new(REALM).unwrap(),
-            scope_ref: realm_scope(),
+            scope_ref: scope,
             actor_id: actor,
             executed_by: None,
             authorization_ref: None,
@@ -1029,6 +1040,77 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.conflict_code(), Some(ConflictCode::CapabilityDenied));
+    }
+
+    #[tokio::test]
+    async fn a_sidecar_add_verifies_its_actual_transition_and_exact_signed_binding() {
+        let state = test_state();
+        let sidecar_id =
+            arkret_wire::SidecarId::new("ak:sidecar:ASZ1iAvlGxgLC_-P6WHoR9vfijpaxbI5hoSwBx8zWTcT")
+                .unwrap();
+        let scope = ScopeRef::Sidecar {
+            realm_id: RealmId::new(REALM).unwrap(),
+            sidecar_id: sidecar_id.clone(),
+        };
+        let binding_for = |base, previous, next| {
+            MlsGovernanceBindingPayload::sidecar(
+                RealmId::new(REALM).unwrap(),
+                sidecar_id.clone(),
+                base,
+                previous,
+                next,
+                0,
+                arkret_wire::Hash::new(arkret_canonical::sha256_digest([0x81])).unwrap(),
+                vec![event_ref(0x82)],
+            )
+            .unwrap()
+        };
+        let (mut group, genesis) =
+            accepted_genesis_in_scope(&state, scope.clone(), binding_for(None, 0, 0)).await;
+        let binding = binding_for(Some(genesis.clone()), 0, 1);
+        let payload = add_member(&mut group, &genesis, &binding);
+        let event = commit_event(actor(CREATOR), &payload);
+        let (installation, added) = verify_commit(&state, &event).await.unwrap();
+        assert_eq!(installation.effective_scope, scope);
+        assert_eq!(installation.epoch, 1);
+        assert_eq!(added[0].actor_id, actor(MEMBER));
+        let tracker = MlsPublicGroupTracker::restore(
+            &installation.public_state,
+            group.group_id().as_str(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(tracker.governance_binding().unwrap(), binding);
+        assert!(installation.consumed_proposals.iter().any(|p| {
+            p.target_after
+                .as_ref()
+                .is_some_and(|leaf| leaf.actor_id == actor(MEMBER))
+        }));
+
+        let mut wrong_binding = event.clone();
+        wrong_binding.payload.get_mut("governance_binding").unwrap()["participant_authority_digest"] =
+            serde_json::json!(arkret_canonical::sha256_digest([0x83]));
+        let error = verify_commit(&state, &wrong_binding).await.unwrap_err();
+        assert_eq!(
+            error.conflict_code(),
+            Some(ConflictCode::GovernanceBindingMismatch)
+        );
+
+        let error = verify_commit(&state, &commit_event(actor(MEMBER), &payload))
+            .await
+            .unwrap_err();
+        assert_eq!(error.conflict_code(), Some(ConflictCode::CapabilityDenied));
+        let mut corrupted = event;
+        let mut bytes = arkret_canonical::base64url_decode(payload.commit_bytes_b64()).unwrap();
+        bytes[20] ^= 1;
+        corrupted.payload.insert(
+            "commit_bytes_b64".to_owned(),
+            serde_json::json!(arkret_canonical::base64url_encode(&bytes)),
+        );
+        assert!(verify_commit(&state, &corrupted).await.is_err());
+        let current = state.mls_groups().current(&scope).await.unwrap().unwrap();
+        assert_eq!(current.value.epoch, 0);
+        assert_eq!(current.value.current_mls_commit_event_ref, genesis);
     }
 
     #[tokio::test]
