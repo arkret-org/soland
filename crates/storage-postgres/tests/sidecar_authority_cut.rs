@@ -662,3 +662,248 @@ async fn provision_owned_agent(
         provision.event_id,
     )
 }
+
+/// Storage admission only: accepted controller/Agent units are real; RFC
+/// verification and publication signatures are covered by HTTP/MLS suites.
+#[tokio::test]
+async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusal() {
+    use diesel::sql_types::{BigInt, Text};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite, MlsKeyPackageStore};
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let station = ordinary_realm::station();
+    let station_did = device_authorization_history::did_web_station(&station);
+    let principal = accepted_controller(&pool, station_did.clone()).await;
+    let controller = &principal.history.account;
+    let realm =
+        ordinary_realm::bootstrap_unit_for_account("agent-mls-join", controller, &station_did);
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store
+        .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let parent = realm.transactions.last().unwrap();
+    let realm_id = &parent.event.realm_id;
+    let (agent, genesis, _) = provision_owned_agent(&pool, &principal).await;
+    let agent_did = arkret_wire::Did::new(format!(
+        "did:{}",
+        agent
+            .principal_id
+            .as_str()
+            .strip_prefix("ak:did_core:")
+            .unwrap()
+    ))
+    .unwrap();
+    let delegation = format!("{agent_did}#managed-controller");
+    let key_event = sidecar_agent::agent_control_event(
+        &principal.history.device_verification_method,
+        principal.history.founding_device_signing_seed,
+        controller,
+        &agent,
+        &genesis.event.realm_id,
+        &delegation,
+        sidecar_agent::agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            genesis.commit.committed_at,
+        ),
+        genesis.commit.committed_at,
+    );
+    let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    profiles
+        .admit_agent_control_event(AgentControlAdmissionWrite {
+            commit: soland_storage::AuthorityCommitTransaction {
+                expected_authority: genesis.expected_authority.clone(),
+                event: key_event.clone(),
+                commit: key_commit.clone(),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: key_commit.committed_at,
+        })
+        .await
+        .unwrap();
+
+    let at = key_commit.committed_at + chrono::TimeDelta::milliseconds(1);
+    let mut group = ordinary_realm::next_request(
+        parent,
+        EventKind::MlsGenesis,
+        &controller.principal_id,
+        serde_json::json!({
+            "cipher_suite":"MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_ref":format!("ak:blob:sha256:{}", "3".repeat(64)),
+            "ratchet_tree_ref":format!("ak:blob:sha256:{}", "4".repeat(64)),
+            "creator_leaf_authority":{
+                "leaf_signature_key_b64u":arkret_canonical::base64url_encode(
+                    ed25519_dalek::SigningKey::from_bytes(&principal.history.founding_device_signing_seed).verifying_key().as_bytes()),
+                "endpoint":{"kind":"device","device_id":principal.history.founding_device_id},
+                "authorization_event_ref":principal.unit.transactions[1].event.event_id
+            },
+            "governance_binding":arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm_id.clone(),None,0,0,0).unwrap(),
+            "created_at":arkret_canonical::format_timestamp_canonical(at)
+        }),
+        at,
+    );
+    // The storage boundary consumes an already verified installation, just
+    // as the founding-unit storage matrix does. No RFC verification is claimed.
+    group.authority_commit.mls_state = Some(soland_storage::MlsStateInstallation {
+        effective_scope: group.authority_commit.event.scope_ref.clone(),
+        base: None,
+        epoch: 0,
+        public_state: b"storage-verified-public-state".to_vec(),
+        member_principals: std::collections::BTreeSet::from([arkret_wire::ActorId::account(
+            controller.clone(),
+        )]),
+        consumed_proposals: Vec::new(),
+        public_blobs: Vec::new(),
+    });
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(group.clone()).await.unwrap();
+    let join = ordinary_realm::next_request(
+        &group.authority_commit,
+        EventKind::MemberState,
+        &controller.principal_id,
+        serde_json::json!({
+            "realm_id":realm_id,"member_id":arkret_wire::ActorId::account(agent.clone()),"membership":"join",
+            "agent_controller_binding":{"controller_account_id":controller,
+                "controller_membership_generation_ref":parent.event.event_id}
+        }),
+        at,
+    );
+    #[derive(diesel::QueryableByName, Debug, PartialEq)]
+    struct Footprint {
+        #[diesel(sql_type=BigInt)]
+        events: i64,
+        #[diesel(sql_type=BigInt)]
+        commits: i64,
+        #[diesel(sql_type=BigInt)]
+        members: i64,
+        #[diesel(sql_type=BigInt)]
+        revision: i64,
+        #[diesel(sql_type=BigInt)]
+        covered: i64,
+        #[diesel(sql_type=BigInt)]
+        epoch: i64,
+    }
+    async fn footprint(
+        pool: &soland_storage_postgres::PgPool,
+        realm: &arkret_wire::RealmId,
+    ) -> Footprint {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("SELECT (SELECT COUNT(*) FROM canonical_events) AS events, \
+            (SELECT COUNT(*) FROM realm_commits) AS commits, \
+            (SELECT COUNT(*) FROM member_state_current_results) AS members, \
+            (SELECT (value->>'current_key_access_revision')::bigint FROM mls_group_current_results WHERE realm_id=$1) AS revision, \
+            (SELECT (value->>'covered_key_access_revision')::bigint FROM mls_group_current_results WHERE realm_id=$1) AS covered, \
+            (SELECT (value->>'epoch')::bigint FROM mls_group_current_results WHERE realm_id=$1) AS epoch")
+            .bind::<Text,_>(realm.as_str()).get_result(&mut *conn).await.unwrap()
+    }
+    let before = footprint(&pool, realm_id).await;
+    assert!(
+        uow.commit_event(join.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("claimable membership KeyPackage")
+    );
+    assert_eq!(footprint(&pool, realm_id).await, before);
+    #[derive(diesel::QueryableByName)]
+    struct Account {
+        #[diesel(sql_type=BigInt)]
+        pk: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let owner=diesel::sql_query("INSERT INTO accounts(principal_id,station_id) VALUES($1,$2) \
+        ON CONFLICT(principal_id,station_id) DO UPDATE SET principal_id=EXCLUDED.principal_id RETURNING pk")
+        .bind::<Text,_>(agent.principal_id.as_str()).bind::<Text,_>(agent.station_id.as_str())
+        .get_result::<Account>(&mut *conn).await.unwrap().pk;
+    drop(conn);
+    let packages = soland_storage_postgres::PgMlsKeyPackageStore { pool: pool.clone() };
+    let package = soland_storage::MlsKeyPackageRow {
+        id: "agent-membership-package".into(),
+        keypackage_ref: format!("sha256:{}", "7".repeat(64)),
+        keypackage_digest: format!("sha256:{}", "7".repeat(64)),
+        owner_account_pk: soland_storage::AccountPk(owner),
+        actor_id: agent.principal_id.to_string(),
+        device_id: None,
+        endpoint_verification_method: Some(format!("{agent_did}#runtime-1")),
+        intended_realm_id: None,
+        key_package_bytes: b"verified-published-keypackage".to_vec(),
+        capabilities: vec!["ak.content.v1".into(), "mimi.content.v1".into()],
+        capabilities_digest: format!("sha256:{}", "8".repeat(64)),
+        last_resort: false,
+        last_resort_realm_id: None,
+        lifetime_not_before: at.timestamp() - 1,
+        lifetime_not_after: at.timestamp() + 3600,
+        claimed_by_mls_group_id: None,
+        device_authorize_event_id: None,
+        agent_key_authorize_event_id: Some(key_event.event_id.to_string()),
+        claimed_at: None,
+        claim_expires_at_unix_ms: None,
+        consumed_at: None,
+        created_at: at.timestamp(),
+    };
+    packages.put(&package).await.unwrap();
+    for mutation in [
+        "lifetime_not_after=0",
+        "claimed_by_mls_group_id='already-claimed',claimed_at=1,claim_expires_at_unix_ms=2",
+        "capabilities='[]'::jsonb",
+        "actor_id='ak:did_core:web:foreign-agent.example'",
+        "agent_key_authorize_event_id=(SELECT id FROM canonical_events WHERE kind='ak.realm.create' ORDER BY pk LIMIT 1)",
+        "endpoint_verification_method='did:web:wrong-agent.example#runtime-1'",
+        "agent_key_authorize_event_id=NULL,endpoint_verification_method='did:web:pairwise.example#key',intended_realm_id='another-realm'",
+    ] {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(format!(
+            "UPDATE mls_key_packages SET {mutation} WHERE id=$1"
+        ))
+        .bind::<Text, _>(&package.id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+        let before = footprint(&pool, realm_id).await;
+        assert!(
+            uow.commit_event(join.clone()).await.is_err(),
+            "mutation {mutation}"
+        );
+        assert_eq!(
+            footprint(&pool, realm_id).await,
+            before,
+            "mutation {mutation}"
+        );
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("DELETE FROM mls_key_packages WHERE id=$1")
+            .bind::<Text, _>(&package.id)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        drop(conn);
+        packages.put(&package).await.unwrap();
+    }
+    let mut stale_payload = serde_json::to_value(&join.authority_commit.event.payload).unwrap();
+    // A valid current KeyPackage does not revive an old controller generation.
+    stale_payload["agent_controller_binding"]["controller_membership_generation_ref"] =
+        serde_json::to_value(key_event.event_id.clone()).unwrap();
+    let stale = ordinary_realm::next_request(
+        &group.authority_commit,
+        EventKind::MemberState,
+        &controller.principal_id,
+        stale_payload,
+        at,
+    );
+    let before = footprint(&pool, realm_id).await;
+    assert!(uow.commit_event(stale).await.is_err());
+    assert_eq!(footprint(&pool, realm_id).await, before);
+    uow.commit_event(join.clone()).await.unwrap();
+    let after = footprint(&pool, realm_id).await;
+    assert_eq!(after.events, before.events + 1);
+    assert_eq!(after.commits, before.commits + 1);
+    assert_eq!(after.members, before.members + 1);
+    assert_eq!(after.revision, before.revision + 1);
+    assert_eq!(after.covered, before.covered);
+    assert_eq!(after.epoch, before.epoch);
+}

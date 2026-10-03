@@ -16,8 +16,9 @@
 //! (the Realm root controller through its effective `ak.realm.owner`).
 //! Invite acceptance is decided with its Invite lifecycle by
 //! [`crate::invite_current_results`], which reuses this module's member row
-//! lock and Realm role check. The Agent controller carve-out, Circle and
-//! Strand scoped membership, Direct Conversation profiles and join policies
+//! lock and Realm role check. Agent controller joins bind accepted ownership
+//! and the controller's exact joined generation. Circle and Strand scoped
+//! membership and join policies
 //! whose proof gates need a same-cut re-evaluation stay closed.
 
 use arkret_models_collaboration::governance::membership_invite::{
@@ -55,6 +56,82 @@ struct ControllerJoinRow {
     membership: String,
     #[diesel(sql_type = Text)]
     event_id: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct AgentKeyPackageAuthorityRow {
+    #[diesel(sql_type = Jsonb)]
+    envelope: Value,
+    #[diesel(sql_type = Jsonb)]
+    commit_json: Value,
+    #[diesel(sql_type = Text)]
+    verification_method: String,
+}
+
+/// A published Agent endpoint must be claimable under the same accepted key
+/// authorization at this transaction's cut. Membership is established by the
+/// caller's join; it cannot be a precondition of this first-join check. The
+/// subsequent Add/Welcome has its own claim and RFC public-transition gate.
+async fn require_agent_membership_keypackage(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    pcr: &arkret_wire::RealmId,
+    agent: &arkret_wire::AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let candidate = sql_query(
+        "SELECT e.envelope,c.commit_json,kp.endpoint_verification_method AS verification_method \
+         FROM mls_key_packages kp JOIN accounts a ON a.pk=kp.owner_account_pk \
+         JOIN canonical_events e ON e.id=kp.agent_key_authorize_event_id AND e.state='committed' \
+           AND e.kind='ak.agent.key.authorize' \
+         JOIN realm_commits c ON c.event_pk=e.pk AND c.realm_id=$1 \
+         JOIN agent_key_current_results k ON k.realm_id=$1 AND k.agent_id=$2 \
+           AND k.agent_key_id=e.envelope->'payload'->>'key_id' \
+         JOIN realm_commits kc ON kc.commit_id=k.current_commit_id AND kc.realm_id=k.realm_id \
+           AND kc.stream_position=k.current_stream_position \
+         WHERE kp.actor_id=$2 AND a.principal_id=$2 AND a.station_id=$3 \
+           AND kp.device_id IS NULL AND kp.device_authorize_event_id IS NULL \
+           AND kp.intended_realm_id IS NULL \
+           AND kp.endpoint_verification_method=e.envelope->'payload'->>'verification_method' \
+           AND kp.lifetime_not_before <= $4 AND kp.lifetime_not_after > $4 \
+           AND kp.capabilities @> '[\"ak.content.v1\",\"mimi.content.v1\"]'::jsonb \
+           AND kp.claimed_by_mls_group_id IS NULL AND kp.claimed_at IS NULL \
+           AND kp.claim_expires_at_unix_ms IS NULL AND kp.consumed_at IS NULL \
+           AND (NOT kp.last_resort OR kp.last_resort_realm_id IS NULL OR kp.last_resort_realm_id=$5) \
+           AND EXISTS(SELECT 1 FROM jsonb_array_elements(k.value->'authorizations') entry \
+             WHERE entry->>'tag_id'=(e.envelope->>'event_id')||':1' \
+               AND entry->'value'=e.envelope->'payload') \
+         ORDER BY kp.created_at,kp.id LIMIT 1 FOR SHARE OF kp,k",
+    )
+    .bind::<Text, _>(pcr.as_str())
+    .bind::<Text, _>(agent.principal_id.as_str())
+    .bind::<Text, _>(agent.station_id.as_str())
+    .bind::<diesel::sql_types::BigInt, _>(at.timestamp())
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<AgentKeyPackageAuthorityRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(|| failed_precondition("Agent has no claimable membership KeyPackage"))?;
+    let event: arkret_wire::Event =
+        serde_json::from_value(candidate.envelope).map_err(PersistenceError::database)?;
+    let commit: arkret_wire::RealmCommit =
+        serde_json::from_value(candidate.commit_json).map_err(PersistenceError::database)?;
+    crate::authority_commit::check_agent_endpoint_current_in_connection(
+        conn,
+        pcr,
+        &agent.principal_id,
+        &arkret_wire::CommittedEventRef {
+            event_id: event.event_id,
+            commit_id: commit.commit_id,
+            stream_ref: commit.stream_ref,
+            stream_position: commit.stream_position,
+        },
+        &arkret_wire::DidUrl::new(candidate.verification_method)
+            .map_err(PersistenceError::database)?,
+        at,
+    )
+    .await
 }
 
 fn failed_precondition(detail: &str) -> PersistenceError {
@@ -418,10 +495,13 @@ async fn check_agent_controller_join(
     }
 
     let provisioning = sql_query(
-        "SELECT value FROM agent_provisioning_current_results \
-         WHERE agent_id=$1 FOR SHARE",
+        "SELECT p.value FROM agent_provisioning_current_results p \
+         JOIN pcr_genesis_units g ON g.realm_id=p.realm_id \
+         WHERE p.agent_id=$1 AND g.principal_id=$2 AND g.station_id=$3 FOR SHARE OF p",
     )
     .bind::<Text, _>(agent.principal_id.as_str())
+    .bind::<Text, _>(controller.principal_id.as_str())
+    .bind::<Text, _>(controller.station_id.as_str())
     .get_result::<CurrentValueRow>(&mut *conn)
     .await
     .optional()
@@ -434,6 +514,12 @@ async fn check_agent_controller_join(
     if provisioning.controller_principal_id != controller.principal_id {
         return Err(capability_denied("writer did not provision the Agent"));
     }
+    crate::agent_current_results::lock_agent_producer_current(
+        conn,
+        &provisioning.principal_control_realm_id,
+        &agent.principal_id,
+    )
+    .await?;
     let status = sql_query(
         "SELECT value FROM agent_status_current_results \
          WHERE realm_id=$1 AND agent_id=$2 FOR SHARE",
@@ -470,8 +556,8 @@ async fn check_agent_controller_join(
             "Agent accountability grant is not active",
         ));
     }
-    // An activated MLS scope needs an accepted KeyPackage and a separate
-    // same-cut Add admission. Keep that branch closed until it is implemented.
+    // Joining changes the key-access revision. It does not install an MLS
+    // leaf; the later Add must cover the new revision with its own claim.
     let mls_active = sql_query(
         "SELECT EXISTS(SELECT 1 FROM mls_group_current_results \
          WHERE realm_id=$1 AND value->'effective_scope'->>'kind'='realm') AS present",
@@ -481,9 +567,14 @@ async fn check_agent_controller_join(
     .await
     .map_err(PersistenceError::database)?;
     if mls_active.present {
-        return Err(unsupported(
-            "Agent join into an activated MLS Realm has no same-cut admission",
-        ));
+        require_agent_membership_keypackage(
+            conn,
+            &event.realm_id,
+            &provisioning.principal_control_realm_id,
+            agent,
+            commit.committed_at,
+        )
+        .await?;
     }
     check_self_entry(
         conn,
