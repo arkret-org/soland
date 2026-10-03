@@ -459,9 +459,16 @@ async fn revoke_rechecks_previously_signed_ghost_request_before_accepting_any_ev
 }
 
 #[tokio::test]
-async fn service_bridge_relinquishes_real_installed_grant_and_replays_durable_commit() {
+async fn managed_bot_relinquishes_exact_subject_grant_and_replays_durable_commit() {
     let fixture = Fixture::new().await;
     let install = fixture.install(false).await;
+    let grant_id = managed_actor_action_grant(
+        &fixture,
+        &install,
+        &install.outcome.bot_actor_id,
+        vec!["ak.message.create".to_owned()],
+    )
+    .await;
     let grants = fixture
         .state
         .test_persistence()
@@ -469,40 +476,17 @@ async fn service_bridge_relinquishes_real_installed_grant_and_replays_durable_co
         .snapshot_for_realm(&fixture.realm)
         .await
         .unwrap();
-    let grant = grants
-        .iter()
-        .find(|row| {
-            install
-                .outcome
-                .capability_grant_refs
-                .contains(&row.grant_id)
-        })
-        .unwrap();
-    let mut event = arkret_wire::test_support::raw_event_for_actor_at(
-        EventKind::CapabilityRelinquish.as_str(), ScopeRef::Realm {realm_id:fixture.realm.clone()},
-        ActorId::account(arkret_wire::AccountId::new(install.package.service_id.clone(), fixture.state.service_core_id())),
-        json!({"grant_id":grant.grant_id,"expected_revision":grant.revision,"reason":"subject_request"}),chrono::Utc::now(),
-    ).unwrap();
-    event.producer_proof = None;
-    event.applet_id = Some(install.package.applet_id.clone());
-    event.authorization_ref = Some(grant.grant_id.clone().into());
-    let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
-        event,
-        arkret_canonical::DigestSuite::Sha256,
-    )
-    .unwrap();
-    let signer = Ed25519PayloadSigner::new(
-        applet_service_signing_key(&install.package.webhook_auth.key_ref),
-        applet_service_did(&install.package),
-        install.package.webhook_auth.key_ref.clone(),
+    let grant = grants.iter().find(|row| row.grant_id == grant_id).unwrap();
+    // Relinquish compares the actual subject; the install's Service authority
+    // pair does not make Account and Service actors interchangeable.
+    let event = managed_service_event(
+        &fixture,
+        &install,
+        &install.outcome.bot_actor_id,
+        &grant.grant_id,
+        EventKind::CapabilityRelinquish,
+        json!({"grant_id":grant.grant_id,"expected_revision":grant.revision,"reason":"subject_request"}),
     );
-    arkret_signatures::sign_event(
-        &mut authored,
-        &signer,
-        arkret_signatures::SignEventOptions::new(),
-    )
-    .unwrap();
-    let event = authored.into_event();
     let body = serde_json::to_value(AppletEventTransactionRequestBody {
         applet_id: install.package.applet_id.clone(),
         source_id: install.package.service_id.clone(),
@@ -1860,7 +1844,16 @@ async fn native_service_bridge_error_requires_exact_installed_grant_and_revoke_f
     revoked_payload["error_code"] = json!("external_unavailable_after_revoke");
     let event = make_event(&service, &grant, revoked_payload);
     let before = managed_domain_snapshot(&fixture.pool).await;
-    managed_rejected_event(&fixture, &install, &event).await;
+    let (status, refusal) = managed_http_event(&fixture, &install, &event).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "revoked installation: {refusal}"
+    );
+    assert_eq!(
+        refusal["type"],
+        "https://arkret.org/problems/applet_registration_unauthorized"
+    );
     assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
 }
 
