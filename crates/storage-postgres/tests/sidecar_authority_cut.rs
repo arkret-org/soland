@@ -676,8 +676,13 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
     let station_did = device_authorization_history::did_web_station(&station);
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = &principal.history.account;
-    let realm =
-        ordinary_realm::bootstrap_unit_for_account("agent-mls-join", controller, &station_did);
+    let realm = ordinary_realm::bootstrap_unit_with_history_for_account(
+        "agent-mls-join",
+        "invite",
+        "since_join",
+        controller,
+        &station_did,
+    );
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)

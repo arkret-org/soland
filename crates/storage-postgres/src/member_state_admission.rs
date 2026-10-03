@@ -416,6 +416,17 @@ async fn check_self_entry(
     if !entry_open {
         return Err(gate_check_failed());
     }
+    check_join_policy(conn, realm_id, has_gate_proofs).await
+}
+
+/// Join Policy constrains every admission path, including the controller's
+/// explicit Agent join. The ordinary self-entry rule is a separate gate:
+/// actor.md section 3.3 admits the owned Agent without an Invite or opt-in.
+async fn check_join_policy(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    has_gate_proofs: bool,
+) -> PersistenceResult<()> {
     let policy = join_policy(conn, realm_id).await?;
     let gates = policy
         .as_ref()
@@ -576,13 +587,7 @@ async fn check_agent_controller_join(
         )
         .await?;
     }
-    check_self_entry(
-        conn,
-        &event.realm_id,
-        "join",
-        !payload.gate_proofs.is_empty(),
-    )
-    .await
+    check_join_policy(conn, &event.realm_id, !payload.gate_proofs.is_empty()).await
 }
 
 /// Decide one ordinary `ak.member.state` Event at its accepting cut.
