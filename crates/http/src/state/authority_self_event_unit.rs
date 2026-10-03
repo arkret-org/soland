@@ -169,6 +169,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::PinReorder
             | arkret_wire::EventKind::ReactionRemove
             | arkret_wire::EventKind::MimiRoomBinding
+            | arkret_wire::EventKind::AppletBridgeError
     )
 }
 
@@ -610,6 +611,7 @@ pub(crate) async fn submit_applet_event(
             | arkret_wire::EventKind::MemberState
             | arkret_wire::EventKind::InviteAccept
             | arkret_wire::EventKind::CapabilityRelinquish
+            | arkret_wire::EventKind::AppletBridgeError
     ) {
         return Err(ServiceError::SchemaViolation(
             "Applet Event kind has no accepting domain unit".into(),

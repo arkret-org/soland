@@ -1943,8 +1943,8 @@ impl AuthorityCommitApplication {
             .await?
             .ok_or_else(|| ServiceError::NotFound("Realm authority is unavailable".to_owned()))?;
         if &authority.service_id != local_service_id {
-            return Err(ServiceError::Conflict(
-                "this Station is not the current Realm authority".to_owned(),
+            return Err(ServiceError::NotFound(
+                "no current authority bundle is available for this Realm here".to_owned(),
             ));
         }
         let stream_ref = CommitStreamRef::Realm {

@@ -1702,7 +1702,8 @@ fn managed_service_event(
     )
     .unwrap();
     event.producer_proof = None;
-    event.executed_by = Some(ActorId::service(install.package.service_id.clone()));
+    let service = ActorId::service(install.package.service_id.clone());
+    event.executed_by = (actor != &service).then_some(service);
     event.applet_id = Some(install.package.applet_id.clone());
     event.authorization_ref = Some(grant.clone().into());
     let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
@@ -1792,6 +1793,75 @@ async fn managed_domain_snapshot(pool: &PgPool) -> Value {
         .unwrap()
         .insert("domain_current".to_owned(), current.value);
     value
+}
+
+#[tokio::test]
+async fn native_service_bridge_error_requires_exact_installed_grant_and_revoke_fence() {
+    let fixture = Fixture::new().await;
+    let install = fixture.install(false).await;
+    let service = ActorId::service(install.package.service_id.clone());
+    let authority_subject = ActorId::account(arkret_wire::AccountId::new(
+        install.package.service_id.clone(),
+        fixture.state.service_core_id(),
+    ));
+    let grant = managed_actor_action_grant(
+        &fixture,
+        &install,
+        &authority_subject,
+        vec!["ak.applet.bridge_error".to_owned()],
+    )
+    .await;
+    let bot_grant = managed_actor_action_grant(
+        &fixture,
+        &install,
+        &install.outcome.bot_actor_id,
+        vec!["ak.message.create".to_owned()],
+    )
+    .await;
+    let payload = json!({
+        "applet_id": install.package.applet_id,
+        "realm_id": fixture.realm,
+        "failed_transaction_ref": install.outcome.registration_event_ref,
+        "error_class": "external_network",
+        "error_code": "external_unavailable",
+        "retriable": true,
+        "visibility_scope": "realm_members",
+    });
+    let make_event = |actor: &ActorId, grant, payload| {
+        managed_service_event(
+            &fixture,
+            &install,
+            actor,
+            grant,
+            EventKind::AppletBridgeError,
+            payload,
+        )
+    };
+    let mut foreign_payload = payload.clone();
+    foreign_payload["applet_id"] = json!(format!("ak:applet:{}", uuid::Uuid::now_v7()));
+    for event in [
+        make_event(&service, &bot_grant, payload.clone()),
+        make_event(&authority_subject, &grant, payload.clone()),
+        make_event(&service, &grant, foreign_payload),
+    ] {
+        let before = managed_domain_snapshot(&fixture.pool).await;
+        managed_rejected_event(&fixture, &install, &event).await;
+        assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
+    }
+    let event = make_event(&service, &grant, payload.clone());
+    assert!(event.executed_by.is_none());
+    assert_managed_accepted(&fixture, &install, &event).await;
+    let accepted = managed_domain_snapshot(&fixture.pool).await;
+    assert_managed_accepted(&fixture, &install, &event).await;
+    assert_eq!(managed_domain_snapshot(&fixture.pool).await, accepted);
+
+    fixture.revoke(&install).await;
+    let mut revoked_payload = payload;
+    revoked_payload["error_code"] = json!("external_unavailable_after_revoke");
+    let event = make_event(&service, &grant, revoked_payload);
+    let before = managed_domain_snapshot(&fixture.pool).await;
+    managed_rejected_event(&fixture, &install, &event).await;
+    assert_eq!(managed_domain_snapshot(&fixture.pool).await, before);
 }
 
 #[tokio::test]
