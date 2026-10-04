@@ -610,39 +610,58 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         serde_json::json!({"member_id":arkret_wire::ActorId::account(agent.clone()),"membership":"leave"}),
         controller_rejoin.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
-    uow.commit_event(leave.clone()).await.unwrap();
+    // The v1 ingress has no Agent cleanup carrier. An invalidated Agent
+    // self-leave cannot rewrite canonical membership or revive its generation.
+    let error = uow.commit_event(leave.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("unsupported_feature"));
     let left = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
         .unwrap();
     assert!(left.desired_agent_ids.is_empty());
     assert!(
-        left.authority_stream_head
+        !left
+            .authority_stream_head
             .contains(&leave.authority_commit.event.event_id)
     );
     assert_eq!(
+        left.authority_stream_head,
+        stale_generation.authority_stream_head
+    );
+    assert_eq!(
         left.participant_authority_digest,
-        not_joined.participant_authority_digest
+        stale_generation.participant_authority_digest
     );
     let fresh_join = ordinary_realm::next_request(
-        &leave.authority_commit,
+        &controller_rejoin.authority_commit,
         EventKind::MemberState,
         &controller.principal_id,
         serde_json::json!({"member_id":arkret_wire::ActorId::account(agent.clone()),"membership":"join",
             "agent_controller_binding":{"controller_account_id":controller,
                 "controller_membership_generation_ref":controller_rejoin.authority_commit.event.event_id}}),
-        leave.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+        controller_rejoin.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
-    uow.commit_event(fresh_join.clone()).await.unwrap();
+    // A new controller generation cannot turn the existing Agent join into
+    // another join without an accepted canonical leave transition.
+    let error = uow.commit_event(fresh_join.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("invalid_membership_transition"));
     let fresh = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(fresh.desired_agent_ids, vec![agent.principal_id]);
+    assert!(fresh.desired_agent_ids.is_empty());
     assert!(
-        fresh
+        !fresh
             .authority_stream_head
             .contains(&fresh_join.authority_commit.event.event_id)
+    );
+    assert_eq!(
+        fresh.authority_stream_head,
+        stale_generation.authority_stream_head
+    );
+    assert_eq!(
+        fresh.participant_authority_digest,
+        stale_generation.participant_authority_digest
     );
 }
 
